@@ -84,6 +84,19 @@ typedef struct
     uint8_t quality;          /**< 质量等级，0 表示最低，数值越高表示质量越好。 */
 } Px4Lite_TopicHeader_t;
 
+/**
+ * @brief Framework 内部统一 UTC 日期时间。
+ */
+typedef struct
+{
+    uint16_t year;   /**< 完整年份，范围 2000 到 2099。 */
+    uint8_t month;   /**< 月份，范围 1 到 12。 */
+    uint8_t day;     /**< 日期，范围 1 到 31。 */
+    uint8_t hours;   /**< 小时，范围 0 到 23。 */
+    uint8_t minutes; /**< 分钟，范围 0 到 59。 */
+    uint8_t seconds; /**< 秒，范围 0 到 59。 */
+} Px4Lite_UtcDateTime_t;
+
 #define PX4LITE_DATA_VALID (1UL << 0)      /**< 数据通过基本有效性检查。 */
 #define PX4LITE_DATA_CALIBRATED (1UL << 1) /**< 数据已经过标定补偿。 */
 #define PX4LITE_DATA_FILTERED (1UL << 2)   /**< 数据已经过滤波。 */

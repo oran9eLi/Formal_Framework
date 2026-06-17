@@ -13,6 +13,7 @@
 #define APP_DATA_API_H
 
 #include <stdint.h>
+#include "px4lite_time.h"
 #include "px4lite_types.h"
 
 #define APP_NAVIGATION_MAX_AGE_MS 1500U  /**< Navigation 快照最大可接受年龄，单位：ms。 */
@@ -121,6 +122,22 @@ typedef struct
 } App_EnvironmentSnapshot_t;
 
 /**
+ * @brief 应用层日期时间快照。
+ */
+typedef struct
+{
+    Px4Lite_TopicHeader_t header;       /**< 快照头，包含 Framework 时间更新时间。 */
+    uint32_t utc_date_ymd;              /**< UTC 日期，编码 YYYYMMDD。 */
+    uint32_t utc_time_hhmmss;           /**< UTC 时间，编码 HHMMSS。 */
+    uint32_t local_date_ymd;            /**< 本地显示日期，编码 YYYYMMDD。 */
+    uint32_t local_time_hhmmss;         /**< 本地显示时间，编码 HHMMSS。 */
+    uint32_t last_sync_ms;              /**< 最近一次 GNSS 校准的系统时间，未知时为 0。 */
+    uint32_t sync_age_s;                /**< 最近一次 GNSS 校准距今秒数，未知时为 0。 */
+    Px4Lite_TimeSource_t source;        /**< 当前时间来源。 */
+    Px4Lite_TimeSyncState_t sync_state; /**< 当前校时状态。 */
+} App_DateTimeSnapshot_t;
+
+/**
  * @brief 复制新鲜且一致的导航快照。
  *
  * @param[out] out 输出缓冲区，不能为 NULL。
@@ -175,6 +192,20 @@ Px4Lite_Result_t App_CopyAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms);
  * @retval PX4LITE_NOT_READY 尚无有效环境快照，或 Baro/Battery 数据均已过期。
  */
 Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t now_ms);
+
+/**
+ * @brief 复制统一日期时间快照。
+ *
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间，用于时间快照新鲜度判断。
+ *
+ * @return 复制结果。
+ * @retval PX4LITE_OK 复制成功。
+ * @retval PX4LITE_INVALID_PARAM 参数为空。
+ * @retval PX4LITE_NOT_READY RTC 尚未有效且 GNSS 尚未完成校时。
+ * @retval PX4LITE_STALE 时间快照超过可接受年龄。
+ */
+Px4Lite_Result_t App_CopyDateTime(App_DateTimeSnapshot_t *out, uint32_t now_ms);
 
 /**
  * @brief 复制单个 Framework 模块的最新状态。

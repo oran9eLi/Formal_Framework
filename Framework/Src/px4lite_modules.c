@@ -15,6 +15,7 @@
 #include "px4lite_faults.h"
 #include "px4lite_platform.h"
 #include "px4lite_recovery.h"
+#include "px4lite_time.h"
 #include "px4lite_topics.h"
 #include "px4lite_mavlink_tx.h"
 #include "FreeRTOS.h"
@@ -944,6 +945,7 @@ void Px4Lite_HealthRun(uint32_t now_ms)
     (void)display_last_valid_ms;
 #endif
 
+    Px4Lite_TimeRun(now_ms);
     Px4Lite_RecoveryMonitorRun(now_ms);
 
     memset(&health, 0, sizeof(health));

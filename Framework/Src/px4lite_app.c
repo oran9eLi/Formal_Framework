@@ -14,6 +14,7 @@
 #include "px4lite_platform.h"
 #include "px4lite_registry.h"
 #include "px4lite_topics.h"
+#include "px4lite_time.h"
 #include "px4lite_work.h"
 #include "px4lite_storage.h"
 #include "debug_console.h"
@@ -196,6 +197,7 @@ BaseType_t Px4Lite_AppInit(void)
     DebugTaskMonitor_Init();
     if ((Px4Lite_TopicsInit() != PX4LITE_OK) ||
         (Px4Lite_ModulesInit() != PX4LITE_OK) ||
+        (Px4Lite_TimeInit() != PX4LITE_OK) ||
         (Px4Lite_RegistryInit() != PX4LITE_OK) ||
         (Px4Lite_RegisterCoreModules() != pdPASS))
     {

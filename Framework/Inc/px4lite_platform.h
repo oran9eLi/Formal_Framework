@@ -84,6 +84,26 @@ void Px4Lite_PlatformWatchdogFeed(uint32_t now_ms);
 Px4Lite_Result_t Px4Lite_PlatformInit(void);
 
 /**
+ * @brief 通过平台适配层读取 RTC UTC 日期时间。
+ *
+ * @param[out] out 输出日期时间，不能为 NULL。
+ *
+ * @return 读取结果。
+ */
+Px4Lite_Result_t Px4Lite_PlatformRtcRead(
+    Px4Lite_UtcDateTime_t *out);
+
+/**
+ * @brief 通过平台适配层写入 RTC UTC 日期时间。
+ *
+ * @param[in] date_time 待写入日期时间，不能为 NULL。
+ *
+ * @return 写入结果。
+ */
+Px4Lite_Result_t Px4Lite_PlatformRtcWrite(
+    const Px4Lite_UtcDateTime_t *date_time);
+
+/**
  * @brief 通过平台适配层初始化 GNSS BSP 和强类型 GNSS 驱动。
  *
  * @return 初始化结果。

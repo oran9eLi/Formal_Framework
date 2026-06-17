@@ -112,7 +112,7 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
   {DISPLAY_HMI_VAR_LONGITUDE,   DISPLAY_HMI_PAGE_DATA, 0x1203U, DISPLAY_HMI_TYPE_I32, DISPLAY_HMI_ACCESS_RO, 1000U, 390U, 246U, 118U, 22U, "longitude",    "\xB0","CNS_State.gnss"},
   {DISPLAY_HMI_VAR_ALTITUDE,    DISPLAY_HMI_PAGE_DATA, 0x1205U, DISPLAY_HMI_TYPE_I32, DISPLAY_HMI_ACCESS_RO, 1000U, 390U, 288U, 118U, 22U, "altitude",     "m",     "CNS_State.gnss"},
   {DISPLAY_HMI_VAR_GNSS_SPEED,  DISPLAY_HMI_PAGE_DATA, 0x1207U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U,   0U,   0U,   0U,  0U, "gnss_speed",   "m/s","CNS_State.gnss"},
-  {DISPLAY_HMI_VAR_GNSS_TIME,   DISPLAY_HMI_PAGE_DATA, 0x1208U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U,   0U,   0U,   0U,  0U, "gnss_time",    "UTC+8", "CNS_State.gnss"},
+  {DISPLAY_HMI_VAR_GNSS_TIME,   DISPLAY_HMI_PAGE_DATA, 0x1208U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U,   0U,   0U,   0U,  0U, "gnss_time",    "UTC+8", "HMI/Clock"},
   {DISPLAY_HMI_VAR_ROLL,        DISPLAY_HMI_PAGE_DATA, 0x1300U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U,   0U,   0U,   0U,  0U, "roll",         "\xB0", "CNS_State.sensor"},
   {DISPLAY_HMI_VAR_PITCH,       DISPLAY_HMI_PAGE_DATA, 0x1301U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U,   0U,   0U,   0U,  0U, "pitch",        "\xB0", "CNS_State.sensor"},
   {DISPLAY_HMI_VAR_YAW,         DISPLAY_HMI_PAGE_DATA, 0x1305U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U,   0U,   0U,   0U,  0U, "yaw",          "\xB0", "CNS_State.navigation"},
@@ -741,9 +741,6 @@ static void Display_ClearNavigationSnapshot(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, 0U);
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, 0U);
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_CLOCK_TIME, 0U);
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, 0U);
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LATITUDE, 0);
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LONGITUDE, 0);
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_ALTITUDE, 0);
@@ -774,77 +771,15 @@ static void Display_ClearBatteryFields(void)
 }
 
 /*
- * 返回指定年月的天数（含闰年 2 月），用于 UTC+8 跨天时的日期进位。
- */
-static uint8_t Display_DaysInMonth(uint32_t month, uint32_t year)
-{
-  static const uint8_t days[12] =
-      {31U, 28U, 31U, 30U, 31U, 30U, 31U, 31U, 30U, 31U, 30U, 31U};
-
-  if ((month < 1U) || (month > 12U)) {
-    return 31U;
-  }
-  if (month == 2U) {
-    uint8_t leap =
-        (((year % 4U) == 0U) && ((year % 100U) != 0U)) ||
-        ((year % 400U) == 0U);
-    return leap ? 29U : 28U;
-  }
-  return days[month - 1U];
-}
-
-/*
  * 将导航快照字段写入 Display 缓存。
  */
 static void Display_LoadNavigationSnapshot(
     const App_NavigationSnapshot_t *navigation)
 {
   uint16_t ground_speed_cms;
-  uint32_t local_hhmmss = 0U;
-  uint32_t local_date_ymd = 0U;
 
   if (navigation == 0) {
     return;
-  }
-
-  if (navigation->gnss_utc_sec < 86400U) {
-    uint32_t local_sec =
-        (navigation->gnss_utc_sec + (8U * 3600U)) % 86400U;
-    uint32_t local_hh = local_sec / 3600U;
-    uint32_t local_mm = (local_sec / 60U) % 60U;
-    uint32_t local_ss = local_sec % 60U;
-
-    local_hhmmss =
-        (local_hh * 10000U) + (local_mm * 100U) + local_ss;
-  }
-
-  /*
-   * GNSS 提供的是 UTC 日期(yymmdd)。换算到 UTC+8 时，若加 8 小时跨过
-   * 当日 24:00，则日期需进位一天（含月末、年末、闰年进位）。
-   */
-  if (navigation->gnss_utc_date != 0U) {
-    uint32_t yy = navigation->gnss_utc_date / 10000U;
-    uint32_t mm = (navigation->gnss_utc_date / 100U) % 100U;
-    uint32_t dd = navigation->gnss_utc_date % 100U;
-    uint32_t full_year = 2000U + yy;
-
-    if ((navigation->gnss_utc_sec < 86400U) &&
-        ((navigation->gnss_utc_sec + (8U * 3600U)) >= 86400U)) {
-      dd++;
-      if (dd > Display_DaysInMonth(mm, full_year)) {
-        dd = 1U;
-        mm++;
-        if (mm > 12U) {
-          mm = 1U;
-          full_year++;
-        }
-      }
-    }
-
-    if ((mm >= 1U) && (mm <= 12U) && (dd >= 1U) && (dd <= 31U)) {
-      local_date_ymd =
-          (full_year * 10000U) + (mm * 100U) + dd;
-    }
   }
 
   ground_speed_cms =
@@ -864,15 +799,6 @@ static void Display_LoadNavigationSnapshot(
   (void)Display_SetHmiValueU16(
       DISPLAY_HMI_VAR_GNSS_HDOP,
       navigation->hdop_x100);
-  (void)Display_SetHmiValueU32(
-      DISPLAY_HMI_VAR_GNSS_TIME,
-      local_hhmmss);
-  (void)Display_SetHmiValueU32(
-      DISPLAY_HMI_VAR_CLOCK_TIME,
-      local_hhmmss);
-  (void)Display_SetHmiValueU32(
-      DISPLAY_HMI_VAR_DATE,
-      local_date_ymd);
   (void)Display_SetHmiValueI32(
       DISPLAY_HMI_VAR_LATITUDE,
       navigation->latitude_e7);
@@ -898,6 +824,37 @@ static void Display_LoadNavigationSnapshot(
   } else {
     Display_ClearAttitudeFields();
   }
+}
+
+/*
+ * 将统一日期时间快照写入 Display 缓存。
+ */
+static void Display_LoadDateTimeSnapshot(
+    const App_DateTimeSnapshot_t *date_time)
+{
+  if (date_time == 0) {
+    return;
+  }
+
+  (void)Display_SetHmiValueU32(
+      DISPLAY_HMI_VAR_GNSS_TIME,
+      date_time->local_time_hhmmss);
+  (void)Display_SetHmiValueU32(
+      DISPLAY_HMI_VAR_CLOCK_TIME,
+      date_time->local_time_hhmmss);
+  (void)Display_SetHmiValueU32(
+      DISPLAY_HMI_VAR_DATE,
+      date_time->local_date_ymd);
+}
+
+/*
+ * 清除统一日期时间显示字段。
+ */
+static void Display_ClearDateTimeSnapshot(void)
+{
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, 0U);
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_CLOCK_TIME, 0U);
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, 0U);
 }
 
 /* ---- 消息日志：状态变化检测 ---- */
@@ -1382,10 +1339,12 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   App_SystemSnapshot_t system;
   App_EnvironmentSnapshot_t environment;
   App_AlarmSnapshot_t alarm;
+  App_DateTimeSnapshot_t date_time;
   Px4Lite_Result_t navigation_result;
   Px4Lite_Result_t system_result;
   Px4Lite_Result_t environment_result;
   Px4Lite_Result_t alarm_result;
+  Px4Lite_Result_t date_time_result;
   uint8_t status_fallback_loaded = 0U;
   uint16_t msglog_highest = 0U;
 
@@ -1402,6 +1361,13 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
     Display_LoadNavigationSnapshot(&navigation);
   } else {
     Display_ClearNavigationSnapshot();
+  }
+
+  date_time_result = App_CopyDateTime(&date_time, now_ms);
+  if (date_time_result == PX4LITE_OK) {
+    Display_LoadDateTimeSnapshot(&date_time);
+  } else {
+    Display_ClearDateTimeSnapshot();
   }
 
   system_result = App_CopySystem(&system, now_ms);

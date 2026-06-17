@@ -437,8 +437,8 @@ static void Display_PagesDrawFlightMiddle(void)
                               DISPLAY_DASH_GPS_W,
                               DISPLAY_DASH_H,
                               DISPLAY_TITLE_FLIGHT);
-  Display_PagesDrawDataGpsRow(290U, 118U, DISPLAY_TXT_DATE);    /* GNSS UTC+8 日期 */
-  Display_PagesDrawDataGpsRow(290U, 154U, DISPLAY_TXT_UTC);     /* GNSS UTC+8 时间 */
+  Display_PagesDrawDataGpsRow(290U, 118U, DISPLAY_TXT_DATE);    /* 本地显示日期 */
+  Display_PagesDrawDataGpsRow(290U, 154U, DISPLAY_TXT_UTC);     /* 本地显示时间 */
   Display_PagesDrawDataGpsRow(290U, 190U, DISPLAY_TXT_UPTIME);  /* 运行(飞行时间) */
   Display_PagesDrawDataGpsRow(290U, 226U, DISPLAY_TXT_BATTERY); /* 电压 */
   Display_PagesDrawDataGpsRow(290U, 262U, DISPLAY_TXT_BATPCT);  /* 电量 */
@@ -1519,7 +1519,7 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
     return DISPLAY_OK;
   }
 
-  /* GNSS UTC+8 时间：HHMMSS -> HH:MM:SS */
+  /* 本地显示时间：HHMMSS -> HH:MM:SS */
   if (variable->id == DISPLAY_HMI_VAR_CLOCK_TIME) {
     Display_PagesFmtHms(fmt_buf, (value / 10000U) % 100U, (value / 100U) % 100U, value % 100U);
     (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
@@ -1528,7 +1528,7 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
     return DISPLAY_OK;
   }
 
-  /* GNSS UTC+8 日期：YYYYMMDD -> YYYY-MM-DD（0 表示无有效日期）*/
+  /* 本地显示日期：YYYYMMDD -> YYYY-MM-DD（0 表示无有效日期）*/
   if (variable->id == DISPLAY_HMI_VAR_DATE) {
     uint32_t yyyy = value / 10000U;
     uint32_t mm = (value / 100U) % 100U;

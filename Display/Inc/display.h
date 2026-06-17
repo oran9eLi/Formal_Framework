@@ -59,7 +59,7 @@ typedef enum {
   DISPLAY_HMI_VAR_LONGITUDE,               /* 经度，单位 1e-7 度*/
   DISPLAY_HMI_VAR_ALTITUDE,                /* 高度，单位 mm */
   DISPLAY_HMI_VAR_GNSS_SPEED,              /* GNSS 地速，单位 0.01m/s */
-  DISPLAY_HMI_VAR_GNSS_TIME,               /* GNSS UTC+8 时间，格式 HHMMSS */
+  DISPLAY_HMI_VAR_GNSS_TIME,               /* 本地显示时间，格式 HHMMSS */
   DISPLAY_HMI_VAR_ROLL,                    /* 横滚角，单位 0.1 度*/
   DISPLAY_HMI_VAR_PITCH,                   /* 俯仰角，单位 0.1 度*/
   DISPLAY_HMI_VAR_YAW,                     /* 偏航角，单位 0.1 度*/
@@ -83,8 +83,8 @@ typedef enum {
   DISPLAY_HMI_VAR_ALARM_ROW3_CODE,         /* 告警表第 3 行告警码 */
   DISPLAY_HMI_VAR_ALARM_ROW4_CODE,         /* 告警表第 4 行告警码 */
   DISPLAY_HMI_VAR_ALARM_ROW5_CODE,         /* 告警表第 5 行告警码 */
-  DISPLAY_HMI_VAR_CLOCK_TIME,              /* GNSS UTC+8 时间，编码 HHMMSS，由业务层喂值*/
-  DISPLAY_HMI_VAR_DATE,                    /* GNSS UTC+8 日期，编码 YYYYMMDD，由业务层喂值*/
+  DISPLAY_HMI_VAR_CLOCK_TIME,              /* 本地显示时间，编码 HHMMSS，由业务层喂值*/
+  DISPLAY_HMI_VAR_DATE,                    /* 本地显示日期，编码 YYYYMMDD，由业务层喂值*/
   DISPLAY_HMI_VAR_FLIGHT_TIME_S,           /* 飞行时间(上电后运行)，单位 s */
   DISPLAY_HMI_VAR_MESSAGE_LOG,             /* 消息日志缓冲版本号，变化即重绘日志区 */
   DISPLAY_HMI_VAR_COUNT                    /* HMI 变量数量 */

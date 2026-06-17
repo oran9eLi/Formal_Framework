@@ -446,6 +446,11 @@
               <FilePath>..\Framework\Src\px4lite_alarm.c</FilePath>
             </File>
             <File>
+              <FileName>px4lite_time.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_time.c</FilePath>
+            </File>
+            <File>
               <FileName>px4lite_topics.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_topics.c</FilePath>
@@ -559,6 +564,11 @@
               <FileName>bsp_gnss.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\bsp_gnss.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_rtc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_rtc.c</FilePath>
             </File>
             <File>
               <FileName>bsp_lora.c</FileName>
@@ -749,6 +759,16 @@
               <FileName>stm32f4xx_hal_pwr_ex.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Third_Party\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_pwr_ex.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_rtc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Third_Party\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_rtc.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_rtc_ex.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Third_Party\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_rtc_ex.c</FilePath>
             </File>
             <File>
               <FileName>stm32f4xx_hal_sram.c</FileName>

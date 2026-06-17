@@ -16,6 +16,9 @@
 #if BSP_ENABLE_GNSS
 #include "bsp_gnss.h"
 #endif
+#if BSP_ENABLE_RTC
+#include "bsp_rtc.h"
+#endif
 
 /**
  * @brief 从统一入口初始化所有启用的板级外设。
@@ -44,6 +47,13 @@ BSP_Status_t BSP_Init(void)
 
 #if BSP_ENABLE_GNSS
     if (BSP_GNSS_Init() != BSP_STATUS_OK)
+    {
+        status = BSP_STATUS_ERROR;
+    }
+#endif
+
+#if BSP_ENABLE_RTC
+    if (BSP_RTC_Init() != BSP_STATUS_OK)
     {
         status = BSP_STATUS_ERROR;
     }

@@ -19,6 +19,7 @@
 #define BSP_ENABLE_I2C            1U
 #define BSP_ENABLE_ADC            1U
 #define BSP_ENABLE_GNSS           1U
+#define BSP_ENABLE_RTC            1U
 
 /* 调试 UART：USART1，PA9/PA10，115200 8N1。 */
 #define BSP_DBG_UART              USART1

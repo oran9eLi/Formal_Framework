@@ -12,6 +12,7 @@
 #include "px4lite_config.h"
 #include "bsp_gnss.h"
 #include "bsp_lora.h"
+#include "bsp_rtc.h"
 #include "lora_e22.h"
 #include "bsp_time.h"
 #include "sensor_bme280.h"
@@ -56,6 +57,52 @@ Px4Lite_Result_t Px4Lite_PlatformInit(void)
     memset(s_heartbeat_ms, 0, sizeof(s_heartbeat_ms));
     s_heartbeat_seen_mask = 0U;
     return PX4LITE_OK;
+}
+
+Px4Lite_Result_t Px4Lite_PlatformRtcRead(
+    Px4Lite_UtcDateTime_t *out)
+{
+    BSP_RTC_DateTime_t rtc_time;
+
+    if (out == 0)
+    {
+        return PX4LITE_INVALID_PARAM;
+    }
+
+    if (BSP_RTC_ReadDateTime(&rtc_time) != BSP_STATUS_OK)
+    {
+        return PX4LITE_NOT_READY;
+    }
+
+    out->year = rtc_time.year;
+    out->month = rtc_time.month;
+    out->day = rtc_time.day;
+    out->hours = rtc_time.hours;
+    out->minutes = rtc_time.minutes;
+    out->seconds = rtc_time.seconds;
+    return PX4LITE_OK;
+}
+
+Px4Lite_Result_t Px4Lite_PlatformRtcWrite(
+    const Px4Lite_UtcDateTime_t *date_time)
+{
+    BSP_RTC_DateTime_t rtc_time;
+
+    if (date_time == 0)
+    {
+        return PX4LITE_INVALID_PARAM;
+    }
+
+    rtc_time.year = date_time->year;
+    rtc_time.month = date_time->month;
+    rtc_time.day = date_time->day;
+    rtc_time.hours = date_time->hours;
+    rtc_time.minutes = date_time->minutes;
+    rtc_time.seconds = date_time->seconds;
+
+    return (BSP_RTC_WriteDateTime(&rtc_time) == BSP_STATUS_OK)
+               ? PX4LITE_OK
+               : PX4LITE_IO_ERROR;
 }
 
 /**

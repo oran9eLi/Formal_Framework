@@ -295,6 +295,40 @@ Px4Lite_Result_t App_CopyEnvironment(
     return (copied != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
 }
 
+Px4Lite_Result_t App_CopyDateTime(App_DateTimeSnapshot_t *out,
+                                  uint32_t now_ms)
+{
+    Px4Lite_TimeSnapshot_t source;
+
+    if (out == 0)
+    {
+        return PX4LITE_INVALID_PARAM;
+    }
+
+    memset(out, 0, sizeof(*out));
+    if (Px4Lite_CopyTime(&source) != PX4LITE_OK)
+    {
+        return PX4LITE_NOT_READY;
+    }
+    if (Px4Lite_IsFresh(&source.header,
+                        now_ms,
+                        APP_SYSTEM_MAX_AGE_MS) == 0U)
+    {
+        return PX4LITE_STALE;
+    }
+
+    out->header = source.header;
+    out->utc_date_ymd = source.utc_date_ymd;
+    out->utc_time_hhmmss = source.utc_time_hhmmss;
+    out->local_date_ymd = source.local_date_ymd;
+    out->local_time_hhmmss = source.local_time_hhmmss;
+    out->last_sync_ms = source.last_sync_ms;
+    out->sync_age_s = source.sync_age_s;
+    out->source = source.source;
+    out->sync_state = source.sync_state;
+    return PX4LITE_OK;
+}
+
 /**
  * @brief 复制指定 Framework 模块的最新状态。
  */
