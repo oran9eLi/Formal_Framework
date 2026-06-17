@@ -1,6 +1,6 @@
 /**
  * @file business_event_bus.c
- * @brief Implement per-subscriber isolated event delivery and statistics.
+ * @brief 实现订阅者隔离的 Business 事件分发和统计。
  */
 
 #include "business_event_bus.h"
@@ -19,7 +19,7 @@ static Business_SubscriberStats_t
 static uint8_t s_initialized;
 
 /**
- * @brief Check whether a business topic identifier is in range.
+ * @brief 检查业务主题编号是否在有效范围内。
  */
 static uint8_t Business_IsValidTopic(Business_Topic_t topic)
 {
@@ -27,7 +27,7 @@ static uint8_t Business_IsValidTopic(Business_Topic_t topic)
 }
 
 /**
- * @brief Check whether a business subscriber identifier is in range.
+ * @brief 检查业务订阅者编号是否在有效范围内。
  */
 static uint8_t Business_IsValidSubscriber(Business_Subscriber_t subscriber)
 {
@@ -36,7 +36,7 @@ static uint8_t Business_IsValidSubscriber(Business_Subscriber_t subscriber)
 }
 
 /**
- * @brief Validate a business event header, payload type, and payload length.
+ * @brief 校验业务事件头、负载类型和负载长度。
  */
 static uint8_t Business_IsValidEvent(const Business_Event_t *event)
 {
@@ -57,7 +57,7 @@ static uint8_t Business_IsValidEvent(const Business_Event_t *event)
 }
 
 /**
- * @brief Reset an optional event publication report.
+ * @brief 清空可选的事件发布报告。
  */
 static void Business_ClearReport(Business_PublishReport_t *report)
 {
@@ -68,7 +68,7 @@ static void Business_ClearReport(Business_PublishReport_t *report)
 }
 
 /**
- * @brief Mark one subscriber as selected in a publication report.
+ * @brief 在发布报告中标记一个订阅者被本次发布命中。
  */
 static void Business_ReportSubscribed(Business_PublishReport_t *report,
                                       uint32_t subscriber)
@@ -80,7 +80,7 @@ static void Business_ReportSubscribed(Business_PublishReport_t *report,
 }
 
 /**
- * @brief Record one successful subscriber delivery in a publication report.
+ * @brief 在发布报告中记录一个订阅者投递成功。
  */
 static void Business_ReportDelivered(Business_PublishReport_t *report,
                                      uint32_t subscriber)
@@ -93,7 +93,7 @@ static void Business_ReportDelivered(Business_PublishReport_t *report,
 }
 
 /**
- * @brief Record one failed subscriber delivery in a publication report.
+ * @brief 在发布报告中记录一个订阅者投递失败。
  */
 static void Business_ReportFailed(Business_PublishReport_t *report,
                                   uint32_t subscriber)
@@ -106,7 +106,7 @@ static void Business_ReportFailed(Business_PublishReport_t *report,
 }
 
 /**
- * @brief Finalize task-context publication statistics and result status.
+ * @brief 汇总任务上下文发布统计并返回发布结果。
  */
 static Business_PublishResult_t Business_FinishPublish(
     Business_Topic_t topic,
@@ -138,7 +138,7 @@ static Business_PublishResult_t Business_FinishPublish(
 }
 
 /**
- * @brief Finalize ISR-context publication statistics and result status.
+ * @brief 汇总中断上下文发布统计并返回发布结果。
  */
 static Business_PublishResult_t Business_FinishPublishFromISR(
     Business_Topic_t topic,
@@ -171,7 +171,7 @@ static Business_PublishResult_t Business_FinishPublishFromISR(
 }
 
 /**
- * @brief Create bounded queues and reset business event bus state.
+ * @brief 创建有界订阅者队列并复位 EventBus 状态。
  */
 BaseType_t Business_EventBusInit(void)
 {
@@ -208,7 +208,7 @@ BaseType_t Business_EventBusInit(void)
 }
 
 /**
- * @brief Subscribe one consumer queue to a business topic.
+ * @brief 将一个消费者订阅到指定业务主题。
  */
 BaseType_t Business_EventBusSubscribe(Business_Topic_t topic,
                                       Business_Subscriber_t subscriber)
@@ -228,7 +228,7 @@ BaseType_t Business_EventBusSubscribe(Business_Topic_t topic,
 }
 
 /**
- * @brief Fan out an event to all subscribed task-context consumers without blocking.
+ * @brief 在任务上下文中非阻塞分发事件给所有订阅者。
  */
 Business_PublishResult_t Business_EventBusPublish(
     const Business_Event_t *event,
@@ -258,10 +258,7 @@ Business_PublishResult_t Business_EventBusPublish(
         subscriber_count++;
         Business_ReportSubscribed(report, i);
 
-        /*
-         * Every subscriber gets one non-blocking attempt. A full queue cannot
-         * delay or prevent delivery to any later subscriber.
-         */
+        /* 每个订阅者只尝试一次；某个队列满不会阻塞后续订阅者。 */
         if ((s_queues[i] != 0) &&
             (xQueueSend(s_queues[i], event, 0U) == pdPASS))
         {
@@ -286,7 +283,7 @@ Business_PublishResult_t Business_EventBusPublish(
 }
 
 /**
- * @brief Fan out an event from interrupt context without blocking.
+ * @brief 在中断上下文中非阻塞分发事件给所有订阅者。
  */
 Business_PublishResult_t Business_EventBusPublishFromISR(
     const Business_Event_t *event,
@@ -355,7 +352,7 @@ Business_PublishResult_t Business_EventBusPublishFromISR(
 }
 
 /**
- * @brief Receive the next event owned by one business subscriber.
+ * @brief 接收指定订阅者队列中的下一条事件。
  */
 BaseType_t Business_EventBusReceive(Business_Subscriber_t subscriber,
                                     Business_Event_t *event,
@@ -372,7 +369,7 @@ BaseType_t Business_EventBusReceive(Business_Subscriber_t subscriber,
 }
 
 /**
- * @brief Copy aggregate publication statistics for one business topic.
+ * @brief 复制指定业务主题的聚合发布统计。
  */
 BaseType_t Business_EventBusGetTopicStats(Business_Topic_t topic,
                                           Business_TopicStats_t *stats)
@@ -389,7 +386,7 @@ BaseType_t Business_EventBusGetTopicStats(Business_Topic_t topic,
 }
 
 /**
- * @brief Copy delivery and drop statistics for one topic subscriber pair.
+ * @brief 复制指定主题和订阅者组合的投递/丢弃统计。
  */
 BaseType_t Business_EventBusGetSubscriberStats(
     Business_Topic_t topic,

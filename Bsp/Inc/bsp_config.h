@@ -1,6 +1,10 @@
 /**
  * @file bsp_config.h
- * @brief Define board pins, UARTs, DMA streams, and interrupt resources.
+ * @brief 定义板级引脚、外设实例、DMA 流和中断资源。
+ *
+ * @details
+ * 本文件只描述板级硬件事实。Framework 模块开关和任务参数不得反向影响 BSP 宏，
+ * 以保持 Platform Adapter -> Driver -> BSP -> HAL 的单向依赖。
  */
 
 #ifndef BSP_CONFIG_H
@@ -9,16 +13,14 @@
 #include "stm32f4xx_hal.h"
 
 /*
- * BSP module compile switches. A disabled peripheral is not initialized by
- * BSP_Init() and, once its sources are gated, consumes no Flash/RAM. These are
- * owned by the BSP layer and must not depend on Framework (PX4LITE_*) macros,
- * to keep the Platform -> BSP -> Sensor dependency one-directional.
+ * BSP 模块编译开关。关闭的外设不会由 BSP_Init() 初始化；源文件被门控后也不占用
+ * Flash/RAM。这些宏归 BSP 层所有，不依赖 Framework 的 PX4LITE_* 宏。
  */
 #define BSP_ENABLE_I2C            1U
 #define BSP_ENABLE_ADC            1U
 #define BSP_ENABLE_GNSS           1U
 
-/* Debug UART: USART1, PA9/PA10, 115200 8N1. */
+/* 调试 UART：USART1，PA9/PA10，115200 8N1。 */
 #define BSP_DBG_UART              USART1
 #define BSP_DBG_UART_BAUD         115200U
 #define BSP_DBG_UART_WORD         UART_WORDLENGTH_8B
@@ -34,7 +36,7 @@
 #define BSP_DBG_RX_PIN            GPIO_PIN_10
 #define BSP_DBG_RX_AF             GPIO_AF7_USART1
 
-/* ATGM336H GNSS: USART2, PA2/PA3, 9600 8N1. */
+/* ATGM336H GNSS：USART2，PA2/PA3，9600 8N1。 */
 #define BSP_GNSS_UART             USART2
 #define BSP_GNSS_UART_BAUD        9600U
 #define BSP_GNSS_UART_WORD        UART_WORDLENGTH_8B
@@ -57,7 +59,7 @@
 #define BSP_GNSS_IRQn             USART2_IRQn
 #define BSP_GNSS_IRQ_PRIORITY     6U
 
-/* BME280 I2C bus: I2C1, PB6/PB7, 400 kHz. */
+/* BME280 I2C 总线：I2C1，PB6/PB7。 */
 #define BSP_I2C_INS               I2C1
 #define BSP_I2C_SPEED             100000U
 #define BSP_I2C_SCL_PORT          GPIOB
@@ -67,7 +69,7 @@
 #define BSP_I2C_SDA_PIN           GPIO_PIN_7
 #define BSP_I2C_SDA_AF            GPIO_AF4_I2C1
 
-/* Power sense ADC: ADC1 IN5, PA5. */
+/* 电源采样 ADC：ADC1 IN5，PA5。 */
 #define BSP_ADC_INS               ADC1
 #define BSP_ADC_CH                ADC_CHANNEL_5
 #define BSP_ADC_PORT              GPIOA
@@ -75,7 +77,7 @@
 #define BSP_ADC_DIVIDER_NUM       4U
 #define BSP_ADC_DIVIDER_DEN       1U
 
-/* ATK-MD0700 display: SSD1963-like controller on FSMC 8080 16-bit bus. */
+/* ATK-MD0700 显示屏：SSD1963 类控制器，FSMC 8080 16-bit 总线。 */
 #define BSP_DISPLAY_ENABLE                 1U
 #define BSP_DISPLAY_MODEL_ATK_MD0700       1U
 #define BSP_DISPLAY_CONTROLLER_SSD1963     1U
@@ -86,10 +88,10 @@
 #define BSP_DISPLAY_PIXEL_FORMAT_RGB565    1U
 #define BSP_DISPLAY_EXPECTED_PID        0x61U
 
-/* Backward-compatible module switches used by the migrated display code. */
+/* 兼容移植显示代码使用的历史模块开关。 */
 #define BSP_DISPLAY_ATK_MD0700_ENABLE BSP_DISPLAY_MODEL_ATK_MD0700
 
-/* FSMC Bank1 NOR/SRAM4, NE4 + A6 command/data select. */
+/* FSMC Bank1 NOR/SRAM4，NE4 + A6 用于命令/数据地址选择。 */
 #define BSP_LCD_FSMC_BANK_ADDR   0x6C000000UL
 #define BSP_LCD_FSMC_REG_SEL              6U
 #define BSP_LCD_FSMC_CMD_ADDR \
@@ -111,7 +113,7 @@
     __HAL_RCC_GPIOG_CLK_ENABLE();           \
 } while (0)
 
-/* FSMC 8080 control lines. */
+/* FSMC 8080 控制线。 */
 #define BSP_LCD_FSMC_CS_PORT      GPIOG
 #define BSP_LCD_FSMC_CS_PIN       GPIO_PIN_12
 #define BSP_LCD_FSMC_CS_AF        GPIO_AF12_FSMC
@@ -125,7 +127,7 @@
 #define BSP_LCD_FSMC_WR_PIN       GPIO_PIN_5
 #define BSP_LCD_FSMC_WR_AF        GPIO_AF12_FSMC
 
-/* FSMC 16-bit data bus. */
+/* FSMC 16-bit 数据总线。 */
 #define BSP_LCD_FSMC_D0_PORT      GPIOD
 #define BSP_LCD_FSMC_D0_PIN       GPIO_PIN_14
 #define BSP_LCD_FSMC_D0_AF        GPIO_AF12_FSMC
@@ -175,13 +177,13 @@
 #define BSP_LCD_FSMC_D15_PIN      GPIO_PIN_10
 #define BSP_LCD_FSMC_D15_AF       GPIO_AF12_FSMC
 
-/* Display backlight, currently driven as a GPIO output. */
+/* 显示背光，当前使用普通 GPIO 输出驱动。 */
 #define BSP_LCD_BL_PORT           GPIOB
 #define BSP_LCD_BL_PIN            GPIO_PIN_15
 #define BSP_LCD_BL_GPIO_CLK_ENABLE() __HAL_RCC_GPIOB_CLK_ENABLE()
 #define BSP_LCD_BL_ACTIVE_LEVEL   GPIO_PIN_SET
 
-/* GT911 capacitive touch on software I2C. */
+/* GT911 电容触摸，使用软件 I2C。 */
 #define BSP_TOUCH_ENABLE                   1U
 #define BSP_TOUCH_CONTROLLER_GT911         1U
 #define BSP_TOUCH_USE_SOFT_I2C             1U
@@ -199,7 +201,7 @@
     __HAL_RCC_GPIOF_CLK_ENABLE();        \
 } while (0)
 
-/* LoRa E22-400T30D: USART3, PB10(TX)/PB11(RX), 9600 8N1. Mode M0=PF1, M1=PF2, AUX=PF0. */
+/* LoRa E22-400T30D：USART3，PB10(TX)/PB11(RX)，9600 8N1；M0=PF1，M1=PF2，AUX=PF0。 */
 #define BSP_LORA_ENABLE              1U
 #define BSP_LORA_UART                USART3
 #define BSP_LORA_UART_BAUD           9600U
@@ -236,9 +238,9 @@
 #define BSP_LORA_AUX_PIN             GPIO_PIN_0
 
 /*
- * SD card SPI bus: SPI3, PB3(SCK)/PB4(MISO)/PB5(MOSI), PA15 CS. These four pins
- * are otherwise unused on this board; PA15/PB3/PB4 are JTAG pins, so on-chip
- * debug must use SWD (PA13/PA14) only.
+ * SD 卡 SPI 总线：SPI3，PB3(SCK)/PB4(MISO)/PB5(MOSI)，PA15 CS。这些引脚在板上
+ * 未被其他功能占用；PA15/PB3/PB4 属于 JTAG 引脚，因此片上调试必须只使用 SWD
+ * (PA13/PA14)。
  */
 #define BSP_SD_SPI_INS            SPI3
 #define BSP_SD_SPI_CLK_ENABLE()   __HAL_RCC_SPI3_CLK_ENABLE()

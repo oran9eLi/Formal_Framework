@@ -1,6 +1,6 @@
 /**
  * @file bsp.c
- * @brief Implement the central board-level initialization entry point.
+ * @brief 实现板级统一初始化入口。
  */
 
 #include "bsp.h"
@@ -18,12 +18,11 @@
 #endif
 
 /**
- * @brief Initialize every enabled board peripheral from one central entry.
+ * @brief 从统一入口初始化所有启用的板级外设。
  *
- * The debug UART is intentionally not initialized here: it is owned by the
- * debug console and brought up earlier so the boot banner can print before the
- * rest of the board. Every other shared peripheral (I2C, ADC, GNSS UART/DMA)
- * is initialized exactly once in this function, gated by its BSP_ENABLE_* macro.
+ * @details
+ * 调试 UART 不在这里初始化，它归 debug console 所有，并需要在板级其余外设之前
+ * 打印启动横幅。I2C、ADC、GNSS UART/DMA 等共享外设只在本函数中初始化一次。
  */
 BSP_Status_t BSP_Init(void)
 {

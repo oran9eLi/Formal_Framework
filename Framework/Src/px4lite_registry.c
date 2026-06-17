@@ -1,6 +1,6 @@
 /**
  * @file px4lite_registry.c
- * @brief Implement bounded module registration and lifecycle sequencing.
+ * @brief 实现有界模块注册表和生命周期调度。
  */
 
 #include "px4lite_registry.h"
@@ -11,15 +11,15 @@
 
 typedef struct
 {
-    Px4Lite_ModuleDescriptor_t descriptor;
-    Px4Lite_ModuleRuntime_t runtime;
-    uint8_t registered;
+    Px4Lite_ModuleDescriptor_t descriptor; /**< 模块静态描述符。 */
+    Px4Lite_ModuleRuntime_t runtime;       /**< 模块运行期生命周期状态。 */
+    uint8_t registered;                    /**< 1 表示该槽位已注册。 */
 } Px4Lite_RegistrySlot_t;
 
 static Px4Lite_RegistrySlot_t s_registry[PX4LITE_MODULE_COUNT];
 
 /**
- * @brief Update one lifecycle runtime state and its transition timestamp.
+ * @brief 更新一个模块生命周期状态和状态切换时间。
  */
 static void Px4Lite_RegistrySetState(
     Px4Lite_RegistrySlot_t *slot,
@@ -33,7 +33,7 @@ static void Px4Lite_RegistrySetState(
 }
 
 /**
- * @brief Execute one optional lifecycle callback and normalize a missing callback.
+ * @brief 执行一个可选生命周期回调，并将空回调视为成功。
  */
 static Px4Lite_Result_t Px4Lite_RegistryCall(
     Px4Lite_LifecycleFn_t callback)
@@ -42,7 +42,7 @@ static Px4Lite_Result_t Px4Lite_RegistryCall(
 }
 
 /**
- * @brief Reset the module registry and lifecycle runtime state.
+ * @brief 复位模块注册表和生命周期运行态。
  */
 Px4Lite_Result_t Px4Lite_RegistryInit(void)
 {
@@ -51,7 +51,7 @@ Px4Lite_Result_t Px4Lite_RegistryInit(void)
 }
 
 /**
- * @brief Register one module descriptor before the scheduler starts.
+ * @brief 在调度器启动前注册一个模块描述符。
  */
 Px4Lite_Result_t Px4Lite_RegistryRegister(
     const Px4Lite_ModuleDescriptor_t *descriptor)
@@ -83,7 +83,7 @@ Px4Lite_Result_t Px4Lite_RegistryRegister(
 }
 
 /**
- * @brief Run init, self-check, and start callbacks for one module.
+ * @brief 依次运行一个模块的 init、self-check 和 start 回调。
  */
 Px4Lite_Result_t Px4Lite_RegistryStart(
     Px4Lite_ModuleId_t module_id,
@@ -153,7 +153,7 @@ Px4Lite_Result_t Px4Lite_RegistryStart(
 }
 
 /**
- * @brief Run the registered stop callback for one module.
+ * @brief 运行一个模块的 stop 回调并更新生命周期状态。
  */
 Px4Lite_Result_t Px4Lite_RegistryStop(
     Px4Lite_ModuleId_t module_id,
@@ -185,7 +185,7 @@ Px4Lite_Result_t Px4Lite_RegistryStop(
 }
 
 /**
- * @brief Run the registered recovery callback and restart one module.
+ * @brief 运行一个模块的 recover 回调并重新进入启动流程。
  */
 Px4Lite_Result_t Px4Lite_RegistryRecover(
     Px4Lite_ModuleId_t module_id,
@@ -224,7 +224,7 @@ Px4Lite_Result_t Px4Lite_RegistryRecover(
 }
 
 /**
- * @brief Copy one registered module descriptor and its lifecycle state.
+ * @brief 复制一个已注册模块的描述符和生命周期状态。
  */
 Px4Lite_Result_t Px4Lite_RegistryGet(
     Px4Lite_ModuleId_t module_id,

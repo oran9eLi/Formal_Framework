@@ -1,6 +1,6 @@
 /**
  * @file px4lite_faults.h
- * @brief Define system-wide fault codes and default fault metadata.
+ * @brief 定义系统级故障码和默认故障元数据。
  */
 
 #ifndef PX4LITE_FAULTS_H
@@ -9,6 +9,9 @@
 #include <stdint.h>
 #include "px4lite_types.h"
 
+/**
+ * @brief Framework 通用严重度等级。
+ */
 typedef enum
 {
     PX4LITE_SEVERITY_INFO = 0,
@@ -18,6 +21,13 @@ typedef enum
     PX4LITE_SEVERITY_FATAL
 } Px4Lite_Severity_t;
 
+/**
+ * @brief Framework 统一故障码。
+ *
+ * @details
+ * 高字节按功能域分段，低字节表示域内具体故障。故障码用于模块状态、告警和
+ * MAVLink STATUSTEXT 等对外输出。
+ */
 typedef enum
 {
     PX4LITE_FAULT_NONE = 0x0000U,
@@ -53,15 +63,18 @@ typedef enum
     PX4LITE_FAULT_ESTIMATOR_DIVERGE = 0x0802U
 } Px4Lite_FaultCode_t;
 
+/**
+ * @brief 故障码默认元数据定义。
+ */
 typedef struct
 {
-    Px4Lite_FaultCode_t code;
-    Px4Lite_ModuleId_t owner;
-    Px4Lite_Severity_t severity;
-    uint8_t latched;
-    uint8_t reserved[3];
-    uint32_t raise_delay_ms;
-    uint32_t clear_delay_ms;
+    Px4Lite_FaultCode_t code;        /**< 故障码。 */
+    Px4Lite_ModuleId_t owner;        /**< 默认归属模块。 */
+    Px4Lite_Severity_t severity;     /**< 默认严重度。 */
+    uint8_t latched;                 /**< 1 表示故障需要显式清除。 */
+    uint8_t reserved[3];             /**< 对齐预留。 */
+    uint32_t raise_delay_ms;         /**< 故障确认延迟，单位 ms。 */
+    uint32_t clear_delay_ms;         /**< 故障清除延迟，单位 ms。 */
 } Px4Lite_FaultDefinition_t;
 
 #endif

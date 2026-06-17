@@ -1,6 +1,10 @@
 /**
  * @file business_task_template.c
- * @brief Implement fixed-period system, acquisition, and display tasks.
+ * @brief Business 层固定周期系统、采集和显示任务实现。
+ *
+ * @details
+ * Business 任务只通过应用数据接口消费 Framework 快照，不直接访问 BSP、Sensor
+ * 或驱动私有变量。周期任务使用 `vTaskDelayUntil()` 保持固定周期。
  */
 
 #include "business_task_template.h"
@@ -14,7 +18,12 @@
 
 #if BUSINESS_ENABLE_DISPLAY
 /**
- * @brief Perform a wrap-safe millisecond deadline comparison.
+ * @brief 执行支持回绕的毫秒 deadline 判断。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ * @param[in] deadline_ms 目标 deadline，单位：ms。
+ *
+ * @return 1 表示 deadline 已到达，0 表示尚未到达。
  */
 static uint8_t Business_TimeReached(uint32_t now_ms, uint32_t deadline_ms)
 {
@@ -23,7 +32,11 @@ static uint8_t Business_TimeReached(uint32_t now_ms, uint32_t deadline_ms)
 #endif
 
 /**
- * @brief Run periodic application registry service and system heartbeat updates.
+ * @brief Business 系统任务入口。
+ *
+ * @param[in] argument FreeRTOS 任务参数，当前未使用。
+ *
+ * @note 周期为 `BUSINESS_SYSTEM_PERIOD_MS`，负责启动日志、应用注册表轮询和系统心跳。
  */
 void Business_SystemTask(void *argument)
 {
@@ -39,7 +52,7 @@ void Business_SystemTask(void *argument)
     startup_record.field = "system.startup";
     startup_record.value = "ok";
 
-    /* Startup is an edge event and is written exactly once. */
+    /* 启动日志是边沿事件，只写一次。 */
     (void)Business_LogWrite(&startup_record);
     last_wake = xTaskGetTickCount();
 
@@ -55,7 +68,11 @@ void Business_SystemTask(void *argument)
 }
 
 /**
- * @brief Distribute newly published navigation snapshots at a fixed period.
+ * @brief Business 采集任务入口。
+ *
+ * @param[in] argument FreeRTOS 任务参数，当前未使用。
+ *
+ * @note 周期为 `BUSINESS_ACQUISITION_PERIOD_MS`，负责复制 Navigation 快照并发布业务事件。
  */
 void Business_AcquisitionTask(void *argument)
 {
@@ -77,7 +94,11 @@ void Business_AcquisitionTask(void *argument)
 }
 
 /**
- * @brief Poll input and advance the non-blocking display refresh state machine.
+ * @brief Business 显示服务任务入口。
+ *
+ * @param[in] argument FreeRTOS 任务参数，当前未使用。
+ *
+ * @note 触摸轮询优先于页面刷新；页面刷新通过预算化 step 防止阻塞传感器采集。
  */
 void Business_DisplayServiceTask(void *argument)
 {

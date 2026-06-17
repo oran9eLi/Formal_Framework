@@ -1,15 +1,16 @@
 /**
  * @file business_template_config.h
- * @brief Configure business task periods, stacks, and display servicing.
+ * @brief 配置 Business 任务周期、栈大小、优先级和显示刷新参数。
+ *
+ * @details
+ * Business 配置只描述应用层任务行为。Framework 固定任务配置在
+ * `px4lite_config.h`，BSP 硬件资源配置在 `bsp_config.h`。
  */
 
 #ifndef BUSINESS_TEMPLATE_CONFIG_H
 #define BUSINESS_TEMPLATE_CONFIG_H
 
-/*
- * Display is enabled in the architecture. Until the real driver is ready,
- * business_display_placeholder.c returns NOT_READY.
- */
+/* 架构上启用显示；真实显示驱动未就绪时，display adapter 返回 NOT_READY。 */
 #define BUSINESS_ENABLE_DISPLAY              1U
 
 #define BUSINESS_EVENT_QUEUE_LENGTH          8U

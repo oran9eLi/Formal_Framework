@@ -1,6 +1,10 @@
 /**
  * @file main.c
- * @brief Initialize hardware, framework services, tasks, and start the scheduler.
+ * @brief 系统组合根，初始化硬件、Framework、Business 任务并启动调度器。
+ *
+ * @details
+ * 本文件只负责启动顺序编排，不承载业务逻辑。外设初始化由 BSP 和 Platform
+ * Adapter 负责，Framework/Business 任务创建分别由各自模块完成。
  */
 
 #include "main.h"
@@ -15,7 +19,9 @@
 static void SystemClock_Config(void);
 
 /**
- * @brief Initialize hardware and framework services, then start the FreeRTOS scheduler.
+ * @brief 初始化硬件与框架服务，然后启动 FreeRTOS 调度器。
+ *
+ * @return 正常情况下不会返回；若调度器退出则进入 `Error_Handler()`。
  */
 int main(void)
 {
@@ -38,7 +44,9 @@ int main(void)
 }
 
 /**
- * @brief Configure the STM32F407 system clock for 168 MHz operation.
+ * @brief 配置 STM32F407 系统时钟为 168 MHz。
+ *
+ * @note 本函数只在启动阶段调用，失败时进入 `Error_Handler()`。
  */
 static void SystemClock_Config(void)
 {
@@ -81,7 +89,9 @@ static void SystemClock_Config(void)
 }
 
 /**
- * @brief Enter the current fatal-stop path after an unrecoverable error.
+ * @brief 进入不可恢复错误的停机路径。
+ *
+ * @note 当前策略为关闭中断后停在死循环；后续可在此扩展故障持久化。
  */
 void Error_Handler(void)
 {
@@ -93,7 +103,10 @@ void Error_Handler(void)
 
 #ifdef USE_FULL_ASSERT
 /**
- * @brief Route full-assert failures to the fatal error handler.
+ * @brief 将 full assert 失败路由到统一错误处理。
+ *
+ * @param[in] file 断言失败文件名，当前未使用。
+ * @param[in] line 断言失败行号，当前未使用。
  */
 void assert_failed(uint8_t *file, uint32_t line)
 {

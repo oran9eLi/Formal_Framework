@@ -1,6 +1,6 @@
 /**
  * @file bsp_spi.c
- * @brief Implement SPI SD access helpers for SD card logging.
+ * @brief 实现 SD 卡日志使用的板级 SPI 接口。
  */
 
 #include "bsp_spi.h"
@@ -12,6 +12,13 @@ static SPI_HandleTypeDef s_hspi1;
 static uint8_t s_initialized;
 static uint32_t s_current_prescaler;
 
+/**
+ * @brief 将 HAL SPI 状态映射为 BSP 通用返回码。
+ *
+ * @param[in] status HAL 返回状态。
+ *
+ * @return BSP 通用返回码。
+ */
 static BSP_Status_t BSP_SPI1_MapHalStatus(HAL_StatusTypeDef status)
 {
     if (status == HAL_OK)
@@ -29,6 +36,13 @@ static BSP_Status_t BSP_SPI1_MapHalStatus(HAL_StatusTypeDef status)
     return BSP_STATUS_ERROR;
 }
 
+/**
+ * @brief 按指定分频系数配置 SD 卡 SPI 总线。
+ *
+ * @param[in] prescaler HAL SPI 波特率分频宏。
+ *
+ * @return BSP 通用返回码。
+ */
 static BSP_Status_t BSP_SPI1_Configure(uint32_t prescaler)
 {
     GPIO_InitTypeDef gpio;
@@ -95,6 +109,11 @@ static BSP_Status_t BSP_SPI1_Configure(uint32_t prescaler)
     return BSP_STATUS_OK;
 }
 
+/**
+ * @brief 确保 SD 卡 SPI 总线已经初始化。
+ *
+ * @return BSP_STATUS_OK 表示总线可用，否则表示初始化失败。
+ */
 static BSP_Status_t BSP_SPI1_EnsureReady(void)
 {
     if (s_initialized != 0U)
@@ -104,21 +123,33 @@ static BSP_Status_t BSP_SPI1_EnsureReady(void)
     return BSP_SPI1_SetSpeedLow();
 }
 
+/**
+ * @brief 初始化 SD 卡 SPI 总线，默认低速。
+ */
 void BSP_SPI1_Init(void)
 {
     (void)BSP_SPI1_EnsureReady();
 }
 
+/**
+ * @brief 将 SD 卡 SPI 总线切换到初始化低速。
+ */
 BSP_Status_t BSP_SPI1_SetSpeedLow(void)
 {
     return BSP_SPI1_Configure(SPI_BAUDRATEPRESCALER_256);
 }
 
+/**
+ * @brief 将 SD 卡 SPI 总线切换到传输高速。
+ */
 BSP_Status_t BSP_SPI1_SetSpeedHigh(void)
 {
     return BSP_SPI1_Configure(SPI_BAUDRATEPRESCALER_8);
 }
 
+/**
+ * @brief 通过 SD 卡 SPI 总线发送字节。
+ */
 BSP_Status_t BSP_SPI1_Transmit(const uint8_t *tx,
                                uint16_t length,
                                uint32_t timeout_ms)
@@ -135,6 +166,9 @@ BSP_Status_t BSP_SPI1_Transmit(const uint8_t *tx,
         HAL_SPI_Transmit(&s_hspi1, (uint8_t *)tx, length, timeout_ms));
 }
 
+/**
+ * @brief 通过 SD 卡 SPI 总线接收字节。
+ */
 BSP_Status_t BSP_SPI1_Receive(uint8_t *rx,
                               uint16_t length,
                               uint32_t timeout_ms)
@@ -151,6 +185,9 @@ BSP_Status_t BSP_SPI1_Receive(uint8_t *rx,
         HAL_SPI_Receive(&s_hspi1, rx, length, timeout_ms));
 }
 
+/**
+ * @brief 通过 SD 卡 SPI 总线同时发送和接收字节。
+ */
 BSP_Status_t BSP_SPI1_TransmitReceive(const uint8_t *tx,
                                       uint8_t *rx,
                                       uint16_t length,
@@ -172,11 +209,17 @@ BSP_Status_t BSP_SPI1_TransmitReceive(const uint8_t *tx,
                                 timeout_ms));
 }
 
+/**
+ * @brief 拉低 SD 卡片选。
+ */
 void BSP_SPI1_SD_Select(void)
 {
     HAL_GPIO_WritePin(BSP_SD_CS_PORT, BSP_SD_CS_PIN, GPIO_PIN_RESET);
 }
 
+/**
+ * @brief 拉高 SD 卡片选。
+ */
 void BSP_SPI1_SD_Deselect(void)
 {
     HAL_GPIO_WritePin(BSP_SD_CS_PORT, BSP_SD_CS_PIN, GPIO_PIN_SET);

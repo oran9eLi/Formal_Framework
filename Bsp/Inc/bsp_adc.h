@@ -1,6 +1,6 @@
 /**
  * @file bsp_adc.h
- * @brief Declare board ADC access helpers for power sensing.
+ * @brief 声明用于电源采样的板级 ADC 接口。
  */
 
 #ifndef BSP_ADC_H
@@ -11,32 +11,32 @@
 #include "bsp_status.h"
 
 /**
- * @brief Initialize the board ADC power-sense channel.
+ * @brief 初始化板级 ADC 电源采样通道。
  */
 BSP_Status_t BSP_ADC_Init(void);
 
 /**
- * @brief Re-initialize the ADC after a conversion fault.
+ * @brief 在转换故障后重新初始化 ADC。
  */
 BSP_Status_t BSP_ADC_Recover(void);
 
 /**
- * @brief Release the ADC peripheral so it consumes no resources.
+ * @brief 释放 ADC 外设资源。
  */
 BSP_Status_t BSP_ADC_DeInit(void);
 
 /**
- * @brief Read one raw ADC conversion.
+ * @brief 读取一次原始 ADC 转换值。
  */
 BSP_Status_t BSP_ADC_ReadRaw(uint32_t *raw);
 
 /**
- * @brief Read several ADC conversions and return a rounded average.
+ * @brief 读取多次 ADC 转换并返回四舍五入平均值。
  */
 BSP_Status_t BSP_ADC_ReadAverage(uint32_t *raw, uint8_t count);
 
 /**
- * @brief Read the restored input voltage in millivolts.
+ * @brief 读取分压还原后的输入电压，单位 mV。
  */
 BSP_Status_t BSP_ADC_ReadVoltageMv(uint32_t *voltage_mv);
 

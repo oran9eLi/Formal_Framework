@@ -1,6 +1,6 @@
 /**
  * @file bsp_adc.c
- * @brief Implement board ADC access helpers for power sensing.
+ * @brief 实现用于电源采样的板级 ADC 接口。
  */
 
 #include "bsp_adc.h"
@@ -16,6 +16,13 @@
 static ADC_HandleTypeDef s_hadc;
 static uint8_t s_initialized;
 
+/**
+ * @brief 将 HAL ADC 返回状态映射为 BSP 通用返回码。
+ *
+ * @param[in] status HAL 返回状态。
+ *
+ * @return BSP 通用返回码。
+ */
 static BSP_Status_t BSP_ADC_MapHalStatus(HAL_StatusTypeDef status)
 {
     if (status == HAL_OK)

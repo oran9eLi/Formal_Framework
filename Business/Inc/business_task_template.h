@@ -1,6 +1,11 @@
 /**
  * @file business_task_template.h
- * @brief Declare business task services and platform hooks.
+ * @brief Business 层任务、业务服务和平台钩子接口。
+ *
+ * @details
+ * Business 层只通过 `app_data_api.h` 读取 Framework 快照，不直接访问 BSP、Sensor
+ * 或 DMA buffer。本文件中的任务入口由 FreeRTOS 调度，服务函数应保持非阻塞或
+ * 预算化执行。
  */
 
 #ifndef BUSINESS_TASK_TEMPLATE_H
@@ -8,86 +13,146 @@
 
 #include <stdint.h>
 
+/**
+ * @brief Business 服务返回值。
+ */
 typedef enum
 {
-    BUSINESS_SERVICE_OK = 0,
-    BUSINESS_SERVICE_BUSY,
-    BUSINESS_SERVICE_IDLE,
-    BUSINESS_SERVICE_NOT_READY,
-    BUSINESS_SERVICE_ERROR
+    BUSINESS_SERVICE_OK = 0,    /**< 本次服务完成且无错误。 */
+    BUSINESS_SERVICE_BUSY,      /**< 本次预算用完，仍有工作留到下一周期。 */
+    BUSINESS_SERVICE_IDLE,      /**< 当前无待处理工作。 */
+    BUSINESS_SERVICE_NOT_READY, /**< 依赖数据或模块尚未就绪。 */
+    BUSINESS_SERVICE_ERROR      /**< 服务执行出错。 */
 } Business_ServiceResult_t;
 
+/**
+ * @brief Business 层组件编号。
+ */
 typedef enum
 {
-    BUSINESS_COMPONENT_SYSTEM = 0,
-    BUSINESS_COMPONENT_ACQUISITION,
-    BUSINESS_COMPONENT_DISPLAY,
-    BUSINESS_COMPONENT_COUNT
+    BUSINESS_COMPONENT_SYSTEM = 0,      /**< 系统业务组件。 */
+    BUSINESS_COMPONENT_ACQUISITION,     /**< 业务采集/事件分发组件。 */
+    BUSINESS_COMPONENT_DISPLAY,         /**< 显示业务组件。 */
+    BUSINESS_COMPONENT_COUNT            /**< 组件数量，必须保持为最后一项。 */
 } Business_ComponentId_t;
 
+/**
+ * @brief Business 层日志记录。
+ */
 typedef struct
 {
-    uint32_t timestamp_ms;
-    uint16_t source_id;
-    uint8_t level;
-    uint8_t reserved;
-    const char *field;
-    const char *value;
+    uint32_t timestamp_ms; /**< 日志时间，单位：ms。 */
+    uint16_t source_id;    /**< 日志来源组件或模块 ID。 */
+    uint8_t level;         /**< 日志等级，具体含义由业务层定义。 */
+    uint8_t reserved;      /**< 保留字段，保持结构体对齐。 */
+    const char *field;     /**< 日志字段名，指向静态或调用期有效字符串。 */
+    const char *value;     /**< 日志字段值，指向静态或调用期有效字符串。 */
 } Business_LogRecord_t;
 
-/*
- * Platform/application hooks. Implement these in the real application layer;
- * sensor drivers and BSP code must not call these hooks directly.
+/**
+ * @brief 获取 Business 层使用的平台毫秒时间。
+ *
+ * @return 当前系统毫秒时间，单位：ms。
  */
 uint32_t Business_PlatformGetMs(void);
+
 /**
- * @brief Run one non-blocking application registry service cycle.
+ * @brief 执行一次非阻塞应用注册表轮询。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
  */
 void Business_RegistryPoll(uint32_t now_ms);
+
 /**
- * @brief Update the heartbeat and online status of a business module.
+ * @brief 更新一个 Business 组件的心跳和在线状态。
+ *
+ * @param[in] component_id Business 组件编号。
  */
 void Business_StatusHeartbeat(Business_ComponentId_t component_id);
+
 /**
- * @brief Convert a business log record into an event bus message.
+ * @brief 将一条 Business 日志记录转换为事件总线消息。
+ *
+ * @param[in] record 日志记录，不能为 NULL。
+ *
+ * @return 写入结果。
  */
 Business_ServiceResult_t Business_LogWrite(
     const Business_LogRecord_t *record);
+
 /**
- * @brief Copy one new navigation snapshot and publish an acquisition event.
+ * @brief 复制一份新的导航快照并发布业务采集事件。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 执行结果。
  */
 Business_ServiceResult_t Business_AcquisitionRunOnce(uint32_t now_ms);
 
-/*
- * Reserved display hooks. RefreshStep must return within budget_us. Return
- * BUSINESS_SERVICE_BUSY when more work remains for the next service period.
+/**
+ * @brief 轮询显示触摸输入。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 执行结果。
  */
 Business_ServiceResult_t Business_DisplayPollTouch(uint32_t now_ms);
+
 /**
- * @brief Placeholder hook for preparing one coherent display snapshot.
+ * @brief 准备一份版本一致的显示快照。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 执行结果。
  */
 Business_ServiceResult_t Business_DisplayPrepareSnapshot(uint32_t now_ms);
+
 /**
- * @brief Placeholder hook for one budget-limited display refresh step.
+ * @brief 执行一步预算化显示刷新。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ * @param[in] budget_us 本步最大执行预算，单位：us。
+ *
+ * @return 执行结果；仍有页面工作时返回 `BUSINESS_SERVICE_BUSY`。
+ *
+ * @note 本函数必须在预算内返回，避免显示刷新阻塞传感器采集。
  */
 Business_ServiceResult_t Business_DisplayRefreshStep(uint32_t now_ms,
                                                      uint32_t budget_us);
+
 /**
- * @brief Map a display service result to the framework module state.
+ * @brief 将显示服务结果映射为 Framework 显示模块状态。
+ *
+ * @param[in] result 显示服务结果。
+ * @param[in] now_ms 当前系统毫秒时间。
  */
 void Business_DisplayReportResult(Business_ServiceResult_t result,
                                   uint32_t now_ms);
 
 /**
- * @brief Run periodic application registry service and system heartbeat updates.
+ * @brief Business 系统任务入口。
+ *
+ * @param[in] argument FreeRTOS 任务参数，当前未使用。
+ *
+ * @note 周期为 1000 ms，用于启动日志、注册表轮询和系统业务心跳。
  */
 void Business_SystemTask(void *argument);
+
 /**
- * @brief Distribute newly published navigation snapshots at a fixed period.
+ * @brief Business 采集任务入口。
+ *
+ * @param[in] argument FreeRTOS 任务参数，当前未使用。
+ *
+ * @note 周期为 200 ms，用于复制 Navigation 快照并向 EventBus 分发。
  */
 void Business_AcquisitionTask(void *argument);
+
 /**
- * @brief Poll input and advance the non-blocking display refresh state machine.
+ * @brief Business 显示服务任务入口。
+ *
+ * @param[in] argument FreeRTOS 任务参数，当前未使用。
+ *
+ * @note 周期为 10 ms，触摸优先，显示刷新按步进预算执行。
  */
 void Business_DisplayServiceTask(void *argument);
 

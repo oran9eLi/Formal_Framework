@@ -1,11 +1,14 @@
 /**
  * @file bsp_status.h
- * @brief Define common board-support return codes.
+ * @brief 定义 BSP 层通用返回码。
  */
 
 #ifndef BSP_STATUS_H
 #define BSP_STATUS_H
 
+/**
+ * @brief BSP 对外接口统一返回码。
+ */
 typedef enum
 {
     BSP_STATUS_OK = 0,

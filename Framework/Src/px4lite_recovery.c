@@ -1,15 +1,12 @@
 /**
  * @file px4lite_recovery.c
- * @brief Generic, registry-driven module recovery supervision.
+ * @brief 实现通用的注册表驱动模块恢复监督。
  *
- * Policy lives here (Health task): detect an unhealthy registered module and,
- * rate-limited, invoke its `recover` callback. The recover callback MUST be
- * cheap (no blocking bus I/O) -- it only *requests* a re-init that the owning
- * module performs from its own Service task. This keeps shared-bus re-init off
- * the Health task, where it would race the sensor task on the same peripheral.
- *
- * Modularity: a new module is covered automatically once it is registered with
- * a non-null `recover` callback. No edit to this file is required.
+ * @details
+ * 恢复策略运行在 Health 任务：发现异常注册模块后，按固定退避调用其 recover 回调。
+ * recover 回调必须很轻，只能请求模块所属 Service 任务后续执行重初始化，不能在
+ * Health 任务中访问共享总线。新增模块只要在注册表中提供 recover 回调，即自动纳入
+ * 通用恢复监督。
  */
 
 #include "px4lite_recovery.h"
@@ -23,7 +20,11 @@ static uint32_t s_last_attempt_ms[PX4LITE_MODULE_COUNT];
 static uint16_t s_attempt_count[PX4LITE_MODULE_COUNT];
 
 /**
- * @brief Decide whether one module's state warrants a recovery attempt.
+ * @brief 判断一个模块状态是否需要尝试恢复。
+ *
+ * @param[in] status 模块状态，不能为 NULL。
+ *
+ * @return 1 表示需要恢复，0 表示不需要。
  */
 static uint8_t Px4Lite_RecoveryNeeded(const Px4Lite_ModuleStatus_t *status)
 {
@@ -37,7 +38,7 @@ static uint8_t Px4Lite_RecoveryNeeded(const Px4Lite_ModuleStatus_t *status)
 #endif
 
 /**
- * @brief Evaluate recovery for every registered module that exposes a recover hook.
+ * @brief 评估所有带 recover 回调的已注册模块。
  */
 void Px4Lite_RecoveryMonitorRun(uint32_t now_ms)
 {
@@ -49,7 +50,7 @@ void Px4Lite_RecoveryMonitorRun(uint32_t now_ms)
         Px4Lite_ModuleDescriptor_t descriptor;
         Px4Lite_ModuleStatus_t status;
 
-        /* Skip slots that are not registered modules. */
+        /* 跳过未注册槽位。 */
         if (Px4Lite_RegistryGet((Px4Lite_ModuleId_t)id,
                                 &descriptor, 0) != PX4LITE_OK)
         {
@@ -65,7 +66,7 @@ void Px4Lite_RecoveryMonitorRun(uint32_t now_ms)
             continue;
         }
 
-        /* Healthy (or only data-degraded): clear the retry budget. */
+        /* 健康或仅数据降级时清空恢复计数。 */
         if ((status.state == PX4LITE_STATE_ONLINE) ||
             (status.state == PX4LITE_STATE_DEGRADED))
         {
@@ -74,16 +75,15 @@ void Px4Lite_RecoveryMonitorRun(uint32_t now_ms)
             continue;
         }
 
-        /* STARTING/UNINITIALIZED/DISABLED are left to the startup path. */
+        /* STARTING/UNINITIALIZED/DISABLED 交给启动流程处理。 */
         if (Px4Lite_RecoveryNeeded(&status) == 0U)
         {
             continue;
         }
 
         /*
-         * Rate-limit attempts. Retries are intentionally unbounded so a device
-         * unplugged for an arbitrary time still recovers when it returns
-         * (hot-plug tolerance); the delay keeps the attempt rate sane.
+         * 对恢复尝试做限速，但不设置总次数上限；设备长时间断开后重新接入仍可恢复，
+         * 延迟只用于限制尝试频率。
          */
         if ((uint32_t)(now_ms - s_last_attempt_ms[id]) <
             PX4LITE_RECOVERY_DELAY_MS)
@@ -97,7 +97,7 @@ void Px4Lite_RecoveryMonitorRun(uint32_t now_ms)
             s_attempt_count[id]++;
         }
 
-        /* Cheap arm-only callback; the owning Service performs the re-init. */
+        /* 轻量请求型回调；真正 re-init 由模块所属 Service 执行。 */
         (void)descriptor.recover();
     }
 #else

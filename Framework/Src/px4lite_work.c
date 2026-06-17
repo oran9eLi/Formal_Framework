@@ -1,6 +1,6 @@
 /**
  * @file px4lite_work.c
- * @brief Implement fixed-period work dispatch and timing statistics.
+ * @brief 实现固定周期工作项调度和执行耗时统计。
  */
 
 #include "px4lite_work.h"
@@ -9,7 +9,12 @@
 #include <string.h>
 
 /**
- * @brief Check a millisecond deadline using wrap-safe signed subtraction.
+ * @brief 使用回绕安全的有符号差值判断毫秒截止时间是否到期。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ * @param[in] deadline_ms 截止时间，单位 ms。
+ *
+ * @return 1 表示已到期，0 表示尚未到期。
  */
 static uint8_t Px4Lite_WorkTimeReached(
     uint32_t now_ms,
@@ -19,7 +24,7 @@ static uint8_t Px4Lite_WorkTimeReached(
 }
 
 /**
- * @brief Initialize one bounded periodic work item.
+ * @brief 初始化一个固定周期工作项。
  */
 Px4Lite_Result_t Px4Lite_WorkInit(
     Px4Lite_WorkItem_t *item,
@@ -44,7 +49,7 @@ Px4Lite_Result_t Px4Lite_WorkInit(
 }
 
 /**
- * @brief Run one work item when its wrap-safe deadline is due.
+ * @brief 在到期时运行一个工作项并更新执行统计。
  */
 Px4Lite_Result_t Px4Lite_WorkRunDue(
     Px4Lite_WorkItem_t *item,

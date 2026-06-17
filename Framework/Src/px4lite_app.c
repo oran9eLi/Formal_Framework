@@ -1,6 +1,11 @@
 /**
  * @file px4lite_app.c
- * @brief Create and run the fixed framework task set.
+ * @brief Framework 固定任务集合创建和模块注册实现。
+ *
+ * @details
+ * 本文件负责注册 Framework 核心模块并创建 sensor、estimator、health、comm、
+ * storage 等固定任务。任务周期、栈和优先级来自 `px4lite_config.h`，调用处不得
+ * 硬编码这些参数。
  */
 
 #include "px4lite_app.h"
@@ -132,7 +137,7 @@ static const Px4Lite_ModuleDescriptor_t s_storage_descriptor = {
 #endif
 
 /**
- * @brief Register the current framework modules with lifecycle callbacks.
+ * @brief 注册当前 Framework 模块及其生命周期回调。
  */
 static BaseType_t Px4Lite_RegisterCoreModules(void)
 {
@@ -182,7 +187,7 @@ static BaseType_t Px4Lite_RegisterCoreModules(void)
 }
 
 /**
- * @brief Initialize framework data services and create the fixed task set.
+ * @brief 初始化 Framework 数据服务并创建固定任务集合。
  */
 BaseType_t Px4Lite_AppInit(void)
 {
@@ -267,6 +272,9 @@ BaseType_t Px4Lite_AppInit(void)
     return pdPASS;
 }
 
+/**
+ * @brief 按配置周期服务 LoRa 接收和 MAVLink 发送。
+ */
 static void Px4Lite_CommTask(void *argument)
 {
 #if PX4LITE_ENABLE_LORA
@@ -301,7 +309,7 @@ static void Px4Lite_CommTask(void *argument)
 }
 
 /**
- * @brief Drive the SD CSV storage work item at the configured period.
+ * @brief 按配置周期驱动 SD CSV 存储工作项。
  */
 static void Px4Lite_StorageTask(void *argument)
 {
@@ -325,7 +333,7 @@ static void Px4Lite_StorageTask(void *argument)
     {
         now_ms = Px4Lite_PlatformGetMs();
         (void)Px4Lite_WorkRunDue(&work, now_ms);
-        /* Storage is intentionally excluded from the watchdog heartbeat set. */
+        /* Storage 阻塞 I/O 优先级最低，故意不纳入 watchdog heartbeat 集合。 */
         vTaskDelayUntil(&last_wake,
                         pdMS_TO_TICKS(PX4LITE_STORAGE_PERIOD_MS));
     }
@@ -336,7 +344,7 @@ static void Px4Lite_StorageTask(void *argument)
 }
 
 /**
- * @brief Service all enabled sensor drivers at the configured acquisition period.
+ * @brief 按配置采集周期服务所有启用的传感器驱动。
  */
 static void Px4Lite_SensorTask(void *argument)
 {
@@ -376,7 +384,7 @@ static void Px4Lite_SensorTask(void *argument)
 }
 
 /**
- * @brief Run domain conversion and future fusion work at a fixed period.
+ * @brief 按固定周期执行领域转换和后续融合工作。
  */
 static void Px4Lite_EstimatorTask(void *argument)
 {
@@ -407,7 +415,7 @@ static void Px4Lite_EstimatorTask(void *argument)
 }
 
 /**
- * @brief Run health evaluation and watchdog gating.
+ * @brief 执行健康评估和 watchdog 门控。
  */
 static void Px4Lite_HealthTask(void *argument)
 {

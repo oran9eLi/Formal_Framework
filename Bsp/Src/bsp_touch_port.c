@@ -1,6 +1,6 @@
 /**
  * @file bsp_touch_port.c
- * @brief Implement the software I2C GPIO port used by the GT911 touch driver.
+ * @brief 实现 GT911 触摸驱动使用的软件 I2C GPIO 端口接口。
  */
 
 #include "bsp_touch_port.h"
@@ -15,7 +15,7 @@ void HAL_DisplayTouchSetIntInput(void);
 static uint8_t s_touch_port_last_error;
 
 /**
- * @brief Delay one software I2C half-period using a small CPU loop.
+ * @brief 使用短 CPU 循环延时一个软件 I2C 半周期。
  */
 static void BSP_TouchPort_Delay(void)
 {
@@ -28,7 +28,7 @@ static void BSP_TouchPort_Delay(void)
 }
 
 /**
- * @brief Drive the software I2C SCL line.
+ * @brief 驱动软件 I2C SCL 引脚。
  */
 static void BSP_TouchPort_WriteScl(uint8_t level)
 {
@@ -38,7 +38,7 @@ static void BSP_TouchPort_WriteScl(uint8_t level)
 }
 
 /**
- * @brief Drive the software I2C SDA line.
+ * @brief 驱动软件 I2C SDA 引脚。
  */
 static void BSP_TouchPort_WriteSda(uint8_t level)
 {
@@ -48,7 +48,7 @@ static void BSP_TouchPort_WriteSda(uint8_t level)
 }
 
 /**
- * @brief Stop a register transaction and store a diagnostic error code.
+ * @brief 终止一次寄存器事务并记录诊断错误码。
  */
 static BSP_TouchPortResult_t BSP_TouchPort_Fail(uint8_t code)
 {
@@ -57,7 +57,7 @@ static BSP_TouchPortResult_t BSP_TouchPort_Fail(uint8_t code)
 }
 
 /**
- * @brief Generate a software I2C start condition.
+ * @brief 产生软件 I2C START 条件。
  */
 static void BSP_TouchPort_Start(void)
 {
@@ -70,7 +70,7 @@ static void BSP_TouchPort_Start(void)
 }
 
 /**
- * @brief Generate a software I2C stop condition.
+ * @brief 产生软件 I2C STOP 条件。
  */
 static void BSP_TouchPort_Stop(void)
 {
@@ -84,7 +84,7 @@ static void BSP_TouchPort_Stop(void)
 }
 
 /**
- * @brief Wait for a software I2C ACK bit.
+ * @brief 等待软件 I2C ACK 位。
  */
 static uint8_t BSP_TouchPort_WaitAck(void)
 {
@@ -110,7 +110,7 @@ static uint8_t BSP_TouchPort_WaitAck(void)
 }
 
 /**
- * @brief Send an ACK or NACK bit after reading one byte.
+ * @brief 读取一个字节后发送 ACK 或 NACK。
  */
 static void BSP_TouchPort_Ack(uint8_t ack)
 {
@@ -124,7 +124,7 @@ static void BSP_TouchPort_Ack(uint8_t ack)
 }
 
 /**
- * @brief Write one byte on the software I2C bus.
+ * @brief 在软件 I2C 总线上写入一个字节。
  */
 static void BSP_TouchPort_SendByte(uint8_t data)
 {
@@ -143,7 +143,7 @@ static void BSP_TouchPort_SendByte(uint8_t data)
 }
 
 /**
- * @brief Read one byte from the software I2C bus.
+ * @brief 从软件 I2C 总线读取一个字节。
  */
 static uint8_t BSP_TouchPort_ReadByte(uint8_t ack)
 {
@@ -170,7 +170,7 @@ static uint8_t BSP_TouchPort_ReadByte(uint8_t ack)
 }
 
 /**
- * @brief Initialize the GPIO resources used by the software I2C touch port.
+ * @brief 初始化软件 I2C 触摸端口使用的 GPIO 资源。
  */
 BSP_TouchPortResult_t BSP_TouchPort_Init(void)
 {
@@ -182,7 +182,7 @@ BSP_TouchPortResult_t BSP_TouchPort_Init(void)
 }
 
 /**
- * @brief Drive the touch reset line high or low.
+ * @brief 驱动触摸 reset 引脚高低电平。
  */
 void BSP_TouchPort_WriteReset(uint8_t level)
 {
@@ -192,7 +192,7 @@ void BSP_TouchPort_WriteReset(uint8_t level)
 }
 
 /**
- * @brief Drive the touch INT line during GT911 address selection.
+ * @brief 在 GT911 地址选择阶段驱动 INT 引脚。
  */
 void BSP_TouchPort_SetIntOutput(uint8_t level)
 {
@@ -200,7 +200,7 @@ void BSP_TouchPort_SetIntOutput(uint8_t level)
 }
 
 /**
- * @brief Restore the touch INT line to input mode.
+ * @brief 将触摸 INT 引脚恢复为输入模式。
  */
 void BSP_TouchPort_SetIntInput(void)
 {
@@ -208,7 +208,7 @@ void BSP_TouchPort_SetIntInput(void)
 }
 
 /**
- * @brief Read the current touch INT line level.
+ * @brief 读取当前触摸 INT 引脚电平。
  */
 uint8_t BSP_TouchPort_ReadInt(void)
 {
@@ -217,7 +217,7 @@ uint8_t BSP_TouchPort_ReadInt(void)
 }
 
 /**
- * @brief Read the current touch SCL line level.
+ * @brief 读取当前触摸 SCL 引脚电平。
  */
 uint8_t BSP_TouchPort_ReadScl(void)
 {
@@ -226,7 +226,7 @@ uint8_t BSP_TouchPort_ReadScl(void)
 }
 
 /**
- * @brief Read the current touch SDA line level.
+ * @brief 读取当前触摸 SDA 引脚电平。
  */
 uint8_t BSP_TouchPort_ReadSda(void)
 {
@@ -235,7 +235,7 @@ uint8_t BSP_TouchPort_ReadSda(void)
 }
 
 /**
- * @brief Recover a stuck software I2C bus by clocking SCL.
+ * @brief 通过 SCL 时钟脉冲恢复卡死的软件 I2C 总线。
  */
 void BSP_TouchPort_Recover(void)
 {
@@ -254,7 +254,7 @@ void BSP_TouchPort_Recover(void)
 }
 
 /**
- * @brief Write bytes to an 8-bit addressed touch register.
+ * @brief 向 8-bit 地址触摸寄存器写入字节。
  */
 BSP_TouchPortResult_t BSP_TouchPort_WriteReg8(
     uint8_t addr,
@@ -295,7 +295,7 @@ BSP_TouchPortResult_t BSP_TouchPort_WriteReg8(
 }
 
 /**
- * @brief Read bytes from an 8-bit addressed touch register.
+ * @brief 从 8-bit 地址触摸寄存器读取字节。
  */
 BSP_TouchPortResult_t BSP_TouchPort_ReadReg8(
     uint8_t addr,
@@ -338,7 +338,7 @@ BSP_TouchPortResult_t BSP_TouchPort_ReadReg8(
 }
 
 /**
- * @brief Write bytes to a 16-bit addressed touch register.
+ * @brief 向 16-bit 地址触摸寄存器写入字节。
  */
 BSP_TouchPortResult_t BSP_TouchPort_WriteReg16(
     uint8_t addr,
@@ -384,7 +384,7 @@ BSP_TouchPortResult_t BSP_TouchPort_WriteReg16(
 }
 
 /**
- * @brief Read bytes from a 16-bit addressed touch register.
+ * @brief 从 16-bit 地址触摸寄存器读取字节。
  */
 BSP_TouchPortResult_t BSP_TouchPort_ReadReg16(
     uint8_t addr,
@@ -432,7 +432,7 @@ BSP_TouchPortResult_t BSP_TouchPort_ReadReg16(
 }
 
 /**
- * @brief Return the last low-level software I2C diagnostic error code.
+ * @brief 返回最近一次底层软件 I2C 诊断错误码。
  */
 uint8_t BSP_TouchPort_GetLastError(void)
 {

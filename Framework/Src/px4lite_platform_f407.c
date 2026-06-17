@@ -1,6 +1,11 @@
 /**
  * @file px4lite_platform_f407.c
- * @brief Adapt STM32F407 BSP and sensor drivers to framework interfaces.
+ * @brief STM32F407 平台适配实现，将 BSP/Driver 数据转换为 Framework 接口。
+ *
+ * @details
+ * 本文件是 Framework 层唯一允许包含 BSP 头文件的位置。它负责调用 BSP 和
+ * Sensor Driver，并把驱动私有类型转换为 `px4lite_types.h` 中定义的 Framework
+ * 强类型数据。其他 Framework 文件不得绕过本文件直接包含 BSP 或 HAL 头文件。
  */
 
 #include "px4lite_platform.h"
@@ -21,6 +26,13 @@
 static uint32_t s_heartbeat_ms[PX4LITE_HEARTBEAT_COUNT];
 static uint32_t s_heartbeat_seen_mask;
 
+/**
+ * @brief 将 float 按四舍五入方式转换为 int32。
+ *
+ * @param[in] value 输入浮点值。
+ *
+ * @return 四舍五入后的整数。
+ */
 static int32_t Px4Lite_RoundFloatToI32(float value)
 {
     if (value >= 0.0f)
@@ -35,7 +47,9 @@ extern void BSP_WatchdogRefresh(void);
 #endif
 
 /**
- * @brief Reset platform heartbeat state and initialize adapter-owned services.
+ * @brief 复位平台心跳状态并初始化适配层拥有的服务。
+ *
+ * @return 初始化结果。
  */
 Px4Lite_Result_t Px4Lite_PlatformInit(void)
 {
@@ -45,16 +59,20 @@ Px4Lite_Result_t Px4Lite_PlatformInit(void)
 }
 
 /**
- * @brief Return the monotonic platform time in milliseconds.
+ * @brief 获取平台单调毫秒时间。
+ *
+ * @return 当前系统毫秒时间，单位：ms。
  */
 uint32_t Px4Lite_PlatformGetMs(void)
 {
-    /* BSP_Time_GetTickMs is the single board millisecond source (TIM6-based). */
+    /* BSP_Time_GetTickMs 是板级唯一毫秒时间源，底层基于 TIM6。 */
     return BSP_Time_GetTickMs();
 }
 
 /**
- * @brief Return a coherent microsecond timestamp from HAL tick and TIM6.
+ * @brief 获取由 HAL tick 和 TIM6 组合出的相干微秒时间戳。
+ *
+ * @return 当前平台时间，单位：us。
  */
 uint32_t Px4Lite_PlatformGetUs(void)
 {
@@ -88,7 +106,10 @@ uint32_t Px4Lite_PlatformGetUs(void)
 }
 
 /**
- * @brief Record the latest successful execution time of one required task.
+ * @brief 记录一个必需任务最近一次成功执行时间。
+ *
+ * @param[in] id 心跳编号。
+ * @param[in] now_ms 当前系统毫秒时间。
  */
 void Px4Lite_PlatformHeartbeat(Px4Lite_HeartbeatId_t id,
                                uint32_t now_ms)
@@ -105,7 +126,11 @@ void Px4Lite_PlatformHeartbeat(Px4Lite_HeartbeatId_t id,
 }
 
 /**
- * @brief Check whether every required task heartbeat is present and fresh.
+ * @brief 检查所有必需任务心跳是否存在且未超时。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 1 表示心跳健康，0 表示至少一个必需任务未上报或已超时。
  */
 uint8_t Px4Lite_PlatformHeartbeatsHealthy(uint32_t now_ms)
 {
@@ -147,7 +172,9 @@ uint8_t Px4Lite_PlatformHeartbeatsHealthy(uint32_t now_ms)
 }
 
 /**
- * @brief Refresh the hardware watchdog only when all required heartbeats are healthy.
+ * @brief 在所有必需任务心跳健康时刷新硬件看门狗。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
  */
 void Px4Lite_PlatformWatchdogFeed(uint32_t now_ms)
 {
@@ -164,12 +191,11 @@ void Px4Lite_PlatformWatchdogFeed(uint32_t now_ms)
 }
 
 /**
- * @brief Initialize the GNSS BSP and typed sensor parser.
+ * @brief 初始化 GNSS BSP 和强类型 GNSS 解析器。
  */
 Px4Lite_Result_t Px4Lite_GnssInit(void)
 {
-    /* GNSS UART/DMA is brought up centrally in BSP_Init(); only the parser
-     * is initialized here. */
+    /* GNSS UART/DMA 由 BSP_Init() 集中初始化；此处只初始化解析器状态。 */
     return (Sensor_GNSS_Init() == GNSS_RESULT_OK)
                ? PX4LITE_OK
                : PX4LITE_IO_ERROR;
@@ -181,7 +207,7 @@ void Px4Lite_GnssRequestReinit(void)
 }
 
 /**
- * @brief Convert one newly received GNSS driver snapshot into framework measurement format.
+ * @brief 将一个最新 GNSS 驱动快照转换为 Framework 测量格式。
  */
 Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
 {

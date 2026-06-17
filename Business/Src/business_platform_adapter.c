@@ -1,6 +1,10 @@
 /**
  * @file business_platform_adapter.c
- * @brief Bridge business hooks to framework topics, status, and time services.
+ * @brief 将 Business 钩子适配到 Framework topic、状态和时间服务。
+ *
+ * @details
+ * Business 层通过本文件访问平台时间、心跳、模块状态和 EventBus。这里是 Business
+ * 到 Framework 的边界适配点，不应向下包含 BSP 或传感器驱动头文件。
  */
 
 #include "business_task_template.h"
@@ -15,7 +19,7 @@
 #include "px4lite_topics.h"
 
 /**
- * @brief Return the platform monotonic time in milliseconds to business code.
+ * @brief 向 Business 代码返回平台单调毫秒时间。
  */
 uint32_t Business_PlatformGetMs(void)
 {
@@ -23,7 +27,7 @@ uint32_t Business_PlatformGetMs(void)
 }
 
 /**
- * @brief Run one non-blocking application registry service cycle.
+ * @brief 执行一次非阻塞应用注册表服务周期。
  */
 void Business_RegistryPoll(uint32_t now_ms)
 {
@@ -31,7 +35,7 @@ void Business_RegistryPoll(uint32_t now_ms)
 }
 
 /**
- * @brief Update the heartbeat and online status of a business module.
+ * @brief 更新业务组件心跳和对应 Framework 模块在线状态。
  */
 void Business_StatusHeartbeat(Business_ComponentId_t component_id)
 {
@@ -70,7 +74,7 @@ void Business_StatusHeartbeat(Business_ComponentId_t component_id)
 }
 
 /**
- * @brief Convert a business log record into an event bus message.
+ * @brief 将业务日志记录转换为 EventBus 消息。
  */
 Business_ServiceResult_t Business_LogWrite(
     const Business_LogRecord_t *record)
@@ -121,7 +125,7 @@ Business_ServiceResult_t Business_LogWrite(
 }
 
 /**
- * @brief Copy one new navigation snapshot and publish an acquisition event.
+ * @brief 复制一份新的导航快照并发布采集完成事件。
  */
 Business_ServiceResult_t Business_AcquisitionRunOnce(uint32_t now_ms)
 {
@@ -166,7 +170,7 @@ Business_ServiceResult_t Business_AcquisitionRunOnce(uint32_t now_ms)
 }
 
 /**
- * @brief Map a display service result to the framework module state.
+ * @brief 将显示服务结果映射为 Framework 显示模块状态。
  */
 void Business_DisplayReportResult(Business_ServiceResult_t result,
                                   uint32_t now_ms)

@@ -1,6 +1,11 @@
 /**
  * @file px4lite_config.h
- * @brief Configure enabled modules, periods, timeouts, queues, and stacks.
+ * @brief 配置 Framework 模块开关、周期、超时、队列和任务栈。
+ *
+ * @details
+ * 本文件只保存 Framework 层配置。BSP 引脚/外设配置放在 `bsp_config.h`，
+ * Business 任务配置放在 `business_template_config.h`。所有 `_MS` 后缀宏均为真实
+ * 毫秒值，不能填入 RTOS tick。
  */
 
 #ifndef PX4LITE_CONFIG_H
@@ -34,12 +39,12 @@
 #define PX4LITE_PRIORITY_ESTIMATOR    (tskIDLE_PRIORITY + 3U)
 #define PX4LITE_PRIORITY_HEALTH       (tskIDLE_PRIORITY + 2U)
 #define PX4LITE_PRIORITY_COMM         (tskIDLE_PRIORITY + 2U)
-/* Storage does blocking SD I/O; keep it strictly below biz_display (idle+1). */
+/* Storage 会执行阻塞 SD I/O，优先级必须低于 biz_display（idle+1）。 */
 #define PX4LITE_PRIORITY_STORAGE      (tskIDLE_PRIORITY)
 
 /*
- * Keep disabled until BSP_WatchdogRefresh() is implemented.
- * Enabling this macro without that function intentionally causes a link error.
+ * 硬件 watchdog 刷新入口实现前保持关闭；若未实现 BSP_WatchdogRefresh() 就打开，
+ * 链接错误是预期保护。
  */
 #define PX4LITE_ENABLE_HARDWARE_WATCHDOG   0U
 
@@ -60,8 +65,8 @@
 #define PX4LITE_DISPLAY_OFFLINE_MS        3000U
 
 /*
- * Recovery is wired into HealthRun but remains disabled until the BSP
- * recovery path has completed hardware fault-injection testing.
+ * GNSS 专用恢复路径已经挂到 HealthRun，但在 BSP 恢复路径完成硬件故障注入测试前
+ * 保持关闭。
  */
 #define PX4LITE_GNSS_RECOVERY_ENABLE          0U
 #define PX4LITE_GNSS_ERROR_THRESHOLD          3U
@@ -69,11 +74,9 @@
 #define PX4LITE_GNSS_RECOVERY_MAX_RETRY       5U
 
 /*
- * Generic registry-driven module recovery (Health supervises; the owning
- * module's Service performs the re-init). Enable only after every recoverable
- * module's `recover` callback is the cheap "request re-init" form (no blocking
- * bus I/O in the Health task). Retries are rate-limited but unbounded so a
- * device unplugged for any duration recovers when it returns (hot-plug).
+ * 通用注册表恢复：Health 只监督并调用轻量 recover 回调，真正 re-init 由模块所属
+ * Service 执行。recover 回调必须是“请求重初始化”形式，不能在 Health 任务中执行
+ * 阻塞总线 I/O。重试限速但不设总次数上限，以支持长时间拔插后的热恢复。
  */
 #define PX4LITE_RECOVERY_ENABLE               1U
 #define PX4LITE_RECOVERY_ERROR_THRESHOLD      5U
@@ -96,8 +99,8 @@
 #define PX4LITE_MAVLINK_COMPONENT_ID       191U
 
 /*
- * MAVLink telemetry selection. CommTask is the only transmission owner.
- * Current product phase sends heartbeat and parsed GNSS only.
+ * MAVLink 遥测消息选择。CommTask 是唯一发送拥有者，消息必须逐字段编码，不能直接
+ * 发送 C 结构体内存。
  */
 #define PX4LITE_MAVLINK_ENABLE_HEARTBEAT       1U
 #define PX4LITE_MAVLINK_ENABLE_GPS_RAW         1U

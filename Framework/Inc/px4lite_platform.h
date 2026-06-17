@@ -1,6 +1,11 @@
 /**
  * @file px4lite_platform.h
- * @brief Declare MCU platform adapters and task heartbeat services.
+ * @brief MCU 平台适配、硬件服务和任务心跳接口。
+ *
+ * @details
+ * Platform Adapter 是 Framework 层接触 BSP 的唯一边界。Framework 其他文件不得
+ * 包含 BSP 头文件，也不得直接调用 HAL/BSP。所有 Driver 类型到 Framework 类型的
+ * 转换都应在平台适配层完成。
  */
 
 #ifndef PX4LITE_PLATFORM_H
@@ -8,97 +13,221 @@
 
 #include "px4lite_types.h"
 
+/**
+ * @brief 必须参与 watchdog 门控的任务心跳编号。
+ */
 typedef enum
 {
-    PX4LITE_HEARTBEAT_SENSOR = 0,
-    PX4LITE_HEARTBEAT_ESTIMATOR,
-    PX4LITE_HEARTBEAT_HEALTH,
-    PX4LITE_HEARTBEAT_SYSTEM,
-    PX4LITE_HEARTBEAT_BUSINESS,
-    PX4LITE_HEARTBEAT_DISPLAY,
-    PX4LITE_HEARTBEAT_COMM,
-    PX4LITE_HEARTBEAT_COUNT
+    PX4LITE_HEARTBEAT_SENSOR = 0, /**< sensor 采集任务心跳。 */
+    PX4LITE_HEARTBEAT_ESTIMATOR,  /**< estimator 姿态/导航任务心跳。 */
+    PX4LITE_HEARTBEAT_HEALTH,     /**< health 健康监控任务心跳。 */
+    PX4LITE_HEARTBEAT_SYSTEM,     /**< biz_system 系统业务任务心跳。 */
+    PX4LITE_HEARTBEAT_BUSINESS,   /**< biz_acq 业务采集任务心跳。 */
+    PX4LITE_HEARTBEAT_DISPLAY,    /**< biz_display 显示业务任务心跳。 */
+    PX4LITE_HEARTBEAT_COMM,       /**< comm 通信任务心跳。 */
+    PX4LITE_HEARTBEAT_COUNT       /**< 心跳数量，必须保持为最后一项。 */
 } Px4Lite_HeartbeatId_t;
 
-/* Platform adapters are the only framework files allowed to call BSP. */
 /**
- * @brief Return the monotonic platform time in milliseconds.
+ * @brief 获取平台单调毫秒时间。
+ *
+ * @return 当前系统毫秒时间，单位：ms。
+ *
+ * @note Framework、Business、Sensor 的 `_ms` 字段应使用该时间基准或
+ * `BSP_Time_GetTickMs()`，不得混用 RTOS ticks。
  */
 uint32_t Px4Lite_PlatformGetMs(void);
+
 /**
- * @brief Return a coherent microsecond timestamp from HAL tick and TIM6.
+ * @brief 获取平台微秒时间戳。
+ *
+ * @return 当前平台微秒时间，单位：us。
+ *
+ * @note 该时间戳由 HAL tick 与 TIM6 组合得到，用于短周期诊断和调试统计。
  */
 uint32_t Px4Lite_PlatformGetUs(void);
+
 /**
- * @brief Record the latest successful execution time of one required task.
+ * @brief 记录一个必需任务最近一次成功执行时间。
+ *
+ * @param[in] id 心跳编号，必须小于 `PX4LITE_HEARTBEAT_COUNT`。
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @note Debug 和 Storage 当前不纳入 watchdog 心跳集合。
  */
-void Px4Lite_PlatformHeartbeat(Px4Lite_HeartbeatId_t id,
-                               uint32_t now_ms);
+void Px4Lite_PlatformHeartbeat(Px4Lite_HeartbeatId_t id, uint32_t now_ms);
+
 /**
- * @brief Check whether every required task heartbeat is present and fresh.
+ * @brief 检查所有必需任务心跳是否存在且未超时。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 1 表示全部必需任务心跳健康，0 表示至少一个心跳缺失或超时。
  */
 uint8_t Px4Lite_PlatformHeartbeatsHealthy(uint32_t now_ms);
+
 /**
- * @brief Refresh the hardware watchdog only when all required heartbeats are healthy.
+ * @brief 在所有必需任务心跳健康时刷新硬件看门狗。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @note 调用方不应绕过本函数直接喂狗。
  */
 void Px4Lite_PlatformWatchdogFeed(uint32_t now_ms);
 
 /**
- * @brief Reset platform heartbeat state and initialize adapter-owned services.
+ * @brief 初始化平台适配层拥有的服务并复位心跳状态。
+ *
+ * @return 初始化结果。
+ * @retval PX4LITE_OK 初始化成功。
  */
 Px4Lite_Result_t Px4Lite_PlatformInit(void);
+
 /**
- * @brief Initialize the GNSS BSP and typed sensor driver through the platform adapter.
+ * @brief 通过平台适配层初始化 GNSS BSP 和强类型 GNSS 驱动。
+ *
+ * @return 初始化结果。
  */
 Px4Lite_Result_t Px4Lite_GnssInit(void);
+
 /**
- * @brief Convert one newly received GNSS driver snapshot into framework measurement format.
+ * @brief 将最新 GNSS 驱动快照转换为 Framework GNSS 测量。
+ *
+ * @param[out] measurement 输出缓冲区，不能为 NULL。
+ *
+ * @return 转换结果。
+ * @retval PX4LITE_OK 成功输出测量。
+ * @retval PX4LITE_INVALID_PARAM 参数为空。
+ * @retval PX4LITE_NOT_READY 驱动暂无新数据或无有效定位。
  */
 Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement);
+
 /**
- * @brief Initialize the MPU6050 IMU driver.
+ * @brief 初始化 MPU6050 IMU 驱动。
+ *
+ * @return 初始化结果。
  */
 Px4Lite_Result_t Px4Lite_ImuInit(void);
+
 /**
- * @brief Convert one MPU6050 snapshot into framework IMU format.
+ * @brief 将最新 MPU6050 快照转换为 Framework IMU 测量。
+ *
+ * @param[out] measurement 输出缓冲区，不能为 NULL。
+ *
+ * @return 转换结果。
  */
 Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *measurement);
+
 /**
- * @brief Initialize the BME280 barometer/environment driver.
+ * @brief 初始化 BME280 气压计/环境驱动。
+ *
+ * @return 初始化结果。
  */
 Px4Lite_Result_t Px4Lite_BaroInit(void);
+
 /**
- * @brief Convert one BME280 driver snapshot into framework barometer format.
+ * @brief 将最新 BME280 快照转换为 Framework 气压计测量。
+ *
+ * @param[out] measurement 输出缓冲区，不能为 NULL。
+ *
+ * @return 转换结果。
  */
 Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement);
+
 /**
- * @brief Initialize the power-sense ADC driver.
+ * @brief 初始化电源检测 ADC 驱动。
+ *
+ * @return 初始化结果。
  */
 Px4Lite_Result_t Px4Lite_BatteryInit(void);
+
 /**
- * @brief Convert one power driver snapshot into framework battery format.
+ * @brief 将最新电源驱动快照转换为 Framework 电池状态。
+ *
+ * @param[out] measurement 输出缓冲区，不能为 NULL。
+ *
+ * @return 转换结果。
  */
-Px4Lite_Result_t Px4Lite_BatteryRead(
-    Px4Lite_BatteryStatus_t *measurement);
+Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement);
 
-/* Add future MCU or Linux adapters here without exposing HAL types. */
-
+/**
+ * @brief 初始化 LoRa E22 通信驱动。
+ *
+ * @return 初始化结果。
+ */
 Px4Lite_Result_t Px4Lite_LoRaInit(void);
+
+/**
+ * @brief 执行 LoRa 驱动周期服务。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 服务结果。
+ *
+ * @note 本函数由 comm 任务调用，用于处理 RX、TX 完成和延迟 reinit。
+ */
 Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms);
-/* Async-copy: PX4LITE_OK means the frame was copied and staged by the driver
-   (caller may reuse its buffer), not that it has been transmitted. Air-side
-   completion is tracked via Px4Lite_LoRaGetDebugInfo (tx_frame_count/last_tx_ms).
-   Returns PX4LITE_BUSY while a previously staged frame is still in flight. */
+
+/**
+ * @brief 发送一帧 LoRa/MAVLink 数据。
+ *
+ * @param[in] data 待发送字节缓冲区，不能为 NULL。
+ * @param[in] len 待发送长度，单位：byte。
+ *
+ * @return 发送提交结果。
+ * @retval PX4LITE_OK 数据已被驱动异步复制并进入发送流程。
+ * @retval PX4LITE_BUSY 上一帧仍在发送中。
+ * @retval PX4LITE_INVALID_PARAM 参数为空或长度非法。
+ * @retval PX4LITE_IO_ERROR 底层发送提交失败。
+ *
+ * @note `PX4LITE_OK` 不表示空口发送完成；真正完成以 UART DMA TC 回调统计为准。
+ * 调用方在返回 OK 后可以立即复用自己的输入缓冲区。
+ */
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief 获取 LoRa 模块当前公开状态。
+ *
+ * @param[in] now_ms 当前系统毫秒时间，用于超时判断。
+ *
+ * @return LoRa 模块状态。
+ */
 Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms);
+
+/**
+ * @brief 复制 LoRa/MAVLink 通信统计。
+ *
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ *
+ * @note 本函数不访问慢速总线，不阻塞。
+ */
 void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out);
 
-/* Cheap "request re-init" hooks used by the recovery monitor. Each only sets a
-   flag; the owning driver performs the actual re-init from its own Service. */
+/**
+ * @brief 请求 GNSS 在所属 service 中重新初始化。
+ *
+ * @note recovery 回调只能置位请求标志，不能在 Health task 中执行总线 I/O。
+ */
 void Px4Lite_GnssRequestReinit(void);
+
+/**
+ * @brief 请求 IMU 在所属 service 中重新初始化。
+ */
 void Px4Lite_ImuRequestReinit(void);
+
+/**
+ * @brief 请求气压计在所属 service 中重新初始化。
+ */
 void Px4Lite_BaroRequestReinit(void);
+
+/**
+ * @brief 请求电源检测模块在所属 service 中重新初始化。
+ */
 void Px4Lite_BatteryRequestReinit(void);
+
+/**
+ * @brief 请求 LoRa 在所属 service 中重新初始化。
+ */
 void Px4Lite_LoRaRequestReinit(void);
 
 #endif

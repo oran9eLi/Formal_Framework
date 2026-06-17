@@ -1,6 +1,10 @@
 /**
  * @file app_data_api.c
- * @brief Implement fresh and coherent application snapshot reads.
+ * @brief 实现 Business 层只读数据 API 的新鲜度检查和一致性复制。
+ *
+ * @details
+ * 本文件是 Business 消费 Framework 数据的唯一入口实现。上层业务不得直接读取
+ * Framework topic、BSP DMA 缓冲或驱动私有变量。
  */
 
 #include "app_data_api.h"
@@ -11,7 +15,9 @@
 #include "px4lite_topics.h"
 
 /**
- * @brief Summarize active module faults in a copied system snapshot.
+ * @brief 从已复制的系统快照中汇总活动模块故障。
+ *
+ * @param[in,out] snapshot 系统快照，允许为 NULL。
  */
 static void App_SummarizeSystemFaults(App_SystemSnapshot_t *snapshot)
 {
@@ -50,6 +56,12 @@ static void App_SummarizeSystemFaults(App_SystemSnapshot_t *snapshot)
     snapshot->highest_severity = best_severity;
 }
 
+/**
+ * @brief 优先使用告警快照填充系统告警汇总，缺失时回退到模块状态汇总。
+ *
+ * @param[in,out] out 系统快照，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间。
+ */
 static void App_ApplyAlarmSummary(App_SystemSnapshot_t *out,
                                   uint32_t now_ms)
 {
@@ -72,7 +84,7 @@ static void App_ApplyAlarmSummary(App_SystemSnapshot_t *out,
 }
 
 /**
- * @brief Copy a fresh and coherent navigation snapshot for application consumers.
+ * @brief 为应用消费者复制一份新鲜的导航快照。
  */
 Px4Lite_Result_t App_CopyNavigation(
     App_NavigationSnapshot_t *out,
@@ -122,7 +134,7 @@ Px4Lite_Result_t App_CopyNavigation(
 }
 
 /**
- * @brief Copy a version-consistent system health and module status snapshot.
+ * @brief 复制一份版本一致的系统健康和模块状态快照。
  */
 Px4Lite_Result_t App_CopySystem(
     App_SystemSnapshot_t *out,
@@ -188,6 +200,9 @@ Px4Lite_Result_t App_CopySystem(
     return PX4LITE_BUSY;
 }
 
+/**
+ * @brief 复制一份新鲜的活动告警快照。
+ */
 Px4Lite_Result_t App_CopyAlarm(
     App_AlarmSnapshot_t *out,
     uint32_t now_ms)
@@ -232,6 +247,9 @@ Px4Lite_Result_t App_CopyAlarm(
     return PX4LITE_OK;
 }
 
+/**
+ * @brief 复制一份新鲜的环境快照。
+ */
 Px4Lite_Result_t App_CopyEnvironment(
     App_EnvironmentSnapshot_t *out,
     uint32_t now_ms)
@@ -278,7 +296,7 @@ Px4Lite_Result_t App_CopyEnvironment(
 }
 
 /**
- * @brief Copy the latest status of one framework module.
+ * @brief 复制指定 Framework 模块的最新状态。
  */
 Px4Lite_Result_t App_GetModuleStatus(
     Px4Lite_ModuleId_t module_id,
@@ -288,7 +306,7 @@ Px4Lite_Result_t App_GetModuleStatus(
 }
 
 /**
- * @brief Copy the latest LoRa/MAVLink communication statistics.
+ * @brief 复制最新 LoRa/MAVLink 通信统计。
  */
 void App_GetCommStats(Px4Lite_CommDebugInfo_t *out)
 {

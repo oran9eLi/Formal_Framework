@@ -1,6 +1,10 @@
 /**
  * @file business_task_registry.c
- * @brief Create the configured business task set.
+ * @brief Business 层任务创建和 Display 模块注册实现。
+ *
+ * @details
+ * 本文件负责初始化 Business 拥有的服务、注册 Display 模块描述符并创建固定
+ * Business 任务集合。任务参数来自 `business_template_config.h`。
  */
 
 #include "business_task_registry.h"
@@ -14,6 +18,11 @@
 #include "px4lite_registry.h"
 #include "task.h"
 
+/**
+ * @brief Display 模块注册表 init 回调。
+ *
+ * @return 初始化结果。
+ */
 static Px4Lite_Result_t Business_DisplayModuleInit(void)
 {
     return (Display_Init() == DISPLAY_OK)
@@ -21,6 +30,11 @@ static Px4Lite_Result_t Business_DisplayModuleInit(void)
                : PX4LITE_IO_ERROR;
 }
 
+/**
+ * @brief Display 模块注册表 self_check 回调。
+ *
+ * @return 自检结果。
+ */
 static Px4Lite_Result_t Business_DisplayModuleSelfCheck(void)
 {
     uint16_t error_code;
@@ -30,6 +44,13 @@ static Px4Lite_Result_t Business_DisplayModuleSelfCheck(void)
                : PX4LITE_NOT_READY;
 }
 
+/**
+ * @brief Display 模块注册表 recover 回调。
+ *
+ * @return 恢复请求结果。
+ *
+ * @note 本函数只请求显示模块恢复，实际恢复由显示服务上下文完成。
+ */
 static Px4Lite_Result_t Business_DisplayModuleRecover(void)
 {
     Display_RequestRecover();
@@ -49,7 +70,9 @@ static const Px4Lite_ModuleDescriptor_t s_display_descriptor = {
 };
 
 /**
- * @brief Initialize business-owned services and create business tasks.
+ * @brief 初始化 Business 拥有的服务并创建 Business 任务。
+ *
+ * @return FreeRTOS 执行结果，`pdPASS` 表示成功。
  */
 BaseType_t Business_AppInit(void)
 {
@@ -69,7 +92,9 @@ BaseType_t Business_AppInit(void)
 }
 
 /**
- * @brief Create the configured fixed set of business-layer tasks.
+ * @brief 创建配置中启用的固定 Business 任务集合。
+ *
+ * @return FreeRTOS 执行结果，`pdPASS` 表示所有任务创建成功。
  */
 BaseType_t Business_CreateTasks(void)
 {

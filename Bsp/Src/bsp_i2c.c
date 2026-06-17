@@ -1,6 +1,6 @@
 /**
  * @file bsp_i2c.c
- * @brief Implement board I2C access helpers.
+ * @brief 实现传感器驱动使用的板级 I2C 访问接口。
  */
 
 #include "bsp_i2c.h"
@@ -11,6 +11,13 @@
 static I2C_HandleTypeDef s_hi2c;
 static uint8_t s_initialized;
 
+/**
+ * @brief 将 HAL I2C 状态映射为 BSP 通用返回码。
+ *
+ * @param[in] status HAL 返回状态。
+ *
+ * @return BSP 通用返回码。
+ */
 static BSP_Status_t BSP_I2C_MapHalStatus(HAL_StatusTypeDef status)
 {
     if (status == HAL_OK)
@@ -56,8 +63,8 @@ BSP_Status_t BSP_I2C_Init(void)
 
 #define BSP_I2C_RECOVER_CLOCKS 9U
 
-/*
- * Short open-loop delay (a few microseconds) used only by bus recovery.
+/**
+ * @brief I2C 总线恢复专用短延时。
  */
 static void BSP_I2C_DelayShort(void)
 {
@@ -69,10 +76,12 @@ static void BSP_I2C_DelayShort(void)
     }
 }
 
-/*
- * Release a hung I2C bus. Drive SCL/SDA as open-drain GPIO, issue nine clock
- * pulses to flush a slave still holding SDA low, generate a STOP, then
- * re-initialize the peripheral so the next transfer starts from a clean state.
+/**
+ * @brief 通过 GPIO 时钟脉冲释放卡死的 I2C 总线。
+ *
+ * @details
+ * 将 SCL/SDA 临时配置为开漏输出，发送 9 个时钟以释放仍拉低 SDA 的从设备，再生成
+ * STOP 条件并重新初始化 I2C 外设。
  */
 static void BSP_I2C_BusRecover(void)
 {
@@ -101,7 +110,7 @@ static void BSP_I2C_BusRecover(void)
         BSP_I2C_DelayShort();
     }
 
-    /* STOP condition: SDA goes low to high while SCL is high. */
+    /* STOP 条件：SCL 为高时 SDA 从低变高。 */
     HAL_GPIO_WritePin(BSP_I2C_SDA_PORT, BSP_I2C_SDA_PIN, GPIO_PIN_RESET);
     BSP_I2C_DelayShort();
     HAL_GPIO_WritePin(BSP_I2C_SCL_PORT, BSP_I2C_SCL_PIN, GPIO_PIN_SET);
@@ -113,9 +122,8 @@ static void BSP_I2C_BusRecover(void)
     BSP_I2C_Init();
 }
 
-/*
- * Public bus recovery. Flush a slave still holding SDA low and re-initialize
- * the peripheral so a stuck bus can be released from outside this file.
+/**
+ * @brief 对外 I2C 总线恢复入口。
  */
 BSP_Status_t BSP_I2C_Recover(void)
 {
@@ -123,9 +131,8 @@ BSP_Status_t BSP_I2C_Recover(void)
     return (s_initialized != 0U) ? BSP_STATUS_OK : BSP_STATUS_ERROR;
 }
 
-/*
- * Release the I2C peripheral. After this the bus consumes no resources until
- * the next BSP_I2C_Init().
+/**
+ * @brief 释放 I2C 外设资源。
  */
 BSP_Status_t BSP_I2C_DeInit(void)
 {
@@ -143,16 +150,18 @@ BSP_Status_t BSP_I2C_DeInit(void)
     return BSP_STATUS_OK;
 }
 
-/*
- * Map the HAL status and, on a bus-level failure, recover the bus so a single
- * stuck transfer cannot permanently block every later transfer.
+/**
+ * @brief 结束一次 I2C 传输并在总线级故障时执行恢复。
+ *
+ * @param[in] status HAL 传输返回状态。
+ *
+ * @return BSP 通用返回码。
  */
 static BSP_Status_t BSP_I2C_Finish(HAL_StatusTypeDef status)
 {
     /*
-     * Only a stuck bus (software timeout or a latched BUSY flag) needs a full
-     * bus recovery. A plain NACK (HAL_ERROR / acknowledge failure) is a normal
-     * transient on a shared bus and must not trigger a disruptive DeInit/Init.
+     * 只有软件超时或 BUSY 锁死需要完整总线恢复；普通 NACK 是共享总线上的正常瞬态，
+     * 不应触发破坏性的 DeInit/Init。
      */
     if ((status == HAL_TIMEOUT) || (status == HAL_BUSY))
     {

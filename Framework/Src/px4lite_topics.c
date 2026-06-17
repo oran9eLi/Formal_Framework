@@ -1,6 +1,6 @@
 /**
  * @file px4lite_topics.c
- * @brief Implement coherent latest-value topics, FIFO, and event queues.
+ * @brief 实现一致的 latest-value topic、IMU FIFO 和事件队列。
  */
 
 #include "px4lite_topics.h"
@@ -22,11 +22,11 @@ DECLARE_LATEST_SLOT(Px4Lite_SystemHealth_t, health);
 
 typedef struct
 {
-    Px4Lite_SensorImu_t samples[PX4LITE_IMU_FIFO_CAPACITY];
-    uint16_t head;
-    uint16_t tail;
-    uint16_t count;
-    Px4Lite_FifoStats_t stats;
+    Px4Lite_SensorImu_t samples[PX4LITE_IMU_FIFO_CAPACITY]; /**< IMU 样本环形缓冲区。 */
+    uint16_t head;                                          /**< 下一次写入位置。 */
+    uint16_t tail;                                          /**< 下一次读取位置。 */
+    uint16_t count;                                         /**< 当前缓存样本数。 */
+    Px4Lite_FifoStats_t stats;                              /**< FIFO 运行统计。 */
 } Px4Lite_ImuFifo_t;
 
 static Px4Lite_ImuFifo_t s_imu_fifo;
@@ -112,7 +112,7 @@ Px4Lite_Result_t Px4Lite_TopicsInit(void)
 }
 
 /**
- * @brief Push one IMU sample into the bounded FIFO, dropping the oldest on overflow.
+ * @brief 将一帧 IMU 样本压入有界 FIFO，溢出时丢弃最旧样本。
  */
 Px4Lite_Result_t Px4Lite_PushImu(
     const Px4Lite_SensorImu_t *data)
@@ -154,7 +154,7 @@ Px4Lite_Result_t Px4Lite_PushImu(
 }
 
 /**
- * @brief Pop the oldest available IMU sample from the FIFO.
+ * @brief 从 FIFO 取出最旧的一帧 IMU 样本。
  */
 Px4Lite_Result_t Px4Lite_PopImu(Px4Lite_SensorImu_t *data)
 {
@@ -184,7 +184,7 @@ Px4Lite_Result_t Px4Lite_PopImu(Px4Lite_SensorImu_t *data)
 }
 
 /**
- * @brief Copy current IMU FIFO usage and overflow statistics.
+ * @brief 复制当前 IMU FIFO 使用量和溢出统计。
  */
 void Px4Lite_GetImuStats(Px4Lite_FifoStats_t *stats)
 {
@@ -199,7 +199,7 @@ void Px4Lite_GetImuStats(Px4Lite_FifoStats_t *stats)
 }
 
 /**
- * @brief Publish one alarm event to the bounded alarm queue.
+ * @brief 向有界告警队列发布一条告警事件。
  */
 Px4Lite_Result_t Px4Lite_PublishAlarm(
     const Px4Lite_AlarmEvent_t *event)
@@ -219,7 +219,7 @@ Px4Lite_Result_t Px4Lite_PublishAlarm(
 }
 
 /**
- * @brief Take one pending alarm event without blocking.
+ * @brief 非阻塞取出一条待处理告警事件。
  */
 Px4Lite_Result_t Px4Lite_TakeAlarm(Px4Lite_AlarmEvent_t *event)
 {
@@ -238,7 +238,7 @@ Px4Lite_Result_t Px4Lite_TakeAlarm(Px4Lite_AlarmEvent_t *event)
 }
 
 /**
- * @brief Publish one application command to the bounded command queue.
+ * @brief 向有界命令队列发布一条应用命令。
  */
 Px4Lite_Result_t Px4Lite_PublishCommand(
     const Px4Lite_Command_t *command)
@@ -258,7 +258,7 @@ Px4Lite_Result_t Px4Lite_PublishCommand(
 }
 
 /**
- * @brief Take one pending application command without blocking.
+ * @brief 非阻塞取出一条待处理应用命令。
  */
 Px4Lite_Result_t Px4Lite_TakeCommand(
     Px4Lite_Command_t *command)
@@ -278,7 +278,7 @@ Px4Lite_Result_t Px4Lite_TakeCommand(
 }
 
 /**
- * @brief Publish one command acknowledgement to its bounded queue.
+ * @brief 向有界应答队列发布一条命令应答。
  */
 Px4Lite_Result_t Px4Lite_PublishCommandAck(
     const Px4Lite_CommandAck_t *ack)
@@ -298,7 +298,7 @@ Px4Lite_Result_t Px4Lite_PublishCommandAck(
 }
 
 /**
- * @brief Take one pending command acknowledgement without blocking.
+ * @brief 非阻塞取出一条待处理命令应答。
  */
 Px4Lite_Result_t Px4Lite_TakeCommandAck(
     Px4Lite_CommandAck_t *ack)

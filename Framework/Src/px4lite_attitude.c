@@ -1,6 +1,10 @@
 /**
  * @file px4lite_attitude.c
- * @brief Implement a first-order complementary roll/pitch estimator.
+ * @brief 实现一阶互补滤波姿态估计器。
+ *
+ * @details
+ * 当前实现使用加速度计校正 roll/pitch，使用陀螺 Z 轴积分得到相对 yaw。
+ * yaw 尚未引入磁力计或双天线 GNSS 绝对航向约束。
  */
 
 #include "px4lite_attitude.h"
@@ -14,6 +18,13 @@
 #define PX4LITE_ATTITUDE_MAX_DT_S     0.2f
 #define PX4LITE_ATTITUDE_YAW_DEADBAND_DPS 0.75f
 
+/**
+ * @brief 将 degree 浮点角度转换为 degree*100 定点值。
+ *
+ * @param[in] value 角度值，单位 degree。
+ *
+ * @return 四舍五入后的 degree * 100。
+ */
 static int32_t Px4Lite_AttitudeRoundDeg100(float value)
 {
     if (value >= 0.0f)
@@ -23,6 +34,13 @@ static int32_t Px4Lite_AttitudeRoundDeg100(float value)
     return (int32_t)((value * 100.0f) - 0.5f);
 }
 
+/**
+ * @brief 将角度归一化到 [-180, 180) 范围。
+ *
+ * @param[in] value 待归一化角度，单位 degree。
+ *
+ * @return 归一化后的角度，单位 degree。
+ */
 static float Px4Lite_AttitudeWrapDeg(float value)
 {
     while (value >= 180.0f)
@@ -36,6 +54,13 @@ static float Px4Lite_AttitudeWrapDeg(float value)
     return value;
 }
 
+/**
+ * @brief 对 Z 轴角速度应用 yaw 死区。
+ *
+ * @param[in] gyro_z_dps Z 轴角速度，单位 degree/s。
+ *
+ * @return 死区处理后的角速度，单位 degree/s。
+ */
 static float Px4Lite_AttitudeApplyYawDeadband(float gyro_z_dps)
 {
     if ((gyro_z_dps > -PX4LITE_ATTITUDE_YAW_DEADBAND_DPS) &&
@@ -46,6 +71,14 @@ static float Px4Lite_AttitudeApplyYawDeadband(float gyro_z_dps)
     return gyro_z_dps;
 }
 
+/**
+ * @brief 计算当前 IMU 样本与上一样本之间的时间间隔。
+ *
+ * @param[in] state 姿态估计器状态。
+ * @param[in] imu 当前 IMU 样本。
+ *
+ * @return 可用于积分的时间间隔，单位 s。
+ */
 static float Px4Lite_AttitudeDtSeconds(
     Px4Lite_AttitudeState_t *state,
     const Px4Lite_SensorImu_t *imu)

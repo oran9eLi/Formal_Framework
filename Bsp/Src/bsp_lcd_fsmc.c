@@ -1,6 +1,6 @@
 /**
  * @file bsp_lcd_fsmc.c
- * @brief Implement the FSMC 8080 bus access layer for the ATK-MD0700 LCD.
+ * @brief 实现 ATK-MD0700 LCD 的 FSMC 8080 总线访问接口。
  */
 
 #include "bsp_lcd_fsmc.h"
@@ -20,7 +20,7 @@
 void HAL_DisplayLcdMspInit(void);
 
 /**
- * @brief Program the FSMC timing registers from the selected LCD bus config.
+ * @brief 根据 LCD 总线配置写入 FSMC 时序寄存器。
  */
 static void BSP_LcdFsmc_ApplyTiming(
     const BSP_LcdFsmcConfig_t *config)
@@ -43,7 +43,7 @@ static void BSP_LcdFsmc_ApplyTiming(
 }
 
 /**
- * @brief Initialize the FSMC bus and LCD backlight GPIO.
+ * @brief 初始化 FSMC 总线和 LCD 背光 GPIO。
  */
 BSP_LcdFsmcResult_t BSP_LcdFsmc_Init(
     const BSP_LcdFsmcConfig_t *config)
@@ -69,7 +69,7 @@ BSP_LcdFsmcResult_t BSP_LcdFsmc_Init(
 }
 
 /**
- * @brief Write one 16-bit LCD command through the FSMC command address.
+ * @brief 通过 FSMC 命令地址写入一个 16-bit LCD 命令。
  */
 void BSP_LcdFsmc_WriteCommand(uint16_t command)
 {
@@ -77,7 +77,7 @@ void BSP_LcdFsmc_WriteCommand(uint16_t command)
 }
 
 /**
- * @brief Write one 16-bit LCD data value through the FSMC data address.
+ * @brief 通过 FSMC 数据地址写入一个 16-bit LCD 数据。
  */
 void BSP_LcdFsmc_WriteData(uint16_t data)
 {
@@ -85,7 +85,7 @@ void BSP_LcdFsmc_WriteData(uint16_t data)
 }
 
 /**
- * @brief Read one 16-bit LCD data value through the FSMC data address.
+ * @brief 通过 FSMC 数据地址读取一个 16-bit LCD 数据。
  */
 uint16_t BSP_LcdFsmc_ReadData(void)
 {
@@ -99,7 +99,7 @@ uint16_t BSP_LcdFsmc_ReadData(void)
 }
 
 /**
- * @brief Set the LCD backlight to an on or off state.
+ * @brief 设置 LCD 背光开关状态。
  */
 void BSP_LcdFsmc_SetBacklight(uint8_t on)
 {

@@ -1,6 +1,10 @@
 /**
  * @file px4lite_mavlink_tx.c
- * @brief Convert coherent framework topics into MAVLink telemetry frames.
+ * @brief 将一致的 Framework topic 转换为 MAVLink 遥测帧。
+ *
+ * @details
+ * CommTask 是本文件唯一调用者。所有 MAVLink 消息均逐字段编码后交给 LoRa 发送，
+ * 不允许直接发送 C 结构体内存。LoRa 发送返回 OK 仅表示帧已进入发送缓冲。
  */
 
 #include "px4lite_mavlink_tx.h"
@@ -40,8 +44,7 @@ typedef enum
 } MavTx_Slot_t;
 
 static mavlink_message_t s_message;
-/* Owner: comm task only (Px4Lite_MavlinkTxRun). Serialized MAVLink frame
-   handed to the LoRa driver, which copies it before the caller reuses it. */
+/* 所有者：仅 CommTask。LoRa 驱动会先复制该缓冲区，再允许调用者复用。 */
 static uint8_t s_frame[MAVLINK_MAX_PACKET_LEN];
 static Px4Lite_MavlinkTxStats_t s_stats;
 
@@ -59,7 +62,7 @@ static uint8_t s_slot;
 #define MAV_TX_DEG100_TO_RAD 0.0001745329252f
 
 /**
- * @brief Test one wrap-safe millisecond deadline.
+ * @brief 使用回绕安全差值判断一个毫秒截止时间是否到期。
  */
 static uint8_t MavTx_TimeReached(uint32_t now_ms,
                                  uint32_t deadline_ms)
@@ -70,7 +73,7 @@ static uint8_t MavTx_TimeReached(uint32_t now_ms,
 }
 
 /**
- * @brief Narrow a signed framework velocity into a MAVLink int16 field.
+ * @brief 将有符号 Framework 数值饱和收窄到 MAVLink int16 字段。
  */
 static int16_t MavTx_SaturateInt16(int32_t value)
 {
@@ -86,7 +89,7 @@ static int16_t MavTx_SaturateInt16(int32_t value)
 }
 
 /**
- * @brief Narrow an unsigned framework value into a MAVLink uint16 field.
+ * @brief 将无符号 Framework 数值饱和收窄到 MAVLink uint16 字段。
  */
 static uint16_t MavTx_SaturateUint16(uint32_t value)
 {
@@ -95,6 +98,13 @@ static uint16_t MavTx_SaturateUint16(uint32_t value)
                : (uint16_t)value;
 }
 
+/**
+ * @brief 将 mA 电流转换为 MAVLink BATTERY_STATUS 使用的 10mA 单位。
+ *
+ * @param[in] current_ma 电流，单位 mA；0 表示未知。
+ *
+ * @return MAVLink current_battery 字段值，单位 10mA；-1 表示未知。
+ */
 static int16_t MavTx_SaturateCentiAmp(int32_t current_ma)
 {
     int32_t centi_amp;
@@ -116,6 +126,13 @@ static int16_t MavTx_SaturateCentiAmp(int32_t current_ma)
     return (int16_t)centi_amp;
 }
 
+/**
+ * @brief 将摄氏度浮点温度转换为 MAVLink 使用的摄氏度 * 100。
+ *
+ * @param[in] temperature_c 温度，单位摄氏度。
+ *
+ * @return 饱和后的摄氏度 * 100 定点值。
+ */
 static int16_t MavTx_SaturateCdegFromFloat(float temperature_c)
 {
     float cdeg = temperature_c * 100.0f;
@@ -132,7 +149,7 @@ static int16_t MavTx_SaturateCdegFromFloat(float temperature_c)
 }
 
 /**
- * @brief Normalize degree-times-100 heading into 0 through 35999.
+ * @brief 将 degree*100 航向角归一化到 [0, 35999]。
  */
 static uint16_t MavTx_NormalizeHeading(int32_t heading_deg100)
 {
@@ -145,13 +162,20 @@ static uint16_t MavTx_NormalizeHeading(int32_t heading_deg100)
     return (uint16_t)normalized;
 }
 
+/**
+ * @brief 将 degree*100 角度转换为弧度。
+ *
+ * @param[in] value 角度，单位 degree * 100。
+ *
+ * @return 角度弧度值。
+ */
 static float MavTx_Deg100ToRad(int32_t value)
 {
     return ((float)value) * MAV_TX_DEG100_TO_RAD;
 }
 
 /**
- * @brief Map NMEA GGA fix quality to MAVLink GPS_FIX_TYPE.
+ * @brief 将 NMEA GGA fix quality 映射为 MAVLink GPS_FIX_TYPE。
  */
 static uint8_t MavTx_MapGpsFixType(uint8_t fix_quality)
 {
@@ -173,7 +197,7 @@ static uint8_t MavTx_MapGpsFixType(uint8_t fix_quality)
 }
 
 /**
- * @brief Return the combined visible GPS and BeiDou satellite count.
+ * @brief 返回 GPS 和北斗可见卫星数量之和。
  */
 static uint8_t MavTx_VisibleSatellites(
     const Px4Lite_SensorGnss_t *gnss)
@@ -188,7 +212,7 @@ static uint8_t MavTx_VisibleSatellites(
 }
 
 /**
- * @brief Serialize and submit the currently prepared MAVLink message.
+ * @brief 序列化当前 MAVLink 消息并提交给 LoRa 发送。
  */
 static Px4Lite_Result_t MavTx_SendPrepared(void)
 {
@@ -205,7 +229,7 @@ static Px4Lite_Result_t MavTx_SendPrepared(void)
 }
 
 /**
- * @brief Encode and send the required MAVLink heartbeat.
+ * @brief 编码并发送 MAVLink HEARTBEAT。
  */
 static Px4Lite_Result_t MavTx_SendHeartbeat(void)
 {
@@ -224,7 +248,7 @@ static Px4Lite_Result_t MavTx_SendHeartbeat(void)
 }
 
 /**
- * @brief Encode the latest parsed GNSS snapshot as GPS_RAW_INT.
+ * @brief 将最新 GNSS 快照编码为 MAVLink GPS_RAW_INT。
  */
 static Px4Lite_Result_t MavTx_SendGpsRaw(uint32_t now_ms)
 {
@@ -238,9 +262,7 @@ static Px4Lite_Result_t MavTx_SendGpsRaw(uint32_t now_ms)
     {
         return PX4LITE_NOT_READY;
     }
-    /* Only report position after a successful fix (fix_valid != 0 maps to
-       fix_type != 0).  Before the first fix, suppress GPS_RAW entirely
-       instead of transmitting no-fix frames. */
+    /* 首次定位前抑制 GPS_RAW，避免持续发送 no-fix 位置帧。 */
     if (gnss.fix_type == 0U)
     {
         return PX4LITE_NOT_READY;
@@ -258,9 +280,7 @@ static Px4Lite_Result_t MavTx_SendGpsRaw(uint32_t now_ms)
 
     memset(&packet, 0, sizeof(packet));
 
-    /* The GNSS topic carries no absolute UTC epoch (the sensor layer only
-       recovers time-of-day, not a full date), so report the sample
-       timestamp.  GPS_RAW_INT.time_usec permits "time since system boot". */
+    /* GNSS topic 不提供完整 UTC epoch，这里按 MAVLink 允许的系统启动后时间填充。 */
     packet.time_usec =
         (uint64_t)gnss.header.sample_time_ms * 1000ULL;
 
@@ -290,7 +310,7 @@ static Px4Lite_Result_t MavTx_SendGpsRaw(uint32_t now_ms)
         packet.cog = UINT16_MAX;
     }
 
-    /* These accuracy and dual-antenna fields are not supplied by ATGM336H. */
+    /* ATGM336H 当前未提供这些精度和双天线字段。 */
     packet.alt_ellipsoid = 0;
     packet.h_acc = UINT32_MAX;
     packet.v_acc = UINT32_MAX;
@@ -314,11 +334,11 @@ static Px4Lite_Result_t MavTx_SendGpsRaw(uint32_t now_ms)
 }
 
 /**
- * @brief Send GPS and BeiDou visible/used counts in one compact standard message.
+ * @brief 用标准 NAMED_VALUE_INT 发送 GPS/北斗可见与使用卫星数。
  *
- * NAMED_VALUE_INT name is "GNSS_SAT". The uint32 bit layout is:
- * bits 0..7 GPS visible, 8..15 BeiDou visible,
- * 16..23 GPS used, and 24..31 BeiDou used.
+ * @details
+ * name 固定为 "GNSS_SAT"。uint32 布局：0..7 位为 GPS visible，8..15 位为北斗
+ * visible，16..23 位为 GPS used，24..31 位为北斗 used。
  */
 static Px4Lite_Result_t MavTx_SendGnssDetail(uint32_t now_ms)
 {
@@ -332,8 +352,7 @@ static Px4Lite_Result_t MavTx_SendGnssDetail(uint32_t now_ms)
     {
         return PX4LITE_NOT_READY;
     }
-    /* Satellite detail follows GPS_RAW: only transmitted once positioning
-       has succeeded (fix_type != 0). */
+    /* 卫星细节跟随 GPS_RAW 策略：定位成功后才发送。 */
     if (gnss.fix_type == 0U)
     {
         return PX4LITE_NOT_READY;
@@ -378,7 +397,7 @@ static Px4Lite_Result_t MavTx_SendGnssDetail(uint32_t now_ms)
 }
 
 /**
- * @brief Encode the latest estimator attitude as MAVLink ATTITUDE.
+ * @brief 将最新估计器姿态编码为 MAVLink ATTITUDE。
  */
 static Px4Lite_Result_t MavTx_SendAttitude(uint32_t now_ms)
 {
@@ -437,7 +456,7 @@ static Px4Lite_Result_t MavTx_SendAttitude(uint32_t now_ms)
 }
 
 /**
- * @brief Encode a future estimator result as GLOBAL_POSITION_INT.
+ * @brief 将导航快照编码为 MAVLink GLOBAL_POSITION_INT。
  */
 static Px4Lite_Result_t MavTx_SendPosition(uint32_t now_ms)
 {
@@ -466,7 +485,7 @@ static Px4Lite_Result_t MavTx_SendPosition(uint32_t now_ms)
     packet.lon = navigation.longitude_e7;
     packet.alt = navigation.fused_altitude_mm;
 
-    /* A future Home module must provide relative altitude. */
+    /* 后续 Home 模块应提供相对高度。 */
     packet.relative_alt = 0;
 
     if ((navigation.valid_mask &
@@ -501,7 +520,7 @@ static Px4Lite_Result_t MavTx_SendPosition(uint32_t now_ms)
 }
 
 /**
- * @brief Encode the latest battery topic using standard MAVLink BATTERY_STATUS.
+ * @brief 将最新电池 topic 编码为 MAVLink BATTERY_STATUS。
  */
 static Px4Lite_Result_t MavTx_SendBatteryStatus(uint32_t now_ms)
 {
@@ -563,7 +582,7 @@ static Px4Lite_Result_t MavTx_SendBatteryStatus(uint32_t now_ms)
 }
 
 /**
- * @brief Encode the latest barometer topic as standard MAVLink SCALED_PRESSURE.
+ * @brief 将最新气压计 topic 编码为 MAVLink SCALED_PRESSURE。
  */
 static Px4Lite_Result_t MavTx_SendScaledPressure(uint32_t now_ms)
 {
@@ -611,7 +630,7 @@ static Px4Lite_Result_t MavTx_SendScaledPressure(uint32_t now_ms)
 }
 
 /**
- * @brief Return whether one framework module can be reported healthy.
+ * @brief 判断模块状态是否可映射为 MAVLink healthy。
  */
 static uint8_t MavTx_ModuleHealthy(Px4Lite_State_t state)
 {
@@ -621,6 +640,13 @@ static uint8_t MavTx_ModuleHealthy(Px4Lite_State_t state)
                : 0U;
 }
 
+/**
+ * @brief 将 Framework 告警严重度映射为 MAVLink 严重度。
+ *
+ * @param[in] severity Framework 告警严重度。
+ *
+ * @return MAVLink MAV_SEVERITY 枚举值。
+ */
 static uint8_t MavTx_MapSeverity(Px4Lite_AlarmSeverity_t severity)
 {
     switch (severity)
@@ -639,6 +665,13 @@ static uint8_t MavTx_MapSeverity(Px4Lite_AlarmSeverity_t severity)
     }
 }
 
+/**
+ * @brief 将模块编号映射为 STATUSTEXT 中的短名称。
+ *
+ * @param[in] module_id Framework 模块编号。
+ *
+ * @return 常量字符串短名称。
+ */
 static const char *MavTx_ModuleName(uint16_t module_id)
 {
     switch ((Px4Lite_ModuleId_t)module_id)
@@ -666,6 +699,13 @@ static const char *MavTx_ModuleName(uint16_t module_id)
     }
 }
 
+/**
+ * @brief 将低 4 bit 数值转换为大写十六进制字符。
+ *
+ * @param[in] value 待转换数值。
+ *
+ * @return 十六进制字符。
+ */
 static char MavTx_HexNibble(uint8_t value)
 {
     value &= 0x0FU;
@@ -674,6 +714,14 @@ static char MavTx_HexNibble(uint8_t value)
                : (char)('A' + (value - 10U));
 }
 
+/**
+ * @brief 构造 MAVLink STATUSTEXT 文本字段。
+ *
+ * @param[out] text MAVLink 文本缓冲区，固定 50 字节。
+ * @param[in] prefix 文本前缀。
+ * @param[in] module 模块短名称。
+ * @param[in] fault_code Framework 故障码。
+ */
 static void MavTx_CopyText(char text[50],
                            const char *prefix,
                            const char *module,
@@ -708,7 +756,7 @@ static void MavTx_CopyText(char text[50],
 }
 
 /**
- * @brief Encode the current highest active alarm as standard MAVLink STATUSTEXT.
+ * @brief 将当前最高活动告警编码为 MAVLink STATUSTEXT。
  */
 static Px4Lite_Result_t MavTx_SendStatusText(uint32_t now_ms)
 {
@@ -760,7 +808,7 @@ static Px4Lite_Result_t MavTx_SendStatusText(uint32_t now_ms)
 }
 
 /**
- * @brief Encode enabled framework sensor health as SYS_STATUS.
+ * @brief 将启用的 Framework 传感器健康状态编码为 SYS_STATUS。
  */
 static Px4Lite_Result_t MavTx_SendSystemStatus(
     uint32_t now_ms)
@@ -846,7 +894,7 @@ static Px4Lite_Result_t MavTx_SendSystemStatus(
 }
 
 /**
- * @brief Record one slot result and calculate its next deadline.
+ * @brief 记录一个发送槽位结果并计算下一次发送截止时间。
  */
 static void MavTx_RecordResult(Px4Lite_Result_t result,
                                uint32_t now_ms,

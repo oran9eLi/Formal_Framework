@@ -1,6 +1,11 @@
 /**
  * @file px4lite_modules.c
- * @brief Implement measurement publication, navigation conversion, and health state.
+ * @brief Framework 测量发布、导航转换、通信调度和健康状态实现。
+ *
+ * @details
+ * 本文件承载 sensor、estimator、comm 和 health 周期任务的核心服务。普通传感器
+ * 统一由 sensor 任务采集；Health task 独占 OFFLINE/FAILED 判定；状态复制通过
+ * 版本号保持一致性。
  */
 
 #include "px4lite_modules.h"
@@ -31,7 +36,11 @@ static uint32_t s_last_battery_work_ms;
 static Px4Lite_AttitudeState_t s_attitude_state;
 
 /**
- * @brief Calculate a bounded GNSS quality score from fix, satellite, and HDOP data.
+ * @brief 根据定位类型、卫星数和 HDOP 计算有限范围 GNSS 质量分。
+ *
+ * @param[in] gnss GNSS 测量快照，不能为 NULL。
+ *
+ * @return 质量分，范围 0 到 100。
  */
 static uint8_t Px4Lite_GnssQuality(
     const Px4Lite_SensorGnss_t *gnss)
@@ -62,7 +71,11 @@ static uint8_t Px4Lite_GnssQuality(
 }
 
 /**
- * @brief Map collected GGA/GSA facts to the display GNSS fix state.
+ * @brief 将 GGA/GSA 定位事实映射为显示侧 GNSS fix 状态。
+ *
+ * @param[in] gnss GNSS 测量快照，不能为 NULL。
+ *
+ * @return 显示侧 fix 状态值。
  */
 static uint8_t Px4Lite_GnssDisplayFixState(
     const Px4Lite_SensorGnss_t *gnss)
@@ -92,7 +105,11 @@ static uint8_t Px4Lite_GnssDisplayFixState(
 }
 
 /**
- * @brief Return whether a framework module is enabled by configuration.
+ * @brief 查询 Framework 模块是否被配置启用。
+ *
+ * @param[in] id 模块编号。
+ *
+ * @return 1 表示启用，0 表示关闭或模块编号非法。
  */
 static uint8_t Px4Lite_IsModuleEnabled(Px4Lite_ModuleId_t id)
 {
@@ -130,7 +147,11 @@ static uint8_t Px4Lite_IsModuleEnabled(Px4Lite_ModuleId_t id)
 }
 
 /**
- * @brief Map a module state to its default alarm severity.
+ * @brief 将模块公开状态映射为默认告警严重度。
+ *
+ * @param[in] state 模块公开状态。
+ *
+ * @return 默认告警严重度。
  */
 static uint8_t Px4Lite_StateSeverity(Px4Lite_State_t state)
 {
@@ -150,7 +171,12 @@ static uint8_t Px4Lite_StateSeverity(Px4Lite_State_t state)
 }
 
 /**
- * @brief Update one module status and increment the shared status version on change.
+ * @brief 更新单个模块状态，并在发生变化时推进共享状态版本号。
+ *
+ * @param[in] id 模块编号。
+ * @param[in] state 新的公开状态。
+ * @param[in] fault 故障码，0 表示无故障。
+ * @param[in] now_ms 当前系统毫秒时间。
  */
 static void Px4Lite_SetStatus(Px4Lite_ModuleId_t id,
                               Px4Lite_State_t state,
@@ -200,6 +226,12 @@ static void Px4Lite_SetStatus(Px4Lite_ModuleId_t id,
     taskEXIT_CRITICAL();
 }
 
+/**
+ * @brief 记录传感器 I/O 错误事实，但不直接写 OFFLINE/FAILED 状态。
+ *
+ * @param[in] id 模块编号。
+ * @param[in] now_ms 当前系统毫秒时间，当前仅用于保持接口语义。
+ */
 static void Px4Lite_RecordSensorIoError(Px4Lite_ModuleId_t id,
                                         uint32_t now_ms)
 {
@@ -209,11 +241,8 @@ static void Px4Lite_RecordSensorIoError(Px4Lite_ModuleId_t id,
     }
 
     /*
-     * Record the hardware fact only (error counters). The public ONLINE/OFFLINE
-     * state has a single writer, the Health layer, which decides OFFLINE from
-     * the per-module timeout. A driver must not force OFFLINE on one transient
-     * I/O error (spec 13.5), otherwise sporadic bus glitches make the display
-     * flap between showing and clearing the value.
+     * 这里只记录硬件事实（错误计数）。公开 ONLINE/OFFLINE 状态的单写者是 Health，
+     * 它根据模块超时判断 OFFLINE，避免一次瞬时 I/O 抖动导致显示反复清空。
      */
     (void)now_ms;
 
@@ -229,7 +258,7 @@ static void Px4Lite_RecordSensorIoError(Px4Lite_ModuleId_t id,
 }
 
 /**
- * @brief Reset framework module states, counters, and startup time.
+ * @brief 复位 Framework 模块状态、统计计数和启动时间。
  */
 Px4Lite_Result_t Px4Lite_ModulesInit(void)
 {
@@ -260,7 +289,7 @@ Px4Lite_Result_t Px4Lite_ModulesInit(void)
 }
 
 /**
- * @brief Set one sensor module's initial framework state from its init result.
+ * @brief 根据初始化结果设置一个传感器模块的初始 Framework 状态。
  */
 static void Px4Lite_PublishInitState(Px4Lite_ModuleId_t id,
                                      Px4Lite_Result_t init_result,
@@ -276,7 +305,7 @@ static void Px4Lite_PublishInitState(Px4Lite_ModuleId_t id,
 }
 
 /**
- * @brief Registry init: bring up the GNSS device and publish its state.
+ * @brief 注册表 init 回调：启动 GNSS 设备并发布初始状态。
  */
 Px4Lite_Result_t Px4Lite_GnssModuleInit(void)
 {
@@ -289,7 +318,7 @@ Px4Lite_Result_t Px4Lite_GnssModuleInit(void)
 }
 
 /**
- * @brief Registry init: bring up the IMU device and publish its state.
+ * @brief 注册表 init 回调：启动 IMU 设备并发布初始状态。
  */
 Px4Lite_Result_t Px4Lite_ImuModuleInit(void)
 {
@@ -302,7 +331,7 @@ Px4Lite_Result_t Px4Lite_ImuModuleInit(void)
 }
 
 /**
- * @brief Registry init: bring up the barometer device and publish its state.
+ * @brief 注册表 init 回调：启动气压计设备并发布初始状态。
  */
 Px4Lite_Result_t Px4Lite_BaroModuleInit(void)
 {
@@ -315,7 +344,7 @@ Px4Lite_Result_t Px4Lite_BaroModuleInit(void)
 }
 
 /**
- * @brief Registry init: bring up the battery/ADC device and publish its state.
+ * @brief 注册表 init 回调：启动电源/ADC 设备并发布初始状态。
  */
 Px4Lite_Result_t Px4Lite_BatteryModuleInit(void)
 {
@@ -349,10 +378,8 @@ Px4Lite_Result_t Px4Lite_AlarmModuleInit(void)
 }
 
 /*
- * Recover callbacks (invoked by the Health-side recovery monitor). They are
- * deliberately cheap: each only *requests* a re-init that the owning module's
- * Service performs in its own task, so bus-touching re-init never runs on the
- * Health task and never races the sensor/comm task on a shared peripheral.
+ * recover 回调由 Health 侧恢复监视器调用。它们必须保持轻量，只请求所属模块的
+ * Service 在本任务中执行 re-init，不能在 Health 任务里访问共享总线。
  */
 Px4Lite_Result_t Px4Lite_GnssRecover(void)
 {
@@ -395,7 +422,7 @@ Px4Lite_Result_t Px4Lite_LoraRecover(void)
 }
 
 /**
- * @brief Run one non-blocking sensor acquisition and publication cycle.
+ * @brief 执行一次非阻塞传感器采集和发布周期。
  */
 void Px4Lite_SensorWorkRun(uint32_t now_ms)
 {
@@ -622,7 +649,7 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 }
 
 /**
- * @brief Initialize the estimator module state.
+ * @brief 初始化估计器模块状态。
  */
 Px4Lite_Result_t Px4Lite_EstimatorInit(void)
 {
@@ -635,7 +662,7 @@ Px4Lite_Result_t Px4Lite_EstimatorInit(void)
 }
 
 /**
- * @brief Convert each fresh GNSS measurement into a navigation snapshot.
+ * @brief 将新鲜 GNSS 测量转换为 Navigation 快照。
  */
 void Px4Lite_EstimatorRun(uint32_t now_ms)
 {
@@ -743,7 +770,7 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
 }
 
 /**
- * @brief Initialize health monitoring services.
+ * @brief 初始化健康监控服务。
  */
 Px4Lite_Result_t Px4Lite_HealthInit(void)
 {
@@ -751,7 +778,7 @@ Px4Lite_Result_t Px4Lite_HealthInit(void)
 }
 
 /**
- * @brief Evaluate module timeouts and publish one coherent system health snapshot.
+ * @brief 评估模块超时并发布一致的系统健康快照。
  */
 void Px4Lite_HealthRun(uint32_t now_ms)
 {
@@ -968,7 +995,7 @@ void Px4Lite_HealthRun(uint32_t now_ms)
 }
 
 /**
- * @brief Copy one module status under framework synchronization.
+ * @brief 在 Framework 同步保护下复制单个模块状态。
  */
 Px4Lite_Result_t Px4Lite_GetModuleStatus(Px4Lite_ModuleId_t module_id,
                                          Px4Lite_ModuleStatus_t *status)
@@ -986,7 +1013,7 @@ Px4Lite_Result_t Px4Lite_GetModuleStatus(Px4Lite_ModuleId_t module_id,
 }
 
 /**
- * @brief Copy a version-consistent array of all module statuses.
+ * @brief 复制版本一致的模块状态数组。
  */
 Px4Lite_Result_t Px4Lite_CopyModuleStatuses(
     Px4Lite_ModuleStatus_t *status,
@@ -1028,7 +1055,7 @@ Px4Lite_Result_t Px4Lite_CopyModuleStatuses(
 }
 
 /**
- * @brief Return the current module status generation number.
+ * @brief 返回当前模块状态版本号。
  */
 uint32_t Px4Lite_GetStatusVersion(void)
 {
@@ -1041,7 +1068,7 @@ uint32_t Px4Lite_GetStatusVersion(void)
 }
 
 /**
- * @brief Allow an external service adapter to update its framework module state.
+ * @brief 允许外部服务适配器更新对应 Framework 模块状态。
  */
 void Px4Lite_SetExternalModuleState(Px4Lite_ModuleId_t module_id,
                                     Px4Lite_State_t state,
@@ -1138,10 +1165,8 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
     taskEXIT_CRITICAL();
 
     /*
-     * Single-writer rule (spec 13.5): the comm task records activity facts and
-     * publishes only positive states -- DEGRADED on a service/TX error, ONLINE
-     * on recent RX/TX. OFFLINE is owned by Health, which times out the recorded
-     * activity. The comm task must not publish OFFLINE itself.
+     * 状态单写者规则：comm 任务只记录活动事实，并发布 ONLINE/DEGRADED；
+     * OFFLINE 由 Health 根据 last_valid_ms 超时统一判定。
      */
     if (result != PX4LITE_OK) {
         Px4Lite_SetStatus(PX4LITE_MODULE_LORA,

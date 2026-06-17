@@ -1,11 +1,11 @@
 /**
  * @file px4lite_storage.c
- * @brief Implement the registry-driven SD CSV storage module.
+ * @brief 实现注册表驱动的 SD CSV 存储模块。
  *
- * Registered as PX4LITE_MODULE_STORAGE with lifecycle init/recover callbacks.
- * The storage task drives Px4Lite_StorageWorkRun() through the generic work
- * item. Data comes only from framework topics via the public copy API, so this
- * file stays inside the Framework layer (no Business / app_data_api include).
+ * @details
+ * 本文件作为 PX4LITE_MODULE_STORAGE 的 Framework 侧实现，提供生命周期
+ * init/recover 回调，并由 storage 任务周期性调用 Px4Lite_StorageWorkRun()。
+ * 所有数据来自 Framework topic，不依赖 Business API。
  */
 
 #include "px4lite_storage.h"
@@ -29,6 +29,13 @@ static uint32_t s_last_sync_ms;
 static Storage_Record_t s_work_record;
 static Storage_Record_t s_pop_record;
 
+/**
+ * @brief 将浮点值按四舍五入转换为 int32。
+ *
+ * @param[in] value 待转换浮点值。
+ *
+ * @return 四舍五入后的整数。
+ */
 static int32_t Storage_RoundFloatToI32(float value)
 {
     if (value >= 0.0f)
@@ -38,6 +45,16 @@ static int32_t Storage_RoundFloatToI32(float value)
     return (int32_t)(value - 0.5f);
 }
 
+/**
+ * @brief 格式化一条存储错误记录并压入记录队列。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ * @param[in] module 错误来源模块名。
+ * @param[in] state 模块状态值。
+ * @param[in] fault Framework 故障码。
+ * @param[in] error_count 附加错误计数。
+ * @param[in] message 错误说明文本。
+ */
 static void Storage_EnqueueError(uint32_t now_ms,
                                  const char *module,
                                  uint32_t state,
@@ -61,9 +78,13 @@ static void Storage_EnqueueError(uint32_t now_ms,
     }
 }
 
-/*
- * Build one data row from framework topics. Each missing source produces an
- * ERROR.CSV row instead of silently logging a zeroed field.
+/**
+ * @brief 从 Framework topic 构造一条 CSV 数据记录。
+ *
+ * @details
+ * 任一数据源缺失时会额外写入 ERROR.CSV 记录，而不是静默记录全零字段。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
  */
 static void Storage_ProduceDataRecord(uint32_t now_ms)
 {
@@ -100,8 +121,7 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     {
         data.temperature_c100 =
             Storage_RoundFloatToI32(baro.temperature_c * 100.0f);
-        /* baro.pressure_pa is in pascals; 1 hPa = 100 Pa, so the pascal value
-         * already equals the desired hPa*100 fixed-point field. */
+        /* pressure_pa 单位为 Pa；1 hPa = 100 Pa，因此 Pa 数值等价于 hPa*100。 */
         data.pressure_hpa100 =
             (uint32_t)Storage_RoundFloatToI32(baro.pressure_pa);
         data.humidity_pct100 =
@@ -169,6 +189,11 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     }
 }
 
+/**
+ * @brief 从队列取出一条记录并写入 SD 卡。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ */
 static void Storage_ConsumeOne(uint32_t now_ms)
 {
     Px4Lite_Result_t result;
@@ -196,6 +221,11 @@ static void Storage_ConsumeOne(uint32_t now_ms)
     }
 }
 
+/**
+ * @brief 根据 SD 就绪状态发布 storage 模块公开状态。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ */
 static void Storage_PublishState(uint32_t now_ms)
 {
     if (Storage_SD_IsReady() != 0U)
@@ -235,8 +265,7 @@ void Px4Lite_StorageWorkRun(uint32_t now_ms)
     if (s_remount_request != 0U)
     {
         s_remount_request = 0U;
-        /* Force a clean re-init so the next Service() remounts immediately
-         * instead of waiting out the retry backoff. */
+        /* 强制清理状态，使下一次 Service() 立即重新挂载，而不是等待退避超时。 */
         Storage_SD_Init();
     }
 
