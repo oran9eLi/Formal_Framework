@@ -1,4 +1,4 @@
-# Formal Framework 11
+# Formal Framework
 
 低空教学实验室 STM32F407 固件框架工程。
 
@@ -160,6 +160,111 @@ App_GetCommStats(&comm);
 6. 在 `Development_Guide/07_移植进度与功能清单.md` 和 `Change_History/` 中记录完成度、验证结果和未完成项。
 
 ## 版本库约定
+
+### 提交信息规范
+
+提交信息统一使用以下格式：
+
+```text
+<type>: <简短中文说明>
+```
+
+`type` 使用小写英文，冒号后保留一个空格，说明部分使用简短中文，描述本次提交的主要变化。
+
+常用类型：
+
+| type | 说明 |
+|---|---|
+| `feat` | 新增功能或能力接入 |
+| `fix` | 修复问题 |
+| `docs` | 文档更新 |
+| `refactor` | 代码重构，不改变功能行为 |
+| `chore` | 工程配置、仓库维护、脚本或杂项调整 |
+| `build` | 构建配置、Keil 工程或依赖调整 |
+| `test` | 测试、验证用例或验证记录调整 |
+
+示例：
+
+```text
+docs: 补充提交信息规范
+feat: 接入气压计采集链路
+fix: 修复LoRa发送忙状态统计
+chore: 初始化仓库忽略规则
+```
+
+提交说明应保持简短、明确，不写过长背景说明。详细设计、验证结果和遗留问题应记录在 `Development_Guide/` 或对应变更记录中。
+
+### 注释规范
+
+新增或重构的源码应使用 Doxygen 风格中文注释，重点说明模块职责、数据含义、调用边界和实时性约束。注释用于帮助团队协作、移植和评审，不写无意义的逐行翻译。
+
+基本要求：
+
+- 每个 `.c` / `.h` 文件开头应包含文件头注释，说明文件职责、所属层级、主要依赖和禁止事项。
+- 每个公开函数和重要内部函数的定义处应包含函数注释。
+- 每个公开数据结构、配置结构、消息结构和跨层传递结构应包含结构体注释。
+- 结构体成员应使用中文注释说明含义；涉及物理量、时间、长度、计数和状态值时必须写清单位或取值范围。
+- 枚举类型应说明用途；枚举值较多或含义不直观时，应逐项注释。
+- 注释应描述“为什么这样设计、由谁调用、有什么限制”，不要只重复代码本身。
+- 修改函数行为、参数含义、结构体字段或模块边界时，必须同步更新对应注释。
+- 禁止把过期设计、未实现能力或猜测性描述写成已完成事实。
+
+文件头示例：
+
+```c
+/**
+ * @file sensor_bme280.c
+ * @brief BME280 气压计驱动实现。
+ *
+ * @details
+ * 本文件负责 BME280 的芯片初始化、寄存器读取、原始数据补偿和采样快照维护。
+ * 驱动层只记录设备事实和采样结果，不负责 OFFLINE / FAILED 状态判定。
+ *
+ * 依赖边界：
+ * - 允许调用 BSP I2C 原始读写接口。
+ * - 不允许直接调用 HAL API。
+ * - 不允许包含 Business / Framework 业务头文件。
+ */
+```
+
+数据结构示例：
+
+```c
+/**
+ * @brief BME280 一次补偿后的环境采样结果。
+ *
+ * @details
+ * 该结构体保存驱动层输出的物理量结果，供平台适配层转换为 Framework 环境 topic。
+ */
+typedef struct
+{
+    float temperature_c;      /**< 温度，单位：摄氏度。 */
+    float pressure_pa;        /**< 气压，单位：Pa。 */
+    float humidity_percent;   /**< 相对湿度，单位：%。 */
+    uint32_t sample_time_ms;  /**< 采样完成时间，单位：ms。 */
+    uint8_t valid;            /**< 采样有效标志，1 表示有效，0 表示无效。 */
+} Sensor_Bme280Sample_t;
+```
+
+函数示例：
+
+```c
+/**
+ * @brief 执行 BME280 周期服务并更新最新采样快照。
+ *
+ * @param[in,out] dev BME280 驱动实例，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间，必须来自 PlatformGetMs() 或 BSP_Time_GetTickMs()。
+ *
+ * @return 驱动服务结果。
+ * @retval SENSOR_OK 本次采样成功，内部快照已更新。
+ * @retval SENSOR_ERR_PARAM 参数非法。
+ * @retval SENSOR_ERR_IO I2C 通信失败，本函数只记录失败事实，不判定 OFFLINE。
+ *
+ * @note 本函数由 sensor 任务周期调用，禁止在 ISR 中调用。
+ * @note 本函数不做日志打印，不发布 Framework topic，不修改 Health 状态。
+ */
+Sensor_Result_t Sensor_Bme280_Service(Sensor_Bme280Device_t *dev, uint32_t now_ms);
+```
 
 本仓库跟踪：
 
