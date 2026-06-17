@@ -1,0 +1,67 @@
+/**
+ * @file px4lite_faults.h
+ * @brief Define system-wide fault codes and default fault metadata.
+ */
+
+#ifndef PX4LITE_FAULTS_H
+#define PX4LITE_FAULTS_H
+
+#include <stdint.h>
+#include "px4lite_types.h"
+
+typedef enum
+{
+    PX4LITE_SEVERITY_INFO = 0,
+    PX4LITE_SEVERITY_WARNING,
+    PX4LITE_SEVERITY_ERROR,
+    PX4LITE_SEVERITY_CRITICAL,
+    PX4LITE_SEVERITY_FATAL
+} Px4Lite_Severity_t;
+
+typedef enum
+{
+    PX4LITE_FAULT_NONE = 0x0000U,
+
+    PX4LITE_FAULT_SYSTEM_SELF_CHECK = 0x0101U,
+    PX4LITE_FAULT_SYSTEM_HEAP = 0x0102U,
+    PX4LITE_FAULT_SYSTEM_STACK = 0x0103U,
+    PX4LITE_FAULT_SYSTEM_TASK_LOST = 0x0104U,
+
+    PX4LITE_FAULT_SENSOR_INIT = 0x0201U,
+    PX4LITE_FAULT_SENSOR_OFFLINE = 0x0202U,
+    PX4LITE_FAULT_SENSOR_INVALID = 0x0203U,
+    PX4LITE_FAULT_SENSOR_NO_FIX = 0x0204U,
+    PX4LITE_FAULT_SENSOR_TIMEOUT = 0x0205U,
+
+    PX4LITE_FAULT_COMM_OFFLINE = 0x0301U,
+    PX4LITE_FAULT_COMM_TIMEOUT = 0x0302U,
+    PX4LITE_FAULT_COMM_FRAME = 0x0303U,
+
+    PX4LITE_FAULT_DISPLAY_OFFLINE = 0x0401U,
+    PX4LITE_FAULT_DISPLAY_REFRESH = 0x0402U,
+
+    PX4LITE_FAULT_STORAGE_NOT_READY = 0x0501U,
+    PX4LITE_FAULT_STORAGE_WRITE = 0x0502U,
+    PX4LITE_FAULT_STORAGE_FULL = 0x0503U,
+
+    PX4LITE_FAULT_PROTOCOL_PARSE = 0x0601U,
+    PX4LITE_FAULT_PROTOCOL_CRC = 0x0602U,
+
+    PX4LITE_FAULT_APP_INVALID_DATA = 0x0701U,
+
+    PX4LITE_FAULT_ESTIMATOR_INPUT = 0x0801U,
+    PX4LITE_FAULT_ESTIMATOR_DIVERGE = 0x0802U
+} Px4Lite_FaultCode_t;
+
+typedef struct
+{
+    Px4Lite_FaultCode_t code;
+    Px4Lite_ModuleId_t owner;
+    Px4Lite_Severity_t severity;
+    uint8_t latched;
+    uint8_t reserved[3];
+    uint32_t raise_delay_ms;
+    uint32_t clear_delay_ms;
+} Px4Lite_FaultDefinition_t;
+
+#endif

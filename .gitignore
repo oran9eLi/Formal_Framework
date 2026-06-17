@@ -1,0 +1,20 @@
+# Keil MDK generated build outputs
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+MDK-ARM/*.log
+MDK-ARM/*.uvguix.*
+MDK-ARM/*.uvgui.*
+MDK-ARM/*.uvgui
+
+# Release binaries generated from Keil builds
+Release/Latest/*.axf
+Release/Latest/*.hex
+Release/Latest/*.map
+Release/Latest/*.log
+
+# Local editor / assistant state
+.claude/settings.local.json
+
+# OS generated files
+Thumbs.db
+Desktop.ini

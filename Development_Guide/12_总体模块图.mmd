@@ -1,0 +1,69 @@
+flowchart TB
+    CORE["Core / Composition Root<br/>HAL -> Clock -> BSP -> Platform -> Framework -> Business -> Scheduler"]
+
+    subgraph CONFIG["Configuration"]
+        BSPCFG["bsp_config.h<br/>enable/model/pin/bus/resource"]
+        FWCFG["px4lite_config.h<br/>module/period/timeout/queue/stack"]
+        BIZCFG["business_template_config.h<br/>business task period/stack"]
+        DBGCFG["debug_config.h<br/>independent monitor switches"]
+    end
+
+    subgraph HW["Hardware And Device Layer"]
+        MSP["HAL MSP<br/>clock/GPIO AF/DMA/NVIC/FSMC pins"]
+        BSP["BSP<br/>UART/FSMC/I2C/SPI runtime parameters"]
+        DRIVER["Typed Device Drivers<br/>GNSS / future IMU / Baro / Battery / Display"]
+    end
+
+    subgraph FW["Framework"]
+        ADAPTER["Platform Adapter<br/>typed driver -> framework measurement"]
+        REGISTRY["Registry / Lifecycle<br/>init/self-check/start/stop/recover"]
+        WORK["Work Scheduler<br/>period/deadline/execution statistics"]
+        MTOPIC["Measurement Topics<br/>Snapshot or FIFO"]
+        EST["Estimator / Domain Calculation"]
+        DTOPIC["Domain Topics<br/>Navigation / System Health"]
+        HEALTH["Health Monitor<br/>freshness/state/fault/heartbeat"]
+    end
+
+    subgraph APP["Application And Business"]
+        API["App Read-only API<br/>App_CopyNavigation / App_CopySystem"]
+        EVENT["Business EventBus<br/>edge events and fan-out"]
+        TASKS["Business Tasks<br/>System / Acquisition / Display"]
+        FUTURE["Future Consumers<br/>LoRa / 5G / Logger / Alarm / Command"]
+    end
+
+    subgraph DEBUG["Independent Diagnostics"]
+        DBGTASK["DebugTask"]
+        MON["Stack/Heap + per-module monitors"]
+    end
+
+    BSPCFG --> MSP
+    BSPCFG --> BSP
+    FWCFG --> REGISTRY
+    FWCFG --> WORK
+    BIZCFG --> TASKS
+    DBGCFG --> DBGTASK
+
+    CORE --> MSP
+    CORE --> REGISTRY
+    CORE --> TASKS
+    CORE --> DBGTASK
+
+    MSP --> BSP
+    BSP --> DRIVER
+    DRIVER --> ADAPTER
+    ADAPTER --> MTOPIC
+    REGISTRY --> DRIVER
+    WORK --> ADAPTER
+    MTOPIC --> EST
+    EST --> DTOPIC
+    HEALTH --> DTOPIC
+    MTOPIC --> HEALTH
+    DTOPIC --> API
+    API --> TASKS
+    TASKS --> EVENT
+    API --> FUTURE
+    EVENT --> FUTURE
+
+    MTOPIC -. read-only diagnostics .-> DBGTASK
+    DTOPIC -. read-only diagnostics .-> DBGTASK
+    MON --> DBGTASK
