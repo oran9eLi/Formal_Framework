@@ -8,7 +8,9 @@ MDK-ARM/*.uvgui
 
 # EIDE / local build outputs
 build/
+Target 1/
 .uvtmp/
+formal_framework.code-workspace
 
 # Release binaries generated from Keil builds
 Release/Latest/*.axf
