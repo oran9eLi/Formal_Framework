@@ -75,8 +75,8 @@
 #define BSP_ADC_CH          ADC_CHANNEL_5
 #define BSP_ADC_PORT        GPIOA
 #define BSP_ADC_PIN         GPIO_PIN_5
-#define BSP_ADC_DIVIDER_NUM 4U
-#define BSP_ADC_DIVIDER_DEN 1U
+#define BSP_ADC_DIVIDER_NUM 10080U
+#define BSP_ADC_DIVIDER_DEN 1000U
 
 /* ATK-MD0700 显示屏：SSD1963 类控制器，FSMC 8080 16-bit 总线。 */
 #define BSP_DISPLAY_ENABLE              1U

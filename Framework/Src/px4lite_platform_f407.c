@@ -10,6 +10,7 @@
 
 #include "px4lite_platform.h"
 #include "px4lite_config.h"
+#include "px4lite_imu_axis_map.h"
 #include "bsp_gnss.h"
 #include "bsp_lora.h"
 #include "bsp_rtc.h"
@@ -302,6 +303,7 @@ Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *measurement)
     measurement->accel_mg[i]  = Px4Lite_RoundFloatToI32(snapshot.accel_g[i] * 1000.0f);
     measurement->gyro_mdps[i] = Px4Lite_RoundFloatToI32(snapshot.gyro_dps[i] * 1000.0f);
   }
+  Px4Lite_MapImuAxes(measurement->accel_mg, measurement->gyro_mdps);
   measurement->temperature_cdeg = (int16_t)Px4Lite_RoundFloatToI32(snapshot.temperature_c * 100.0f);
   measurement->sample_period_us = (uint16_t)(PX4LITE_IMU_WORK_PERIOD_MS * 1000U);
 
