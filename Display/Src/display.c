@@ -1415,11 +1415,56 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   return DISPLAY_OK;
 }
 
+/**
+ * @brief 优先刷新当前页内的强节奏字段。
+ *
+ * @param[in] id 待优先刷新的 HMI 变量 ID。
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return DISPLAY_NOT_READY 表示本次已经绘制一个字段，DISPLAY_OK 表示无需绘制。
+ */
+static Display_Result_t Display_RefreshPriorityField(Display_HmiVariableId_t id,
+                                                     uint32_t now_ms)
+{
+  uint16_t i;
+
+  for (i = 0U; i < DISPLAY_ARRAY_SIZE(s_hmi_variables); i++) {
+    const Display_HmiVariableConfig_t *variable = &s_hmi_variables[i];
+    Display_ValueCache_t *cache;
+
+    if ((variable->id != id) || (variable->page != s_current_page)) {
+      continue;
+    }
+
+    cache = &s_hmi_values[variable->id];
+    if (cache->valid == 0U) {
+      return DISPLAY_OK;
+    }
+    if ((cache->drawn_valid != 0U) &&
+        (cache->value == cache->drawn_value)) {
+      return DISPLAY_OK;
+    }
+
+    if (Display_PagesDrawField(variable, cache->value) != DISPLAY_OK) {
+      return DISPLAY_ERROR;
+    }
+
+    cache->drawn_value = cache->value;
+    cache->drawn_valid = 1U;
+    cache->last_refresh_ms = now_ms;
+    cache->dirty = 0U;
+    return DISPLAY_NOT_READY;
+  }
+
+  return DISPLAY_OK;
+}
+
 /*
  * 执行一次有预算约束的显示刷新步骤。
  */
 Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
 {
+  Display_Result_t result;
   uint16_t scanned;
 
   (void)budget_us;
@@ -1435,6 +1480,16 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
     s_static_redraw_pending = 0U;
     s_refresh_cursor = 0U;
     return DISPLAY_NOT_READY;
+  }
+
+  result = Display_RefreshPriorityField(DISPLAY_HMI_VAR_CLOCK_TIME, now_ms);
+  if (result != DISPLAY_OK) {
+    return result;
+  }
+
+  result = Display_RefreshPriorityField(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms);
+  if (result != DISPLAY_OK) {
+    return result;
   }
 
   for (scanned = 0U; scanned < DISPLAY_ARRAY_SIZE(s_hmi_variables); scanned++) {

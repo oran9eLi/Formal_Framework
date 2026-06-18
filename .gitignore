@@ -6,6 +6,10 @@ MDK-ARM/*.uvguix.*
 MDK-ARM/*.uvgui.*
 MDK-ARM/*.uvgui
 
+# EIDE / local build outputs
+build/
+.uvtmp/
+
 # Release binaries generated from Keil builds
 Release/Latest/*.axf
 Release/Latest/*.hex
@@ -14,6 +18,11 @@ Release/Latest/*.log
 
 # Local editor / assistant state
 .claude/settings.local.json
+.vscode/
+.idea/
+.vs/
+.cursor/
+*.code-workspace
 
 # OS generated files
 Thumbs.db
