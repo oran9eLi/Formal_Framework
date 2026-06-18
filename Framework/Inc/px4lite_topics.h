@@ -16,13 +16,12 @@
 /**
  * @brief 有界 FIFO 运行统计。
  */
-typedef struct
-{
-    uint16_t count;           /**< 当前 FIFO 中的元素数量。 */
-    uint16_t peak;            /**< 历史峰值占用。 */
-    uint32_t push_count;      /**< 累计 push 次数。 */
-    uint32_t pop_count;       /**< 累计 pop 次数。 */
-    uint32_t overflow_count;  /**< 累计溢出次数。 */
+typedef struct {
+  uint16_t count;          /**< 当前 FIFO 中的元素数量。 */
+  uint16_t peak;           /**< 历史峰值占用。 */
+  uint32_t push_count;     /**< 累计 push 次数。 */
+  uint32_t pop_count;      /**< 累计 pop 次数。 */
+  uint32_t overflow_count; /**< 累计溢出次数。 */
 } Px4Lite_FifoStats_t;
 
 /**
@@ -132,8 +131,7 @@ Px4Lite_Result_t Px4Lite_CopyBattery(Px4Lite_BatteryStatus_t *data);
  *
  * @param[in] data 导航域快照指针，不能为 NULL。
  */
-void Px4Lite_PublishNavigation(
-    const Px4Lite_VehicleNavigation_t *data);
+void Px4Lite_PublishNavigation(const Px4Lite_VehicleNavigation_t *data);
 
 /**
  * @brief 复制最新完整导航域快照。
@@ -145,8 +143,7 @@ void Px4Lite_PublishNavigation(
  * @retval PX4LITE_INVALID_PARAM 参数为空。
  * @retval PX4LITE_NOT_READY 尚未发布有效快照。
  */
-Px4Lite_Result_t Px4Lite_CopyNavigation(
-    Px4Lite_VehicleNavigation_t *data);
+Px4Lite_Result_t Px4Lite_CopyNavigation(Px4Lite_VehicleNavigation_t *data);
 
 /**
  * @brief 原子发布一份完整系统健康快照。
@@ -177,8 +174,7 @@ Px4Lite_Result_t Px4Lite_CopyHealth(Px4Lite_SystemHealth_t *data);
  * @retval PX4LITE_INVALID_PARAM 参数为空。
  * @retval PX4LITE_NOT_READY 告警队列未启用、未创建或发送失败。
  */
-Px4Lite_Result_t Px4Lite_PublishAlarm(
-    const Px4Lite_AlarmEvent_t *event);
+Px4Lite_Result_t Px4Lite_PublishAlarm(const Px4Lite_AlarmEvent_t *event);
 
 /**
  * @brief 非阻塞读取一个待处理告警事件。
@@ -202,8 +198,7 @@ Px4Lite_Result_t Px4Lite_TakeAlarm(Px4Lite_AlarmEvent_t *event);
  * @retval PX4LITE_INVALID_PARAM 参数为空。
  * @retval PX4LITE_NOT_READY 命令队列未启用、未创建或发送失败。
  */
-Px4Lite_Result_t Px4Lite_PublishCommand(
-    const Px4Lite_Command_t *command);
+Px4Lite_Result_t Px4Lite_PublishCommand(const Px4Lite_Command_t *command);
 
 /**
  * @brief 非阻塞读取一个待处理应用命令。
@@ -227,8 +222,7 @@ Px4Lite_Result_t Px4Lite_TakeCommand(Px4Lite_Command_t *command);
  * @retval PX4LITE_INVALID_PARAM 参数为空。
  * @retval PX4LITE_NOT_READY ACK 队列未启用、未创建或发送失败。
  */
-Px4Lite_Result_t Px4Lite_PublishCommandAck(
-    const Px4Lite_CommandAck_t *ack);
+Px4Lite_Result_t Px4Lite_PublishCommandAck(const Px4Lite_CommandAck_t *ack);
 
 /**
  * @brief 非阻塞读取一个待处理命令回执。

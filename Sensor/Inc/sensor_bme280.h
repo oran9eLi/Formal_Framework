@@ -15,27 +15,25 @@
 /**
  * @brief BME280 驱动返回值。
  */
-typedef enum
-{
-    BME280_RESULT_OK = 0,       /**< 操作成功。 */
-    BME280_RESULT_NO_DATA,      /**< 当前无可用新样本。 */
-    BME280_RESULT_BAD_ID,       /**< 芯片 ID 不匹配。 */
-    BME280_RESULT_IO_ERROR,     /**< I2C 访问失败。 */
-    BME280_RESULT_TIMEOUT,      /**< 测量等待超时。 */
-    BME280_RESULT_INVALID_PARAM /**< 参数非法。 */
+typedef enum {
+  BME280_RESULT_OK = 0,       /**< 操作成功。 */
+  BME280_RESULT_NO_DATA,      /**< 当前无可用新样本。 */
+  BME280_RESULT_BAD_ID,       /**< 芯片 ID 不匹配。 */
+  BME280_RESULT_IO_ERROR,     /**< I2C 访问失败。 */
+  BME280_RESULT_TIMEOUT,      /**< 测量等待超时。 */
+  BME280_RESULT_INVALID_PARAM /**< 参数非法。 */
 } Bme280_Result_t;
 
 /**
  * @brief BME280 最近一次有效环境采样快照。
  */
-typedef struct
-{
-    uint32_t rx_sequence;           /**< 样本序号，每次有效采样递增。 */
-    uint32_t sample_time_ms;        /**< 采样完成时间，单位：ms。 */
-    float temperature_c;            /**< 温度，单位：摄氏度。 */
-    float pressure_pa;              /**< 气压，单位：Pa。 */
-    float relative_humidity_pct;    /**< 相对湿度，单位：%。 */
-    uint32_t error_count;           /**< 累计错误次数。 */
+typedef struct {
+  uint32_t rx_sequence;        /**< 样本序号，每次有效采样递增。 */
+  uint32_t sample_time_ms;     /**< 采样完成时间，单位：ms。 */
+  float temperature_c;         /**< 温度，单位：摄氏度。 */
+  float pressure_pa;           /**< 气压，单位：Pa。 */
+  float relative_humidity_pct; /**< 相对湿度，单位：%。 */
+  uint32_t error_count;        /**< 累计错误次数。 */
 } Bme280_Snapshot_t;
 
 /**
@@ -44,11 +42,10 @@ typedef struct
  * @details
  * 状态查询不携带测量负载，不访问 I2C 总线，只复制驱动内部缓存。
  */
-typedef struct
-{
-    uint32_t rx_sequence;    /**< 最近有效样本序号。 */
-    uint32_t sample_time_ms; /**< 最近有效采样时间，单位：ms。 */
-    uint32_t error_count;    /**< 累计错误次数。 */
+typedef struct {
+  uint32_t rx_sequence;    /**< 最近有效样本序号。 */
+  uint32_t sample_time_ms; /**< 最近有效采样时间，单位：ms。 */
+  uint32_t error_count;    /**< 累计错误次数。 */
 } Bme280_Status_t;
 
 /**

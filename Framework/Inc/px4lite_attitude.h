@@ -12,14 +12,13 @@
 /**
  * @brief 姿态估计器内部状态。
  */
-typedef struct
-{
-    float roll_deg;                  /**< 当前横滚角，单位 degree。 */
-    float pitch_deg;                 /**< 当前俯仰角，单位 degree。 */
-    float yaw_deg;                   /**< 当前相对航向角，单位 degree。 */
-    uint32_t last_sample_time_ms;    /**< 上一次使用的 IMU 样本时间，单位 ms。 */
-    uint8_t valid;                   /**< 1 表示估计器已完成首帧初始化。 */
-    uint8_t reserved[3];             /**< 对齐预留。 */
+typedef struct {
+  float roll_deg;               /**< 当前横滚角，单位 degree。 */
+  float pitch_deg;              /**< 当前俯仰角，单位 degree。 */
+  float yaw_deg;                /**< 当前相对航向角，单位 degree。 */
+  uint32_t last_sample_time_ms; /**< 上一次使用的 IMU 样本时间，单位 ms。 */
+  uint8_t valid;                /**< 1 表示估计器已完成首帧初始化。 */
+  uint8_t reserved[3];          /**< 对齐预留。 */
 } Px4Lite_AttitudeState_t;
 
 /**
@@ -41,11 +40,6 @@ void Px4Lite_AttitudeInit(Px4Lite_AttitudeState_t *state);
  * @retval PX4LITE_OK 更新成功。
  * @retval PX4LITE_INVALID_PARAM 参数非法。
  */
-Px4Lite_Result_t Px4Lite_AttitudeUpdate(
-    Px4Lite_AttitudeState_t *state,
-    const Px4Lite_SensorImu_t *imu,
-    int32_t *roll_deg100,
-    int32_t *pitch_deg100,
-    int32_t *yaw_deg100);
+Px4Lite_Result_t Px4Lite_AttitudeUpdate(Px4Lite_AttitudeState_t *state, const Px4Lite_SensorImu_t *imu, int32_t *roll_deg100, int32_t *pitch_deg100, int32_t *yaw_deg100);
 
 #endif

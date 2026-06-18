@@ -16,16 +16,15 @@
 /**
  * @brief 必须参与 watchdog 门控的任务心跳编号。
  */
-typedef enum
-{
-    PX4LITE_HEARTBEAT_SENSOR = 0, /**< sensor 采集任务心跳。 */
-    PX4LITE_HEARTBEAT_ESTIMATOR,  /**< estimator 姿态/导航任务心跳。 */
-    PX4LITE_HEARTBEAT_HEALTH,     /**< health 健康监控任务心跳。 */
-    PX4LITE_HEARTBEAT_SYSTEM,     /**< biz_system 系统业务任务心跳。 */
-    PX4LITE_HEARTBEAT_BUSINESS,   /**< biz_acq 业务采集任务心跳。 */
-    PX4LITE_HEARTBEAT_DISPLAY,    /**< biz_display 显示业务任务心跳。 */
-    PX4LITE_HEARTBEAT_COMM,       /**< comm 通信任务心跳。 */
-    PX4LITE_HEARTBEAT_COUNT       /**< 心跳数量，必须保持为最后一项。 */
+typedef enum {
+  PX4LITE_HEARTBEAT_SENSOR = 0, /**< sensor 采集任务心跳。 */
+  PX4LITE_HEARTBEAT_ESTIMATOR,  /**< estimator 姿态/导航任务心跳。 */
+  PX4LITE_HEARTBEAT_HEALTH,     /**< health 健康监控任务心跳。 */
+  PX4LITE_HEARTBEAT_SYSTEM,     /**< biz_system 系统业务任务心跳。 */
+  PX4LITE_HEARTBEAT_BUSINESS,   /**< biz_acq 业务采集任务心跳。 */
+  PX4LITE_HEARTBEAT_DISPLAY,    /**< biz_display 显示业务任务心跳。 */
+  PX4LITE_HEARTBEAT_COMM,       /**< comm 通信任务心跳。 */
+  PX4LITE_HEARTBEAT_COUNT       /**< 心跳数量，必须保持为最后一项。 */
 } Px4Lite_HeartbeatId_t;
 
 /**
@@ -90,8 +89,7 @@ Px4Lite_Result_t Px4Lite_PlatformInit(void);
  *
  * @return 读取结果。
  */
-Px4Lite_Result_t Px4Lite_PlatformRtcRead(
-    Px4Lite_UtcDateTime_t *out);
+Px4Lite_Result_t Px4Lite_PlatformRtcRead(Px4Lite_UtcDateTime_t *out);
 
 /**
  * @brief 通过平台适配层写入 RTC UTC 日期时间。
@@ -100,8 +98,7 @@ Px4Lite_Result_t Px4Lite_PlatformRtcRead(
  *
  * @return 写入结果。
  */
-Px4Lite_Result_t Px4Lite_PlatformRtcWrite(
-    const Px4Lite_UtcDateTime_t *date_time);
+Px4Lite_Result_t Px4Lite_PlatformRtcWrite(const Px4Lite_UtcDateTime_t *date_time);
 
 /**
  * @brief 通过平台适配层初始化 GNSS BSP 和强类型 GNSS 驱动。

@@ -16,14 +16,13 @@
 /**
  * @brief RTC UTC 日期时间。
  */
-typedef struct
-{
-    uint16_t year;   /**< 完整年份，范围 2000 到 2099。 */
-    uint8_t month;   /**< 月份，范围 1 到 12。 */
-    uint8_t day;     /**< 日期，范围 1 到 31。 */
-    uint8_t hours;   /**< 小时，范围 0 到 23。 */
-    uint8_t minutes; /**< 分钟，范围 0 到 59。 */
-    uint8_t seconds; /**< 秒，范围 0 到 59。 */
+typedef struct {
+  uint16_t year;   /**< 完整年份，范围 2000 到 2099。 */
+  uint8_t month;   /**< 月份，范围 1 到 12。 */
+  uint8_t day;     /**< 日期，范围 1 到 31。 */
+  uint8_t hours;   /**< 小时，范围 0 到 23。 */
+  uint8_t minutes; /**< 分钟，范围 0 到 59。 */
+  uint8_t seconds; /**< 秒，范围 0 到 59。 */
 } BSP_RTC_DateTime_t;
 
 /**
@@ -56,7 +55,6 @@ BSP_Status_t BSP_RTC_ReadDateTime(BSP_RTC_DateTime_t *out);
  *
  * @return 写入结果。
  */
-BSP_Status_t BSP_RTC_WriteDateTime(
-    const BSP_RTC_DateTime_t *date_time);
+BSP_Status_t BSP_RTC_WriteDateTime(const BSP_RTC_DateTime_t *date_time);
 
 #endif

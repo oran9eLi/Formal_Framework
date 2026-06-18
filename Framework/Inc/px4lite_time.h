@@ -15,38 +15,35 @@
 /**
  * @brief 当前时间快照来源。
  */
-typedef enum
-{
-    PX4LITE_TIME_SOURCE_NONE = 0, /**< 尚无可用时间源。 */
-    PX4LITE_TIME_SOURCE_RTC,      /**< 当前快照来自 RTC。 */
-    PX4LITE_TIME_SOURCE_GNSS      /**< 当前快照来自 GNSS 校准结果。 */
+typedef enum {
+  PX4LITE_TIME_SOURCE_NONE = 0, /**< 尚无可用时间源。 */
+  PX4LITE_TIME_SOURCE_RTC,      /**< 当前快照来自 RTC。 */
+  PX4LITE_TIME_SOURCE_GNSS      /**< 当前快照来自 GNSS 校准结果。 */
 } Px4Lite_TimeSource_t;
 
 /**
  * @brief 时间同步状态。
  */
-typedef enum
-{
-    PX4LITE_TIME_SYNC_INVALID = 0, /**< 尚无有效日期时间。 */
-    PX4LITE_TIME_SYNC_RTC_VALID,   /**< RTC 时间有效但本次启动尚未 GNSS 校准。 */
-    PX4LITE_TIME_SYNC_GNSS_SYNCED, /**< 本次启动已经通过 GNSS 校准。 */
-    PX4LITE_TIME_SYNC_STALE        /**< 曾经校准过，但距离最近校准已经较久。 */
+typedef enum {
+  PX4LITE_TIME_SYNC_INVALID = 0, /**< 尚无有效日期时间。 */
+  PX4LITE_TIME_SYNC_RTC_VALID,   /**< RTC 时间有效但本次启动尚未 GNSS 校准。 */
+  PX4LITE_TIME_SYNC_GNSS_SYNCED, /**< 本次启动已经通过 GNSS 校准。 */
+  PX4LITE_TIME_SYNC_STALE        /**< 曾经校准过，但距离最近校准已经较久。 */
 } Px4Lite_TimeSyncState_t;
 
 /**
  * @brief Framework 统一时间快照。
  */
-typedef struct
-{
-    Px4Lite_TopicHeader_t header;      /**< 快照头，包含更新时间和序号。 */
-    uint32_t utc_date_ymd;             /**< UTC 日期，编码 YYYYMMDD。 */
-    uint32_t utc_time_hhmmss;          /**< UTC 时间，编码 HHMMSS。 */
-    uint32_t local_date_ymd;           /**< 本地显示日期，编码 YYYYMMDD。 */
-    uint32_t local_time_hhmmss;        /**< 本地显示时间，编码 HHMMSS。 */
-    uint32_t last_sync_ms;             /**< 最近一次 GNSS 校准的系统时间，未知时为 0。 */
-    uint32_t sync_age_s;               /**< 最近一次 GNSS 校准距今秒数，未知时为 0。 */
-    Px4Lite_TimeSource_t source;       /**< 当前快照来源。 */
-    Px4Lite_TimeSyncState_t sync_state;/**< 当前同步状态。 */
+typedef struct {
+  Px4Lite_TopicHeader_t header;       /**< 快照头，包含更新时间和序号。 */
+  uint32_t utc_date_ymd;              /**< UTC 日期，编码 YYYYMMDD。 */
+  uint32_t utc_time_hhmmss;           /**< UTC 时间，编码 HHMMSS。 */
+  uint32_t local_date_ymd;            /**< 本地显示日期，编码 YYYYMMDD。 */
+  uint32_t local_time_hhmmss;         /**< 本地显示时间，编码 HHMMSS。 */
+  uint32_t last_sync_ms;              /**< 最近一次 GNSS 校准的系统时间，未知时为 0。 */
+  uint32_t sync_age_s;                /**< 最近一次 GNSS 校准距今秒数，未知时为 0。 */
+  Px4Lite_TimeSource_t source;        /**< 当前快照来源。 */
+  Px4Lite_TimeSyncState_t sync_state; /**< 当前同步状态。 */
 } Px4Lite_TimeSnapshot_t;
 
 /**

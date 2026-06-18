@@ -16,37 +16,34 @@
 /**
  * @brief Business 服务返回值。
  */
-typedef enum
-{
-    BUSINESS_SERVICE_OK = 0,    /**< 本次服务完成且无错误。 */
-    BUSINESS_SERVICE_BUSY,      /**< 本次预算用完，仍有工作留到下一周期。 */
-    BUSINESS_SERVICE_IDLE,      /**< 当前无待处理工作。 */
-    BUSINESS_SERVICE_NOT_READY, /**< 依赖数据或模块尚未就绪。 */
-    BUSINESS_SERVICE_ERROR      /**< 服务执行出错。 */
+typedef enum {
+  BUSINESS_SERVICE_OK = 0,    /**< 本次服务完成且无错误。 */
+  BUSINESS_SERVICE_BUSY,      /**< 本次预算用完，仍有工作留到下一周期。 */
+  BUSINESS_SERVICE_IDLE,      /**< 当前无待处理工作。 */
+  BUSINESS_SERVICE_NOT_READY, /**< 依赖数据或模块尚未就绪。 */
+  BUSINESS_SERVICE_ERROR      /**< 服务执行出错。 */
 } Business_ServiceResult_t;
 
 /**
  * @brief Business 层组件编号。
  */
-typedef enum
-{
-    BUSINESS_COMPONENT_SYSTEM = 0,      /**< 系统业务组件。 */
-    BUSINESS_COMPONENT_ACQUISITION,     /**< 业务采集/事件分发组件。 */
-    BUSINESS_COMPONENT_DISPLAY,         /**< 显示业务组件。 */
-    BUSINESS_COMPONENT_COUNT            /**< 组件数量，必须保持为最后一项。 */
+typedef enum {
+  BUSINESS_COMPONENT_SYSTEM = 0,  /**< 系统业务组件。 */
+  BUSINESS_COMPONENT_ACQUISITION, /**< 业务采集/事件分发组件。 */
+  BUSINESS_COMPONENT_DISPLAY,     /**< 显示业务组件。 */
+  BUSINESS_COMPONENT_COUNT        /**< 组件数量，必须保持为最后一项。 */
 } Business_ComponentId_t;
 
 /**
  * @brief Business 层日志记录。
  */
-typedef struct
-{
-    uint32_t timestamp_ms; /**< 日志时间，单位：ms。 */
-    uint16_t source_id;    /**< 日志来源组件或模块 ID。 */
-    uint8_t level;         /**< 日志等级，具体含义由业务层定义。 */
-    uint8_t reserved;      /**< 保留字段，保持结构体对齐。 */
-    const char *field;     /**< 日志字段名，指向静态或调用期有效字符串。 */
-    const char *value;     /**< 日志字段值，指向静态或调用期有效字符串。 */
+typedef struct {
+  uint32_t timestamp_ms; /**< 日志时间，单位：ms。 */
+  uint16_t source_id;    /**< 日志来源组件或模块 ID。 */
+  uint8_t level;         /**< 日志等级，具体含义由业务层定义。 */
+  uint8_t reserved;      /**< 保留字段，保持结构体对齐。 */
+  const char *field;     /**< 日志字段名，指向静态或调用期有效字符串。 */
+  const char *value;     /**< 日志字段值，指向静态或调用期有效字符串。 */
 } Business_LogRecord_t;
 
 /**
@@ -77,8 +74,7 @@ void Business_StatusHeartbeat(Business_ComponentId_t component_id);
  *
  * @return 写入结果。
  */
-Business_ServiceResult_t Business_LogWrite(
-    const Business_LogRecord_t *record);
+Business_ServiceResult_t Business_LogWrite(const Business_LogRecord_t *record);
 
 /**
  * @brief 复制一份新的导航快照并发布业务采集事件。
@@ -117,8 +113,7 @@ Business_ServiceResult_t Business_DisplayPrepareSnapshot(uint32_t now_ms);
  *
  * @note 本函数必须在预算内返回，避免显示刷新阻塞传感器采集。
  */
-Business_ServiceResult_t Business_DisplayRefreshStep(uint32_t now_ms,
-                                                     uint32_t budget_us);
+Business_ServiceResult_t Business_DisplayRefreshStep(uint32_t now_ms, uint32_t budget_us);
 
 /**
  * @brief 将显示服务结果映射为 Framework 显示模块状态。
@@ -126,8 +121,7 @@ Business_ServiceResult_t Business_DisplayRefreshStep(uint32_t now_ms,
  * @param[in] result 显示服务结果。
  * @param[in] now_ms 当前系统毫秒时间。
  */
-void Business_DisplayReportResult(Business_ServiceResult_t result,
-                                  uint32_t now_ms);
+void Business_DisplayReportResult(Business_ServiceResult_t result, uint32_t now_ms);
 
 /**
  * @brief Business 系统任务入口。

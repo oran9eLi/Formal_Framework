@@ -19,18 +19,9 @@ static UART_HandleTypeDef huart1;
  */
 static BSP_Status_t BSP_UART_MapHalStatus(HAL_StatusTypeDef status)
 {
-  if (status == HAL_OK)
-  {
-    return BSP_STATUS_OK;
-  }
-  if (status == HAL_BUSY)
-  {
-    return BSP_STATUS_BUSY;
-  }
-  if (status == HAL_TIMEOUT)
-  {
-    return BSP_STATUS_TIMEOUT;
-  }
+  if (status == HAL_OK) { return BSP_STATUS_OK; }
+  if (status == HAL_BUSY) { return BSP_STATUS_BUSY; }
+  if (status == HAL_TIMEOUT) { return BSP_STATUS_TIMEOUT; }
   return BSP_STATUS_ERROR;
 }
 
@@ -55,7 +46,6 @@ BSP_Status_t BSP_UART_Init(void)
  */
 BSP_Status_t BSP_UART_Send(const uint8_t *data, uint16_t length, uint32_t timeout_ms)
 {
-  return BSP_UART_MapHalStatus(
-      HAL_UART_Transmit(&huart1, (uint8_t *)data, length, timeout_ms));
+  return BSP_UART_MapHalStatus(HAL_UART_Transmit(&huart1, (uint8_t *)data, length, timeout_ms));
 }
 /*************DEBUG END*************/

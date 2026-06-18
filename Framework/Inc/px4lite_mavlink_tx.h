@@ -16,28 +16,27 @@
 /**
  * @brief MAVLink 遥测发送统计。
  */
-typedef struct
-{
-    uint32_t heartbeat_count;       /**< HEARTBEAT 已调度次数。 */
-    uint32_t gps_raw_count;         /**< GPS_RAW_INT 已调度次数。 */
-    uint32_t gnss_detail_count;     /**< GNSS 详情或状态文本已调度次数。 */
-    uint32_t attitude_count;        /**< ATTITUDE 已调度次数。 */
-    uint32_t position_count;        /**< GLOBAL_POSITION_INT 已调度次数。 */
-    uint32_t sys_status_count;      /**< SYS_STATUS 已调度次数。 */
-    uint32_t battery_status_count;  /**< BATTERY_STATUS 已调度次数。 */
-    uint32_t scaled_pressure_count; /**< SCALED_PRESSURE 已调度次数。 */
-    uint32_t statustext_count;      /**< STATUSTEXT 已调度次数。 */
-    uint32_t no_data_count;         /**< 因无可用 topic 数据跳过发送的次数。 */
-    uint32_t stale_count;           /**< 因 topic 数据过期跳过发送的次数。 */
-    uint32_t busy_count;            /**< 因 LoRa 发送忙跳过发送的次数。 */
-    uint32_t error_count;           /**< 编码或发送提交错误次数。 */
-    uint32_t last_gps_sequence;     /**< 最近发送 GPS 数据对应的 topic sequence。 */
-    uint32_t last_detail_sequence;  /**< 最近发送 GNSS 详情对应的 topic sequence。 */
-    uint32_t last_attitude_sequence;/**< 最近发送姿态对应的 topic sequence。 */
-    uint32_t last_battery_sequence; /**< 最近发送电池对应的 topic sequence。 */
-    uint32_t last_pressure_sequence;/**< 最近发送气压对应的 topic sequence。 */
-    uint32_t last_alarm_sequence;   /**< 最近发送告警对应的 topic sequence。 */
-    uint32_t last_message_id;       /**< 最近调度的 MAVLink message id。 */
+typedef struct {
+  uint32_t heartbeat_count;        /**< HEARTBEAT 已调度次数。 */
+  uint32_t gps_raw_count;          /**< GPS_RAW_INT 已调度次数。 */
+  uint32_t gnss_detail_count;      /**< GNSS 详情或状态文本已调度次数。 */
+  uint32_t attitude_count;         /**< ATTITUDE 已调度次数。 */
+  uint32_t position_count;         /**< GLOBAL_POSITION_INT 已调度次数。 */
+  uint32_t sys_status_count;       /**< SYS_STATUS 已调度次数。 */
+  uint32_t battery_status_count;   /**< BATTERY_STATUS 已调度次数。 */
+  uint32_t scaled_pressure_count;  /**< SCALED_PRESSURE 已调度次数。 */
+  uint32_t statustext_count;       /**< STATUSTEXT 已调度次数。 */
+  uint32_t no_data_count;          /**< 因无可用 topic 数据跳过发送的次数。 */
+  uint32_t stale_count;            /**< 因 topic 数据过期跳过发送的次数。 */
+  uint32_t busy_count;             /**< 因 LoRa 发送忙跳过发送的次数。 */
+  uint32_t error_count;            /**< 编码或发送提交错误次数。 */
+  uint32_t last_gps_sequence;      /**< 最近发送 GPS 数据对应的 topic sequence。 */
+  uint32_t last_detail_sequence;   /**< 最近发送 GNSS 详情对应的 topic sequence。 */
+  uint32_t last_attitude_sequence; /**< 最近发送姿态对应的 topic sequence。 */
+  uint32_t last_battery_sequence;  /**< 最近发送电池对应的 topic sequence。 */
+  uint32_t last_pressure_sequence; /**< 最近发送气压对应的 topic sequence。 */
+  uint32_t last_alarm_sequence;    /**< 最近发送告警对应的 topic sequence。 */
+  uint32_t last_message_id;        /**< 最近调度的 MAVLink message id。 */
 } Px4Lite_MavlinkTxStats_t;
 
 /**

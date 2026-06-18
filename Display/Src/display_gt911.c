@@ -11,8 +11,8 @@
 
 #include <string.h>
 
-#define DISPLAY_GT911_ADDR_14       0x14U
-#define DISPLAY_GT911_ADDR_5D       0x5DU
+#define DISPLAY_GT911_ADDR_14     0x14U
+#define DISPLAY_GT911_ADDR_5D     0x5DU
 #define DISPLAY_GT911_REG_PID     0x8140U
 #define DISPLAY_GT911_REG_CTRL    0x8040U
 #define DISPLAY_GT911_REG_CFG     0x8047U
@@ -31,25 +31,17 @@ static uint8_t s_gt911_cfg_bytes[4];
 /**
  * @brief Read a GT911 16-bit register with short bus recovery retries.
  */
-static uint8_t Display_Gt911_ReadRegRetry(uint8_t addr,
-                                          uint16_t reg,
-                                          uint8_t *buf,
-                                          uint8_t len)
+static uint8_t Display_Gt911_ReadRegRetry(uint8_t addr, uint16_t reg, uint8_t *buf, uint8_t len)
 {
-    uint8_t retry;
+  uint8_t retry;
 
-    for (retry = 0U; retry < 3U; retry++)
-    {
-        if (BSP_TouchPort_ReadReg16(addr, reg, buf, len) ==
-            BSP_TOUCH_PORT_OK)
-        {
-            return 0U;
-        }
-        BSP_TouchPort_Recover();
-        HAL_Delay(2U);
-    }
+  for (retry = 0U; retry < 3U; retry++) {
+    if (BSP_TouchPort_ReadReg16(addr, reg, buf, len) == BSP_TOUCH_PORT_OK) { return 0U; }
+    BSP_TouchPort_Recover();
+    HAL_Delay(2U);
+  }
 
-    return 1U;
+  return 1U;
 }
 
 /**
@@ -57,10 +49,7 @@ static uint8_t Display_Gt911_ReadRegRetry(uint8_t addr,
  */
 static uint8_t Display_Gt911_PidIsSupported(const uint8_t *pid)
 {
-    return (uint8_t)((memcmp(pid, "911", 4U) == 0) ||
-                     (memcmp(pid, "9147", 4U) == 0) ||
-                     (memcmp(pid, "9271", 4U) == 0) ||
-                     (memcmp(pid, "1158", 4U) == 0));
+  return (uint8_t)((memcmp(pid, "911", 4U) == 0) || (memcmp(pid, "9147", 4U) == 0) || (memcmp(pid, "9271", 4U) == 0) || (memcmp(pid, "1158", 4U) == 0));
 }
 
 /**
@@ -68,26 +57,23 @@ static uint8_t Display_Gt911_PidIsSupported(const uint8_t *pid)
  */
 static void Display_Gt911_ResetForAddress(uint8_t addr)
 {
-    BSP_TouchPort_WriteReset(0U);
+  BSP_TouchPort_WriteReset(0U);
 
-    if (addr == DISPLAY_GT911_ADDR_14)
-    {
-        BSP_TouchPort_SetIntOutput(0U);
-        BSP_TouchPort_SetIntOutput(1U);
-        HAL_Delay(1U);
-        BSP_TouchPort_WriteReset(1U);
-        HAL_Delay(10U);
-    }
-    else
-    {
-        BSP_TouchPort_SetIntOutput(0U);
-        HAL_Delay(1U);
-        BSP_TouchPort_WriteReset(1U);
-        HAL_Delay(10U);
-    }
+  if (addr == DISPLAY_GT911_ADDR_14) {
+    BSP_TouchPort_SetIntOutput(0U);
+    BSP_TouchPort_SetIntOutput(1U);
+    HAL_Delay(1U);
+    BSP_TouchPort_WriteReset(1U);
+    HAL_Delay(10U);
+  } else {
+    BSP_TouchPort_SetIntOutput(0U);
+    HAL_Delay(1U);
+    BSP_TouchPort_WriteReset(1U);
+    HAL_Delay(10U);
+  }
 
-    BSP_TouchPort_SetIntInput();
-    HAL_Delay(100U);
+  BSP_TouchPort_SetIntInput();
+  HAL_Delay(100U);
 }
 
 /**
@@ -95,37 +81,21 @@ static void Display_Gt911_ResetForAddress(uint8_t addr)
  */
 static uint8_t Display_Gt911_ReadConfigDebug(uint8_t addr)
 {
-    s_gt911_cfg_verified = 0U;
-    s_gt911_cfg_version = 0U;
-    s_gt911_orig_version = 0U;
-    s_gt911_init_error = 0U;
+  s_gt911_cfg_verified = 0U;
+  s_gt911_cfg_version  = 0U;
+  s_gt911_orig_version = 0U;
+  s_gt911_init_error   = 0U;
 
-    if (BSP_TouchPort_ReadReg16(addr,
-                                DISPLAY_GT911_REG_CTRL,
-                                &s_gt911_orig_version,
-                                1U) != BSP_TOUCH_PORT_OK)
-    {
-        s_gt911_init_error = 0xA1U;
-        return 1U;
-    }
+  if (BSP_TouchPort_ReadReg16(addr, DISPLAY_GT911_REG_CTRL, &s_gt911_orig_version, 1U) != BSP_TOUCH_PORT_OK) {
+    s_gt911_init_error = 0xA1U;
+    return 1U;
+  }
 
-    if (BSP_TouchPort_ReadReg16(addr,
-                                DISPLAY_GT911_REG_CFG,
-                                s_gt911_cfg_bytes,
-                                4U) == BSP_TOUCH_PORT_OK)
-    {
-        s_gt911_cfg_verified = 1U;
-    }
+  if (BSP_TouchPort_ReadReg16(addr, DISPLAY_GT911_REG_CFG, s_gt911_cfg_bytes, 4U) == BSP_TOUCH_PORT_OK) { s_gt911_cfg_verified = 1U; }
 
-    if (BSP_TouchPort_ReadReg16(addr,
-                                DISPLAY_GT911_REG_CTRL,
-                                &s_gt911_cfg_version,
-                                1U) != BSP_TOUCH_PORT_OK)
-    {
-        s_gt911_cfg_version = 0xFFU;
-    }
+  if (BSP_TouchPort_ReadReg16(addr, DISPLAY_GT911_REG_CTRL, &s_gt911_cfg_version, 1U) != BSP_TOUCH_PORT_OK) { s_gt911_cfg_version = 0xFFU; }
 
-    return 0U;
+  return 0U;
 }
 
 /**
@@ -133,26 +103,19 @@ static uint8_t Display_Gt911_ReadConfigDebug(uint8_t addr)
  */
 static uint8_t Display_Gt911_TryAddress(uint8_t addr)
 {
-    uint8_t pid[4];
+  uint8_t pid[4];
 
-    Display_Gt911_ResetForAddress(addr);
-    BSP_TouchPort_Recover();
-    if (BSP_TouchPort_ReadReg16(addr,
-                                DISPLAY_GT911_REG_PID,
-                                pid,
-                                sizeof(pid)) != BSP_TOUCH_PORT_OK)
-    {
-        return 1U;
-    }
+  Display_Gt911_ResetForAddress(addr);
+  BSP_TouchPort_Recover();
+  if (BSP_TouchPort_ReadReg16(addr, DISPLAY_GT911_REG_PID, pid, sizeof(pid)) != BSP_TOUCH_PORT_OK) { return 1U; }
 
-    if (Display_Gt911_PidIsSupported(pid) != 0U)
-    {
-        s_gt911_addr = addr;
-        (void)Display_Gt911_ReadConfigDebug(addr);
-        return 0U;
-    }
+  if (Display_Gt911_PidIsSupported(pid) != 0U) {
+    s_gt911_addr = addr;
+    (void)Display_Gt911_ReadConfigDebug(addr);
+    return 0U;
+  }
 
-    return 1U;
+  return 1U;
 }
 
 /**
@@ -160,28 +123,19 @@ static uint8_t Display_Gt911_TryAddress(uint8_t addr)
  */
 static void Display_Gt911_Clamp(uint16_t *x, uint16_t *y)
 {
-    if (*x >= BSP_DISPLAY_WIDTH)
-    {
-        *x = (uint16_t)(BSP_DISPLAY_WIDTH - 1U);
-    }
-    if (*y >= BSP_DISPLAY_HEIGHT)
-    {
-        *y = (uint16_t)(BSP_DISPLAY_HEIGHT - 1U);
-    }
+  if (*x >= BSP_DISPLAY_WIDTH) { *x = (uint16_t)(BSP_DISPLAY_WIDTH - 1U); }
+  if (*y >= BSP_DISPLAY_HEIGHT) { *y = (uint16_t)(BSP_DISPLAY_HEIGHT - 1U); }
 }
 
 /**
  * @brief Map GT911 coordinates to the 800x480 display space.
  */
-static void Display_Gt911_MapToDisplay(uint16_t raw_x,
-                                       uint16_t raw_y,
-                                       uint16_t *x,
-                                       uint16_t *y)
+static void Display_Gt911_MapToDisplay(uint16_t raw_x, uint16_t raw_y, uint16_t *x, uint16_t *y)
 {
-    *x = raw_x;
-    *y = raw_y;
+  *x = raw_x;
+  *y = raw_y;
 
-    Display_Gt911_Clamp(x, y);
+  Display_Gt911_Clamp(x, y);
 }
 
 /**
@@ -189,25 +143,23 @@ static void Display_Gt911_MapToDisplay(uint16_t raw_x,
  */
 Display_Gt911Result_t Display_Gt911_Init(void)
 {
-    (void)BSP_TouchPort_Init();
-    s_gt911_addr = 0U;
-    s_gt911_last_info = 0U;
-    s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+  (void)BSP_TouchPort_Init();
+  s_gt911_addr        = 0U;
+  s_gt911_last_info   = 0U;
+  s_gt911_last_result = DISPLAY_GT911_NOT_READY;
 
-    if (Display_Gt911_TryAddress(DISPLAY_GT911_ADDR_14) == 0U)
-    {
-        s_gt911_last_result = DISPLAY_GT911_OK;
-        return DISPLAY_GT911_OK;
-    }
+  if (Display_Gt911_TryAddress(DISPLAY_GT911_ADDR_14) == 0U) {
+    s_gt911_last_result = DISPLAY_GT911_OK;
+    return DISPLAY_GT911_OK;
+  }
 
-    if (Display_Gt911_TryAddress(DISPLAY_GT911_ADDR_5D) == 0U)
-    {
-        s_gt911_last_result = DISPLAY_GT911_OK;
-        return DISPLAY_GT911_OK;
-    }
+  if (Display_Gt911_TryAddress(DISPLAY_GT911_ADDR_5D) == 0U) {
+    s_gt911_last_result = DISPLAY_GT911_OK;
+    return DISPLAY_GT911_OK;
+  }
 
-    s_gt911_last_result = DISPLAY_GT911_NOT_READY;
-    return DISPLAY_GT911_NOT_READY;
+  s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+  return DISPLAY_GT911_NOT_READY;
 }
 
 /**
@@ -215,61 +167,44 @@ Display_Gt911Result_t Display_Gt911_Init(void)
  */
 Display_Gt911Result_t Display_Gt911_Scan(uint16_t *x, uint16_t *y)
 {
-    uint8_t info;
-    uint8_t data[8];
-    uint16_t raw_x;
-    uint16_t raw_y;
-    uint8_t clear = 0U;
+  uint8_t info;
+  uint8_t data[8];
+  uint16_t raw_x;
+  uint16_t raw_y;
+  uint8_t clear = 0U;
 
-    if ((x == 0) || (y == 0) || (s_gt911_addr == 0U))
-    {
-        s_gt911_last_result = DISPLAY_GT911_NOT_READY;
-        return DISPLAY_GT911_NOT_READY;
-    }
+  if ((x == 0) || (y == 0) || (s_gt911_addr == 0U)) {
+    s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+    return DISPLAY_GT911_NOT_READY;
+  }
 
-    if (Display_Gt911_ReadRegRetry(s_gt911_addr,
-                                   DISPLAY_GT911_REG_TP_INFO,
-                                   &info,
-                                   1U) != 0U)
-    {
-        s_gt911_last_result = DISPLAY_GT911_NOT_READY;
-        return DISPLAY_GT911_NOT_READY;
-    }
+  if (Display_Gt911_ReadRegRetry(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &info, 1U) != 0U) {
+    s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+    return DISPLAY_GT911_NOT_READY;
+  }
 
-    s_gt911_last_info = info;
-    if ((info & 0x80U) == 0U)
-    {
-        s_gt911_last_result = DISPLAY_GT911_NO_DATA;
-        return DISPLAY_GT911_NO_DATA;
-    }
-    if ((info & 0x0FU) == 0U)
-    {
-        (void)BSP_TouchPort_WriteReg16(s_gt911_addr,
-                                       DISPLAY_GT911_REG_TP_INFO,
-                                       &clear,
-                                       1U);
-        s_gt911_last_result = DISPLAY_GT911_NO_POINT;
-        return DISPLAY_GT911_NO_POINT;
-    }
-    if (Display_Gt911_ReadRegRetry(s_gt911_addr,
-                                   DISPLAY_GT911_REG_TP1,
-                                   data,
-                                   6U) != 0U)
-    {
-        s_gt911_last_result = DISPLAY_GT911_NOT_READY;
-        return DISPLAY_GT911_NOT_READY;
-    }
+  s_gt911_last_info = info;
+  if ((info & 0x80U) == 0U) {
+    s_gt911_last_result = DISPLAY_GT911_NO_DATA;
+    return DISPLAY_GT911_NO_DATA;
+  }
+  if ((info & 0x0FU) == 0U) {
+    (void)BSP_TouchPort_WriteReg16(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &clear, 1U);
+    s_gt911_last_result = DISPLAY_GT911_NO_POINT;
+    return DISPLAY_GT911_NO_POINT;
+  }
+  if (Display_Gt911_ReadRegRetry(s_gt911_addr, DISPLAY_GT911_REG_TP1, data, 6U) != 0U) {
+    s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+    return DISPLAY_GT911_NOT_READY;
+  }
 
-    raw_x = (uint16_t)(((uint16_t)data[1] << 8) | data[0]);
-    raw_y = (uint16_t)(((uint16_t)data[3] << 8) | data[2]);
-    Display_Gt911_MapToDisplay(raw_x, raw_y, x, y);
-    (void)BSP_TouchPort_WriteReg16(s_gt911_addr,
-                                   DISPLAY_GT911_REG_TP_INFO,
-                                   &clear,
-                                   1U);
+  raw_x = (uint16_t)(((uint16_t)data[1] << 8) | data[0]);
+  raw_y = (uint16_t)(((uint16_t)data[3] << 8) | data[2]);
+  Display_Gt911_MapToDisplay(raw_x, raw_y, x, y);
+  (void)BSP_TouchPort_WriteReg16(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &clear, 1U);
 
-    s_gt911_last_result = DISPLAY_GT911_OK;
-    return DISPLAY_GT911_OK;
+  s_gt911_last_result = DISPLAY_GT911_OK;
+  return DISPLAY_GT911_OK;
 }
 
 /**
@@ -277,22 +212,19 @@ Display_Gt911Result_t Display_Gt911_Scan(uint16_t *x, uint16_t *y)
  */
 void Display_Gt911_GetDebug(Display_Gt911Debug_t *debug)
 {
-    if (debug == 0)
-    {
-        return;
-    }
+  if (debug == 0) { return; }
 
-    debug->addr = s_gt911_addr;
-    debug->last_info = s_gt911_last_info;
-    debug->int_level = BSP_TouchPort_ReadInt();
-    debug->scl_level = BSP_TouchPort_ReadScl();
-    debug->sda_level = BSP_TouchPort_ReadSda();
-    debug->last_result = (uint8_t)s_gt911_last_result;
-    debug->last_error = BSP_TouchPort_GetLastError();
-    debug->cfg_version = s_gt911_cfg_version;
-    debug->cfg_verified = s_gt911_cfg_verified;
-    debug->init_error = s_gt911_init_error;
-    debug->touch_status = s_gt911_last_info;
-    debug->orig_ver = s_gt911_orig_version;
-    (void)memcpy(debug->cfg_bytes, s_gt911_cfg_bytes, 4U);
+  debug->addr         = s_gt911_addr;
+  debug->last_info    = s_gt911_last_info;
+  debug->int_level    = BSP_TouchPort_ReadInt();
+  debug->scl_level    = BSP_TouchPort_ReadScl();
+  debug->sda_level    = BSP_TouchPort_ReadSda();
+  debug->last_result  = (uint8_t)s_gt911_last_result;
+  debug->last_error   = BSP_TouchPort_GetLastError();
+  debug->cfg_version  = s_gt911_cfg_version;
+  debug->cfg_verified = s_gt911_cfg_verified;
+  debug->init_error   = s_gt911_init_error;
+  debug->touch_status = s_gt911_last_info;
+  debug->orig_ver     = s_gt911_orig_version;
+  (void)memcpy(debug->cfg_bytes, s_gt911_cfg_bytes, 4U);
 }

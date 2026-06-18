@@ -28,22 +28,15 @@ BSP_Status_t BSP_SPI1_SetSpeedHigh(void);
 /**
  * @brief 通过 SD 卡 SPI 总线发送字节。
  */
-BSP_Status_t BSP_SPI1_Transmit(const uint8_t *tx,
-                               uint16_t length,
-                               uint32_t timeout_ms);
+BSP_Status_t BSP_SPI1_Transmit(const uint8_t *tx, uint16_t length, uint32_t timeout_ms);
 /**
  * @brief 通过 SD 卡 SPI 总线接收字节。
  */
-BSP_Status_t BSP_SPI1_Receive(uint8_t *rx,
-                              uint16_t length,
-                              uint32_t timeout_ms);
+BSP_Status_t BSP_SPI1_Receive(uint8_t *rx, uint16_t length, uint32_t timeout_ms);
 /**
  * @brief 通过 SD 卡 SPI 总线同时发送和接收字节。
  */
-BSP_Status_t BSP_SPI1_TransmitReceive(const uint8_t *tx,
-                                      uint8_t *rx,
-                                      uint16_t length,
-                                      uint32_t timeout_ms);
+BSP_Status_t BSP_SPI1_TransmitReceive(const uint8_t *tx, uint8_t *rx, uint16_t length, uint32_t timeout_ms);
 /**
  * @brief 拉低 SD 卡片选。
  */

@@ -29,35 +29,23 @@
  */
 BSP_Status_t BSP_Init(void)
 {
-    BSP_Status_t status = BSP_STATUS_OK;
+  BSP_Status_t status = BSP_STATUS_OK;
 
 #if BSP_ENABLE_I2C
-    if (BSP_I2C_Init() != BSP_STATUS_OK)
-    {
-        status = BSP_STATUS_ERROR;
-    }
+  if (BSP_I2C_Init() != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
 #endif
 
 #if BSP_ENABLE_ADC
-    if (BSP_ADC_Init() != BSP_STATUS_OK)
-    {
-        status = BSP_STATUS_ERROR;
-    }
+  if (BSP_ADC_Init() != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
 #endif
 
 #if BSP_ENABLE_GNSS
-    if (BSP_GNSS_Init() != BSP_STATUS_OK)
-    {
-        status = BSP_STATUS_ERROR;
-    }
+  if (BSP_GNSS_Init() != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
 #endif
 
 #if BSP_ENABLE_RTC
-    if (BSP_RTC_Init() != BSP_STATUS_OK)
-    {
-        status = BSP_STATUS_ERROR;
-    }
+  if (BSP_RTC_Init() != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
 #endif
 
-    return status;
+  return status;
 }

@@ -17,20 +17,18 @@
 /**
  * @brief 存储记录类型。
  */
-typedef enum
-{
-    STORAGE_RECORD_DATA = 0, /**< 常规传感器/业务数据记录。 */
-    STORAGE_RECORD_ERROR = 1 /**< 错误、告警或状态记录。 */
+typedef enum {
+  STORAGE_RECORD_DATA  = 0, /**< 常规传感器/业务数据记录。 */
+  STORAGE_RECORD_ERROR = 1  /**< 错误、告警或状态记录。 */
 } Storage_RecordType_t;
 
 /**
  * @brief 一条待写入 SD 的 CSV 记录。
  */
-typedef struct
-{
-    Storage_RecordType_t type;              /**< 记录类型，决定写入哪个 CSV 文件。 */
-    uint32_t enqueue_time_ms;               /**< 入队时间，单位：ms。 */
-    char line[STORAGE_CSV_LINE_MAX];        /**< 完整 CSV 行，包含行尾换行或结束符由实现约定。 */
+typedef struct {
+  Storage_RecordType_t type;       /**< 记录类型，决定写入哪个 CSV 文件。 */
+  uint32_t enqueue_time_ms;        /**< 入队时间，单位：ms。 */
+  char line[STORAGE_CSV_LINE_MAX]; /**< 完整 CSV 行，包含行尾换行或结束符由实现约定。 */
 } Storage_Record_t;
 
 /**
@@ -84,7 +82,6 @@ uint32_t StorageQueue_DropCount(void);
  *
  * @return 复制结果。
  */
-Px4Lite_Result_t Storage_RecordSetLine(Storage_Record_t *record,
-                                       const char *line);
+Px4Lite_Result_t Storage_RecordSetLine(Storage_Record_t *record, const char *line);
 
 #endif

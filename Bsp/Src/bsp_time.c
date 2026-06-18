@@ -12,7 +12,7 @@
  */
 uint32_t BSP_Time_GetTickMs(void)
 {
-    return HAL_GetTick();
+  return HAL_GetTick();
 }
 
 /**
@@ -20,5 +20,5 @@ uint32_t BSP_Time_GetTickMs(void)
  */
 void BSP_Time_DelayMs(uint32_t delay_ms)
 {
-    HAL_Delay(delay_ms);
+  HAL_Delay(delay_ms);
 }

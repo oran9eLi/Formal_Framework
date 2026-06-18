@@ -38,32 +38,32 @@ typedef enum {
 typedef struct {
   Gnss_DataState_t data_state; /**< 数据事实状态；组件离线/失败归 Framework 判定。 */
 
-  uint8_t fix_valid;       /**< 定位有效标志，1 表示定位有效。 */
-  uint8_t fix_quality;     /**< GGA 定位质量字段。 */
-  uint8_t fix_dimension;   /**< GSA 定位维度，0/2D/3D 按 NMEA 字段解析。 */
+  uint8_t fix_valid;     /**< 定位有效标志，1 表示定位有效。 */
+  uint8_t fix_quality;   /**< GGA 定位质量字段。 */
+  uint8_t fix_dimension; /**< GSA 定位维度，0/2D/3D 按 NMEA 字段解析。 */
 
-  uint8_t satellites;      /**< 当前 GGA fix 使用的总卫星数。 */
+  uint8_t satellites; /**< 当前 GGA fix 使用的总卫星数。 */
 
   uint8_t gps_visible_sats; /**< GSV 报告的 GPS 可见卫星数。 */
   uint8_t bds_visible_sats; /**< GSV 报告的北斗可见卫星数。 */
 
-  uint8_t gps_used_sats;   /**< GSA 报告的 GPS 参与解算卫星数。 */
-  uint8_t bds_used_sats;   /**< GSA 报告的北斗参与解算卫星数。 */
+  uint8_t gps_used_sats; /**< GSA 报告的 GPS 参与解算卫星数。 */
+  uint8_t bds_used_sats; /**< GSA 报告的北斗参与解算卫星数。 */
 
-  uint16_t hdop_cm;        /**< 水平精度因子，单位：HDOP * 100。 */
-  uint32_t utc_sec;        /**< UTC 当日秒数，单位：s。 */
-  uint32_t utc_date;       /**< RMC 日期，压缩格式 yymmdd；无有效日期时为 0。 */
+  uint16_t hdop_cm;  /**< 水平精度因子，单位：HDOP * 100。 */
+  uint32_t utc_sec;  /**< UTC 当日秒数，单位：s。 */
+  uint32_t utc_date; /**< RMC 日期，压缩格式 yymmdd；无有效日期时为 0。 */
 
   int32_t latitude_deg_e7;  /**< 纬度，单位：degree * 1e7。 */
   int32_t longitude_deg_e7; /**< 经度，单位：degree * 1e7。 */
   int32_t altitude_mm;      /**< 海拔高度，单位：mm。 */
 
-  uint32_t speed_cms;       /**< 地速，单位：cm/s。 */
-  uint32_t heading_deg100;  /**< 地面航向，单位：degree * 100。 */
+  uint32_t speed_cms;      /**< 地速，单位：cm/s。 */
+  uint32_t heading_deg100; /**< 地面航向，单位：degree * 100。 */
 
-  uint32_t rx_sequence;     /**< 接收解析序号，每次有效解析推进。 */
-  uint32_t last_rx_ms;      /**< 最近收到完整 NMEA 句子的时间，单位：ms。 */
-  uint32_t last_fix_ms;     /**< 最近有效定位时间，单位：ms。 */
+  uint32_t rx_sequence; /**< 接收解析序号，每次有效解析推进。 */
+  uint32_t last_rx_ms;  /**< 最近收到完整 NMEA 句子的时间，单位：ms。 */
+  uint32_t last_fix_ms; /**< 最近有效定位时间，单位：ms。 */
 } Gnss_Snapshot_t;
 
 /**
@@ -74,8 +74,8 @@ typedef struct {
  */
 typedef struct {
   Gnss_DataState_t data_state; /**< 数据事实状态。 */
-  uint8_t  fix_valid;          /**< 定位有效标志。 */
-  uint8_t  satellites;         /**< 当前使用卫星数。 */
+  uint8_t fix_valid;           /**< 定位有效标志。 */
+  uint8_t satellites;          /**< 当前使用卫星数。 */
   uint32_t rx_sequence;        /**< 接收解析序号。 */
   uint32_t last_rx_ms;         /**< 最近收到完整 NMEA 句子的时间，单位：ms。 */
   uint32_t last_fix_ms;        /**< 最近有效定位时间，单位：ms。 */

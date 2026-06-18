@@ -16,7 +16,7 @@
 /**
  * @brief 初始化 LoRa E22 使用的 UART、DMA 和控制 GPIO。
  */
-int32_t  BSP_LoRa_Init(void);
+int32_t BSP_LoRa_Init(void);
 /**
  * @brief 返回 LoRa 私有 UART 句柄，仅供中断和 MSP 使用。
  */
@@ -24,15 +24,15 @@ UART_HandleTypeDef *BSP_LoRa_GetUartHandle(void);
 /**
  * @brief 设置 E22 模块工作模式引脚。
  */
-void     BSP_LoRa_SetMode(uint8_t m);
+void BSP_LoRa_SetMode(uint8_t m);
 /**
  * @brief 读取 E22 AUX 就绪状态。
  */
-uint8_t  BSP_LoRa_IsReady(void);
+uint8_t BSP_LoRa_IsReady(void);
 /**
  * @brief 判断 E22 是否正忙。
  */
-uint8_t  BSP_LoRa_IsBusy(void);
+uint8_t BSP_LoRa_IsBusy(void);
 /**
  * @brief 从 LoRa 接收环形缓冲复制可用字节。
  */
@@ -52,30 +52,30 @@ uint32_t BSP_LoRa_GetRxOverflowCount(void);
  * 该函数先把帧复制到内部 DMA 缓冲区，再启动 USART3 TX DMA。返回 0 表示发送已启动，
  * 1 表示上一帧仍在发送，-1 表示参数非法或 HAL 启动失败。
  */
-int32_t  BSP_LoRa_StartSend(const uint8_t *data, uint16_t len);
+int32_t BSP_LoRa_StartSend(const uint8_t *data, uint16_t len);
 /**
  * @brief 返回 LoRa TX DMA 是否仍在发送。
  */
-uint8_t  BSP_LoRa_IsTxBusy(void);
+uint8_t BSP_LoRa_IsTxBusy(void);
 /**
  * @brief 中止当前 LoRa TX DMA 发送。
  */
-void     BSP_LoRa_AbortTx(void);
+void BSP_LoRa_AbortTx(void);
 /**
  * @brief 处理 LoRa TX DMA 中断。
  */
-void     BSP_LoRa_TxDmaIrqHandler(void);
+void BSP_LoRa_TxDmaIrqHandler(void);
 /**
  * @brief 在 USART3 IDLE 后推进 LoRa 接收环形缓冲。
  */
-void     BSP_LoRa_RxIdleCallback(uint16_t dummy);
+void BSP_LoRa_RxIdleCallback(uint16_t dummy);
 /**
  * @brief 处理 LoRa RX DMA 中断。
  */
-void     BSP_LoRa_DmaIrqHandler(void);
+void BSP_LoRa_DmaIrqHandler(void);
 /**
  * @brief 恢复 LoRa UART 和 RX DMA 接收路径。
  */
-void     BSP_LoRa_RecoverRx(void);
+void BSP_LoRa_RecoverRx(void);
 
 #endif

@@ -15,18 +15,17 @@
 /**
  * @brief 模块生命周期状态。
  */
-typedef enum
-{
-    PX4LITE_LIFECYCLE_EMPTY = 0,    /**< 槽位为空，未注册模块。 */
-    PX4LITE_LIFECYCLE_REGISTERED,   /**< 模块已注册但尚未初始化。 */
-    PX4LITE_LIFECYCLE_INITIALIZING, /**< 正在执行 init 回调。 */
-    PX4LITE_LIFECYCLE_SELF_CHECK,   /**< 正在执行 self_check 回调。 */
-    PX4LITE_LIFECYCLE_STARTING,     /**< 正在执行 start 回调。 */
-    PX4LITE_LIFECYCLE_RUNNING,      /**< 模块已启动并处于运行态。 */
-    PX4LITE_LIFECYCLE_RECOVERING,   /**< 正在执行 recover 回调。 */
-    PX4LITE_LIFECYCLE_STOPPED,      /**< 模块已停止。 */
-    PX4LITE_LIFECYCLE_FAILED,       /**< 生命周期回调失败。 */
-    PX4LITE_LIFECYCLE_DISABLED      /**< 模块被配置关闭。 */
+typedef enum {
+  PX4LITE_LIFECYCLE_EMPTY = 0,    /**< 槽位为空，未注册模块。 */
+  PX4LITE_LIFECYCLE_REGISTERED,   /**< 模块已注册但尚未初始化。 */
+  PX4LITE_LIFECYCLE_INITIALIZING, /**< 正在执行 init 回调。 */
+  PX4LITE_LIFECYCLE_SELF_CHECK,   /**< 正在执行 self_check 回调。 */
+  PX4LITE_LIFECYCLE_STARTING,     /**< 正在执行 start 回调。 */
+  PX4LITE_LIFECYCLE_RUNNING,      /**< 模块已启动并处于运行态。 */
+  PX4LITE_LIFECYCLE_RECOVERING,   /**< 正在执行 recover 回调。 */
+  PX4LITE_LIFECYCLE_STOPPED,      /**< 模块已停止。 */
+  PX4LITE_LIFECYCLE_FAILED,       /**< 生命周期回调失败。 */
+  PX4LITE_LIFECYCLE_DISABLED      /**< 模块被配置关闭。 */
 } Px4Lite_LifecycleState_t;
 
 /**
@@ -41,29 +40,27 @@ typedef Px4Lite_Result_t (*Px4Lite_LifecycleFn_t)(void);
 /**
  * @brief 模块静态描述符。
  */
-typedef struct
-{
-    Px4Lite_ModuleId_t module_id;     /**< 模块编号，必须唯一。 */
-    const char *name;                 /**< 模块名称，指向静态字符串。 */
-    uint8_t enabled;                  /**< 使能标志，0 表示注册后保持 disabled。 */
-    uint8_t required;                 /**< 必需模块标志，1 表示影响系统 ready 判定。 */
-    Px4Lite_LifecycleFn_t init;       /**< 初始化回调，可为 NULL。 */
-    Px4Lite_LifecycleFn_t self_check; /**< 自检回调，可为 NULL。 */
-    Px4Lite_LifecycleFn_t start;      /**< 启动回调，可为 NULL。 */
-    Px4Lite_LifecycleFn_t stop;       /**< 停止回调，可为 NULL。 */
-    Px4Lite_LifecycleFn_t recover;    /**< 恢复请求回调，可为 NULL。 */
+typedef struct {
+  Px4Lite_ModuleId_t module_id;     /**< 模块编号，必须唯一。 */
+  const char *name;                 /**< 模块名称，指向静态字符串。 */
+  uint8_t enabled;                  /**< 使能标志，0 表示注册后保持 disabled。 */
+  uint8_t required;                 /**< 必需模块标志，1 表示影响系统 ready 判定。 */
+  Px4Lite_LifecycleFn_t init;       /**< 初始化回调，可为 NULL。 */
+  Px4Lite_LifecycleFn_t self_check; /**< 自检回调，可为 NULL。 */
+  Px4Lite_LifecycleFn_t start;      /**< 启动回调，可为 NULL。 */
+  Px4Lite_LifecycleFn_t stop;       /**< 停止回调，可为 NULL。 */
+  Px4Lite_LifecycleFn_t recover;    /**< 恢复请求回调，可为 NULL。 */
 } Px4Lite_ModuleDescriptor_t;
 
 /**
  * @brief 模块生命周期运行态。
  */
-typedef struct
-{
-    Px4Lite_LifecycleState_t state; /**< 当前生命周期状态。 */
-    Px4Lite_Result_t last_result;   /**< 最近一次生命周期回调结果。 */
-    uint32_t state_since_ms;        /**< 进入当前生命周期状态的时间，单位：ms。 */
-    uint16_t start_count;           /**< 启动次数。 */
-    uint16_t recovery_count;        /**< 恢复请求次数。 */
+typedef struct {
+  Px4Lite_LifecycleState_t state; /**< 当前生命周期状态。 */
+  Px4Lite_Result_t last_result;   /**< 最近一次生命周期回调结果。 */
+  uint32_t state_since_ms;        /**< 进入当前生命周期状态的时间，单位：ms。 */
+  uint16_t start_count;           /**< 启动次数。 */
+  uint16_t recovery_count;        /**< 恢复请求次数。 */
 } Px4Lite_ModuleRuntime_t;
 
 /**

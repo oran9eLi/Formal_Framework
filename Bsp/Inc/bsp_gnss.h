@@ -42,11 +42,11 @@ uint32_t BSP_GNSS_GetDropCount(void);
 /**
  * @brief 在 UART IDLE 中断报告新 DMA 字节后推进接收环形缓冲。
  */
-void     BSP_GNSS_RxIdleCallback(uint16_t dummy);
+void BSP_GNSS_RxIdleCallback(uint16_t dummy);
 /**
  * @brief 处理 GNSS DMA 接收中断并维护循环接收路径。
  */
-void     BSP_GNSS_DmaIrqHandler(void);
+void BSP_GNSS_DmaIrqHandler(void);
 /**
  * @brief 在错误后恢复 GNSS UART 和 DMA 接收路径。
  */
@@ -57,21 +57,21 @@ BSP_Status_t BSP_GNSS_RecoverRx(void);
  * @brief GNSS BSP 接收路径诊断信息。
  */
 typedef struct {
-  uint32_t usart2_irq_count;         /**< USART2 IRQ 进入次数。 */
-  uint32_t idle_irq_count;           /**< IDLE 中断识别次数。 */
-  uint32_t rx_idle_callback_count;   /**< 接收 IDLE 回调次数。 */
-  uint32_t dma_irq_count;            /**< DMA IRQ 进入次数。 */
+  uint32_t usart2_irq_count;       /**< USART2 IRQ 进入次数。 */
+  uint32_t idle_irq_count;         /**< IDLE 中断识别次数。 */
+  uint32_t rx_idle_callback_count; /**< 接收 IDLE 回调次数。 */
+  uint32_t dma_irq_count;          /**< DMA IRQ 进入次数。 */
 
-  uint32_t sr_snapshot;              /**< 最近一次 USART SR 快照。 */
-  uint32_t cr1_snapshot;             /**< 最近一次 USART CR1 快照。 */
-  uint32_t cr3_snapshot;             /**< 最近一次 USART CR3 快照。 */
+  uint32_t sr_snapshot;  /**< 最近一次 USART SR 快照。 */
+  uint32_t cr1_snapshot; /**< 最近一次 USART CR1 快照。 */
+  uint32_t cr3_snapshot; /**< 最近一次 USART CR3 快照。 */
 
-  uint16_t dma_ndtr;                 /**< 当前 DMA NDTR。 */
-  uint16_t dma_pos;                  /**< 当前 DMA 写入位置。 */
-  uint16_t rx_head;                  /**< 软件环形缓冲写指针。 */
-  uint16_t rx_tail;                  /**< 软件环形缓冲读指针。 */
-  uint16_t rx_count;                 /**< 未读字节数。 */
-  uint32_t rx_drop_count;            /**< 累计丢字节数。 */
+  uint16_t dma_ndtr;      /**< 当前 DMA NDTR。 */
+  uint16_t dma_pos;       /**< 当前 DMA 写入位置。 */
+  uint16_t rx_head;       /**< 软件环形缓冲写指针。 */
+  uint16_t rx_tail;       /**< 软件环形缓冲读指针。 */
+  uint16_t rx_count;      /**< 未读字节数。 */
+  uint32_t rx_drop_count; /**< 累计丢字节数。 */
 } BSP_GNSS_DebugInfo_t;
 
 /**
@@ -89,5 +89,3 @@ void BSP_GNSS_DebugGetInfo(BSP_GNSS_DebugInfo_t *info);
 #endif
 
 #endif
-
-

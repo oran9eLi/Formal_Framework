@@ -13,12 +13,11 @@ volatile uint32_t g_malloc_failed_count;
 /**
  * @brief Capture the failed task and enter the fatal error path on stack overflow.
  */
-void vApplicationStackOverflowHook(TaskHandle_t task,
-                                   char *task_name)
+void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
 {
-    (void)task_name;
-    g_stack_overflow_task = task;
-    Error_Handler();
+  (void)task_name;
+  g_stack_overflow_task = task;
+  Error_Handler();
 }
 
 /**
@@ -26,6 +25,6 @@ void vApplicationStackOverflowHook(TaskHandle_t task,
  */
 void vApplicationMallocFailedHook(void)
 {
-    g_malloc_failed_count++;
-    Error_Handler();
+  g_malloc_failed_count++;
+  Error_Handler();
 }
