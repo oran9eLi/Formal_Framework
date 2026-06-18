@@ -164,9 +164,7 @@ void Px4Lite_HealthRun(uint32_t now_ms);
  *
  * @return 复制结果。
  */
-Px4Lite_Result_t Px4Lite_GetModuleStatus(
-    Px4Lite_ModuleId_t module_id,
-    Px4Lite_ModuleStatus_t *status);
+Px4Lite_Result_t Px4Lite_GetModuleStatus(Px4Lite_ModuleId_t module_id, Px4Lite_ModuleStatus_t *status);
 
 /**
  * @brief 复制模块状态数组和对应版本号。
@@ -179,10 +177,7 @@ Px4Lite_Result_t Px4Lite_GetModuleStatus(
  *
  * @note 调用方可结合 `Px4Lite_GetStatusVersion()` 做版本一致性确认。
  */
-Px4Lite_Result_t Px4Lite_CopyModuleStatuses(
-    Px4Lite_ModuleStatus_t *status,
-    uint16_t count,
-    uint32_t *version);
+Px4Lite_Result_t Px4Lite_CopyModuleStatuses(Px4Lite_ModuleStatus_t *status, uint16_t count, uint32_t *version);
 
 /**
  * @brief 获取当前模块状态版本号。
@@ -201,10 +196,6 @@ uint32_t Px4Lite_GetStatusVersion(void);
  *
  * @note 该接口用于 Display/Storage 等外部服务汇报状态，不应用于绕过 Health 策略。
  */
-void Px4Lite_SetExternalModuleState(
-    Px4Lite_ModuleId_t module_id,
-    Px4Lite_State_t state,
-    uint16_t fault_code,
-    uint32_t now_ms);
+void Px4Lite_SetExternalModuleState(Px4Lite_ModuleId_t module_id, Px4Lite_State_t state, uint16_t fault_code, uint32_t now_ms);
 
 #endif

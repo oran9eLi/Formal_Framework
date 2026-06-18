@@ -28,25 +28,16 @@ BSP_Status_t BSP_I2C_DeInit(void);
 /**
  * @brief 探测一个 I2C 设备地址是否响应。
  */
-BSP_Status_t BSP_I2C_IsDeviceReady(uint16_t dev_addr,
-                                   uint32_t timeout_ms);
+BSP_Status_t BSP_I2C_IsDeviceReady(uint16_t dev_addr, uint32_t timeout_ms);
 
 /**
  * @brief 从 8-bit 寄存器地址读取字节。
  */
-BSP_Status_t BSP_I2C_MemRead(uint16_t dev_addr,
-                             uint16_t reg_addr,
-                             uint8_t *data,
-                             uint16_t len,
-                             uint32_t timeout_ms);
+BSP_Status_t BSP_I2C_MemRead(uint16_t dev_addr, uint16_t reg_addr, uint8_t *data, uint16_t len, uint32_t timeout_ms);
 
 /**
  * @brief 向 8-bit 寄存器地址写入字节。
  */
-BSP_Status_t BSP_I2C_MemWrite(uint16_t dev_addr,
-                              uint16_t reg_addr,
-                              const uint8_t *data,
-                              uint16_t len,
-                              uint32_t timeout_ms);
+BSP_Status_t BSP_I2C_MemWrite(uint16_t dev_addr, uint16_t reg_addr, const uint8_t *data, uint16_t len, uint32_t timeout_ms);
 
 #endif

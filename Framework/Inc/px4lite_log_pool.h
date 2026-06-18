@@ -16,13 +16,12 @@
 /**
  * @brief 日志池容量和丢弃统计。
  */
-typedef struct
-{
-    uint16_t free_count;      /**< 当前空闲块数量。 */
-    uint16_t free_min;        /**< 历史最小空闲块数量。 */
-    uint16_t committed_count; /**< 已提交、等待写入的记录数量。 */
-    uint32_t append_count;    /**< 累计追加记录次数。 */
-    uint32_t drop_count;      /**< 因容量不足或参数非法丢弃记录次数。 */
+typedef struct {
+  uint16_t free_count;      /**< 当前空闲块数量。 */
+  uint16_t free_min;        /**< 历史最小空闲块数量。 */
+  uint16_t committed_count; /**< 已提交、等待写入的记录数量。 */
+  uint32_t append_count;    /**< 累计追加记录次数。 */
+  uint32_t drop_count;      /**< 因容量不足或参数非法丢弃记录次数。 */
 } Px4Lite_LogPoolStats_t;
 
 /**
@@ -44,9 +43,7 @@ Px4Lite_Result_t Px4Lite_LogPoolInit(void);
  *
  * @warning 调用方必须一次提交完整记录，不得提交半条记录。
  */
-Px4Lite_Result_t Px4Lite_LogPoolAppend(
-    const uint8_t *record,
-    uint16_t length);
+Px4Lite_Result_t Px4Lite_LogPoolAppend(const uint8_t *record, uint16_t length);
 
 /**
  * @brief 请求将待处理日志记录转为可写入状态。
@@ -66,10 +63,7 @@ Px4Lite_Result_t Px4Lite_LogPoolFlush(void);
  *
  * @note 调用方写入完成后必须调用 `Px4Lite_LogPoolRelease()` 释放池块。
  */
-Px4Lite_Result_t Px4Lite_LogPoolTake(
-    uint16_t *index,
-    const uint8_t **data,
-    uint16_t *length);
+Px4Lite_Result_t Px4Lite_LogPoolTake(uint16_t *index, const uint8_t **data, uint16_t *length);
 
 /**
  * @brief 释放已取出的日志池块。

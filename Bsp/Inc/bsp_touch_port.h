@@ -15,10 +15,9 @@ extern "C" {
 /**
  * @brief 触摸端口返回码。
  */
-typedef enum
-{
-    BSP_TOUCH_PORT_OK = 0,
-    BSP_TOUCH_PORT_ERROR
+typedef enum {
+  BSP_TOUCH_PORT_OK = 0,
+  BSP_TOUCH_PORT_ERROR
 } BSP_TouchPortResult_t;
 
 /**
@@ -56,35 +55,19 @@ void BSP_TouchPort_Recover(void);
 /**
  * @brief 向 8-bit 地址触摸寄存器写入字节。
  */
-BSP_TouchPortResult_t BSP_TouchPort_WriteReg8(
-    uint8_t addr,
-    uint8_t reg,
-    const uint8_t *buf,
-    uint8_t len);
+BSP_TouchPortResult_t BSP_TouchPort_WriteReg8(uint8_t addr, uint8_t reg, const uint8_t *buf, uint8_t len);
 /**
  * @brief 从 8-bit 地址触摸寄存器读取字节。
  */
-BSP_TouchPortResult_t BSP_TouchPort_ReadReg8(
-    uint8_t addr,
-    uint8_t reg,
-    uint8_t *buf,
-    uint8_t len);
+BSP_TouchPortResult_t BSP_TouchPort_ReadReg8(uint8_t addr, uint8_t reg, uint8_t *buf, uint8_t len);
 /**
  * @brief 向 16-bit 地址触摸寄存器写入字节。
  */
-BSP_TouchPortResult_t BSP_TouchPort_WriteReg16(
-    uint8_t addr,
-    uint16_t reg,
-    const uint8_t *buf,
-    uint8_t len);
+BSP_TouchPortResult_t BSP_TouchPort_WriteReg16(uint8_t addr, uint16_t reg, const uint8_t *buf, uint8_t len);
 /**
  * @brief 从 16-bit 地址触摸寄存器读取字节。
  */
-BSP_TouchPortResult_t BSP_TouchPort_ReadReg16(
-    uint8_t addr,
-    uint16_t reg,
-    uint8_t *buf,
-    uint8_t len);
+BSP_TouchPortResult_t BSP_TouchPort_ReadReg16(uint8_t addr, uint16_t reg, uint8_t *buf, uint8_t len);
 /**
  * @brief 返回最近一次底层软件 I2C 诊断错误码。
  */

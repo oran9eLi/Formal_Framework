@@ -16,24 +16,23 @@
 /**
  * @brief SD 日志服务状态。
  */
-typedef struct
-{
-    Px4Lite_State_t state;   /**< Storage 模块公开状态。 */
-    uint8_t mounted;         /**< 挂载标志，1 表示 FatFs 已挂载。 */
-    uint8_t files_open;      /**< 文件打开标志，1 表示数据/错误文件已打开。 */
-    uint8_t last_sync_ok;    /**< 最近一次 sync 成功标志。 */
-    uint8_t disk_error;      /**< 磁盘错误标志。 */
-    uint8_t card_type;       /**< SD 卡类型，来自底层识别结果。 */
-    uint8_t mount_result;    /**< 最近一次挂载结果。 */
-    uint8_t last_command;    /**< 最近一次底层 SD 命令。 */
-    uint8_t last_response;   /**< 最近一次底层 SD 响应。 */
-    uint8_t open_phase;      /**< 文件打开阶段。 */
-    uint8_t open_result;     /**< 最近一次文件打开结果。 */
-    uint8_t reserved[2];     /**< 保留字段，保持结构体对齐。 */
-    uint32_t written_count;  /**< 累计成功写入记录数。 */
-    uint32_t error_count;    /**< 累计写入或挂载错误数。 */
-    uint32_t last_write_ms;  /**< 最近成功写入时间，单位：ms。 */
-    uint32_t last_attempt_ms;/**< 最近一次挂载或写入尝试时间，单位：ms。 */
+typedef struct {
+  Px4Lite_State_t state;    /**< Storage 模块公开状态。 */
+  uint8_t mounted;          /**< 挂载标志，1 表示 FatFs 已挂载。 */
+  uint8_t files_open;       /**< 文件打开标志，1 表示数据/错误文件已打开。 */
+  uint8_t last_sync_ok;     /**< 最近一次 sync 成功标志。 */
+  uint8_t disk_error;       /**< 磁盘错误标志。 */
+  uint8_t card_type;        /**< SD 卡类型，来自底层识别结果。 */
+  uint8_t mount_result;     /**< 最近一次挂载结果。 */
+  uint8_t last_command;     /**< 最近一次底层 SD 命令。 */
+  uint8_t last_response;    /**< 最近一次底层 SD 响应。 */
+  uint8_t open_phase;       /**< 文件打开阶段。 */
+  uint8_t open_result;      /**< 最近一次文件打开结果。 */
+  uint8_t reserved[2];      /**< 保留字段，保持结构体对齐。 */
+  uint32_t written_count;   /**< 累计成功写入记录数。 */
+  uint32_t error_count;     /**< 累计写入或挂载错误数。 */
+  uint32_t last_write_ms;   /**< 最近成功写入时间，单位：ms。 */
+  uint32_t last_attempt_ms; /**< 最近一次挂载或写入尝试时间，单位：ms。 */
 } Storage_SdStatus_t;
 
 /**
@@ -60,8 +59,7 @@ void Storage_SD_Service(uint32_t now_ms);
  *
  * @return 写入结果。
  */
-Px4Lite_Result_t Storage_SD_WriteDataLine(const char *line,
-                                          uint32_t now_ms);
+Px4Lite_Result_t Storage_SD_WriteDataLine(const char *line, uint32_t now_ms);
 
 /**
  * @brief 写入一行错误记录 CSV。
@@ -71,8 +69,7 @@ Px4Lite_Result_t Storage_SD_WriteDataLine(const char *line,
  *
  * @return 写入结果。
  */
-Px4Lite_Result_t Storage_SD_WriteErrorLine(const char *line,
-                                           uint32_t now_ms);
+Px4Lite_Result_t Storage_SD_WriteErrorLine(const char *line, uint32_t now_ms);
 
 /**
  * @brief 同步 SD 文件缓存。

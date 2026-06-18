@@ -28,12 +28,7 @@ static uint16_t s_attempt_count[PX4LITE_MODULE_COUNT];
  */
 static uint8_t Px4Lite_RecoveryNeeded(const Px4Lite_ModuleStatus_t *status)
 {
-    return ((status->state == PX4LITE_STATE_OFFLINE) ||
-            (status->state == PX4LITE_STATE_FAILED) ||
-            (status->consecutive_errors >=
-             PX4LITE_RECOVERY_ERROR_THRESHOLD))
-               ? 1U
-               : 0U;
+  return ((status->state == PX4LITE_STATE_OFFLINE) || (status->state == PX4LITE_STATE_FAILED) || (status->consecutive_errors >= PX4LITE_RECOVERY_ERROR_THRESHOLD)) ? 1U : 0U;
 }
 #endif
 
@@ -43,64 +38,40 @@ static uint8_t Px4Lite_RecoveryNeeded(const Px4Lite_ModuleStatus_t *status)
 void Px4Lite_RecoveryMonitorRun(uint32_t now_ms)
 {
 #if PX4LITE_RECOVERY_ENABLE
-    uint32_t id;
+  uint32_t id;
 
-    for (id = 0U; id < (uint32_t)PX4LITE_MODULE_COUNT; ++id)
-    {
-        Px4Lite_ModuleDescriptor_t descriptor;
-        Px4Lite_ModuleStatus_t status;
+  for (id = 0U; id < (uint32_t)PX4LITE_MODULE_COUNT; ++id) {
+    Px4Lite_ModuleDescriptor_t descriptor;
+    Px4Lite_ModuleStatus_t status;
 
-        /* 跳过未注册槽位。 */
-        if (Px4Lite_RegistryGet((Px4Lite_ModuleId_t)id,
-                                &descriptor, 0) != PX4LITE_OK)
-        {
-            continue;
-        }
-        if ((descriptor.enabled == 0U) || (descriptor.recover == 0))
-        {
-            continue;
-        }
-        if (Px4Lite_GetModuleStatus((Px4Lite_ModuleId_t)id,
-                                    &status) != PX4LITE_OK)
-        {
-            continue;
-        }
+    /* 跳过未注册槽位。 */
+    if (Px4Lite_RegistryGet((Px4Lite_ModuleId_t)id, &descriptor, 0) != PX4LITE_OK) { continue; }
+    if ((descriptor.enabled == 0U) || (descriptor.recover == 0)) { continue; }
+    if (Px4Lite_GetModuleStatus((Px4Lite_ModuleId_t)id, &status) != PX4LITE_OK) { continue; }
 
-        /* 健康或仅数据降级时清空恢复计数。 */
-        if ((status.state == PX4LITE_STATE_ONLINE) ||
-            (status.state == PX4LITE_STATE_DEGRADED))
-        {
-            s_attempt_count[id] = 0U;
-            s_last_attempt_ms[id] = now_ms;
-            continue;
-        }
-
-        /* STARTING/UNINITIALIZED/DISABLED 交给启动流程处理。 */
-        if (Px4Lite_RecoveryNeeded(&status) == 0U)
-        {
-            continue;
-        }
-
-        /*
-         * 对恢复尝试做限速，但不设置总次数上限；设备长时间断开后重新接入仍可恢复，
-         * 延迟只用于限制尝试频率。
-         */
-        if ((uint32_t)(now_ms - s_last_attempt_ms[id]) <
-            PX4LITE_RECOVERY_DELAY_MS)
-        {
-            continue;
-        }
-
-        s_last_attempt_ms[id] = now_ms;
-        if (s_attempt_count[id] < 0xFFFFU)
-        {
-            s_attempt_count[id]++;
-        }
-
-        /* 轻量请求型回调；真正 re-init 由模块所属 Service 执行。 */
-        (void)descriptor.recover();
+    /* 健康或仅数据降级时清空恢复计数。 */
+    if ((status.state == PX4LITE_STATE_ONLINE) || (status.state == PX4LITE_STATE_DEGRADED)) {
+      s_attempt_count[id]   = 0U;
+      s_last_attempt_ms[id] = now_ms;
+      continue;
     }
+
+    /* STARTING/UNINITIALIZED/DISABLED 交给启动流程处理。 */
+    if (Px4Lite_RecoveryNeeded(&status) == 0U) { continue; }
+
+    /*
+     * 对恢复尝试做限速，但不设置总次数上限；设备长时间断开后重新接入仍可恢复，
+     * 延迟只用于限制尝试频率。
+     */
+    if ((uint32_t)(now_ms - s_last_attempt_ms[id]) < PX4LITE_RECOVERY_DELAY_MS) { continue; }
+
+    s_last_attempt_ms[id] = now_ms;
+    if (s_attempt_count[id] < 0xFFFFU) { s_attempt_count[id]++; }
+
+    /* 轻量请求型回调；真正 re-init 由模块所属 Service 执行。 */
+    (void)descriptor.recover();
+  }
 #else
-    (void)now_ms;
+  (void)now_ms;
 #endif
 }

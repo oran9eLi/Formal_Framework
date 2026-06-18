@@ -18,19 +18,18 @@
 /**
  * @brief 常规数据 CSV 行输入字段。
  */
-typedef struct
-{
-    uint32_t time_ms;            /**< 记录时间，单位：ms。 */
-    uint8_t gnss_valid;          /**< GNSS 有效标志，1 表示位置字段可用。 */
-    int32_t latitude_e7;         /**< 纬度，单位：degree * 1e7。 */
-    int32_t longitude_e7;        /**< 经度，单位：degree * 1e7。 */
-    int32_t roll_deg100;         /**< 横滚角，单位：degree * 100。 */
-    int32_t pitch_deg100;        /**< 俯仰角，单位：degree * 100。 */
-    int32_t temperature_c100;    /**< 温度，单位：摄氏度 * 100。 */
-    uint32_t pressure_hpa100;    /**< 气压，单位：hPa * 100。 */
-    uint32_t humidity_pct100;    /**< 相对湿度，单位：% * 100。 */
-    uint32_t voltage_mv;         /**< 电压，单位：mV。 */
-    uint8_t battery_pct;         /**< 电量百分比，范围：0 到 100。 */
+typedef struct {
+  uint32_t time_ms;         /**< 记录时间，单位：ms。 */
+  uint8_t gnss_valid;       /**< GNSS 有效标志，1 表示位置字段可用。 */
+  int32_t latitude_e7;      /**< 纬度，单位：degree * 1e7。 */
+  int32_t longitude_e7;     /**< 经度，单位：degree * 1e7。 */
+  int32_t roll_deg100;      /**< 横滚角，单位：degree * 100。 */
+  int32_t pitch_deg100;     /**< 俯仰角，单位：degree * 100。 */
+  int32_t temperature_c100; /**< 温度，单位：摄氏度 * 100。 */
+  uint32_t pressure_hpa100; /**< 气压，单位：hPa * 100。 */
+  uint32_t humidity_pct100; /**< 相对湿度，单位：% * 100。 */
+  uint32_t voltage_mv;      /**< 电压，单位：mV。 */
+  uint8_t battery_pct;      /**< 电量百分比，范围：0 到 100。 */
 } Storage_CsvData_t;
 
 /**
@@ -56,10 +55,7 @@ const char *StorageCsv_ErrorHeader(void);
  *
  * @return 格式化结果。
  */
-Px4Lite_Result_t StorageCsv_FormatDataLine(
-    const Storage_CsvData_t *data,
-    char *line,
-    size_t line_size);
+Px4Lite_Result_t StorageCsv_FormatDataLine(const Storage_CsvData_t *data, char *line, size_t line_size);
 
 /**
  * @brief 格式化一行错误记录 CSV。
@@ -75,14 +71,6 @@ Px4Lite_Result_t StorageCsv_FormatDataLine(
  *
  * @return 格式化结果。
  */
-Px4Lite_Result_t StorageCsv_FormatErrorLine(
-    uint32_t time_ms,
-    const char *module,
-    uint32_t state,
-    uint32_t fault,
-    uint32_t error_count,
-    const char *message,
-    char *line,
-    size_t line_size);
+Px4Lite_Result_t StorageCsv_FormatErrorLine(uint32_t time_ms, const char *module, uint32_t state, uint32_t fault, uint32_t error_count, const char *message, char *line, size_t line_size);
 
 #endif

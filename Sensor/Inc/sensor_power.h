@@ -15,26 +15,24 @@
 /**
  * @brief 电源检测驱动返回值。
  */
-typedef enum
-{
-    POWER_RESULT_OK = 0,       /**< 操作成功。 */
-    POWER_RESULT_NO_DATA,      /**< 当前无可用新样本。 */
-    POWER_RESULT_IO_ERROR,     /**< ADC 或 BSP 访问失败。 */
-    POWER_RESULT_INVALID_PARAM /**< 参数非法。 */
+typedef enum {
+  POWER_RESULT_OK = 0,       /**< 操作成功。 */
+  POWER_RESULT_NO_DATA,      /**< 当前无可用新样本。 */
+  POWER_RESULT_IO_ERROR,     /**< ADC 或 BSP 访问失败。 */
+  POWER_RESULT_INVALID_PARAM /**< 参数非法。 */
 } Power_Result_t;
 
 /**
  * @brief 电源检测最近一次有效采样快照。
  */
-typedef struct
-{
-    uint32_t rx_sequence;    /**< 样本序号，每次有效采样递增。 */
-    uint32_t sample_time_ms; /**< 采样完成时间，单位：ms。 */
-    float voltage_v;         /**< 电压，单位：V。 */
-    uint8_t percent;         /**< 电量百分比，范围：0 到 100。 */
-    uint8_t low_voltage;     /**< 低电压标志，1 表示低电压。 */
-    uint16_t reserved;       /**< 保留字段，保持结构体对齐。 */
-    uint32_t error_count;    /**< 累计错误次数。 */
+typedef struct {
+  uint32_t rx_sequence;    /**< 样本序号，每次有效采样递增。 */
+  uint32_t sample_time_ms; /**< 采样完成时间，单位：ms。 */
+  float voltage_v;         /**< 电压，单位：V。 */
+  uint8_t percent;         /**< 电量百分比，范围：0 到 100。 */
+  uint8_t low_voltage;     /**< 低电压标志，1 表示低电压。 */
+  uint16_t reserved;       /**< 保留字段，保持结构体对齐。 */
+  uint32_t error_count;    /**< 累计错误次数。 */
 } Power_Snapshot_t;
 
 /**
@@ -43,14 +41,13 @@ typedef struct
  * @details
  * 状态查询不携带原始 ADC 负载，不访问 ADC，只复制驱动内部缓存。
  */
-typedef struct
-{
-    uint32_t rx_sequence;    /**< 最近有效样本序号。 */
-    uint32_t sample_time_ms; /**< 最近有效采样时间，单位：ms。 */
-    uint32_t error_count;    /**< 累计错误次数。 */
-    uint8_t percent;         /**< 电量百分比，范围：0 到 100。 */
-    uint8_t low_voltage;     /**< 低电压标志，1 表示低电压。 */
-    uint16_t reserved;       /**< 保留字段，保持结构体对齐。 */
+typedef struct {
+  uint32_t rx_sequence;    /**< 最近有效样本序号。 */
+  uint32_t sample_time_ms; /**< 最近有效采样时间，单位：ms。 */
+  uint32_t error_count;    /**< 累计错误次数。 */
+  uint8_t percent;         /**< 电量百分比，范围：0 到 100。 */
+  uint8_t low_voltage;     /**< 低电压标志，1 表示低电压。 */
+  uint16_t reserved;       /**< 保留字段，保持结构体对齐。 */
 } Power_Status_t;
 
 /**

@@ -8,9 +8,9 @@
 extern "C" {
 #endif
 
-#define DISPLAY_PAGES_FOOTER_Y        420U
-#define DISPLAY_PAGES_FOOTER_HEIGHT   60U
-#define DISPLAY_PAGES_NAV_SIDE_WIDTH  150U
+#define DISPLAY_PAGES_FOOTER_Y       420U
+#define DISPLAY_PAGES_FOOTER_HEIGHT  60U
+#define DISPLAY_PAGES_NAV_SIDE_WIDTH 150U
 
 /**
  * @brief       页面绘制层读取变量缓存的回调函数类型

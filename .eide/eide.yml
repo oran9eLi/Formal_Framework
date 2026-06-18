@@ -21,6 +21,7 @@ virtualFolder:
       files:
         - path: Framework/Src/px4lite_app.c
         - path: Framework/Src/px4lite_storage.c
+        - path: Framework/Src/px4lite_time.c
         - path: Framework/Src/px4lite_modules.c
         - path: Framework/Src/px4lite_mavlink_tx.c
         - path: Framework/Src/px4lite_attitude.c
@@ -60,6 +61,7 @@ virtualFolder:
         - path: Bsp/Src/bsp_i2c.c
         - path: Bsp/Src/bsp_adc.c
         - path: Bsp/Src/bsp_time.c
+        - path: Bsp/Src/bsp_rtc.c
         - path: Bsp/Src/bsp_spi.c
       folders: []
     - name: Display
@@ -86,6 +88,8 @@ virtualFolder:
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_gpio.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc_ex.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc_ex.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c
@@ -269,4 +273,14 @@ targets:
         otherCmds: ""
         proType: 1
         speed: 8000
-    uploader: JLink
+      STLink:
+        address: "0x8000000"
+        bin: ""
+        elFile: None
+        optionBytes: .eide/target 1.st.option.bytes.ini
+        otherCmds: ""
+        proType: SWD
+        resetMode: default
+        runAfterProgram: true
+        speed: 4000
+    uploader: STLink

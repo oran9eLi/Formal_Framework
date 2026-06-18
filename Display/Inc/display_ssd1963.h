@@ -12,14 +12,13 @@
 extern "C" {
 #endif
 
-#define DISPLAY_SSD1963_WIDTH   800U
-#define DISPLAY_SSD1963_HEIGHT  480U
+#define DISPLAY_SSD1963_WIDTH  800U
+#define DISPLAY_SSD1963_HEIGHT 480U
 
-typedef enum
-{
-    DISPLAY_SSD1963_OK = 0,
-    DISPLAY_SSD1963_NOT_READY,
-    DISPLAY_SSD1963_ERROR
+typedef enum {
+  DISPLAY_SSD1963_OK = 0,
+  DISPLAY_SSD1963_NOT_READY,
+  DISPLAY_SSD1963_ERROR
 } Display_Ssd1963Result_t;
 
 /**
@@ -37,11 +36,7 @@ void Display_Ssd1963_DrawPixel(uint16_t x, uint16_t y, uint16_t color);
 /**
  * @brief Fill one clipped RGB565 rectangle.
  */
-void Display_Ssd1963_FillRect(uint16_t x,
-                              uint16_t y,
-                              uint16_t width,
-                              uint16_t height,
-                              uint16_t color);
+void Display_Ssd1963_FillRect(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t color);
 /**
  * @brief Fill the full display area with one RGB565 color.
  */
