@@ -11,6 +11,7 @@
 
 #include <string.h>
 #include "px4lite_alarm.h"
+#include "px4lite_control.h"
 #include "px4lite_modules.h"
 #include "px4lite_topics.h"
 
@@ -202,6 +203,31 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
   }
 
   return (copied != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
+}
+
+Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
+{
+  Px4Lite_MotorOutputs_t source;
+  uint8_t i;
+
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+
+  memset(out, 0, sizeof(*out));
+  if (Px4Lite_CopyMotor(&source) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&source.header, now_ms, APP_MOTOR_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
+
+  out->header      = source.header;
+  out->run_state   = source.run_state;
+  out->speed_level = source.speed_level;
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    out->duty_percent[i] = source.duty_percent[i];
+  }
+  return PX4LITE_OK;
+}
+
+Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
+{
+  return Px4Lite_ControlSetMotorThrottlePercent(motor_index, throttle_percent);
 }
 
 Px4Lite_Result_t App_CopyDateTime(App_DateTimeSnapshot_t *out, uint32_t now_ms)

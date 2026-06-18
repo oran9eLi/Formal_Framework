@@ -451,6 +451,11 @@
               <FilePath>..\Framework\Src\px4lite_time.c</FilePath>
             </File>
             <File>
+              <FileName>px4lite_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_control.c</FilePath>
+            </File>
+            <File>
               <FileName>px4lite_topics.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_topics.c</FilePath>
@@ -604,6 +609,16 @@
               <FileName>bsp_spi.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\bsp_spi.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_pwm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_pwm.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_button.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_button.c</FilePath>
             </File>
           </Files>
         </Group>

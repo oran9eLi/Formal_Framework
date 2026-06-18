@@ -146,6 +146,22 @@ void Px4Lite_PublishNavigation(const Px4Lite_VehicleNavigation_t *data);
 Px4Lite_Result_t Px4Lite_CopyNavigation(Px4Lite_VehicleNavigation_t *data);
 
 /**
+ * @brief 原子发布一份完整电机输出命令快照。
+ *
+ * @param[in] data 电机输出命令快照指针，不能为 NULL。
+ */
+void Px4Lite_PublishMotor(const Px4Lite_MotorOutputs_t *data);
+
+/**
+ * @brief 复制最新完整电机输出命令快照。
+ *
+ * @param[out] data 输出缓冲区，不能为 NULL。
+ *
+ * @return 复制结果。
+ */
+Px4Lite_Result_t Px4Lite_CopyMotor(Px4Lite_MotorOutputs_t *data);
+
+/**
  * @brief 原子发布一份完整系统健康快照。
  *
  * @param[in] data 系统健康快照指针，不能为 NULL。

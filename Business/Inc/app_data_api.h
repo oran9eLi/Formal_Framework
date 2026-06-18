@@ -20,6 +20,7 @@
 #define APP_SYSTEM_MAX_AGE_MS      500U  /**< System/Health 快照最大可接受年龄，单位：ms。 */
 #define APP_ENVIRONMENT_MAX_AGE_MS 2500U /**< Environment 快照最大可接受年龄，单位：ms。 */
 #define APP_ALARM_MAX_AGE_MS       500U  /**< Alarm 快照最大可接受年龄，单位：ms。 */
+#define APP_MOTOR_MAX_AGE_MS       500U  /**< Motor 命令快照最大可接受年龄，单位：ms。 */
 #define APP_STATUS_COPY_RETRY_MAX  3U    /**< 状态版本一致性复制的最大重试次数。 */
 
 /**
@@ -117,6 +118,21 @@ typedef struct {
 } App_EnvironmentSnapshot_t;
 
 /**
+ * @brief 应用层电机输出命令快照。
+ *
+ * @details
+ * 该结构体用于显示和日志查看当前 Control 模块已发布的目标油门，不代表 ESC 或电机
+ * 的真实反馈速度。
+ */
+typedef struct {
+  Px4Lite_TopicHeader_t header;              /**< 快照头，包含 Control 发布时间。 */
+  uint8_t duty_percent[PX4LITE_MOTOR_COUNT]; /**< 每路目标油门百分比，范围 0 到 100。 */
+  uint8_t run_state;                         /**< 运行状态，1 表示已完成 ESC 预解锁。 */
+  uint8_t speed_level;                       /**< 四路目标油门最大值，范围 0 到 100。 */
+  uint16_t reserved;                         /**< 保留字段，保持结构体对齐。 */
+} App_MotorSnapshot_t;
+
+/**
  * @brief 应用层日期时间快照。
  */
 typedef struct {
@@ -186,6 +202,26 @@ Px4Lite_Result_t App_CopyAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms);
  * @retval PX4LITE_NOT_READY 尚无有效环境快照，或 Baro/Battery 数据均已过期。
  */
 Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t now_ms);
+
+/**
+ * @brief 复制新鲜的电机输出命令快照。
+ *
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间，用于新鲜度判断。
+ *
+ * @return 复制结果。
+ */
+Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms);
+
+/**
+ * @brief 设置单路电机目标油门百分比。
+ *
+ * @param[in] motor_index 电机编号，范围 0 到 `PX4LITE_MOTOR_COUNT - 1`。
+ * @param[in] throttle_percent 目标油门百分比，范围 0 到 100，超过 100 时由 Control 限幅。
+ *
+ * @return 设置结果。
+ */
+Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent);
 
 /**
  * @brief 复制统一日期时间快照。

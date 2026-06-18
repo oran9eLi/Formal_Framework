@@ -38,6 +38,8 @@
 #define DISPLAY_NAV_BUTTON_X2_NEXT 792U
 #define DISPLAY_NAV_BUTTON_Y1      426U
 #define DISPLAY_NAV_BUTTON_Y2      474U
+#define DISPLAY_MOTOR_SLIDER_MAX_VALUE 100U
+#define DISPLAY_MOTOR_HANDLE_GRAB_PAD  18U
 typedef struct {
   uint32_t value;           /* 当前缓存的原始显示值 */
   uint32_t drawn_value;     /* 上一次已经绘制到屏幕的值 */
@@ -56,7 +58,7 @@ typedef enum {
 /*
  * 页面 ID 用于 App 和调试链路路由，枚举值保持稳定。
  */
-static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_LOGO, 0x0003U, "logo", 0U}, {DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}};
+static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_LOGO, 0x0003U, "logo", 0U}, {DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_MOTOR, 0x0006U, "motor", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}};
 
 /*
  * ATK-MD0700 800x480 显示变量配置。
@@ -165,16 +167,29 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, DISPLAY_HMI_PAGE_AIRCRAFT, 0x100EU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 362U, 24U, 16U, "ac_status_motor4", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_LORA_STATUS, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1400U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 616U, 16U, 24U, 16U, "ac_header_lora_status", "-", "CNS_State.lora"},
 
-    /* 飞机情况页 -- 中间栏：4 路电机输出(进度条%)、横滚、俯仰、偏航、LoRa 发送/接收 */
-    {DISPLAY_HMI_VAR_MOTOR_PWM_1, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1600U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, 348U, 116U, 120U, 16U, "ac_motor_pwm_1", "%", "HMI/Motor"},
-    {DISPLAY_HMI_VAR_MOTOR_PWM_2, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1601U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, 348U, 148U, 120U, 16U, "ac_motor_pwm_2", "%", "HMI/Motor"},
-    {DISPLAY_HMI_VAR_MOTOR_PWM_3, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1602U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, 348U, 180U, 120U, 16U, "ac_motor_pwm_3", "%", "HMI/Motor"},
-    {DISPLAY_HMI_VAR_MOTOR_PWM_4, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1603U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, 348U, 212U, 120U, 16U, "ac_motor_pwm_4", "%", "HMI/Motor"},
-    {DISPLAY_HMI_VAR_ROLL, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1300U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 246U, 124U, 22U, "ac_roll", "\xB0", "CNS_State.sensor"},
-    {DISPLAY_HMI_VAR_PITCH, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1301U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 280U, 124U, 22U, "ac_pitch", "\xB0", "CNS_State.sensor"},
-    {DISPLAY_HMI_VAR_YAW, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1305U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 314U, 124U, 22U, "ac_yaw", "\xB0", "CNS_State.navigation"},
-    {DISPLAY_HMI_VAR_LORA_TX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1401U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 344U, 124U, 22U, "ac_lora_tx", "-", "CNS_State.lora"},
-    {DISPLAY_HMI_VAR_LORA_RX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1403U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 374U, 124U, 22U, "ac_lora_rx", "-", "CNS_State.lora"},
+    /* 飞机情况页 -- 中间栏：横滚、俯仰、偏航、LoRa 发送/接收 */
+    {DISPLAY_HMI_VAR_ROLL, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1300U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 140U, 124U, 22U, "ac_roll", "\xB0", "CNS_State.sensor"},
+    {DISPLAY_HMI_VAR_PITCH, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1301U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 190U, 124U, 22U, "ac_pitch", "\xB0", "CNS_State.sensor"},
+    {DISPLAY_HMI_VAR_YAW, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1305U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 240U, 124U, 22U, "ac_yaw", "\xB0", "CNS_State.navigation"},
+    {DISPLAY_HMI_VAR_LORA_TX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1401U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 290U, 124U, 22U, "ac_lora_tx", "-", "CNS_State.lora"},
+    {DISPLAY_HMI_VAR_LORA_RX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1403U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 340U, 124U, 22U, "ac_lora_rx", "-", "CNS_State.lora"},
+
+    /* 电机控制页 -- 左侧状态栏、四路竖向油门滑条和右侧消息日志 */
+    {DISPLAY_HMI_VAR_SELF_CHECK_GNSS, DISPLAY_HMI_PAGE_MOTOR, 0x1009U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 122U, 24U, 16U, "mc_status_gnss", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, DISPLAY_HMI_PAGE_MOTOR, 0x1001U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 152U, 24U, 16U, "mc_status_mpu", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_BME280, DISPLAY_HMI_PAGE_MOTOR, 0x1002U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 182U, 24U, 16U, "mc_status_bme", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_LORA, DISPLAY_HMI_PAGE_MOTOR, 0x100AU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 212U, 24U, 16U, "mc_status_lora", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_SD, DISPLAY_HMI_PAGE_MOTOR, 0x1003U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 242U, 24U, 16U, "mc_status_sd", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, DISPLAY_HMI_PAGE_MOTOR, 0x1004U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 272U, 24U, 16U, "mc_status_motor1", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, DISPLAY_HMI_PAGE_MOTOR, 0x100CU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 302U, 24U, 16U, "mc_status_motor2", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, DISPLAY_HMI_PAGE_MOTOR, 0x100DU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 332U, 24U, 16U, "mc_status_motor3", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, DISPLAY_HMI_PAGE_MOTOR, 0x100EU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 362U, 24U, 16U, "mc_status_motor4", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_LORA_STATUS, DISPLAY_HMI_PAGE_MOTOR, 0x1400U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 616U, 16U, 24U, 16U, "motor_header_lora_status", "-", "CNS_State.lora"},
+    {DISPLAY_HMI_VAR_MOTOR_PWM_1, DISPLAY_HMI_PAGE_MOTOR, 0x1600U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK1_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_1", "%", "HMI/Motor"},
+    {DISPLAY_HMI_VAR_MOTOR_PWM_2, DISPLAY_HMI_PAGE_MOTOR, 0x1601U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK2_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_2", "%", "HMI/Motor"},
+    {DISPLAY_HMI_VAR_MOTOR_PWM_3, DISPLAY_HMI_PAGE_MOTOR, 0x1602U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK3_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_3", "%", "HMI/Motor"},
+    {DISPLAY_HMI_VAR_MOTOR_PWM_4, DISPLAY_HMI_PAGE_MOTOR, 0x1603U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK4_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_4", "%", "HMI/Motor"},
+    {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_MOTOR, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 616U, 76U, 176U, 330U, "msg_log_motor", "-", "App_Registry"},
 
     /* 告警页 -- 运行期告警项 */
     {DISPLAY_HMI_VAR_LORA_STATUS, DISPLAY_HMI_PAGE_ALARM, 0x1400U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 616U, 16U, 24U, 16U, "alarm_header_lora_status", "-", "CNS_State.lora"},
@@ -193,6 +208,8 @@ static uint8_t s_touch_down                   = 0U;
 static uint8_t s_touch_retry_count            = 0U;
 static uint8_t s_touch_poll_count             = 0U;
 static Display_NavTouch_t s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
+static const Display_HmiVariableConfig_t *s_touch_slider_latched;
+static uint8_t s_selected_motor_index         = 0U;
 static uint8_t s_display_initialized          = 0U;
 static volatile uint8_t s_recover_requested   = 0U;
 static uint16_t s_refresh_cursor              = 0U;
@@ -258,6 +275,233 @@ static Display_NavTouch_t Display_CheckNavRect(uint16_t x, uint16_t y)
   if (Display_IsPointInBox(x, y, DISPLAY_NAV_BUTTON_X1_NEXT, DISPLAY_NAV_BUTTON_Y1, DISPLAY_NAV_BUTTON_X2_NEXT, DISPLAY_NAV_BUTTON_Y2) != 0U) { return DISPLAY_NAV_TOUCH_NEXT; }
 
   return DISPLAY_NAV_TOUCH_NONE;
+}
+
+static uint8_t Display_IsMotorSliderId(Display_HmiVariableId_t id)
+{
+  return (uint8_t)((id == DISPLAY_HMI_VAR_MOTOR_PWM_1) || (id == DISPLAY_HMI_VAR_MOTOR_PWM_2) || (id == DISPLAY_HMI_VAR_MOTOR_PWM_3) || (id == DISPLAY_HMI_VAR_MOTOR_PWM_4));
+}
+
+static uint8_t Display_MotorIndexFromId(Display_HmiVariableId_t id, uint8_t *index)
+{
+  if (index == 0) { return 0U; }
+
+  switch (id) {
+    case DISPLAY_HMI_VAR_MOTOR_PWM_1:
+      *index = 0U;
+      return 1U;
+    case DISPLAY_HMI_VAR_MOTOR_PWM_2:
+      *index = 1U;
+      return 1U;
+    case DISPLAY_HMI_VAR_MOTOR_PWM_3:
+      *index = 2U;
+      return 1U;
+    case DISPLAY_HMI_VAR_MOTOR_PWM_4:
+      *index = 3U;
+      return 1U;
+    default:
+      break;
+  }
+
+  return 0U;
+}
+
+static uint16_t Display_MotorHandleCenterY(const Display_HmiVariableConfig_t *variable, uint16_t value)
+{
+  uint32_t filled;
+  uint16_t cy;
+  uint16_t lo;
+  uint16_t hi;
+
+  if ((variable == 0) || (variable->height == 0U)) { return 0U; }
+  if (value > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { value = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
+
+  filled = ((uint32_t)value * variable->height) / DISPLAY_MOTOR_SLIDER_MAX_VALUE;
+  cy     = (uint16_t)(variable->y + variable->height - filled);
+  lo     = (uint16_t)(variable->y + DISPLAY_MOTOR_HANDLE_HALF_H);
+  hi     = (uint16_t)(variable->y + variable->height - DISPLAY_MOTOR_HANDLE_HALF_H);
+  if (cy < lo) { cy = lo; }
+  if (cy > hi) { cy = hi; }
+
+  return cy;
+}
+
+static uint16_t Display_MotorSliderValueFromY(const Display_HmiVariableConfig_t *variable, uint16_t y)
+{
+  uint16_t bottom;
+  uint32_t value;
+
+  if ((variable == 0) || (variable->height == 0U)) { return 0U; }
+
+  bottom = (uint16_t)(variable->y + variable->height);
+  if (y >= bottom) { return 0U; }
+  if (y <= variable->y) { return DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
+
+  value = (((uint32_t)(bottom - y) * DISPLAY_MOTOR_SLIDER_MAX_VALUE) + (variable->height / 2U)) / variable->height;
+  if (value > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { value = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
+  return (uint16_t)value;
+}
+
+static const Display_HmiVariableConfig_t *Display_FindMotorSliderByIndex(uint8_t motor_index)
+{
+  uint16_t i;
+
+  for (i = 0U; i < DISPLAY_ARRAY_SIZE(s_hmi_variables); i++) {
+    const Display_HmiVariableConfig_t *variable = &s_hmi_variables[i];
+    uint8_t index;
+
+    if ((variable->page != DISPLAY_HMI_PAGE_MOTOR) || (Display_MotorIndexFromId(variable->id, &index) == 0U)) { continue; }
+    if (index == motor_index) { return variable; }
+  }
+
+  return 0;
+}
+
+static void Display_DrawSelectedMotorTriangle(void)
+{
+  uint8_t i;
+
+  if (s_current_page != DISPLAY_HMI_PAGE_MOTOR) { return; }
+
+  for (i = 0U; i < 4U; i++) {
+    const Display_HmiVariableConfig_t *variable = Display_FindMotorSliderByIndex(i);
+    uint16_t cx;
+    uint16_t top;
+    uint16_t dy;
+
+    if (variable == 0) { continue; }
+
+    cx  = (uint16_t)(variable->x + (variable->width / 2U));
+    top = (uint16_t)(variable->y - 10U);
+    (void)Display_GfxFillRect((uint16_t)(cx - 6U), top, 13U, 8U, DISPLAY_GFX_COLOR_WHITE);
+    if (i != s_selected_motor_index) { continue; }
+
+    for (dy = 0U; dy < 6U; dy++) {
+      uint16_t half = (uint16_t)(5U - dy);
+      (void)Display_GfxDrawHLine((uint16_t)(cx - half), (uint16_t)(top + dy), (uint16_t)((half * 2U) + 1U), DISPLAY_GFX_COLOR_BLUE);
+    }
+  }
+}
+
+static uint8_t Display_IsOnMotorHandle(const Display_HmiVariableConfig_t *variable, uint16_t x, uint16_t y)
+{
+  uint16_t cx;
+  uint16_t cy;
+  uint16_t hw;
+  uint16_t hh;
+  uint16_t x1;
+  uint16_t x2;
+  uint16_t y1;
+  uint16_t y2;
+
+  if (variable == 0) { return 0U; }
+
+  cx = (uint16_t)(variable->x + (variable->width / 2U));
+  cy = Display_MotorHandleCenterY(variable, (uint16_t)Display_GetCachedValue(variable->id, 0U));
+  hw = (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_W + DISPLAY_MOTOR_HANDLE_GRAB_PAD);
+  hh = (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_H + DISPLAY_MOTOR_HANDLE_GRAB_PAD);
+  x1 = (cx > hw) ? (uint16_t)(cx - hw) : 0U;
+  x2 = (uint16_t)(cx + hw);
+  y1 = (cy > hh) ? (uint16_t)(cy - hh) : 0U;
+  y2 = (uint16_t)(cy + hh);
+
+  return Display_IsPointInBox(x, y, x1, y1, x2, y2);
+}
+
+static const Display_HmiVariableConfig_t *Display_FindMotorSliderAt(uint16_t x, uint16_t y)
+{
+  uint16_t i;
+
+  if (s_current_page != DISPLAY_HMI_PAGE_MOTOR) { return 0; }
+
+  for (i = 0U; i < DISPLAY_ARRAY_SIZE(s_hmi_variables); i++) {
+    const Display_HmiVariableConfig_t *variable = &s_hmi_variables[i];
+    if ((variable->page != s_current_page) || (Display_IsMotorSliderId(variable->id) == 0U)) { continue; }
+    if (Display_IsOnMotorHandle(variable, x, y) != 0U) { return variable; }
+  }
+
+  return 0;
+}
+
+static Display_Result_t Display_DrawMotorSliderNow(const Display_HmiVariableConfig_t *variable, uint16_t throttle_percent, uint8_t draw_percent)
+{
+  Display_ValueCache_t *cache;
+
+  if (variable == 0) { return DISPLAY_ERROR; }
+
+  cache = &s_hmi_values[variable->id];
+  if ((cache->drawn_valid != 0U) && (cache->drawn_value == throttle_percent) && (draw_percent == 0U)) {
+    cache->last_refresh_ms = 0U;
+    cache->dirty           = 0U;
+    return DISPLAY_OK;
+  }
+
+  if (Display_PagesDrawMotorSliderField(variable, cache->drawn_value, throttle_percent, (cache->drawn_valid == 0U) ? 1U : 0U, draw_percent) != DISPLAY_OK) { return DISPLAY_ERROR; }
+  cache->drawn_value     = throttle_percent;
+  cache->drawn_valid     = 1U;
+  cache->last_refresh_ms = 0U;
+  cache->dirty           = 0U;
+
+  return DISPLAY_OK;
+}
+
+static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariableConfig_t *variable, uint16_t throttle_percent)
+{
+  uint8_t motor_index;
+  uint8_t selection_changed;
+
+  if ((variable == 0) || (Display_MotorIndexFromId(variable->id, &motor_index) == 0U)) { return DISPLAY_ERROR; }
+  if (throttle_percent > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { throttle_percent = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
+
+  if (App_SetMotorThrottlePercent(motor_index, (uint8_t)throttle_percent) != PX4LITE_OK) { return DISPLAY_ERROR; }
+
+  selection_changed      = (s_selected_motor_index != motor_index) ? 1U : 0U;
+  s_selected_motor_index = motor_index;
+  (void)Display_SetHmiValueU16(variable->id, throttle_percent);
+
+  if (s_current_page == DISPLAY_HMI_PAGE_MOTOR) {
+    if (selection_changed != 0U) { Display_DrawSelectedMotorTriangle(); }
+    return Display_DrawMotorSliderNow(variable, throttle_percent, 1U);
+  }
+
+  return DISPLAY_OK;
+}
+
+static Display_Result_t Display_HandleMotorSliderTouch(const Display_HmiVariableConfig_t *variable, uint16_t y, Display_HmiVariableId_t *id, uint32_t *value)
+{
+  uint16_t throttle_percent;
+
+  if (variable == 0) { return DISPLAY_ERROR; }
+
+  throttle_percent = Display_MotorSliderValueFromY(variable, y);
+  if (id != 0) { *id = variable->id; }
+  if (value != 0) { *value = throttle_percent; }
+
+  return Display_SetMotorThrottleCommand(variable, throttle_percent);
+}
+
+static Display_Result_t Display_MotorEmergencyStop(void)
+{
+  uint8_t i;
+
+  for (i = 0U; i < 4U; i++) {
+    const Display_HmiVariableConfig_t *variable = Display_FindMotorSliderByIndex(i);
+
+    (void)App_SetMotorThrottlePercent(i, 0U);
+    if (variable != 0) {
+      (void)Display_SetHmiValueU16(variable->id, 0U);
+      if (s_current_page == DISPLAY_HMI_PAGE_MOTOR) { (void)Display_DrawMotorSliderNow(variable, 0U, 1U); }
+    }
+  }
+
+  return DISPLAY_OK;
+}
+
+static uint8_t Display_IsMotorEstopTouch(uint16_t x, uint16_t y)
+{
+  if (s_current_page != DISPLAY_HMI_PAGE_MOTOR) { return 0U; }
+
+  return Display_IsPointInBox(x, y, DISPLAY_MOTOR_ESTOP_X, DISPLAY_MOTOR_ESTOP_Y, (uint16_t)(DISPLAY_MOTOR_ESTOP_X + DISPLAY_MOTOR_ESTOP_W), (uint16_t)(DISPLAY_MOTOR_ESTOP_Y + DISPLAY_MOTOR_ESTOP_H));
 }
 
 /*
@@ -489,6 +733,7 @@ Display_Result_t Display_Init(void)
   s_current_page          = DISPLAY_HMI_PAGE_LOGO;
   s_touch_down            = 0U;
   s_touch_nav_latched     = DISPLAY_NAV_TOUCH_NONE;
+  s_touch_slider_latched  = 0;
   s_refresh_cursor        = 0U;
   s_static_redraw_pending = 0U;
   Display_InitSelfCheckValues();
@@ -666,6 +911,24 @@ static void Display_ClearBatteryFields(void)
 {
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, 0U);
+}
+
+static void Display_ClearMotorFields(void)
+{
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_1, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_3, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, 0U);
+}
+
+static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
+{
+  if (motor == 0) { return; }
+
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_1, motor->duty_percent[0]);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, motor->duty_percent[1]);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_3, motor->duty_percent[2]);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, motor->duty_percent[3]);
 }
 
 /*
@@ -929,6 +1192,10 @@ static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, Display_MapStateValue(system->modules[PX4LITE_MODULE_LORA].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, Display_MapStateValue(system->modules[PX4LITE_MODULE_LORA].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue(system->modules[PX4LITE_MODULE_STORAGE].state));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, Display_MapStateValue(system->modules[PX4LITE_MODULE_5G].state));
   /* 自检页错误码表由 Display_LoadAlarmSnapshot 按激活故障列表整体刷新，
      此处不再用单个 highest_fault_code 驱动。 */
@@ -1065,11 +1332,13 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   App_EnvironmentSnapshot_t environment;
   App_AlarmSnapshot_t alarm;
   App_DateTimeSnapshot_t date_time;
+  App_MotorSnapshot_t motor;
   Px4Lite_Result_t navigation_result;
   Px4Lite_Result_t system_result;
   Px4Lite_Result_t environment_result;
   Px4Lite_Result_t alarm_result;
   Px4Lite_Result_t date_time_result;
+  Px4Lite_Result_t motor_result;
   uint8_t status_fallback_loaded = 0U;
   uint16_t msglog_highest        = 0U;
 
@@ -1117,6 +1386,13 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   } else {
     Display_ClearEnvironmentFields();
     Display_ClearBatteryFields();
+  }
+
+  motor_result = App_CopyMotor(&motor, now_ms);
+  if (motor_result == PX4LITE_OK) {
+    Display_LoadMotorSnapshot(&motor);
+  } else {
+    Display_ClearMotorFields();
   }
 
   /* LoRa 收发帧计数为累计值，独立于上面三个快照，每帧都刷新 */
@@ -1179,6 +1455,7 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
 
   if (s_static_redraw_pending != 0U) {
     if (Display_PagesDrawStatic(s_current_page, Display_GetCachedValue) != DISPLAY_OK) { return DISPLAY_ERROR; }
+    Display_DrawSelectedMotorTriangle();
     s_static_redraw_pending = 0U;
     s_refresh_cursor        = 0U;
     return DISPLAY_NOT_READY;
@@ -1205,7 +1482,11 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
 
     if ((cache->dirty == 0U) && (variable->refresh_ms != 0U) && (cache->last_refresh_ms != 0U) && ((now_ms - cache->last_refresh_ms) < variable->refresh_ms)) { continue; }
 
-    if (Display_PagesDrawField(variable, cache->value) != DISPLAY_OK) { return DISPLAY_ERROR; }
+    if (Display_IsMotorSliderId(variable->id) != 0U) {
+      if (Display_PagesDrawMotorSliderField(variable, cache->drawn_value, cache->value, (cache->drawn_valid == 0U) ? 1U : 0U, 1U) != DISPLAY_OK) { return DISPLAY_ERROR; }
+    } else if (Display_PagesDrawField(variable, cache->value) != DISPLAY_OK) {
+      return DISPLAY_ERROR;
+    }
 
     cache->drawn_value     = cache->value;
     cache->drawn_valid     = 1U;
@@ -1239,6 +1520,7 @@ Display_Result_t Display_SetHmiPage(Display_HmiPage_t page)
 
   s_static_redraw_pending = 1U;
   s_refresh_cursor        = 0U;
+  s_touch_slider_latched  = 0;
 
   return DISPLAY_OK;
 }
@@ -1264,6 +1546,8 @@ Display_Result_t Display_PollTouch(void)
   uint16_t x;
   uint16_t y;
   Display_NavTouch_t nav_touch;
+  const Display_HmiVariableConfig_t *slider;
+  Display_ValueCache_t *cache = 0;
   Display_Gt911Result_t touch_result;
 
   if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
@@ -1276,6 +1560,7 @@ Display_Result_t Display_PollTouch(void)
       s_touch_ready       = (Display_Gt911_Init() == DISPLAY_GT911_OK) ? 1U : 0U;
       s_touch_down        = 0U;
       s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
+      s_touch_slider_latched = 0;
       s_touch_retry_count = 0U;
     }
     return DISPLAY_OK;
@@ -1287,7 +1572,19 @@ Display_Result_t Display_PollTouch(void)
     if (s_touch_down == 0U) {
       s_touch_down = 1U;
       if (s_current_page == DISPLAY_HMI_PAGE_LOGO) { return Display_HandleTouch(x, y, 0, 0); }
+      if (Display_IsMotorEstopTouch(x, y) != 0U) {
+        s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
+        return Display_MotorEmergencyStop();
+      }
+      slider = Display_FindMotorSliderAt(x, y);
+      if (slider != 0) {
+        s_touch_slider_latched = slider;
+        s_touch_nav_latched    = DISPLAY_NAV_TOUCH_NONE;
+        return Display_HandleMotorSliderTouch(slider, y, 0, 0);
+      }
       s_touch_nav_latched = Display_GetNavTouch(x, y);
+    } else if (s_touch_slider_latched != 0) {
+      return Display_HandleMotorSliderTouch(s_touch_slider_latched, y, 0, 0);
     }
 
     return DISPLAY_OK;
@@ -1300,14 +1597,20 @@ Display_Result_t Display_PollTouch(void)
 
   if (touch_result == DISPLAY_GT911_NO_POINT) {
     nav_touch           = s_touch_nav_latched;
+    if (s_touch_slider_latched != 0) {
+      cache = &s_hmi_values[s_touch_slider_latched->id];
+      if (cache->drawn_valid != 0U) { (void)Display_DrawMotorSliderNow(s_touch_slider_latched, (uint16_t)cache->drawn_value, 1U); }
+    }
     s_touch_down        = 0U;
     s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
+    s_touch_slider_latched = 0;
     s_touch_retry_count = 0U;
     return Display_HandleNavTouch(nav_touch);
   }
 
   s_touch_down        = 0U;
   s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
+  s_touch_slider_latched = 0;
   s_touch_retry_count++;
   if (s_touch_retry_count >= 3U) {
     s_touch_ready       = (Display_Gt911_Init() == DISPLAY_GT911_OK) ? 1U : 0U;
@@ -1322,14 +1625,24 @@ Display_Result_t Display_PollTouch(void)
 Display_Result_t Display_HandleTouch(uint16_t x, uint16_t y, Display_HmiVariableId_t *id, uint32_t *value)
 {
   Display_NavTouch_t nav_touch;
+  const Display_HmiVariableConfig_t *slider;
 
   if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
 
-  (void)id;
-  (void)value;
-
   nav_touch = Display_GetNavTouch(x, y);
   if (s_current_page == DISPLAY_HMI_PAGE_LOGO) { return Display_SetHmiPage(DISPLAY_HMI_PAGE_SELF_CHECK); }
+
+  if (Display_IsMotorEstopTouch(x, y) != 0U) {
+    if (id != 0) { *id = DISPLAY_HMI_VAR_COUNT; }
+    if (value != 0) { *value = 0U; }
+    return Display_MotorEmergencyStop();
+  }
+
+  slider = Display_FindMotorSliderAt(x, y);
+  if (slider != 0) { return Display_HandleMotorSliderTouch(slider, y, id, value); }
+
+  if (id != 0) { *id = DISPLAY_HMI_VAR_COUNT; }
+  if (value != 0) { *value = 0U; }
 
   return Display_HandleNavTouch(nav_touch);
 }

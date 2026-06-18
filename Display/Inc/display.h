@@ -25,11 +25,26 @@ typedef enum {
   DISPLAY_HMI_PAGE_LOGO = 0,   /* Logo 开机页：触屏任意位置进入自检页 */
   DISPLAY_HMI_PAGE_SELF_CHECK, /* 上电自检页：进度、模块状态和故障码 */
   DISPLAY_HMI_PAGE_FLIGHT,     /* 飞行数据页：系统栏、时间/电源/温湿度气压、消息日志*/
-  DISPLAY_HMI_PAGE_AIRCRAFT,   /* 飞机情况页：系统栏、电机/姿态/LoRa 通信、消息日志*/
+  DISPLAY_HMI_PAGE_AIRCRAFT,   /* 飞机情况页：系统栏、姿态/LoRa 通信、消息日志*/
   DISPLAY_HMI_PAGE_DATA,       /* 定位数据页：系统、GNSS 定位、消息日志*/
+  DISPLAY_HMI_PAGE_MOTOR,      /* 电机控制页：四路油门滑条和急停入口 */
   DISPLAY_HMI_PAGE_ALARM,      /* 告警页：运行期告警码和原因表*/
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
+
+#define DISPLAY_MOTOR_TRACK_W       30U
+#define DISPLAY_MOTOR_TRACK_H       166U
+#define DISPLAY_MOTOR_TRACK_TOP_Y   144U
+#define DISPLAY_MOTOR_TRACK1_X      270U
+#define DISPLAY_MOTOR_TRACK2_X      355U
+#define DISPLAY_MOTOR_TRACK3_X      440U
+#define DISPLAY_MOTOR_TRACK4_X      525U
+#define DISPLAY_MOTOR_HANDLE_HALF_W 22U
+#define DISPLAY_MOTOR_HANDLE_HALF_H 7U
+#define DISPLAY_MOTOR_ESTOP_X       250U
+#define DISPLAY_MOTOR_ESTOP_Y       344U
+#define DISPLAY_MOTOR_ESTOP_W       328U
+#define DISPLAY_MOTOR_ESTOP_H       52U
 
 typedef enum {
   DISPLAY_HMI_VAR_SELF_CHECK_5GA = 0,    /* 5G-A 通信模块自检状态*/

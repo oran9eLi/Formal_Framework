@@ -55,6 +55,17 @@ Display_Result_t Display_PagesDrawStatic(Display_HmiPage_t page, Display_PagesVa
  */
 Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *variable, uint32_t value);
 
+/**
+ * @brief       绘制 Motor 页单个竖向油门滑条动态部分
+ * @param       variable: 电机 PWM 变量配置项
+ * @param       old_value: 上一次已绘制油门百分比，范围 0 到 100
+ * @param       value: 当前油门百分比，范围 0 到 100
+ * @param       full_redraw: 非 0 表示重绘完整滑条轨道
+ * @param       draw_percent: 非 0 表示同步刷新底部百分比文本
+ * @retval      Display_Result_t: 绘制结果
+ */
+Display_Result_t Display_PagesDrawMotorSliderField(const Display_HmiVariableConfig_t *variable, uint32_t old_value, uint32_t value, uint8_t full_redraw, uint8_t draw_percent);
+
 Display_Result_t Display_PagesDrawAlarmIcon(uint32_t now_ms, Display_PagesValueReader_t read_value, uint8_t force_draw);
 
 /**

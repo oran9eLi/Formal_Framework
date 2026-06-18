@@ -168,6 +168,52 @@ Px4Lite_Result_t Px4Lite_BatteryInit(void);
 Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement);
 
 /**
+ * @brief 初始化电机 PWM 输出并强制进入安全脉宽。
+ *
+ * @return 初始化结果。
+ *
+ * @note 本接口是 Framework 访问 BSP PWM 的唯一入口。
+ */
+Px4Lite_Result_t Px4Lite_MotorInit(void);
+
+/**
+ * @brief 写入单路电机 PWM 高电平脉宽。
+ *
+ * @param[in] channel 电机通道，范围 0 到 `PX4LITE_MOTOR_COUNT - 1`。
+ * @param[in] pulse_us 高电平脉宽，单位：us。
+ *
+ * @return 写入结果。
+ */
+Px4Lite_Result_t Px4Lite_MotorWritePulseUs(uint8_t channel, uint16_t pulse_us);
+
+/**
+ * @brief 将所有电机输出强制写为 ESC 最小脉宽。
+ *
+ * @return 写入结果。
+ */
+Px4Lite_Result_t Px4Lite_MotorDisarmAll(void);
+
+/**
+ * @brief 板载按键逻辑编号。
+ */
+typedef enum {
+  PX4LITE_BUTTON_WKUP = 0, /**< WKUP 按键。 */
+  PX4LITE_BUTTON_KEY0,     /**< KEY0 按键。 */
+  PX4LITE_BUTTON_KEY1,     /**< KEY1 按键，当前作为电机急停输入。 */
+  PX4LITE_BUTTON_KEY2,     /**< KEY2 按键。 */
+  PX4LITE_BUTTON_COUNT     /**< 按键数量。 */
+} Px4Lite_ButtonId_t;
+
+/**
+ * @brief 读取板载按键是否处于按下状态。
+ *
+ * @param[in] button 按键编号。
+ *
+ * @return 1 表示按下，0 表示未按下或编号非法。
+ */
+uint8_t Px4Lite_ButtonPressed(Px4Lite_ButtonId_t button);
+
+/**
  * @brief 初始化 LoRa E22 通信驱动。
  *
  * @return 初始化结果。

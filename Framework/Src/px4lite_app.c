@@ -10,6 +10,7 @@
 
 #include "px4lite_app.h"
 #include "px4lite_config.h"
+#include "px4lite_control.h"
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
 #include "px4lite_registry.h"
@@ -26,6 +27,7 @@ static void Px4Lite_SensorTask(void *argument);
 static void Px4Lite_EstimatorTask(void *argument);
 static void Px4Lite_HealthTask(void *argument);
 static void Px4Lite_CommTask(void *argument);
+static void Px4Lite_ControlTask(void *argument);
 static void Px4Lite_StorageTask(void *argument);
 static BaseType_t Px4Lite_RegisterCoreModules(void);
 
@@ -57,6 +59,10 @@ static const Px4Lite_ModuleDescriptor_t s_lora_descriptor = {PX4LITE_MODULE_LORA
 static const Px4Lite_ModuleDescriptor_t s_storage_descriptor = {PX4LITE_MODULE_STORAGE, "storage", PX4LITE_ENABLE_STORAGE, 0U, Px4Lite_StorageModuleInit, 0, 0, 0, Px4Lite_StorageRecover};
 #endif
 
+#if PX4LITE_ENABLE_CONTROL
+static const Px4Lite_ModuleDescriptor_t s_control_descriptor = {PX4LITE_MODULE_CONTROL, "control", PX4LITE_ENABLE_CONTROL, 0U, Px4Lite_ControlModuleInit, 0, 0, 0, Px4Lite_ControlRecover};
+#endif
+
 /**
  * @brief 注册当前 Framework 模块及其生命周期回调。
  */
@@ -80,6 +86,9 @@ static BaseType_t Px4Lite_RegisterCoreModules(void)
 #endif
 #if PX4LITE_ENABLE_STORAGE
   if (Px4Lite_RegistryRegister(&s_storage_descriptor) != PX4LITE_OK) { return pdFAIL; }
+#endif
+#if PX4LITE_ENABLE_CONTROL
+  if (Px4Lite_RegistryRegister(&s_control_descriptor) != PX4LITE_OK) { return pdFAIL; }
 #endif
   return pdPASS;
 }
@@ -118,11 +127,42 @@ BaseType_t Px4Lite_AppInit(void)
   (void)DebugTaskMonitor_Register(task_handle, "storage", PX4LITE_STACK_STORAGE);
 #endif
 
+#if PX4LITE_ENABLE_CONTROL
+  task_handle = 0;
+  if (xTaskCreate(Px4Lite_ControlTask, "control", PX4LITE_STACK_CONTROL, 0, PX4LITE_PRIORITY_CONTROL, &task_handle) != pdPASS) { return pdFAIL; }
+  (void)DebugTaskMonitor_Register(task_handle, "control", PX4LITE_STACK_CONTROL);
+#endif
+
   if (DebugService_CreateTask() != pdPASS) { return pdFAIL; }
 
   DBG_BOOT_PRINT("Framework tasks ready, heap_free=%lu bytes", (unsigned long)xPortGetFreeHeapSize());
 
   return pdPASS;
+}
+
+/**
+ * @brief 按固定周期下发电机控制输出。
+ */
+static void Px4Lite_ControlTask(void *argument)
+{
+#if PX4LITE_ENABLE_CONTROL
+  TickType_t last_wake;
+  uint32_t now_ms;
+
+  (void)argument;
+  now_ms = Px4Lite_PlatformGetMs();
+  (void)Px4Lite_RegistryStart(PX4LITE_MODULE_CONTROL, now_ms);
+  last_wake = xTaskGetTickCount();
+
+  for (;;) {
+    now_ms = Px4Lite_PlatformGetMs();
+    Px4Lite_ControlRun(now_ms);
+    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(PX4LITE_CONTROL_PERIOD_MS));
+  }
+#else
+  (void)argument;
+  vTaskDelete(0);
+#endif
 }
 
 /**

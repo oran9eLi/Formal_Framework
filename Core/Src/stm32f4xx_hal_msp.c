@@ -93,6 +93,58 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
   }
 }
 
+void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
+{
+#if (BSP_ENABLE_PWM == 1U)
+  GPIO_InitTypeDef gpio;
+
+  gpio.Mode  = GPIO_MODE_AF_PP;
+  gpio.Pull  = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+
+  if (htim->Instance == BSP_PWM_MOTOR1_TIM) {
+    __HAL_RCC_TIM3_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    gpio.Pin       = BSP_PWM_MOTOR1_PIN;
+    gpio.Alternate = BSP_PWM_MOTOR1_AF;
+    HAL_GPIO_Init(BSP_PWM_MOTOR1_PORT, &gpio);
+
+    gpio.Pin       = BSP_PWM_MOTOR2_PIN;
+    gpio.Alternate = BSP_PWM_MOTOR2_AF;
+    HAL_GPIO_Init(BSP_PWM_MOTOR2_PORT, &gpio);
+  } else if (htim->Instance == BSP_PWM_MOTOR3_TIM) {
+    __HAL_RCC_TIM4_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+
+    gpio.Pin       = BSP_PWM_MOTOR3_PIN;
+    gpio.Alternate = BSP_PWM_MOTOR3_AF;
+    HAL_GPIO_Init(BSP_PWM_MOTOR3_PORT, &gpio);
+
+    gpio.Pin       = BSP_PWM_MOTOR4_PIN;
+    gpio.Alternate = BSP_PWM_MOTOR4_AF;
+    HAL_GPIO_Init(BSP_PWM_MOTOR4_PORT, &gpio);
+  }
+#else
+  (void)htim;
+#endif
+}
+
+void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef *htim)
+{
+#if (BSP_ENABLE_PWM == 1U)
+  if (htim->Instance == BSP_PWM_MOTOR1_TIM) {
+    __HAL_RCC_TIM3_CLK_DISABLE();
+    HAL_GPIO_DeInit(BSP_PWM_MOTOR1_PORT, BSP_PWM_MOTOR1_PIN | BSP_PWM_MOTOR2_PIN);
+  } else if (htim->Instance == BSP_PWM_MOTOR3_TIM) {
+    __HAL_RCC_TIM4_CLK_DISABLE();
+    HAL_GPIO_DeInit(BSP_PWM_MOTOR3_PORT, BSP_PWM_MOTOR3_PIN | BSP_PWM_MOTOR4_PIN);
+  }
+#else
+  (void)htim;
+#endif
+}
+
 void HAL_I2C_MspInit(I2C_HandleTypeDef *hi2c)
 {
   GPIO_InitTypeDef gpio;

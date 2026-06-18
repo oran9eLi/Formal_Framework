@@ -124,6 +124,24 @@ Display_GfxResult_t Display_TextDrawLabelBold(uint16_t x, uint16_t y, Display_Te
 Display_GfxResult_t Display_TextDrawCompanyTitle(uint16_t x, uint16_t y, uint16_t color);
 
 /**
+ * @brief       绘制电机控制页标题“电机控制”。
+ * @param       x: 左上角 X 坐标
+ * @param       y: 左上角 Y 坐标
+ * @param       color: RGB565 颜色值
+ * @retval      Display_GfxResult_t: 绘制结果
+ */
+Display_GfxResult_t Display_TextDrawMotorTitle(uint16_t x, uint16_t y, uint16_t color);
+
+/**
+ * @brief       绘制屏幕急停按钮文字“急停”。
+ * @param       x: 左上角 X 坐标
+ * @param       y: 左上角 Y 坐标
+ * @param       color: RGB565 颜色值
+ * @retval      Display_GfxResult_t: 绘制结果
+ */
+Display_GfxResult_t Display_TextDrawEstop(uint16_t x, uint16_t y, uint16_t color);
+
+/**
  * @brief       绘制一条消息日志短语（单字字模拼接，字高 16px）
  * @param       x: 左上角 X 坐标
  * @param       y: 左上角 Y 坐标

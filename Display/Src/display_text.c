@@ -409,6 +409,14 @@ static const uint8_t s_mlg_qi[]        = {/* 'qi'   start-1  */
                                    0x01, 0x00, 0x00, 0x80, 0x1F, 0xFC, 0x10, 0x04, 0x10, 0x04, 0x10, 0x04, 0x1F, 0xFC, 0x10, 0x00, 0x10, 0x00, 0x10, 0x00, 0x17, 0xFC, 0x24, 0x04, 0x24, 0x04, 0x44, 0x04, 0x87, 0xFC, 0x04, 0x04};
 static const uint8_t s_mlg_dong[]      = {/* 'dong' start-2  */
                                      0x00, 0x40, 0x00, 0x40, 0x7C, 0x40, 0x00, 0x40, 0x01, 0xFC, 0x00, 0x44, 0xFE, 0x44, 0x20, 0x44, 0x20, 0x44, 0x20, 0x84, 0x48, 0x84, 0x44, 0x84, 0xFD, 0x04, 0x45, 0x04, 0x02, 0x28, 0x04, 0x10};
+static const uint8_t s_mlg_kong[]      = {/* 'kong' control-1 */
+                                      0x00, 0x20, 0x13, 0xF8, 0x12, 0x08, 0x12, 0xE8, 0xFE, 0xA8, 0x10, 0xE0, 0x10, 0x00, 0x10, 0x00, 0x03, 0xFC, 0x00, 0x40, 0x00, 0x40, 0x20, 0x40, 0x18, 0x40, 0x07, 0xFC, 0x00, 0x00, 0x00, 0x00};
+static const uint8_t s_mlg_zhi[]       = {/* 'zhi'  control-2 */
+                                    0x08, 0x40, 0x08, 0x44, 0xFF, 0xFE, 0x08, 0x44, 0x18, 0x44, 0x2F, 0xD4, 0x48, 0x54, 0x08, 0x54, 0xFF, 0xC4, 0x08, 0x44, 0x08, 0x44, 0x08, 0x44, 0x08, 0x44, 0x10, 0x44, 0x20, 0x40, 0x40, 0x40};
+static const uint8_t s_mlg_ji_urg[]    = {/* 'ji'   urgent */
+                                       0x00, 0x00, 0x06, 0x00, 0x0C, 0x00, 0x1B, 0xF0, 0x30, 0x60, 0x7F, 0xFC, 0x00, 0x0C, 0x1F, 0xFC, 0x00, 0x0C, 0x1F, 0xFC, 0x00, 0x08, 0x24, 0x8C, 0x24, 0x86, 0x64, 0x1A, 0x47, 0xF0, 0x00, 0x00};
+static const uint8_t s_mlg_ting[]      = {/* 'ting' stop */
+                                     0x00, 0x00, 0x18, 0x60, 0x17, 0xFE, 0x10, 0x00, 0x33, 0xF8, 0x32, 0x08, 0x53, 0xF8, 0x50, 0x00, 0x17, 0xFE, 0x14, 0x02, 0x13, 0xFC, 0x10, 0x20, 0x10, 0x20, 0x10, 0x20, 0x10, 0xE0, 0x00, 0x80};
 
 typedef enum {
   MLG_WU = 0,
@@ -446,17 +454,77 @@ typedef enum {
   MLG_TONG_SYS,
   MLG_QI,
   MLG_DONG,
+  MLG_KONG,
+  MLG_ZHI,
+  MLG_JI_URG,
+  MLG_TING,
   MLG_COUNT
 } Display_MsgGlyph_t;
 
 static const Display_TextBitmap_t s_mlg_table[MLG_COUNT] = {{16U, 16U, 2U, s_mlg_wu},   {16U, 16U, 2U, s_mlg_xin}, {16U, 16U, 2U, s_mlg_hao}, {16U, 16U, 2U, s_mlg_duan}, {16U, 16U, 2U, s_mlg_kai},       {16U, 16U, 2U, s_mlg_zi_pose}, {16U, 16U, 2U, s_mlg_tai},  {16U, 16U, 2U, s_mlg_zheng}, {16U, 16U, 2U, s_mlg_chang}, {16U, 16U, 2U, s_mlg_huan}, {16U, 16U, 2U, s_mlg_jing_env}, {16U, 16U, 2U, s_mlg_tong}, {16U, 16U, 2U, s_mlg_cun}, {16U, 16U, 2U, s_mlg_chu}, {16U, 16U, 2U, s_mlg_dian},     {16U, 16U, 2U, s_mlg_ji}, {16U, 16U, 2U, s_mlg_gu},  {16U, 16U, 2U, s_mlg_zhang},
-                                                            {16U, 16U, 2U, s_mlg_quan}, {16U, 16U, 2U, s_mlg_bu},  {16U, 16U, 2U, s_mlg_you}, {16U, 16U, 2U, s_mlg_gao},  {16U, 16U, 2U, s_mlg_jing_warn}, {16U, 16U, 2U, s_mlg_zi_self}, {16U, 16U, 2U, s_mlg_jian}, {16U, 16U, 2U, s_mlg_fen},   {16U, 16U, 2U, s_mlg_guo},   {16U, 16U, 2U, s_mlg_wei},  {8U, 16U, 1U, s_mlg_g},         {8U, 16U, 1U, s_mlg_p},     {8U, 16U, 1U, s_mlg_s},    {16U, 16U, 2U, s_mlg_xi},  {16U, 16U, 2U, s_mlg_tong_sys}, {16U, 16U, 2U, s_mlg_qi}, {16U, 16U, 2U, s_mlg_dong}};
+                                                            {16U, 16U, 2U, s_mlg_quan}, {16U, 16U, 2U, s_mlg_bu},  {16U, 16U, 2U, s_mlg_you}, {16U, 16U, 2U, s_mlg_gao},  {16U, 16U, 2U, s_mlg_jing_warn}, {16U, 16U, 2U, s_mlg_zi_self}, {16U, 16U, 2U, s_mlg_jian}, {16U, 16U, 2U, s_mlg_fen},   {16U, 16U, 2U, s_mlg_guo},   {16U, 16U, 2U, s_mlg_wei},  {8U, 16U, 1U, s_mlg_g},         {8U, 16U, 1U, s_mlg_p},     {8U, 16U, 1U, s_mlg_s},    {16U, 16U, 2U, s_mlg_xi},  {16U, 16U, 2U, s_mlg_tong_sys}, {16U, 16U, 2U, s_mlg_qi}, {16U, 16U, 2U, s_mlg_dong}, {16U, 16U, 2U, s_mlg_kong}, {16U, 16U, 2U, s_mlg_zhi}, {16U, 16U, 2U, s_mlg_ji_urg}, {16U, 16U, 2U, s_mlg_ting}};
 
 /* Draw one glyph, return advance width in pixels. */
 static uint16_t Display_TextDrawGlyph(uint16_t x, uint16_t y, Display_MsgGlyph_t g, uint16_t color)
 {
   (void)Display_TextDrawBitmap(x, y, &s_mlg_table[g], color);
   return s_mlg_table[g].width;
+}
+
+static uint16_t Display_TextDrawGlyphScale2(uint16_t x, uint16_t y, Display_MsgGlyph_t g, uint16_t color)
+{
+  const Display_TextBitmap_t *bitmap;
+  uint16_t row;
+  uint16_t col;
+
+  if (g >= MLG_COUNT) { return 0U; }
+
+  bitmap = &s_mlg_table[g];
+  for (row = 0U; row < bitmap->height; row++) {
+    for (col = 0U; col < bitmap->width; col++) {
+      uint16_t byte_index = (uint16_t)((row * bitmap->bytes_per_row) + (col / 8U));
+      uint8_t mask        = (uint8_t)(0x80U >> (col & 0x07U));
+      if ((bitmap->data[byte_index] & mask) != 0U) {
+        uint16_t px = (uint16_t)(x + (col * 2U));
+        uint16_t py = (uint16_t)(y + (row * 2U));
+        (void)Display_GfxDrawPixel(px, py, color);
+        (void)Display_GfxDrawPixel((uint16_t)(px + 1U), py, color);
+        (void)Display_GfxDrawPixel(px, (uint16_t)(py + 1U), color);
+        (void)Display_GfxDrawPixel((uint16_t)(px + 1U), (uint16_t)(py + 1U), color);
+      }
+    }
+  }
+  return (uint16_t)(bitmap->width * 2U);
+}
+
+static uint16_t Display_TextDrawGlyphBold(uint16_t x, uint16_t y, Display_MsgGlyph_t g, uint16_t color)
+{
+  uint16_t width;
+
+  width = Display_TextDrawGlyph(x, y, g, color);
+  (void)Display_TextDrawGlyph((uint16_t)(x + 1U), y, g, color);
+  return width;
+}
+
+Display_GfxResult_t Display_TextDrawMotorTitle(uint16_t x, uint16_t y, uint16_t color)
+{
+  uint16_t cx = x;
+  uint16_t cy = (uint16_t)(y + 3U);
+
+  cx = (uint16_t)(cx + Display_TextDrawGlyphBold(cx, cy, MLG_DIAN, color));
+  cx = (uint16_t)(cx + Display_TextDrawGlyphBold(cx, cy, MLG_JI, color));
+  cx = (uint16_t)(cx + Display_TextDrawGlyphBold(cx, cy, MLG_KONG, color));
+  (void)Display_TextDrawGlyphBold(cx, cy, MLG_ZHI, color);
+  return DISPLAY_GFX_OK;
+}
+
+Display_GfxResult_t Display_TextDrawEstop(uint16_t x, uint16_t y, uint16_t color)
+{
+  uint16_t cx = x;
+
+  cx = (uint16_t)(cx + Display_TextDrawGlyphScale2(cx, y, MLG_JI_URG, color));
+  (void)Display_TextDrawGlyphScale2(cx, y, MLG_TING, color);
+  return DISPLAY_GFX_OK;
 }
 
 /* Draw a single ASCII digit (scale 2) aligned with the 16px glyph row. */

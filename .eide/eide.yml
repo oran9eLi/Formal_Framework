@@ -21,11 +21,12 @@ virtualFolder:
       files:
         - path: Framework/Src/px4lite_app.c
         - path: Framework/Src/px4lite_storage.c
-        - path: Framework/Src/px4lite_time.c
         - path: Framework/Src/px4lite_modules.c
         - path: Framework/Src/px4lite_mavlink_tx.c
         - path: Framework/Src/px4lite_attitude.c
         - path: Framework/Src/px4lite_alarm.c
+        - path: Framework/Src/px4lite_time.c
+        - path: Framework/Src/px4lite_control.c
         - path: Framework/Src/px4lite_topics.c
         - path: Framework/Src/px4lite_platform_f407.c
         - path: Framework/Src/px4lite_registry.c
@@ -55,14 +56,16 @@ virtualFolder:
         - path: Bsp/Src/bsp.c
         - path: Bsp/Src/bsp_uart.c
         - path: Bsp/Src/bsp_gnss.c
+        - path: Bsp/Src/bsp_rtc.c
         - path: Bsp/Src/bsp_lora.c
         - path: Bsp/Src/bsp_lcd_fsmc.c
         - path: Bsp/Src/bsp_touch_port.c
         - path: Bsp/Src/bsp_i2c.c
         - path: Bsp/Src/bsp_adc.c
         - path: Bsp/Src/bsp_time.c
-        - path: Bsp/Src/bsp_rtc.c
         - path: Bsp/Src/bsp_spi.c
+        - path: Bsp/Src/bsp_pwm.c
+        - path: Bsp/Src/bsp_button.c
       folders: []
     - name: Display
       files:
@@ -88,8 +91,6 @@ virtualFolder:
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_gpio.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc_ex.c
-        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc.c
-        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc_ex.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c
@@ -102,6 +103,8 @@ virtualFolder:
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr_ex.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc_ex.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_sram.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_fsmc.c
       folders: []

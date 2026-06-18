@@ -18,6 +18,7 @@ DECLARE_LATEST_SLOT(Px4Lite_SensorGnss_t, gnss);
 DECLARE_LATEST_SLOT(Px4Lite_SensorBaro_t, baro);
 DECLARE_LATEST_SLOT(Px4Lite_BatteryStatus_t, battery);
 DECLARE_LATEST_SLOT(Px4Lite_VehicleNavigation_t, navigation);
+DECLARE_LATEST_SLOT(Px4Lite_MotorOutputs_t, motor);
 DECLARE_LATEST_SLOT(Px4Lite_SystemHealth_t, health);
 
 typedef struct {
@@ -57,6 +58,7 @@ DEFINE_LATEST_ACCESSORS(Px4Lite_SensorGnss_t, Gnss, gnss)
 DEFINE_LATEST_ACCESSORS(Px4Lite_SensorBaro_t, Baro, baro)
 DEFINE_LATEST_ACCESSORS(Px4Lite_BatteryStatus_t, Battery, battery)
 DEFINE_LATEST_ACCESSORS(Px4Lite_VehicleNavigation_t, Navigation, navigation)
+DEFINE_LATEST_ACCESSORS(Px4Lite_MotorOutputs_t, Motor, motor)
 DEFINE_LATEST_ACCESSORS(Px4Lite_SystemHealth_t, Health, health)
 
 Px4Lite_Result_t Px4Lite_TopicsInit(void)
@@ -66,6 +68,7 @@ Px4Lite_Result_t Px4Lite_TopicsInit(void)
   s_baro_ready        = 0U;
   s_battery_ready     = 0U;
   s_navigation_ready  = 0U;
+  s_motor_ready       = 0U;
   s_health_ready      = 0U;
   s_alarm_queue       = 0;
   s_command_queue     = 0;

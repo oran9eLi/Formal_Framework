@@ -13,6 +13,8 @@
 #include "px4lite_imu_axis_map.h"
 #include "bsp_gnss.h"
 #include "bsp_lora.h"
+#include "bsp_button.h"
+#include "bsp_pwm.h"
 #include "bsp_rtc.h"
 #include "lora_e22.h"
 #include "bsp_time.h"
@@ -385,6 +387,35 @@ Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement)
 
   last_rx_sequence = snapshot.rx_sequence;
   return PX4LITE_OK;
+}
+
+Px4Lite_Result_t Px4Lite_MotorInit(void)
+{
+  if (BSP_PWM_Init() != BSP_STATUS_OK) { return PX4LITE_IO_ERROR; }
+  return Px4Lite_MotorDisarmAll();
+}
+
+Px4Lite_Result_t Px4Lite_MotorWritePulseUs(uint8_t channel, uint16_t pulse_us)
+{
+  if (channel >= PX4LITE_MOTOR_COUNT) { return PX4LITE_INVALID_PARAM; }
+  return (BSP_PWM_SetPulseUs((BSP_PwmChannel_t)channel, pulse_us) == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+}
+
+Px4Lite_Result_t Px4Lite_MotorDisarmAll(void)
+{
+  uint8_t i;
+  Px4Lite_Result_t result = PX4LITE_OK;
+
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (Px4Lite_MotorWritePulseUs(i, PX4LITE_CONTROL_ESC_MIN_PULSE_US) != PX4LITE_OK) { result = PX4LITE_IO_ERROR; }
+  }
+  return result;
+}
+
+uint8_t Px4Lite_ButtonPressed(Px4Lite_ButtonId_t button)
+{
+  if (button >= PX4LITE_BUTTON_COUNT) { return 0U; }
+  return BSP_Button_IsPressed((BSP_ButtonId_t)button);
 }
 
 Px4Lite_Result_t Px4Lite_LoRaInit(void)

@@ -175,6 +175,25 @@ typedef struct {
   uint16_t reserved;            /**< 保留字段，保持结构体对齐。 */
 } Px4Lite_BatteryStatus_t;
 
+#ifndef PX4LITE_MOTOR_COUNT
+#define PX4LITE_MOTOR_COUNT 4U /**< 电机输出通道数量。 */
+#endif
+
+/**
+ * @brief 电机输出命令快照。
+ *
+ * @details
+ * 该 topic 由 Control 模块单写者发布，用于 Display、日志和后续遥测读取当前命令
+ * 状态。字段表示已下发目标，不表示电机真实转速或 ESC 反馈。
+ */
+typedef struct {
+  Px4Lite_TopicHeader_t header;                  /**< topic 公共头。 */
+  uint8_t duty_percent[PX4LITE_MOTOR_COUNT];     /**< 每路电机目标油门百分比，范围 0 到 100。 */
+  uint8_t run_state;                             /**< 运行状态，1 表示 ESC 已完成预解锁并允许输出目标油门。 */
+  uint8_t speed_level;                           /**< 兼容显示字段，当前等于四路目标油门最大值，范围 0 到 100。 */
+  uint16_t reserved;                             /**< 保留字段，保持结构体对齐。 */
+} Px4Lite_MotorOutputs_t;
+
 #define PX4LITE_NAV_VALID_ATTITUDE (1UL << 0) /**< 姿态角和角速度有效。 */
 #define PX4LITE_NAV_VALID_POSITION (1UL << 1) /**< 经纬度位置有效。 */
 #define PX4LITE_NAV_VALID_VELOCITY (1UL << 2) /**< NED 速度有效。 */

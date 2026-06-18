@@ -54,6 +54,18 @@
 #define DISPLAY_ALARM_COLOR_HEADER     DISPLAY_GFX_COLOR_DARK
 #define DISPLAY_ALARM_COLOR_GRID       DISPLAY_GFX_COLOR_GRAY
 #define DISPLAY_ALARM_COLOR_ROW_ALT    0xF7BEU
+#define DISPLAY_MOTOR_STATUS_X         8U
+#define DISPLAY_MOTOR_STATUS_W         204U
+#define DISPLAY_MOTOR_PANEL_X          220U
+#define DISPLAY_MOTOR_PANEL_W          388U
+#define DISPLAY_MOTOR_LOG_X            616U
+#define DISPLAY_MOTOR_LOG_W            176U
+#define DISPLAY_MOTOR_LABEL_Y          116U
+#define DISPLAY_MOTOR_MSGLOG_TIME_X    624U
+#define DISPLAY_MOTOR_MSGLOG_TEXT_X    676U
+#define DISPLAY_MOTOR_MSGLOG_ALARM_X   734U
+#define DISPLAY_MOTOR_MSGLOG_ALARM_W   54U
+#define DISPLAY_MOTOR_SLIDER_MAX_VALUE 100U
 
 /*
  * 通过回调读取变量值，回调为空时使用默认值。
@@ -172,30 +184,36 @@ static void Display_PagesDrawDataGpsLabelRow(uint16_t label_x, uint16_t y, Displ
  * 绘制左侧系统栏面板和 9 个模块状态行。
  * 三个数据页(飞行数据/飞机情况/定位数据)共用同一系统栏。
  */
-static void Display_PagesDrawSystemColumn(void)
+static void Display_PagesDrawSystemColumnAt(uint16_t x, uint16_t width)
 {
   uint16_t y;
+  uint16_t dot_x = (uint16_t)(x + 22U);
 
-  Display_PagesDrawPanelLabel(DISPLAY_DASH_STATUS_X, DISPLAY_DASH_Y, DISPLAY_DASH_STATUS_W, DISPLAY_DASH_H, DISPLAY_TITLE_SYSTEM);
+  Display_PagesDrawPanelLabel(x, DISPLAY_DASH_Y, width, DISPLAY_DASH_H, DISPLAY_TITLE_SYSTEM);
 
   y = DISPLAY_DASH_ROW_Y;
-  Display_PagesDrawDataStatusRow(30U, y, DISPLAY_TEXT_SELF_GNSS, 0);
+  Display_PagesDrawDataStatusRow(dot_x, y, DISPLAY_TEXT_SELF_GNSS, 0);
   y = (uint16_t)(y + DISPLAY_DASH_ROW_H);
-  Display_PagesDrawDataStatusRow(30U, y, DISPLAY_TEXT_SELF_ATTITUDE, 0);
+  Display_PagesDrawDataStatusRow(dot_x, y, DISPLAY_TEXT_SELF_ATTITUDE, 0);
   y = (uint16_t)(y + DISPLAY_DASH_ROW_H);
-  Display_PagesDrawDataStatusRow(30U, y, DISPLAY_TEXT_SELF_ENV, 0);
+  Display_PagesDrawDataStatusRow(dot_x, y, DISPLAY_TEXT_SELF_ENV, 0);
   y = (uint16_t)(y + DISPLAY_DASH_ROW_H);
-  Display_PagesDrawDataStatusRow(30U, y, DISPLAY_TEXT_SELF_LORA, 0);
+  Display_PagesDrawDataStatusRow(dot_x, y, DISPLAY_TEXT_SELF_LORA, 0);
   y = (uint16_t)(y + DISPLAY_DASH_ROW_H);
-  Display_PagesDrawDataStatusRow(30U, y, DISPLAY_TEXT_SELF_STORAGE, 0);
+  Display_PagesDrawDataStatusRow(dot_x, y, DISPLAY_TEXT_SELF_STORAGE, 0);
   y = (uint16_t)(y + DISPLAY_DASH_ROW_H);
-  Display_PagesDrawDataStatusRow(30U, y, DISPLAY_TEXT_COUNT, '1');
+  Display_PagesDrawDataStatusRow(dot_x, y, DISPLAY_TEXT_COUNT, '1');
   y = (uint16_t)(y + DISPLAY_DASH_ROW_H);
-  Display_PagesDrawDataStatusRow(30U, y, DISPLAY_TEXT_COUNT, '2');
+  Display_PagesDrawDataStatusRow(dot_x, y, DISPLAY_TEXT_COUNT, '2');
   y = (uint16_t)(y + DISPLAY_DASH_ROW_H);
-  Display_PagesDrawDataStatusRow(30U, y, DISPLAY_TEXT_COUNT, '3');
+  Display_PagesDrawDataStatusRow(dot_x, y, DISPLAY_TEXT_COUNT, '3');
   y = (uint16_t)(y + DISPLAY_DASH_ROW_H);
-  Display_PagesDrawDataStatusRow(30U, y, DISPLAY_TEXT_COUNT, '4');
+  Display_PagesDrawDataStatusRow(dot_x, y, DISPLAY_TEXT_COUNT, '4');
+}
+
+static void Display_PagesDrawSystemColumn(void)
+{
+  Display_PagesDrawSystemColumnAt(DISPLAY_DASH_STATUS_X, DISPLAY_DASH_STATUS_W);
 }
 
 /* ---- 消息日志环形缓冲 ---- */
@@ -257,55 +275,75 @@ static void Display_PagesFmtClock(char *buf, uint32_t hhmmss)
   buf[8] = '\0';
 }
 
-static void Display_PagesDrawMessageLogAlarmStatus(void)
+static void Display_PagesDrawMessageLogAlarmStatusAt(uint16_t alarm_x, uint16_t alarm_y, uint16_t alarm_w, uint16_t alarm_h)
 {
   uint16_t color;
 
-  (void)Display_GfxFillRect(DISPLAY_MSGLOG_ALARM_X, DISPLAY_MSGLOG_ALARM_Y, DISPLAY_MSGLOG_ALARM_W, DISPLAY_MSGLOG_ALARM_H, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect(alarm_x, alarm_y, alarm_w, alarm_h, DISPLAY_GFX_COLOR_WHITE);
 
   if (s_msglog_alarm_valid == 0U) { return; }
 
   color = (s_msglog_alarm.msg == DISPLAY_LOGMSG_ALARM_ACTIVE) ? DISPLAY_GFX_COLOR_RED : DISPLAY_GFX_COLOR_DARK;
-  (void)Display_TextDrawLogMessage(DISPLAY_MSGLOG_ALARM_X, DISPLAY_MSGLOG_ALARM_Y, s_msglog_alarm.msg, color);
+  (void)Display_TextDrawLogMessage(alarm_x, alarm_y, s_msglog_alarm.msg, color);
 }
 
 /*
  * 绘制消息日志正文：普通消息从最旧到最新逐行显示。
  * 由 DISPLAY_HMI_VAR_MESSAGE_LOG 字段刷新驱动；缓冲为空时整片留白。
  */
-static void Display_PagesDrawMessageLogBody(void)
+static void Display_PagesDrawMessageLogBodyAt(uint16_t log_x, uint16_t log_w, uint16_t time_x, uint16_t text_x, uint16_t alarm_x, uint16_t alarm_w)
 {
   uint16_t i;
   char tbuf[9];
 
   if (Display_GfxIsReady() == 0U) { return; }
 
-  Display_PagesDrawMessageLogAlarmStatus();
+  Display_PagesDrawMessageLogAlarmStatusAt(alarm_x, DISPLAY_MSGLOG_ALARM_Y, alarm_w, DISPLAY_MSGLOG_ALARM_H);
 
-  (void)Display_GfxFillRect((uint16_t)(DISPLAY_DASH_LOG_X + 1U), DISPLAY_MSGLOG_BODY_Y, (uint16_t)(DISPLAY_DASH_LOG_W - 2U), DISPLAY_MSGLOG_BODY_H, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect((uint16_t)(log_x + 1U), DISPLAY_MSGLOG_BODY_Y, (uint16_t)(log_w - 2U), DISPLAY_MSGLOG_BODY_H, DISPLAY_GFX_COLOR_WHITE);
 
   for (i = 0U; i < s_msglog_count; i++) {
     uint16_t idx   = (uint16_t)((s_msglog_head + DISPLAY_MSGLOG_CAP - s_msglog_count + i) % DISPLAY_MSGLOG_CAP);
     uint16_t row_y = (uint16_t)(DISPLAY_MSGLOG_ROW_Y0 + (i * DISPLAY_MSGLOG_ROW_H));
 
     Display_PagesFmtClock(tbuf, s_msglog[idx].time_hhmmss);
-    (void)Display_GfxDrawString(DISPLAY_MSGLOG_TIME_X, (uint16_t)(row_y + 4U), tbuf, DISPLAY_GFX_COLOR_GRAY, 1U);
-    (void)Display_TextDrawLogMessage(DISPLAY_MSGLOG_TEXT_X, row_y, s_msglog[idx].msg, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_GfxDrawString(time_x, (uint16_t)(row_y + 4U), tbuf, DISPLAY_GFX_COLOR_GRAY, 1U);
+    (void)Display_TextDrawLogMessage(text_x, row_y, s_msglog[idx].msg, DISPLAY_GFX_COLOR_DARK);
   }
+}
+
+static void Display_PagesDrawMessageLogBody(void)
+{
+  Display_PagesDrawMessageLogBodyAt(DISPLAY_DASH_LOG_X, DISPLAY_DASH_LOG_W, DISPLAY_MSGLOG_TIME_X, DISPLAY_MSGLOG_TEXT_X, DISPLAY_MSGLOG_ALARM_X, DISPLAY_MSGLOG_ALARM_W);
+}
+
+static void Display_PagesDrawMotorMessageLogBody(void)
+{
+  Display_PagesDrawMessageLogBodyAt(DISPLAY_MOTOR_LOG_X, DISPLAY_MOTOR_LOG_W, DISPLAY_MOTOR_MSGLOG_TIME_X, DISPLAY_MOTOR_MSGLOG_TEXT_X, DISPLAY_MOTOR_MSGLOG_ALARM_X, DISPLAY_MOTOR_MSGLOG_ALARM_W);
 }
 
 /*
  * 绘制右侧消息日志面板的固定骨架(外框+标题+分隔线)。
  * 正文由 Display_PagesDrawMessageLogBody 动态刷新。三个数据页共用。
  */
+static void Display_PagesDrawMessageLogAt(uint16_t log_x, uint16_t log_w, uint16_t time_x, uint16_t text_x, uint16_t alarm_x, uint16_t alarm_w)
+{
+  (void)Display_GfxDrawFrame(log_x, DISPLAY_DASH_Y, log_w, DISPLAY_DASH_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_TextDrawLabel((uint16_t)(log_x + 10U), (uint16_t)(DISPLAY_DASH_Y + 4U), DISPLAY_TEXT_MESSAGE_LOG, DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_GfxDrawHLine(log_x, (uint16_t)(DISPLAY_DASH_Y + 28U), log_w, DISPLAY_GFX_COLOR_GRAY);
+  Display_PagesDrawMessageLogAlarmStatusAt(alarm_x, DISPLAY_MSGLOG_ALARM_Y, alarm_w, DISPLAY_MSGLOG_ALARM_H);
+
+  Display_PagesDrawMessageLogBodyAt(log_x, log_w, time_x, text_x, alarm_x, alarm_w);
+}
+
 static void Display_PagesDrawMessageLog(void)
 {
-  (void)Display_GfxDrawFrame(DISPLAY_DASH_LOG_X, DISPLAY_DASH_Y, DISPLAY_DASH_LOG_W, DISPLAY_DASH_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_TextDrawLabel((uint16_t)(DISPLAY_DASH_LOG_X + 10U), (uint16_t)(DISPLAY_DASH_Y + 4U), DISPLAY_TEXT_MESSAGE_LOG, DISPLAY_GFX_COLOR_BLUE);
-  (void)Display_GfxDrawHLine(DISPLAY_DASH_LOG_X, (uint16_t)(DISPLAY_DASH_Y + 28U), DISPLAY_DASH_LOG_W, DISPLAY_GFX_COLOR_GRAY);
-  Display_PagesDrawMessageLogAlarmStatus();
+  Display_PagesDrawMessageLogAt(DISPLAY_DASH_LOG_X, DISPLAY_DASH_LOG_W, DISPLAY_MSGLOG_TIME_X, DISPLAY_MSGLOG_TEXT_X, DISPLAY_MSGLOG_ALARM_X, DISPLAY_MSGLOG_ALARM_W);
+}
 
-  Display_PagesDrawMessageLogBody();
+static void Display_PagesDrawMotorMessageLog(void)
+{
+  Display_PagesDrawMessageLogAt(DISPLAY_MOTOR_LOG_X, DISPLAY_MOTOR_LOG_W, DISPLAY_MOTOR_MSGLOG_TIME_X, DISPLAY_MOTOR_MSGLOG_TEXT_X, DISPLAY_MOTOR_MSGLOG_ALARM_X, DISPLAY_MOTOR_MSGLOG_ALARM_W);
 }
 
 /*
@@ -351,18 +389,6 @@ static void Display_PagesDrawFlightLayout(void)
 }
 
 /*
- * 飞机情况页中间栏的一行电机标签："电机" + 序号 + 下划线。
- */
-static void Display_PagesDrawAircraftMotorRow(uint16_t y, char index)
-{
-  uint16_t motor_w = Display_TextGetLabelWidth(DISPLAY_TXT_MOTOR);
-
-  (void)Display_TextDrawLabel(280U, y, DISPLAY_TXT_MOTOR, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawChar((uint16_t)(280U + motor_w + 2U), y, index, DISPLAY_GFX_COLOR_DARK, 2U);
-  (void)Display_GfxDrawHLine(272U, (uint16_t)(y + 26U), 244U, DISPLAY_GFX_COLOR_GRAY);
-}
-
-/*
  * 飞机情况页中间栏的一行普通标签 + 下划线。
  */
 static void Display_PagesDrawAircraftLabelRow(uint16_t y, Display_TextLabel_t label)
@@ -372,20 +398,16 @@ static void Display_PagesDrawAircraftLabelRow(uint16_t y, Display_TextLabel_t la
 }
 
 /*
- * 飞机情况页中间栏：4 路电机输出(进度条%)、横滚、俯仰、LoRa 在线/发送/接收。
+ * 飞机情况页中间栏：横滚、俯仰、偏航、LoRa 发送/接收。
  */
 static void Display_PagesDrawAircraftMiddle(void)
 {
   Display_PagesDrawPanelLabel(DISPLAY_DASH_GPS_X, DISPLAY_DASH_Y, DISPLAY_DASH_GPS_W, DISPLAY_DASH_H, DISPLAY_TITLE_AIRCRAFT);
-  Display_PagesDrawAircraftMotorRow(116U, '1');
-  Display_PagesDrawAircraftMotorRow(148U, '2');
-  Display_PagesDrawAircraftMotorRow(180U, '3');
-  Display_PagesDrawAircraftMotorRow(212U, '4');
-  Display_PagesDrawAircraftLabelRow(248U, DISPLAY_TXT_ROLL);  /* 横滚 */
-  Display_PagesDrawAircraftLabelRow(282U, DISPLAY_TXT_PITCH); /* 俯仰 */
-  Display_PagesDrawAircraftLabelRow(316U, DISPLAY_TXT_YAW);   /* 偏航 */
-  Display_PagesDrawAircraftLabelRow(346U, DISPLAY_TXT_TX);    /* 发送计数 */
-  Display_PagesDrawAircraftLabelRow(376U, DISPLAY_TXT_RX);    /* 接收计数 */
+  Display_PagesDrawAircraftLabelRow(140U, DISPLAY_TXT_ROLL);  /* 横滚 */
+  Display_PagesDrawAircraftLabelRow(190U, DISPLAY_TXT_PITCH); /* 俯仰 */
+  Display_PagesDrawAircraftLabelRow(240U, DISPLAY_TXT_YAW);   /* 偏航 */
+  Display_PagesDrawAircraftLabelRow(290U, DISPLAY_TXT_TX);    /* 发送计数 */
+  Display_PagesDrawAircraftLabelRow(340U, DISPLAY_TXT_RX);    /* 接收计数 */
 }
 
 static void Display_PagesDrawAircraftLayout(void)
@@ -393,6 +415,41 @@ static void Display_PagesDrawAircraftLayout(void)
   Display_PagesDrawSystemColumn();
   Display_PagesDrawAircraftMiddle();
   Display_PagesDrawMessageLog();
+}
+
+static void Display_PagesDrawMotorSliderStatic(uint16_t track_x, char index)
+{
+  uint16_t cx = (uint16_t)(track_x + (DISPLAY_MOTOR_TRACK_W / 2U));
+  uint16_t motor_w = Display_TextGetLabelWidth(DISPLAY_TXT_MOTOR);
+  uint16_t total   = (uint16_t)(motor_w + 14U);
+  uint16_t label_x = (cx > (total / 2U)) ? (uint16_t)(cx - (total / 2U)) : track_x;
+
+  (void)Display_TextDrawLabel(label_x, DISPLAY_MOTOR_LABEL_Y, DISPLAY_TXT_MOTOR, DISPLAY_GFX_COLOR_DARK);
+  (void)Display_GfxDrawChar((uint16_t)(label_x + motor_w + 2U), DISPLAY_MOTOR_LABEL_Y, index, DISPLAY_GFX_COLOR_DARK, 2U);
+  (void)Display_GfxFillRect(track_x, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxDrawRect((uint16_t)(track_x - 1U), (uint16_t)(DISPLAY_MOTOR_TRACK_TOP_Y - 1U), (uint16_t)(DISPLAY_MOTOR_TRACK_W + 2U), (uint16_t)(DISPLAY_MOTOR_TRACK_H + 2U), DISPLAY_GFX_COLOR_GRAY);
+}
+
+static void Display_PagesDrawMotorLayout(void)
+{
+  uint16_t estop_text_x = (uint16_t)(DISPLAY_MOTOR_ESTOP_X + ((DISPLAY_MOTOR_ESTOP_W - 64U) / 2U));
+  uint16_t estop_text_y = (uint16_t)(DISPLAY_MOTOR_ESTOP_Y + ((DISPLAY_MOTOR_ESTOP_H - 32U) / 2U));
+
+  Display_PagesDrawSystemColumnAt(DISPLAY_MOTOR_STATUS_X, DISPLAY_MOTOR_STATUS_W);
+
+  (void)Display_GfxDrawFrame(DISPLAY_MOTOR_PANEL_X, DISPLAY_DASH_Y, DISPLAY_MOTOR_PANEL_W, DISPLAY_DASH_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_TextDrawLabel((uint16_t)(DISPLAY_MOTOR_PANEL_X + 10U), (uint16_t)(DISPLAY_DASH_Y + 4U), DISPLAY_TEXT_MOTOR_PWM, DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_GfxDrawHLine(DISPLAY_MOTOR_PANEL_X, (uint16_t)(DISPLAY_DASH_Y + 28U), DISPLAY_MOTOR_PANEL_W, DISPLAY_GFX_COLOR_GRAY);
+
+  Display_PagesDrawMotorSliderStatic(DISPLAY_MOTOR_TRACK1_X, '1');
+  Display_PagesDrawMotorSliderStatic(DISPLAY_MOTOR_TRACK2_X, '2');
+  Display_PagesDrawMotorSliderStatic(DISPLAY_MOTOR_TRACK3_X, '3');
+  Display_PagesDrawMotorSliderStatic(DISPLAY_MOTOR_TRACK4_X, '4');
+
+  (void)Display_GfxDrawFrame(DISPLAY_MOTOR_ESTOP_X, DISPLAY_MOTOR_ESTOP_Y, DISPLAY_MOTOR_ESTOP_W, DISPLAY_MOTOR_ESTOP_H, DISPLAY_GFX_COLOR_RED, DISPLAY_GFX_COLOR_RED);
+  (void)Display_TextDrawEstop(estop_text_x, estop_text_y, DISPLAY_GFX_COLOR_WHITE);
+
+  Display_PagesDrawMotorMessageLog();
 }
 
 /*
@@ -761,6 +818,8 @@ Display_Result_t Display_PagesDrawStatic(Display_HmiPage_t page, Display_PagesVa
     Display_PagesDrawAircraftLayout();
   } else if (page == DISPLAY_HMI_PAGE_DATA) {
     Display_PagesDrawDataDashboardLayout();
+  } else if (page == DISPLAY_HMI_PAGE_MOTOR) {
+    Display_PagesDrawMotorLayout();
   } else if (page == DISPLAY_HMI_PAGE_ALARM) {
     Display_PagesDrawAlarmStaticLayout();
   } else {
@@ -955,6 +1014,125 @@ static void Display_PagesDrawTenthsPercent(uint16_t x, uint16_t y, uint16_t valu
   (void)Display_GfxDrawString(x, y, buf, color, 1U);
 }
 
+static uint16_t Display_PagesMotorLimitPercent(uint32_t value)
+{
+  return (value > DISPLAY_MOTOR_SLIDER_MAX_VALUE) ? DISPLAY_MOTOR_SLIDER_MAX_VALUE : (uint16_t)value;
+}
+
+static uint16_t Display_PagesMotorFilledHeight(const Display_HmiVariableConfig_t *variable, uint16_t percent)
+{
+  if ((variable == 0) || (variable->height == 0U)) { return 0U; }
+
+  return (uint16_t)(((uint32_t)variable->height * percent) / DISPLAY_MOTOR_SLIDER_MAX_VALUE);
+}
+
+static uint16_t Display_PagesMotorHandleCy(const Display_HmiVariableConfig_t *variable, uint16_t percent)
+{
+  uint16_t fill_h;
+  uint16_t cy;
+  uint16_t lo;
+  uint16_t hi;
+
+  if ((variable == 0) || (variable->height == 0U)) { return 0U; }
+
+  fill_h = Display_PagesMotorFilledHeight(variable, percent);
+  cy     = (uint16_t)(variable->y + variable->height - fill_h);
+  lo     = (uint16_t)(variable->y + DISPLAY_MOTOR_HANDLE_HALF_H);
+  hi     = (uint16_t)(variable->y + variable->height - DISPLAY_MOTOR_HANDLE_HALF_H);
+  if (cy < lo) { cy = lo; }
+  if (cy > hi) { cy = hi; }
+
+  return cy;
+}
+
+static uint16_t Display_PagesMinU16(uint16_t a, uint16_t b)
+{
+  return (a < b) ? a : b;
+}
+
+static uint16_t Display_PagesMaxU16(uint16_t a, uint16_t b)
+{
+  return (a > b) ? a : b;
+}
+
+static void Display_PagesDrawMotorTrackBand(const Display_HmiVariableConfig_t *variable, uint16_t y, uint16_t height, uint16_t percent)
+{
+  uint16_t clear_x;
+  uint16_t clear_w;
+  uint16_t fill_h;
+  uint16_t fill_y;
+  uint16_t y_end;
+  uint16_t fill_end;
+
+  if ((variable == 0) || (height == 0U)) { return; }
+
+  clear_x = (variable->x > DISPLAY_MOTOR_HANDLE_HALF_W) ? (uint16_t)(variable->x - DISPLAY_MOTOR_HANDLE_HALF_W) : 0U;
+  clear_w = (uint16_t)(variable->width + (DISPLAY_MOTOR_HANDLE_HALF_W * 2U));
+  y_end    = (uint16_t)(y + height);
+  fill_h   = Display_PagesMotorFilledHeight(variable, percent);
+  fill_y   = (uint16_t)(variable->y + variable->height - fill_h);
+  fill_end = (uint16_t)(variable->y + variable->height);
+
+  (void)Display_GfxFillRect(clear_x, y, clear_w, height, DISPLAY_GFX_COLOR_WHITE);
+  if ((fill_h != 0U) && (y_end > fill_y) && (y < fill_end)) {
+    uint16_t blue_y = (y > fill_y) ? y : fill_y;
+    uint16_t blue_h = (uint16_t)(((y_end < fill_end) ? y_end : fill_end) - blue_y);
+    if (blue_h != 0U) { (void)Display_GfxFillRect(variable->x, blue_y, variable->width, blue_h, DISPLAY_GFX_COLOR_BLUE); }
+  }
+}
+
+static void Display_PagesDrawMotorPercent(const Display_HmiVariableConfig_t *variable, uint16_t percent)
+{
+  (void)Display_GfxFillRect((uint16_t)(variable->x - 16U), (uint16_t)(variable->y + variable->height + 14U), 64U, 18U, DISPLAY_GFX_COLOR_WHITE);
+  Display_PagesDrawWholePercent((uint16_t)(variable->x - 10U), (uint16_t)(variable->y + variable->height + 16U), percent, DISPLAY_GFX_COLOR_DARK);
+}
+
+Display_Result_t Display_PagesDrawMotorSliderField(const Display_HmiVariableConfig_t *variable, uint32_t old_value, uint32_t value, uint8_t full_redraw, uint8_t draw_percent)
+{
+  uint16_t old_fill_y;
+  uint16_t fill_y;
+  uint16_t old_percent;
+  uint16_t percent;
+  uint16_t old_handle_cy;
+  uint16_t handle_cy;
+  uint16_t cx;
+
+  if ((variable == 0) || (Display_GfxIsReady() == 0U)) { return DISPLAY_ERROR; }
+
+  old_percent   = Display_PagesMotorLimitPercent(old_value);
+  percent       = Display_PagesMotorLimitPercent(value);
+  old_handle_cy = Display_PagesMotorHandleCy(variable, old_percent);
+  handle_cy     = Display_PagesMotorHandleCy(variable, percent);
+  old_fill_y     = (uint16_t)(variable->y + variable->height - Display_PagesMotorFilledHeight(variable, old_percent));
+  fill_y         = (uint16_t)(variable->y + variable->height - Display_PagesMotorFilledHeight(variable, percent));
+  cx            = (uint16_t)(variable->x + (variable->width / 2U));
+
+  if (full_redraw != 0U) {
+    Display_PagesDrawMotorTrackBand(variable, variable->y, variable->height, percent);
+    (void)Display_GfxDrawRect((uint16_t)(variable->x - 1U), (uint16_t)(variable->y - 1U), (uint16_t)(variable->width + 2U), (uint16_t)(variable->height + 2U), DISPLAY_GFX_COLOR_GRAY);
+  } else if (old_handle_cy != handle_cy) {
+    uint16_t dirty_y   = Display_PagesMinU16(old_fill_y, fill_y);
+    uint16_t dirty_end = Display_PagesMaxU16(old_fill_y, fill_y);
+    uint16_t old_top   = (old_handle_cy > DISPLAY_MOTOR_HANDLE_HALF_H) ? (uint16_t)(old_handle_cy - DISPLAY_MOTOR_HANDLE_HALF_H) : variable->y;
+    uint16_t new_top   = (handle_cy > DISPLAY_MOTOR_HANDLE_HALF_H) ? (uint16_t)(handle_cy - DISPLAY_MOTOR_HANDLE_HALF_H) : variable->y;
+    uint16_t old_end   = (uint16_t)(old_handle_cy + DISPLAY_MOTOR_HANDLE_HALF_H);
+    uint16_t new_end   = (uint16_t)(handle_cy + DISPLAY_MOTOR_HANDLE_HALF_H);
+
+    dirty_y   = Display_PagesMinU16(dirty_y, Display_PagesMinU16(old_top, new_top));
+    dirty_end = Display_PagesMaxU16(dirty_end, Display_PagesMaxU16(old_end, new_end));
+    if (dirty_y < variable->y) { dirty_y = variable->y; }
+    if (dirty_end > (uint16_t)(variable->y + variable->height)) { dirty_end = (uint16_t)(variable->y + variable->height); }
+    if (dirty_end > dirty_y) { Display_PagesDrawMotorTrackBand(variable, dirty_y, (uint16_t)(dirty_end - dirty_y), percent); }
+    (void)Display_GfxDrawRect((uint16_t)(variable->x - 1U), (uint16_t)(variable->y - 1U), (uint16_t)(variable->width + 2U), (uint16_t)(variable->height + 2U), DISPLAY_GFX_COLOR_GRAY);
+  }
+
+  (void)Display_GfxFillRect((uint16_t)(cx - DISPLAY_MOTOR_HANDLE_HALF_W), (uint16_t)(handle_cy - DISPLAY_MOTOR_HANDLE_HALF_H), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_W * 2U), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_H * 2U), DISPLAY_GFX_COLOR_CYAN);
+  (void)Display_GfxDrawRect((uint16_t)(cx - DISPLAY_MOTOR_HANDLE_HALF_W), (uint16_t)(handle_cy - DISPLAY_MOTOR_HANDLE_HALF_H), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_W * 2U), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_H * 2U), DISPLAY_GFX_COLOR_DARK);
+  (void)Display_GfxDrawHLine((uint16_t)(cx - DISPLAY_MOTOR_HANDLE_HALF_W + 3U), handle_cy, (uint16_t)((DISPLAY_MOTOR_HANDLE_HALF_W * 2U) - 6U), DISPLAY_GFX_COLOR_DARK);
+  if (draw_percent != 0U) { Display_PagesDrawMotorPercent(variable, percent); }
+  return DISPLAY_OK;
+}
+
 /*
  * 绘制有符号 32 位整数，返回绘制像素宽度。
  */
@@ -1106,7 +1284,11 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
   }
 
   if (variable->id == DISPLAY_HMI_VAR_MESSAGE_LOG) {
-    Display_PagesDrawMessageLogBody();
+    if (variable->page == DISPLAY_HMI_PAGE_MOTOR) {
+      Display_PagesDrawMotorMessageLogBody();
+    } else {
+      Display_PagesDrawMessageLogBody();
+    }
     return DISPLAY_OK;
   }
 
@@ -1128,6 +1310,8 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
     (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
     return DISPLAY_OK;
   }
+
+  if (((variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_1) || (variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_2) || (variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_3) || (variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_4)) && (variable->page == DISPLAY_HMI_PAGE_MOTOR)) { return Display_PagesDrawMotorSliderField(variable, value, value, 1U, 1U); }
 
   if ((variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_1) || (variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_2) || (variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_3) || (variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_4)) {
     limited_value = (value > 100U) ? 100U : (uint16_t)value;
