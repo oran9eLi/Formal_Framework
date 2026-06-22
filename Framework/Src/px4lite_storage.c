@@ -12,9 +12,11 @@
 
 #include <string.h>
 #include "px4lite_config.h"
+#include "px4lite_alarm.h"
 #include "px4lite_faults.h"
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
+#include "px4lite_time.h"
 #include "px4lite_topics.h"
 #include "storage_config.h"
 #include "storage_csv.h"
@@ -73,10 +75,21 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
   Px4Lite_VehicleNavigation_t navigation;
   Px4Lite_SensorBaro_t baro;
   Px4Lite_BatteryStatus_t battery;
+  Px4Lite_TimeSnapshot_t time;
+  Px4Lite_MotorOutputs_t motor;
+  Px4Lite_AlarmSnapshot_t alarm;
+  Px4Lite_CommDebugInfo_t comm;
   Storage_CsvData_t data;
+  uint8_t i;
 
   memset(&data, 0, sizeof(data));
   data.time_ms = now_ms;
+
+  if (Px4Lite_CopyTime(&time) == PX4LITE_OK) {
+    data.local_date_ymd    = time.local_date_ymd;
+    data.local_time_hhmmss = time.local_time_hhmmss;
+    data.time_sync_state   = (uint8_t)time.sync_state;
+  }
 
   if (Px4Lite_CopyNavigation(&navigation) == PX4LITE_OK) {
     data.gnss_valid   = ((navigation.valid_mask & PX4LITE_NAV_VALID_POSITION) != 0U) ? 1U : 0U;
@@ -105,6 +118,26 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     Storage_EnqueueError(now_ms, "BATTERY", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, 0U, "battery_not_ready");
   }
 
+  if (Px4Lite_CopyMotor(&motor) == PX4LITE_OK) {
+    for (i = 0U; (i < PX4LITE_MOTOR_COUNT) && (i < 4U); i++) {
+      data.motor_pct[i] = motor.duty_percent[i];
+    }
+    data.motor_run_state = motor.run_state;
+  }
+
+  if (Px4Lite_CopyAlarmSnapshot(&alarm) == PX4LITE_OK) {
+    data.active_alarm_count = alarm.active_count;
+    data.highest_fault_code = alarm.highest_fault_code;
+  }
+
+  Px4Lite_GetCommDebugInfo(&comm);
+  data.lora_rx_count          = comm.rx_frame_count;
+  data.lora_tx_count          = comm.tx_frame_count;
+  data.lora_parse_error_count = comm.parse_error_count;
+  data.lora_send_error_count  = comm.send_error_count;
+  data.storage_queue_count    = StorageQueue_Count();
+  data.storage_drop_count     = StorageQueue_DropCount();
+
   memset(&s_work_record, 0, sizeof(s_work_record));
   s_work_record.type            = STORAGE_RECORD_DATA;
   s_work_record.enqueue_time_ms = now_ms;
@@ -115,7 +148,6 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
 
   if (StorageQueue_Push(&s_work_record) != PX4LITE_OK) { Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_FULL, StorageQueue_DropCount(), "storage_queue_full"); }
 }
-
 /**
  * @brief 从队列取出一条记录并写入 SD 卡。
  *

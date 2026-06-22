@@ -12,7 +12,7 @@
 - 开发栈：HAL + FreeRTOS + ARMCC 5.06
 - 工程入口：Keil MDK-ARM v5
 - 任务模型：固定周期任务 + 框架注册表 + 强类型 topic / snapshot
-- 主要边界：硬件采集、设备驱动、框架调度、业务读取、显示刷新、LoRa 发送、日志显示、SD 存储分层隔离
+- 主要边界：硬件采集、设备驱动、框架调度、业务读取、显示刷新、LoRa 发送、电机目标油门、日志显示、SD 存储分层隔离
 - 完成度口径：以 `Development_Guide/07_移植进度与功能清单.md` 为准
 
 ## 目录结构
@@ -88,6 +88,7 @@ Core -> Business -> Framework -> Platform Adapter -> Driver -> BSP -> HAL
 | `estimator` | 20 ms | GNSS 到 Navigation domain，IMU FIFO 到姿态解算 |
 | `health` | 100 ms | 超时检测、OFFLINE 判定、健康快照、看门狗喂狗门控 |
 | `comm` | 10 ms | LoRa RX 和 MAVLink TX 调度 |
+| `control` | 20 ms | 四路电机目标油门到 PWM 输出，处理 KEY1 急停和失效保护 |
 | `biz_system` | 1000 ms | 启动日志、注册表轮询、系统业务状态 |
 | `biz_acq` | 200 ms | 导航快照复制和 EventBus 分发 |
 | `biz_display` | 10 ms | 触摸优先、预算化 LCD 刷新 |
@@ -107,6 +108,8 @@ App_CopyEnvironment(&env, now_ms);
 App_CopyAlarm(&alarm, now_ms);
 App_GetModuleStatus(id, &status);
 App_GetCommStats(&comm);
+App_CopyMotor(&motor, now_ms);
+App_SetMotorThrottlePercent(index, percent);
 ```
 
 低频状态数据采用 latest-value snapshot 模式。高频或不能丢样的数据使用 FIFO 或固定内存池。临界区只允许复制快照和设置 ready 标志，不允许解析、计算或打印。
@@ -119,13 +122,16 @@ App_GetCommStats(&comm);
 |---|---|
 | Core / HAL / FreeRTOS 启动 | 已形成独立工程基础 |
 | Sensor 读取 | GNSS、IMU、气压计、电源等传感器读取链路已接入统一采集任务 |
-| Framework topic / registry / health | 已形成模块生命周期、latest-value topic / FIFO、基础健康状态和恢复框架 |
+| Framework topic / registry / health | 已形成模块生命周期、latest-value topic / FIFO、基础健康状态和恢复框架；Health 深度监控仍在扩展中 |
 | Business API / EventBus | 应用只读快照边界已建立，业务层通过统一 API 获取导航、环境、电源、状态和告警数据 |
-| Display | 传感器数据显示、状态显示和业务刷新链路已完成 |
-| LoRa / MAVLink | LoRa 遥测发送链路已完成，按低速链路预算发送 MAVLink 遥测消息 |
+| Display | 传感器数据显示、状态显示、日志显示和 Motor 页刷新链路已完成 |
+| LoRa / MAVLink | LoRa 遥测发送链路已完成，RX 已有 MAVLink 解析基础；命令分发仍归 Command 后续闭环 |
 | Debug / Log 显示 | 调试日志、状态日志和运行信息显示链路已完成 |
 | Storage | SD CSV 日志存储链路已完成，数据记录和错误记录通过存储服务落盘 |
-| Alarm / Command | 保留接口和扩展位置，不能视为完整业务闭环 |
+| Control / Motor | 四路电机目标油门、PWM 输出、急停和失效保护基础闭环已接入；当前不含 ESC 转速反馈闭环 |
+| Alarm | 活动告警表、最高严重度和增量告警事件已接入；告警恢复动作和外部输出动作仍未完成 |
+| Command | 当前仍为占位，命令队列开关关闭，尚无 LoRa RX 命令分发和执行器 |
+| 5G / Remote ID | 预留架构位置，尚未进入当前完成闭环 |
 
 ## 关键配置文件
 

@@ -19,17 +19,30 @@
  * @brief 常规数据 CSV 行输入字段。
  */
 typedef struct {
-  uint32_t time_ms;         /**< 记录时间，单位：ms。 */
-  uint8_t gnss_valid;       /**< GNSS 有效标志，1 表示位置字段可用。 */
-  int32_t latitude_e7;      /**< 纬度，单位：degree * 1e7。 */
-  int32_t longitude_e7;     /**< 经度，单位：degree * 1e7。 */
-  int32_t roll_deg100;      /**< 横滚角，单位：degree * 100。 */
-  int32_t pitch_deg100;     /**< 俯仰角，单位：degree * 100。 */
-  int32_t temperature_c100; /**< 温度，单位：摄氏度 * 100。 */
-  uint32_t pressure_hpa100; /**< 气压，单位：hPa * 100。 */
-  uint32_t humidity_pct100; /**< 相对湿度，单位：% * 100。 */
-  uint32_t voltage_mv;      /**< 电压，单位：mV。 */
-  uint8_t battery_pct;      /**< 电量百分比，范围：0 到 100。 */
+  uint32_t time_ms;                /**< 记录时间，单位：ms。 */
+  uint32_t local_date_ymd;         /**< 本地日期，编码 YYYYMMDD；未知时为 0。 */
+  uint32_t local_time_hhmmss;      /**< 本地时间，编码 HHMMSS；未知时为 0。 */
+  uint8_t time_sync_state;         /**< 时间同步状态，见 `Px4Lite_TimeSyncState_t`。 */
+  uint8_t gnss_valid;              /**< GNSS 有效标志，1 表示位置字段可用。 */
+  int32_t latitude_e7;             /**< 纬度，单位：degree * 1e7。 */
+  int32_t longitude_e7;            /**< 经度，单位：degree * 1e7。 */
+  int32_t roll_deg100;             /**< 横滚角，单位：degree * 100。 */
+  int32_t pitch_deg100;            /**< 俯仰角，单位：degree * 100。 */
+  int32_t temperature_c100;        /**< 温度，单位：摄氏度 * 100。 */
+  uint32_t pressure_hpa100;        /**< 气压，单位：hPa * 100。 */
+  uint32_t humidity_pct100;        /**< 相对湿度，单位：% * 100。 */
+  uint32_t voltage_mv;             /**< 电压，单位：mV。 */
+  uint8_t battery_pct;             /**< 电量百分比，范围：0 到 100。 */
+  uint8_t motor_pct[PX4LITE_MOTOR_COUNT];            /**< 四路电机目标油门百分比，范围：0 到 100。 */
+  uint8_t motor_run_state;         /**< 电机运行状态，1 表示允许输出目标油门。 */
+  uint16_t active_alarm_count;     /**< 当前活动告警数量。 */
+  uint16_t highest_fault_code;     /**< 当前最高严重度告警故障码。 */
+  uint32_t lora_rx_count;          /**< LoRa/MAVLink 已接收完整帧数量。 */
+  uint32_t lora_tx_count;          /**< LoRa/MAVLink DMA 发送完成帧数量。 */
+  uint32_t lora_parse_error_count; /**< LoRa/MAVLink 接收解析错误累计次数。 */
+  uint32_t lora_send_error_count;  /**< LoRa 底层发送错误累计次数。 */
+  uint16_t storage_queue_count;    /**< Storage 记录队列当前占用数量。 */
+  uint32_t storage_drop_count;     /**< Storage 记录队列累计丢弃次数。 */
 } Storage_CsvData_t;
 
 /**
