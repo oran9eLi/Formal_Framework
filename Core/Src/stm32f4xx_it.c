@@ -63,8 +63,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* Go to infinite loop when Hard Fault exception occurs */
-  while (1) {
-  }
+  while (1) {}
 }
 
 /**
@@ -75,8 +74,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* Go to infinite loop when Memory Manage exception occurs */
-  while (1) {
-  }
+  while (1) {}
 }
 
 /**
@@ -87,8 +85,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* Go to infinite loop when Bus Fault exception occurs */
-  while (1) {
-  }
+  while (1) {}
 }
 
 /**
@@ -99,8 +96,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* Go to infinite loop when Usage Fault exception occurs */
-  while (1) {
-  }
+  while (1) {}
 }
 
 /**
@@ -166,7 +162,7 @@ void DMA1_Stream5_IRQHandler(void)
 void USART2_IRQHandler(void)
 {
   UART_HandleTypeDef *huart = BSP_GNSS_GetUartHandle();
-  uint32_t sr = USART2->SR;
+  uint32_t sr               = USART2->SR;
 
 #if DEBUG_GNSS_BSP_MONITOR_ENABLE
   BSP_GNSS_DebugMarkUsart2Irq(USART2->SR, USART2->CR1, USART2->CR3);
@@ -202,7 +198,7 @@ void DMA1_Stream3_IRQHandler(void)
 void USART3_IRQHandler(void)
 {
   UART_HandleTypeDef *huart = BSP_LoRa_GetUartHandle();
-  uint32_t sr = USART3->SR;
+  uint32_t sr               = USART3->SR;
 
   if ((sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE)) != 0U) {
     BSP_LoRa_RecoverRx();

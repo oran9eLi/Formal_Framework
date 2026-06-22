@@ -2,7 +2,7 @@
 
 ## 1. 迁移目标
 
-本次将 `projext` 工程中的 BME280 环境传感器和 Power ADC 电源采样能力迁入 N1 工程，但不迁移旧的 `Sensor_Driver_t`、`Sensor_Sample_t` 通用通道模型。
+本次将 `原始参考工程`中的 BME280 环境传感器和 Power ADC 电源采样能力迁入 Formal_Framework1 工程，但不迁移旧的 `Sensor_Driver_t`、`Sensor_Sample_t` 通用通道模型。
 
 迁移后的正式链路为：
 
@@ -77,7 +77,7 @@ Framework 发布 `Px4Lite_BatteryStatus_t`。
 | BME280 | `sensor` | 1000 ms |
 | Power ADC | `sensor` | 1000 ms |
 
-这样符合 N1 规范：普通低频传感器由统一采集任务持有，不为单个传感器创建永久任务。
+这样符合 Formal_Framework1 规范：普通低频传感器由统一采集任务持有，不为单个传感器创建永久任务。
 
 ## 6. 验证
 
@@ -103,4 +103,4 @@ gcc -std=c99 -Wall -Wextra -fsyntax-only -I Bsp\Inc -I Sensor\Inc Sensor\Src\sen
 
 BSP/Sensor 文件语法检查通过。BSP 检查中出现的 warning 来自 STM32 HAL/CMSIS 头在 64 位主机 GCC 下的指针宽度差异，不是本次业务代码告警。
 
-当前环境未找到 `UV4` 或 `armcc` 命令行，因此未在本机完成 Keil ARMCC5 全量构建。Keil 工程文件已经加入新增源文件，后续应在 MDK 中执行一次全量 `0 Error / 0 Warning` 构建确认。
+原始记录未完成 Keil ARMCC5 全量构建；合入当前工程后，应以本分支实际 Keil Rebuild All 的 `0 Error / 0 Warning` 结果为准。

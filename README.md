@@ -1,134 +1,304 @@
-# STM32F407 Formal Sensor Framework
+# Formal Framework
 
-This directory is an independent build. It does not modify or include the
-original application source files.
+低空教学实验室 STM32F407 固件框架工程。
 
-Business-layer code is grouped under `Business/Inc` and `Business/Src`.
+本仓库基于 **STM32F407 + HAL + FreeRTOS + Keil MDK-ARM v5**，用于沉淀低空教学实验室产品中的传感器采集、状态管理、业务快照、显示、通信、调试和存储框架。工程目标不是临时 Demo，而是可持续扩展、可教学讲解、可团队分工维护的嵌入式基础框架。
 
-## Included baseline
+当前工程以 `MDK-ARM/formal_framework.uvprojx` 为唯一构建入口，HAL、CMSIS、FreeRTOS、FatFs、MAVLink 等依赖已经收拢在本仓库内。
 
-- STM32F407ZG, HAL and FreeRTOS
-- USART1 debug console
-- ATGM336H on USART2
-- DMA1 Stream5 Channel4 circular reception
-- USART2 IDLE interrupt chain
-- NMEA GGA/RMC/GSA/GSV parsing
-- GPS and BeiDou visible/used satellite counts
-- latest-value topics with protected copy access
-- GNSS to navigation snapshot conversion
-- module state, timeout and health snapshot
-- non-blocking business event bus with per-subscriber delivery statistics
-- business system and snapshot-distribution tasks
-- application read-only API for coherent navigation and system snapshots
-- enabled Display service task with a NOT_READY placeholder adapter
-- FreeRTOS stack-overflow and malloc-failure hooks
-- module registry and lifecycle sequencing
-- fixed-period work items with deadline and execution-time statistics
-- optional USART1 task stack high-water and heap reporting
+## 当前定位
 
-## Runtime flow
+- MCU 平台：STM32F407ZGT6 / STM32F407ZGTx
+- 开发栈：HAL + FreeRTOS + ARMCC 5.06
+- 工程入口：Keil MDK-ARM v5
+- 任务模型：固定周期任务 + 框架注册表 + 强类型 topic / snapshot
+- 主要边界：硬件采集、设备驱动、框架调度、业务读取、显示刷新、LoRa 发送、电机目标油门、日志显示、SD 存储分层隔离
+- 完成度口径：以 `Development_Guide/07_移植进度与功能清单.md` 为准
+
+## 目录结构
+
+| 目录 | 说明 |
+|---|---|
+| `Core/` | `main.c`、HAL MSP、IRQ、FreeRTOS hook、系统启动代码 |
+| `Bsp/` | 板级外设、GPIO、总线、DMA、中断、原始收发接口 |
+| `Sensor/` | 设备协议、解析、校准、设备事实和驱动状态 |
+| `Framework/` | 模块注册、topic、状态、恢复、调度、MAVLink 发送和平台适配 |
+| `Business/` | 应用层任务、事件总线、业务快照读取和显示业务入口 |
+| `Display/` | ATK-MD0700 / SSD1963 / GT911 / 页面渲染相关代码 |
+| `Debug/` | 独立调试开关、任务监控、周期诊断、串口调试输出 |
+| `Storage/` | SD 卡、FatFs、CSV 记录队列和存储服务 |
+| `Third_Party/` | HAL、CMSIS、FreeRTOS、FatFs、MAVLink 等第三方代码 |
+| `Development_Guide/` | 架构规范、模块接入、完成度清单、变更记录和模板 |
+| `MDK-ARM/` | Keil 工程文件、调试配置和本地构建输出目录 |
+| `Release/` | 已验证发布产物和发布说明 |
+
+## 构建方式
+
+使用 Keil MDK-ARM v5 打开：
 
 ```text
-USART2 DMA/IDLE
-      |
-      v
-BSP GNSS byte buffer
-      |
-      v
-GNSS driver + NMEA parser
-      |
-      v
-platform adapter
-      |
-      v
-sensor task -> GNSS topic -> estimator task -> navigation topic
-      |                              |                 |
-      +---------- health task <------+                 v
-                                                business snapshot task
-                                                        |
-                                                        v
-                                                   event bus
-
-system task --------------------------------------> status/log event
-display task <------------------------------------ navigation/health copy
+MDK-ARM/formal_framework.uvprojx
 ```
 
-Six tasks are created:
+编译目标：
 
-| Task | Period | Responsibility |
+```text
+Target 1
+```
+
+发布要求：
+
+```text
+0 Error(s), 0 Warning(s)
+```
+
+成功构建后，Keil 会在以下目录生成中间产物和固件：
+
+```text
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+```
+
+这些构建产物不进入 Git。需要对外发布时，按 `Release/README.md` 的规则更新 `Release/Latest/`，并保证 `hex`、`axf`、`map`、构建日志和 `MANIFEST.md` 来自同一次全量构建。
+
+## 架构规则
+
+工程采用单向依赖：
+
+```text
+Core -> Business -> Framework -> Platform Adapter -> Driver -> BSP -> HAL
+```
+
+关键约束：
+
+- `main.c` 是组合根。
+- `Framework/Src/px4lite_platform_f407.c` 是 Framework 层唯一允许包含 BSP 头文件的位置。
+- Business 层只能通过 `app_data_api.h` 读取数据。
+- Business 不得直接包含 BSP / Sensor 头文件，不得读取 DMA buffer 或驱动私有变量。
+- Sensor Driver 只负责设备协议、解析、标定和硬件事实，不负责业务状态。
+- OFFLINE / FAILED 状态由 Health task 统一判定，驱动只上报硬件事实和 ONLINE / DEGRADED。
+- 通信层不得直接发送 C struct 内存，MAVLink 必须逐字段编码。
+- ISR 只做计数、位置更新或任务通知，不做解析、打印、SD 写入或页面渲染。
+
+## 任务模型
+
+| Task | 周期 | 职责 |
 |---|---:|---|
-| `sensor` | 10 ms | service drivers and publish measurements |
-| `estimator` | 20 ms | convert measurements to domain snapshots |
-| `health` | 100 ms | timeout/state checks and 1 Hz debug report |
-| `biz_system` | 1000 ms | one-shot startup log and business polling |
-| `biz_acq` | 200 ms | copy published navigation and fan out events |
-| `biz_display` | 10 ms | touch-first, budgeted Display service |
+| `sensor` | 10 ms | GNSS、IMU、Baro、Battery 等普通传感器的唯一硬件采集者 |
+| `estimator` | 20 ms | GNSS 到 Navigation domain，IMU FIFO 到姿态解算 |
+| `health` | 100 ms | 超时检测、OFFLINE 判定、健康快照、看门狗喂狗门控 |
+| `comm` | 10 ms | LoRa RX 和 MAVLink TX 调度 |
+| `control` | 20 ms | 四路电机目标油门到 PWM 输出，处理 KEY1 急停和失效保护 |
+| `biz_system` | 1000 ms | 启动日志、注册表轮询、系统业务状态 |
+| `biz_acq` | 200 ms | 导航快照复制和 EventBus 分发 |
+| `biz_display` | 10 ms | 触摸优先、预算化 LCD 刷新 |
+| `debug` | 100 ms | 周期诊断和任务监控，不纳入看门狗集合 |
+| `storage` | 50 ms | SD CSV 日志记录，注册表登记，低优先级阻塞 I/O |
 
-`biz_acq` never reads BSP or sensor drivers. Hardware acquisition remains
-single-owner inside `sensor`. Business consumers use `app_data_api.h` rather
-than reading Framework topics directly.
+原则：**一个硬件资源只有一个任务所有者**。不要为每个传感器单独创建任务，普通传感器统一由 `sensor` 任务采集。
 
-Display is enabled with `BUSINESS_ENABLE_DISPLAY=1U`. Until the real adapter
-is implemented, `business_display_placeholder.c` reports `NOT_READY`, and the
-Display module state is `OFFLINE`.
+## 数据读取方式
 
-## GNSS states
+应用消费者必须使用 `Business/Inc/app_data_api.h`：
 
-| State | Meaning |
+```c
+App_CopyNavigation(&nav, now_ms);
+App_CopySystem(&sys, now_ms);
+App_CopyEnvironment(&env, now_ms);
+App_CopyAlarm(&alarm, now_ms);
+App_GetModuleStatus(id, &status);
+App_GetCommStats(&comm);
+App_CopyMotor(&motor, now_ms);
+App_SetMotorThrottlePercent(index, percent);
+```
+
+低频状态数据采用 latest-value snapshot 模式。高频或不能丢样的数据使用 FIFO 或固定内存池。临界区只允许复制快照和设置 ready 标志，不允许解析、计算或打印。
+
+## 当前能力概览
+
+当前真实完成度以 `Development_Guide/07_移植进度与功能清单.md` 为唯一来源。不要仅凭文件、任务或函数声明存在就判断模块已经完成。
+
+| 模块 | 当前状态口径 |
 |---|---|
-| `STARTING` | initialized and waiting for NMEA |
-| `ONLINE` | NMEA is arriving and the position fix is valid |
-| `DEGRADED` | NMEA is arriving but there is no valid fix |
-| `OFFLINE` | no new valid NMEA for 2 seconds |
-| `FAILED` | initialization failed |
+| Core / HAL / FreeRTOS 启动 | 已形成独立工程基础 |
+| Sensor 读取 | GNSS、IMU、气压计、电源等传感器读取链路已接入统一采集任务 |
+| Framework topic / registry / health | 已形成模块生命周期、latest-value topic / FIFO、基础健康状态和恢复框架；Health 深度监控仍在扩展中 |
+| Business API / EventBus | 应用只读快照边界已建立，业务层通过统一 API 获取导航、环境、电源、状态和告警数据 |
+| Display | 传感器数据显示、状态显示、日志显示和 Motor 页刷新链路已完成 |
+| LoRa / MAVLink | LoRa 遥测发送链路已完成，RX 已有 MAVLink 解析基础；命令分发仍归 Command 后续闭环 |
+| Debug / Log 显示 | 调试日志、状态日志和运行信息显示链路已完成 |
+| Storage | SD CSV 日志存储链路已完成，数据记录和错误记录通过存储服务落盘 |
+| Control / Motor | 四路电机目标油门、PWM 输出、急停和失效保护基础闭环已接入；当前不含 ESC 转速反馈闭环 |
+| Alarm | 活动告警表、最高严重度和增量告警事件已接入；告警恢复动作和外部输出动作仍未完成 |
+| Command | 当前仍为占位，命令队列开关关闭，尚无 LoRa RX 命令分发和执行器 |
+| 5G / Remote ID | 预留架构位置，尚未进入当前完成闭环 |
 
-The first 5 seconds are a startup grace period before an offline state is
-reported.
+## 关键配置文件
 
-## Build
+| 文件 | 作用 |
+|---|---|
+| `Bsp/Inc/bsp_config.h` | 引脚、总线、DMA stream、外设开关 |
+| `Framework/Inc/px4lite_config.h` | 模块使能、任务周期、栈、优先级、超时、MAVLink 发送周期 |
+| `Debug/Inc/debug_config.h` | 独立调试开关，底部派生宏自动计算，不要手动改 |
+| `Business/Inc/business_template_config.h` | 业务任务周期、栈、优先级、显示配置 |
+| `Storage/Inc/storage_config.h` | SD 服务周期、队列深度、SPI 超时、CSV 文件名 |
 
-Open:
+## 开发入口
 
-`MDK-ARM/formal_framework.uvprojx`
+常用文档：
 
-The project uses ARMCC 5.06. HAL, CMSIS and FreeRTOS sources are included
-under `Third_Party`, so this directory no longer references the parent
-project's source tree. A successful build creates:
+| 文档 | 用途 |
+|---|---|
+| `Development_Guide/01_强制开发规范.md` | 代码评审和合入门禁 |
+| `Development_Guide/06_应用层数据接口.md` | Business 层读取数据的正式接口 |
+| `Development_Guide/07_移植进度与功能清单.md` | 当前完成度、占位项、后续阶段和验收标准 |
+| `Development_Guide/10_Debug模块化使用指南.md` | Debug 开关和诊断模块使用方式 |
+| `Development_Guide/12_团队模块化开发手册.md` | 新成员和协作开发流程 |
+| `Development_Guide/16_模块接入标准与评审清单.md` | 新模块接入模板和 16 项检查清单 |
 
-- `MDK-ARM/Objects/formal_framework.axf`
-- `MDK-ARM/Objects/formal_framework.hex`
+新增模块时，应按以下顺序设计和落地：
 
-The startup debug output includes the remaining FreeRTOS heap after queues and
-all six tasks are created. Stack overflow and allocation failure still enter
-the existing FreeRTOS hooks.
+1. 在 `Bsp` 中处理引脚、时钟、DMA、中断和原始收发。
+2. 在 `Sensor` 中处理芯片协议、解析、校准和设备事实。
+3. 在 `Framework/Src/px4lite_platform_f407.c` 中做 Driver 类型到 Framework 类型的转换。
+4. 在 `Framework` 中建立强类型 topic、状态、超时和恢复入口。
+5. 在 `Business` 中只通过 `app_data_api.h` 或 EventBus 消费快照。
+6. 在 `Development_Guide/07_移植进度与功能清单.md` 和 `Change_History/` 中记录完成度、验证结果和未完成项。
 
-## Debug switch
+## 版本库约定
 
-`Debug/Inc/debug_config.h` contains independent debug switches.
+### 提交信息规范
 
-- `DEBUG_ENABLE`: enables the USART1 debug console
-- `DEBUG_PERIODIC_ENABLE`: enables the one-second GNSS summary
-- `DEBUG_TASK_STACK_ENABLE`: enables the five-second task stack and heap report
-- undefined: debug calls compile out; the sensor pipeline keeps running
+提交信息统一使用以下格式：
 
-The Keil target is `STM32F407ZGTx`, matching STM32F407ZGT6. DMA buffers must
-remain in the 128 KB SRAM region at `0x20000000`; the 64 KB CCM region at
-`0x10000000` is not DMA-accessible.
+```text
+<type>: <简短中文说明>
+```
 
-Do not enable raw NMEA printing for endurance tests because continuous UART
-formatting changes task timing.
+`type` 使用小写英文，冒号后保留一个空格，说明部分使用简短中文，描述本次提交的主要变化。
 
-## Adding another sensor
+常用类型：
 
-1. Put register/bus handling in `Bsp`.
-2. Put chip parsing, calibration and device state in `Sensor`.
-3. Add a HAL-free adapter in `Framework/Src/px4lite_platform_f407.c`.
-4. Add a typed measurement in `px4lite_types.h`.
-5. Add publish/copy access in `px4lite_topics.*`.
-6. Schedule the driver only from `sensor`; do not create one task per sensor.
-7. Add freshness and offline limits in `px4lite_config.h`.
-8. Let domain/communication tasks copy snapshots; they must not consume BSP
-   DMA buffers directly.
+| type | 说明 |
+|---|---|
+| `feat` | 新增功能或能力接入 |
+| `fix` | 修复问题 |
+| `docs` | 文档更新 |
+| `refactor` | 代码重构，不改变功能行为 |
+| `chore` | 工程配置、仓库维护、脚本或杂项调整 |
+| `build` | 构建配置、Keil 工程或依赖调整 |
+| `test` | 测试、验证用例或验证记录调整 |
 
-Large or high-rate data should use a FIFO or memory pool. Low-rate state data
-should use the latest-value publish/copy pattern already used by GNSS.
+示例：
+
+```text
+docs: 补充提交信息规范
+feat: 接入气压计采集链路
+fix: 修复LoRa发送忙状态统计
+chore: 初始化仓库忽略规则
+```
+
+提交说明应保持简短、明确，不写过长背景说明。详细设计、验证结果和遗留问题应记录在 `Development_Guide/` 或对应变更记录中。
+
+### 注释规范
+
+新增或重构的源码应使用 Doxygen 风格中文注释，重点说明模块职责、数据含义、调用边界和实时性约束。注释用于帮助团队协作、移植和评审，不写无意义的逐行翻译。
+
+基本要求：
+
+- 每个 `.c` / `.h` 文件开头应包含文件头注释，说明文件职责、所属层级、主要依赖和禁止事项。
+- 每个公开函数和重要内部函数的定义处应包含函数注释。
+- 每个公开数据结构、配置结构、消息结构和跨层传递结构应包含结构体注释。
+- 结构体成员应使用中文注释说明含义；涉及物理量、时间、长度、计数和状态值时必须写清单位或取值范围。
+- 枚举类型应说明用途；枚举值较多或含义不直观时，应逐项注释。
+- 注释应描述“为什么这样设计、由谁调用、有什么限制”，不要只重复代码本身。
+- 修改函数行为、参数含义、结构体字段或模块边界时，必须同步更新对应注释。
+- 禁止把过期设计、未实现能力或猜测性描述写成已完成事实。
+
+文件头示例：
+
+```c
+/**
+ * @file sensor_bme280.c
+ * @brief BME280 气压计驱动实现。
+ *
+ * @details
+ * 本文件负责 BME280 的芯片初始化、寄存器读取、原始数据补偿和采样快照维护。
+ * 驱动层只记录设备事实和采样结果，不负责 OFFLINE / FAILED 状态判定。
+ *
+ * 依赖边界：
+ * - 允许调用 BSP I2C 原始读写接口。
+ * - 不允许直接调用 HAL API。
+ * - 不允许包含 Business / Framework 业务头文件。
+ */
+```
+
+数据结构示例：
+
+```c
+/**
+ * @brief BME280 一次补偿后的环境采样结果。
+ *
+ * @details
+ * 该结构体保存驱动层输出的物理量结果，供平台适配层转换为 Framework 环境 topic。
+ */
+typedef struct
+{
+    float temperature_c;      /**< 温度，单位：摄氏度。 */
+    float pressure_pa;        /**< 气压，单位：Pa。 */
+    float humidity_percent;   /**< 相对湿度，单位：%。 */
+    uint32_t sample_time_ms;  /**< 采样完成时间，单位：ms。 */
+    uint8_t valid;            /**< 采样有效标志，1 表示有效，0 表示无效。 */
+} Sensor_Bme280Sample_t;
+```
+
+函数示例：
+
+```c
+/**
+ * @brief 执行 BME280 周期服务并更新最新采样快照。
+ *
+ * @param[in,out] dev BME280 驱动实例，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间，必须来自 PlatformGetMs() 或 BSP_Time_GetTickMs()。
+ *
+ * @return 驱动服务结果。
+ * @retval SENSOR_OK 本次采样成功，内部快照已更新。
+ * @retval SENSOR_ERR_PARAM 参数非法。
+ * @retval SENSOR_ERR_IO I2C 通信失败，本函数只记录失败事实，不判定 OFFLINE。
+ *
+ * @note 本函数由 sensor 任务周期调用，禁止在 ISR 中调用。
+ * @note 本函数不做日志打印，不发布 Framework topic，不修改 Health 状态。
+ */
+Sensor_Result_t Sensor_Bme280_Service(Sensor_Bme280Device_t *dev, uint32_t now_ms);
+```
+
+本仓库跟踪：
+
+- 源码
+- Keil 工程文件
+- 配置文件
+- 规范文档
+- 发布清单和发布说明
+
+本仓库不跟踪：
+
+- `MDK-ARM/Objects/`
+- `MDK-ARM/Listings/`
+- Keil build log
+- `.uvguix.*` 本地界面状态
+- `.claude/` 本地助手状态
+- `Release/Latest/` 下的 `.axf`、`.hex`、`.map`、`.log` 二进制或构建产物
+
+初始化仓库后，首个提交应包含源码、工程文件、配置、文档和 `.gitignore`。构建产物只在发布流程中按 `Release/README.md` 归档。
+
+## 重要硬件和实时性规则
+
+- DMA buffer 必须放在 `0x20000000` 起始的 128 KB SRAM 中。
+- `0x10000000` 起始的 64 KB CCM 不支持 DMA。
+- 周期任务使用 `vTaskDelayUntil()`，不要用 `vTaskDelay()` 代替。
+- `_ms` 字段必须是真实毫秒值，来自 `PlatformGetMs()` 或 `BSP_Time_GetTickMs()`。
+- `_ticks` 字段才表示 RTOS ticks，禁止混用。
+- Sensor / Driver 层不得调用 `HAL_GetTick()`。
+- 启动后不再动态分配内存，数据结构优先静态分配。
+- `heap_4` 峰值使用率应保持在 75% 以下。
+- 调试输出开关关闭后，不得改变生产数据路径。

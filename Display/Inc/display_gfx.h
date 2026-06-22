@@ -17,24 +17,24 @@ extern "C" {
  *   颜色格式：RGB565
  */
 
-#define DISPLAY_GFX_WIDTH          800U
-#define DISPLAY_GFX_HEIGHT         480U
+#define DISPLAY_GFX_WIDTH         800U
+#define DISPLAY_GFX_HEIGHT        480U
 
-#define DISPLAY_GFX_COLOR_BLACK    0x0000U
-#define DISPLAY_GFX_COLOR_WHITE    0xFFFFU
-#define DISPLAY_GFX_COLOR_RED      0xF800U
-#define DISPLAY_GFX_COLOR_GREEN    0x07E0U
-#define DISPLAY_GFX_COLOR_BLUE     0x001FU
-#define DISPLAY_GFX_COLOR_YELLOW   0xFFE0U
-#define DISPLAY_GFX_COLOR_CYAN     0x07FFU
-#define DISPLAY_GFX_COLOR_MAGENTA  0xF81FU
-#define DISPLAY_GFX_COLOR_GRAY     0x8410U
-#define DISPLAY_GFX_COLOR_DARK     0x4208U
+#define DISPLAY_GFX_COLOR_BLACK   0x0000U
+#define DISPLAY_GFX_COLOR_WHITE   0xFFFFU
+#define DISPLAY_GFX_COLOR_RED     0xF800U
+#define DISPLAY_GFX_COLOR_GREEN   0x07E0U
+#define DISPLAY_GFX_COLOR_BLUE    0x001FU
+#define DISPLAY_GFX_COLOR_YELLOW  0xFFE0U
+#define DISPLAY_GFX_COLOR_CYAN    0x07FFU
+#define DISPLAY_GFX_COLOR_MAGENTA 0xF81FU
+#define DISPLAY_GFX_COLOR_GRAY    0x8410U
+#define DISPLAY_GFX_COLOR_DARK    0x4208U
 
 typedef enum {
-  DISPLAY_GFX_OK = 0,       /* 绘图成功 */
-  DISPLAY_GFX_NOT_READY,    /* 底层画点或填充端口尚未注册*/
-  DISPLAY_GFX_PARAM_ERROR   /* 入参超出范围或不合法 */
+  DISPLAY_GFX_OK = 0,     /* 绘图成功 */
+  DISPLAY_GFX_NOT_READY,  /* 底层画点或填充端口尚未注册*/
+  DISPLAY_GFX_PARAM_ERROR /* 入参超出范围或不合法 */
 } Display_GfxResult_t;
 
 /**
@@ -47,8 +47,7 @@ typedef void (*Display_GfxDrawPixelFn_t)(uint16_t x, uint16_t y, uint16_t color)
  */
 typedef void (*Display_GfxFillRectFn_t)(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t color);
 
-typedef struct
-{
+typedef struct {
   Display_GfxDrawPixelFn_t draw_pixel; /* 底层画点函数，后续接 atk_md0700_draw_point() */
   Display_GfxFillRectFn_t fill_rect;   /* 底层填充矩形函数，后续接 atk_md0700_fill() 或同类接口*/
 } Display_GfxPort_t;
@@ -212,15 +211,7 @@ Display_GfxResult_t Display_GfxFillCircle(uint16_t x0, uint16_t y0, uint16_t rad
  * @param       border_color: 边框颜色，格式为 RGB565
  * @retval      Display_GfxResult_t: 绘图结果
  */
-Display_GfxResult_t Display_GfxDrawProgressBar(uint16_t x,
-                                               uint16_t y,
-                                               uint16_t width,
-                                               uint16_t height,
-                                               uint16_t value,
-                                               uint16_t max_value,
-                                               uint16_t active_color,
-                                               uint16_t empty_color,
-                                               uint16_t border_color);
+Display_GfxResult_t Display_GfxDrawProgressBar(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t value, uint16_t max_value, uint16_t active_color, uint16_t empty_color, uint16_t border_color);
 
 /**
  * @brief       画状态圆点
@@ -231,11 +222,7 @@ Display_GfxResult_t Display_GfxDrawProgressBar(uint16_t x,
  * @param       border_color: 边框颜色，格式为 RGB565
  * @retval      Display_GfxResult_t: 绘图结果
  */
-Display_GfxResult_t Display_GfxDrawStatusDot(uint16_t x,
-                                             uint16_t y,
-                                             uint16_t radius,
-                                             uint16_t fill_color,
-                                             uint16_t border_color);
+Display_GfxResult_t Display_GfxDrawStatusDot(uint16_t x, uint16_t y, uint16_t radius, uint16_t fill_color, uint16_t border_color);
 
 /**
  * @brief       画规则网格
@@ -248,13 +235,7 @@ Display_GfxResult_t Display_GfxDrawStatusDot(uint16_t x,
  * @param       color: 网格线颜色，格式为 RGB565
  * @retval      Display_GfxResult_t: 绘图结果
  */
-Display_GfxResult_t Display_GfxDrawGrid(uint16_t x,
-                                        uint16_t y,
-                                        uint16_t width,
-                                        uint16_t height,
-                                        uint16_t cell_width,
-                                        uint16_t cell_height,
-                                        uint16_t color);
+Display_GfxResult_t Display_GfxDrawGrid(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t cell_width, uint16_t cell_height, uint16_t color);
 
 #ifdef __cplusplus
 }

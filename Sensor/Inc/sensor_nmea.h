@@ -39,7 +39,7 @@ typedef struct {
 
   uint16_t hdop_cm;
   uint32_t utc_sec;
-  uint32_t utc_date;   /* Packed yymmdd from RMC; 0 when no valid date. */
+  uint32_t utc_date; /* Packed yymmdd from RMC; 0 when no valid date. */
 } Nmea_GeoData_t;
 
 /**
@@ -50,31 +50,21 @@ uint8_t Nmea_Checksum(const char *sentence, uint16_t len);
 /**
  * @brief Extract one complete NMEA sentence from a byte buffer and advance the cursor.
  */
-uint8_t Nmea_ExtractSentence(const uint8_t *buf,
-                             uint16_t buf_len,
-                             uint16_t *cursor,
-                             Nmea_Sentence_t *out);
+uint8_t Nmea_ExtractSentence(const uint8_t *buf, uint16_t buf_len, uint16_t *cursor, Nmea_Sentence_t *out);
 
 /**
  * @brief Copy one comma-separated NMEA field into a caller buffer.
  */
-uint8_t Nmea_GetField(const char *raw,
-                      uint8_t index,
-                      char *dst,
-                      uint16_t dst_len);
+uint8_t Nmea_GetField(const char *raw, uint8_t index, char *dst, uint16_t dst_len);
 
 /**
  * @brief Parse GGA position, fix, satellite, HDOP, and altitude fields.
  */
-void Nmea_ParseGGA(const Nmea_Sentence_t *s,
-                   Nmea_GeoData_t *geo);
+void Nmea_ParseGGA(const Nmea_Sentence_t *s, Nmea_GeoData_t *geo);
 
 /**
  * @brief Parse RMC position, speed, heading, and validity fields.
  */
-void Nmea_ParseRMC(const Nmea_Sentence_t *s,
-                   Nmea_GeoData_t *geo);
+void Nmea_ParseRMC(const Nmea_Sentence_t *s, Nmea_GeoData_t *geo);
 
 #endif
-
-

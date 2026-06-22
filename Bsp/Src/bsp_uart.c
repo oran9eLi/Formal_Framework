@@ -1,6 +1,6 @@
 /**
  * @file bsp_uart.c
- * @brief Implement USART1 debug console transmission.
+ * @brief 实现 USART1 调试控制台发送接口。
  */
 
 #include "bsp_uart.h"
@@ -10,29 +10,23 @@
 /***************DEBUG***************/
 static UART_HandleTypeDef huart1;
 
-/*
- * Map a HAL status onto the unified board status type so the public UART API
- * never leaks HAL_StatusTypeDef to callers.
+/**
+ * @brief 将 HAL UART 状态映射为 BSP 通用返回码。
+ *
+ * @param[in] status HAL 返回状态。
+ *
+ * @return BSP 通用返回码，避免向上层泄漏 HAL_StatusTypeDef。
  */
 static BSP_Status_t BSP_UART_MapHalStatus(HAL_StatusTypeDef status)
 {
-  if (status == HAL_OK)
-  {
-    return BSP_STATUS_OK;
-  }
-  if (status == HAL_BUSY)
-  {
-    return BSP_STATUS_BUSY;
-  }
-  if (status == HAL_TIMEOUT)
-  {
-    return BSP_STATUS_TIMEOUT;
-  }
+  if (status == HAL_OK) { return BSP_STATUS_OK; }
+  if (status == HAL_BUSY) { return BSP_STATUS_BUSY; }
+  if (status == HAL_TIMEOUT) { return BSP_STATUS_TIMEOUT; }
   return BSP_STATUS_ERROR;
 }
 
 /**
- * @brief Initialize the board debug UART with the configured pins and baud rate.
+ * @brief 按配置引脚和波特率初始化调试 UART。
  */
 BSP_Status_t BSP_UART_Init(void)
 {
@@ -48,11 +42,10 @@ BSP_Status_t BSP_UART_Init(void)
 }
 
 /**
- * @brief Send a complete byte buffer through the debug UART with a timeout.
+ * @brief 通过调试 UART 在超时时间内发送完整字节缓冲区。
  */
 BSP_Status_t BSP_UART_Send(const uint8_t *data, uint16_t length, uint32_t timeout_ms)
 {
-  return BSP_UART_MapHalStatus(
-      HAL_UART_Transmit(&huart1, (uint8_t *)data, length, timeout_ms));
+  return BSP_UART_MapHalStatus(HAL_UART_Transmit(&huart1, (uint8_t *)data, length, timeout_ms));
 }
 /*************DEBUG END*************/

@@ -1,13 +1,17 @@
 # For more options, open this url: https://clang.llvm.net.cn/docs/ClangFormatStyleOptions.html
 ---
 BasedOnStyle: Microsoft
-IndentWidth: 4
+IndentWidth: 2
 UseTab: Never
-TabWidth: 4
-ColumnLimit: 0
+TabWidth: 2
+ColumnLimit: 1000
+BinPackArguments: true
+BinPackParameters: true
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
 ---
 Language: Cpp
-AccessModifierOffset: -4
+AccessModifierOffset: -2
 NamespaceIndentation: All
 FixNamespaceComments: false
 BreakBeforeBraces: Linux

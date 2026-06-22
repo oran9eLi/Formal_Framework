@@ -8,8 +8,8 @@
 extern "C" {
 #endif
 
-#define DISPLAY_LOGO_WIDTH   550U
-#define DISPLAY_LOGO_HEIGHT  326U
+#define DISPLAY_LOGO_WIDTH             550U
+#define DISPLAY_LOGO_HEIGHT            326U
 #define DISPLAY_LOGO_TRANSPARENT_COLOR 0x0000U
 
 extern const uint8_t s_logo_data[];

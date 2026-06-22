@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-在当前 N1 工程中新增基于 SPI SD 卡的 CSV 日志模块，实现正常数据和错误信息分离存储。
+在当前 Formal_Framework1 工程中新增基于 SPI SD 卡的 CSV 日志模块，实现正常数据和错误信息分离存储。
 
 目标结果：
 
@@ -22,7 +22,7 @@
 2. SD 写入不能影响 Sensor、Estimator、Health 等实时任务。
 3. 新增任务不能造成栈溢出。
 4. CSV 文件拔卡后可以在电脑上直接读取。
-5. 数据来源必须来自当前 N1 强类型数据链路，不能使用弱类型 `device_id + channel + value` 通道。
+5. 数据来源必须来自当前 Formal_Framework1 强类型数据链路，不能使用弱类型 `device_id + channel + value` 通道。
 
 ## 2. 硬件连接
 

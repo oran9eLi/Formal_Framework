@@ -18,10 +18,7 @@ void DebugTaskMonitor_Init(void);
 /**
  * @brief Register one application task and its configured stack depth in words.
  */
-BaseType_t DebugTaskMonitor_Register(
-    TaskHandle_t handle,
-    const char *name,
-    uint16_t stack_words);
+BaseType_t DebugTaskMonitor_Register(TaskHandle_t handle, const char *name, uint16_t stack_words);
 
 /**
  * @brief Print registered task stack high-water marks and heap statistics.
