@@ -267,3 +267,13 @@ void App_GetCommStats(Px4Lite_CommDebugInfo_t *out)
 {
   Px4Lite_GetCommDebugInfo(out);
 }
+
+Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void)
+{
+  return Px4Lite_RemoteTelemetryGetMode();
+}
+
+Px4Lite_Result_t App_CopyRemoteTelemetry(Px4Lite_RemoteTelemetrySnapshot_t *out, uint32_t now_ms)
+{
+  return Px4Lite_RemoteTelemetryCopySnapshot(out, now_ms);
+}

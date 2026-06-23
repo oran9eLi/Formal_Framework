@@ -18,6 +18,8 @@
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
 #include "px4lite_mavlink_tx.h"
+#include "px4lite_mavlink_rx.h"
+#include "px4lite_remote_telemetry.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
@@ -785,7 +787,11 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
   uint32_t now_ms         = Px4Lite_PlatformGetMs();
   Px4Lite_Result_t result = Px4Lite_LoRaInit();
 
-  if (result == PX4LITE_OK) { result = Px4Lite_MavlinkTxInit(now_ms); }
+  if (result == PX4LITE_OK) {
+    Px4Lite_RemoteTelemetryInit(now_ms);
+    Px4Lite_MavlinkRxInit(now_ms);
+    result = Px4Lite_MavlinkTxInit(now_ms);
+  }
 
   Px4Lite_SetStatus(PX4LITE_MODULE_LORA, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   return result;
@@ -800,13 +806,22 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   Px4Lite_CommDebugInfo_t info;
   Px4Lite_State_t state;
   Px4Lite_Result_t result;
-  Px4Lite_Result_t tx_result;
   uint32_t last_valid_ms;
+
+  (void)Px4Lite_RemoteTelemetryUpdateModeButton(Px4Lite_ButtonPressed(PX4LITE_BUTTON_KEY0), now_ms);
 
   result = Px4Lite_LoRaService(now_ms);
   if (result == PX4LITE_OK) {
-    tx_result = Px4Lite_MavlinkTxRun(now_ms);
-    if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
+    if (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+      Px4Lite_LoRaRxFrame_t rx_frame;
+      Px4Lite_Result_t rx_result = Px4Lite_LoRaCopyRxFrame(&rx_frame);
+
+      if (rx_result == PX4LITE_OK) { rx_result = Px4Lite_MavlinkRxHandleFrame(&rx_frame, now_ms); }
+      if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY) && (rx_result != PX4LITE_STALE) && (rx_result != PX4LITE_BUSY)) { result = rx_result; }
+    } else {
+      Px4Lite_Result_t tx_result = Px4Lite_MavlinkTxRun(now_ms);
+      if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
+    }
   }
 
   memset(&info, 0, sizeof(info));
@@ -823,10 +838,8 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count;
   taskEXIT_CRITICAL();
 
-  /*
-     * 状态单写者规则：comm 任务只记录活动事实，并发布 ONLINE/DEGRADED；
-     * OFFLINE 由 Health 根据 last_valid_ms 超时统一判定。
-     */
+  /* 状态单写者规则：comm 任务只记录活动事实，并发布 ONLINE/DEGRADED；
+     OFFLINE 由 Health 根据 last_valid_ms 超时统一判定。 */
   if (result != PX4LITE_OK) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
   } else if (state == PX4LITE_STATE_ONLINE) {
@@ -836,7 +849,6 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   (void)now_ms;
 #endif
 }
-
 void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out)
 {
   Px4Lite_MavlinkTxStats_t stats;

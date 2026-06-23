@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include "px4lite_time.h"
 #include "px4lite_types.h"
+#include "px4lite_remote_telemetry.h"
 
 #define APP_NAVIGATION_MAX_AGE_MS  1500U /**< Navigation 快照最大可接受年龄，单位：ms。 */
 #define APP_SYSTEM_MAX_AGE_MS      500U  /**< System/Health 快照最大可接受年龄，单位：ms。 */
@@ -258,5 +259,22 @@ Px4Lite_Result_t App_GetModuleStatus(Px4Lite_ModuleId_t module_id, Px4Lite_Modul
  * @note 本函数只复制统计值，不访问 LoRa 硬件，不阻塞。
  */
 void App_GetCommStats(Px4Lite_CommDebugInfo_t *out);
+
+/**
+ * @brief 获取当前显示数据源模式。
+ *
+ * @return 当前模式，LOCAL 表示本机显示，REMOTE 表示远端显示。
+ */
+Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void);
+
+/**
+ * @brief 复制远端显示快照。
+ *
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间，用于远端快照新鲜度判断。
+ *
+ * @return 复制结果。
+ */
+Px4Lite_Result_t App_CopyRemoteTelemetry(Px4Lite_RemoteTelemetrySnapshot_t *out, uint32_t now_ms);
 
 #endif

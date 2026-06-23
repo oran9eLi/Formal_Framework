@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file display.c
  * @brief Coordinate display snapshots, touch navigation, and budgeted refresh.
  */
@@ -11,6 +11,7 @@
 #include "display_logo.h"
 #include "display_ssd1963.h"
 #include "debug_console.h"
+#include <string.h>
 
 /*
  * ATK-MD0700 显示骨架。
@@ -214,6 +215,8 @@ static uint8_t s_display_initialized          = 0U;
 static volatile uint8_t s_recover_requested   = 0U;
 static uint16_t s_refresh_cursor              = 0U;
 static uint8_t s_static_redraw_pending        = 0U;
+static uint8_t s_remote_mode_cache_valid      = 0U;
+static uint16_t s_remote_mode_cache           = 0U;
 
 /*
  * Check whether a point is inside an inclusive rectangle.
@@ -223,6 +226,26 @@ static uint8_t Display_IsPointInBox(uint16_t x, uint16_t y, uint16_t x1, uint16_
   return (uint8_t)((x >= x1) && (x <= x2) && (y >= y1) && (y <= y2));
 }
 
+/*
+ * 整页静态重绘会清空动态字段所在区域，必须让当前页字段重新补画。
+ */
+static void Display_InvalidateCurrentPageDrawnState(void)
+{
+  uint16_t i;
+
+  for (i = 0U; i < DISPLAY_ARRAY_SIZE(s_hmi_variables); i++) {
+    const Display_HmiVariableConfig_t *variable = &s_hmi_variables[i];
+    Display_ValueCache_t *cache;
+
+    if (variable->page != s_current_page) { continue; }
+
+    cache = &s_hmi_values[variable->id];
+    if (cache->valid == 0U) { continue; }
+
+    cache->drawn_valid = 0U;
+    cache->dirty       = 1U;
+  }
+}
 /*
  * 将图元层画点调用转接到底层 LCD 端口。 */
 static void AtkMd0700_GfxDrawPixel(uint16_t x, uint16_t y, uint16_t color)
@@ -572,11 +595,16 @@ static Display_Result_t Display_EnsureInit(void)
  */
 static Display_Result_t Display_SetValue(Display_HmiVariableId_t id, Display_HmiDataType_t type, uint32_t value)
 {
-  const Display_HmiVariableConfig_t *variable = Display_GetVariableConfig(id);
+  const Display_HmiVariableConfig_t *variable;
 
-  if ((variable == 0) || (id >= DISPLAY_HMI_VAR_COUNT)) { return DISPLAY_ERROR; }
+  if (id >= DISPLAY_HMI_VAR_COUNT) { return DISPLAY_ERROR; }
 
-  if (variable->data_type != type) { return DISPLAY_ERROR; }
+  variable = Display_GetVariableConfig(id);
+  if (variable == 0) {
+    if ((id != DISPLAY_HMI_VAR_REMOTE_MODE) || (type != DISPLAY_HMI_TYPE_U16)) { return DISPLAY_ERROR; }
+  } else if (variable->data_type != type) {
+    return DISPLAY_ERROR;
+  }
 
   if ((s_hmi_values[id].valid != 0U) && (s_hmi_values[id].value == value)) { return DISPLAY_OK; }
 
@@ -736,6 +764,8 @@ Display_Result_t Display_Init(void)
   s_touch_slider_latched  = 0;
   s_refresh_cursor        = 0U;
   s_static_redraw_pending = 0U;
+  s_remote_mode_cache_valid = 0U;
+  s_remote_mode_cache       = 0U;
   Display_InitSelfCheckValues();
 #ifdef DEBUG_ENABLE
   Display_LoadMockValues();
@@ -921,6 +951,8 @@ static void Display_ClearMotorFields(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, 0U);
 }
 
+static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *environment);
+
 static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
 {
   if (motor == 0) { return; }
@@ -962,6 +994,54 @@ static void Display_LoadNavigationSnapshot(const App_NavigationSnapshot_t *navig
 /*
  * 将统一日期时间快照写入 Display 缓存。
  */
+
+static void Display_LoadRemoteTelemetrySnapshot(const Px4Lite_RemoteTelemetrySnapshot_t *remote)
+{
+  App_NavigationSnapshot_t navigation;
+  App_EnvironmentSnapshot_t environment;
+
+  if (remote == 0) { return; }
+
+  if ((remote->valid_mask & (PX4LITE_REMOTE_VALID_NAVIGATION | PX4LITE_REMOTE_VALID_ATTITUDE)) != 0U) {
+    memset(&navigation, 0, sizeof(navigation));
+    navigation.header             = remote->header;
+    navigation.valid_mask         = 0U;
+    navigation.latitude_e7        = remote->latitude_e7;
+    navigation.longitude_e7       = remote->longitude_e7;
+    navigation.altitude_mm        = remote->altitude_mm;
+    navigation.velocity_north_cms = remote->velocity_north_cms;
+    navigation.velocity_east_cms  = remote->velocity_east_cms;
+    navigation.velocity_down_cms  = remote->velocity_down_cms;
+    navigation.roll_deg100        = remote->roll_deg100;
+    navigation.pitch_deg100       = remote->pitch_deg100;
+    navigation.yaw_deg100         = remote->yaw_deg100;
+    navigation.roll_rate_dps100   = remote->roll_rate_dps100;
+    navigation.pitch_rate_dps100  = remote->pitch_rate_dps100;
+    navigation.yaw_rate_dps100    = remote->yaw_rate_dps100;
+    navigation.hdop_x100          = remote->hdop_x100;
+    navigation.satellites_used    = remote->satellites_used;
+    navigation.gnss_fix_type      = remote->gnss_fix_type;
+    navigation.navigation_quality = 100U;
+    if ((remote->valid_mask & PX4LITE_REMOTE_VALID_NAVIGATION) != 0U) { navigation.valid_mask |= PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY | PX4LITE_NAV_VALID_ALTITUDE; }
+    if ((remote->valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) != 0U) { navigation.valid_mask |= PX4LITE_NAV_VALID_ATTITUDE; }
+    Display_LoadNavigationSnapshot(&navigation);
+  } else {
+    Display_ClearNavigationSnapshot();
+  }
+
+  if ((remote->valid_mask & (PX4LITE_REMOTE_VALID_ENVIRONMENT | PX4LITE_REMOTE_VALID_POWER)) != 0U) {
+    memset(&environment, 0, sizeof(environment));
+    environment.header          = remote->header;
+    environment.pressure_pa     = remote->pressure_pa;
+    environment.temperature_c   = remote->temperature_c;
+    environment.voltage_mv      = remote->voltage_mv;
+    environment.battery_percent = remote->battery_percent;
+    Display_LoadEnvironmentSnapshot(&environment);
+  } else {
+    Display_ClearEnvironmentFields();
+    Display_ClearBatteryFields();
+  }
+}
 static void Display_LoadDateTimeSnapshot(const App_DateTimeSnapshot_t *date_time)
 {
   if (date_time == 0) { return; }
@@ -1333,33 +1413,74 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   App_AlarmSnapshot_t alarm;
   App_DateTimeSnapshot_t date_time;
   App_MotorSnapshot_t motor;
-  Px4Lite_Result_t navigation_result;
+  Px4Lite_RemoteTelemetrySnapshot_t remote;
+  Px4Lite_RemoteMode_t remote_mode;
+  Px4Lite_Result_t navigation_result = PX4LITE_NOT_READY;
   Px4Lite_Result_t system_result;
-  Px4Lite_Result_t environment_result;
+  Px4Lite_Result_t environment_result = PX4LITE_NOT_READY;
   Px4Lite_Result_t alarm_result;
-  Px4Lite_Result_t date_time_result;
-  Px4Lite_Result_t motor_result;
+  Px4Lite_Result_t date_time_result = PX4LITE_NOT_READY;
+  Px4Lite_Result_t motor_result = PX4LITE_NOT_READY;
+  Px4Lite_Result_t remote_result = PX4LITE_NOT_READY;
   uint8_t status_fallback_loaded = 0U;
   uint16_t msglog_highest        = 0U;
 
   if (Display_EnsureInit() != DISPLAY_OK) { return DISPLAY_NOT_READY; }
 
+  remote_mode = App_GetRemoteDisplayMode();
+  {
+    uint16_t remote_mode_value = (remote_mode == PX4LITE_REMOTE_MODE_REMOTE) ? 1U : 0U;
+    if ((s_remote_mode_cache_valid == 0U) || (s_remote_mode_cache != remote_mode_value)) {
+      s_remote_mode_cache       = remote_mode_value;
+      s_remote_mode_cache_valid = 1U;
+      s_static_redraw_pending   = 1U;
+    }
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_REMOTE_MODE, remote_mode_value);
+  }
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_UPTIME_MS, now_ms);
   /* 飞行时间(上电后运行)，秒粒度，避免毫秒每帧抖动导致重绘 */
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms / 1000U);
 
-  navigation_result = App_CopyNavigation(&navigation, now_ms);
-  if (navigation_result == PX4LITE_OK) {
-    Display_LoadNavigationSnapshot(&navigation);
-  } else {
-    Display_ClearNavigationSnapshot();
-  }
-
-  date_time_result = App_CopyDateTime(&date_time, now_ms);
-  if (date_time_result == PX4LITE_OK) {
-    Display_LoadDateTimeSnapshot(&date_time);
-  } else {
+  if (remote_mode == PX4LITE_REMOTE_MODE_REMOTE) {
+    remote_result = App_CopyRemoteTelemetry(&remote, now_ms);
+    if (remote_result == PX4LITE_OK) {
+      Display_LoadRemoteTelemetrySnapshot(&remote);
+    } else {
+      Display_ClearNavigationSnapshot();
+      Display_ClearEnvironmentFields();
+      Display_ClearBatteryFields();
+    }
     Display_ClearDateTimeSnapshot();
+    Display_ClearMotorFields();
+  } else {
+    navigation_result = App_CopyNavigation(&navigation, now_ms);
+    if (navigation_result == PX4LITE_OK) {
+      Display_LoadNavigationSnapshot(&navigation);
+    } else {
+      Display_ClearNavigationSnapshot();
+    }
+
+    date_time_result = App_CopyDateTime(&date_time, now_ms);
+    if (date_time_result == PX4LITE_OK) {
+      Display_LoadDateTimeSnapshot(&date_time);
+    } else {
+      Display_ClearDateTimeSnapshot();
+    }
+
+    environment_result = App_CopyEnvironment(&environment, now_ms);
+    if (environment_result == PX4LITE_OK) {
+      Display_LoadEnvironmentSnapshot(&environment);
+    } else {
+      Display_ClearEnvironmentFields();
+      Display_ClearBatteryFields();
+    }
+
+    motor_result = App_CopyMotor(&motor, now_ms);
+    if (motor_result == PX4LITE_OK) {
+      Display_LoadMotorSnapshot(&motor);
+    } else {
+      Display_ClearMotorFields();
+    }
   }
 
   system_result = App_CopySystem(&system, now_ms);
@@ -1380,34 +1501,24 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
      无论完整 system 快照是否可用都更新，避免日志一直空白。 */
   Display_UpdateMessageLog(now_ms, msglog_highest);
 
-  environment_result = App_CopyEnvironment(&environment, now_ms);
-  if (environment_result == PX4LITE_OK) {
-    Display_LoadEnvironmentSnapshot(&environment);
-  } else {
-    Display_ClearEnvironmentFields();
-    Display_ClearBatteryFields();
-  }
-
-  motor_result = App_CopyMotor(&motor, now_ms);
-  if (motor_result == PX4LITE_OK) {
-    Display_LoadMotorSnapshot(&motor);
-  } else {
-    Display_ClearMotorFields();
-  }
-
   /* LoRa 收发帧计数为累计值，独立于上面三个快照，每帧都刷新 */
   Display_LoadLoraStats();
 
-  Display_ApplyOfflineDataPolicy();
+  if (remote_mode == PX4LITE_REMOTE_MODE_LOCAL) { Display_ApplyOfflineDataPolicy(); }
 
   /* 消息日志缓冲版本变化即触发日志区重绘 */
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, Display_PagesGetLogVersion());
 
-  if ((navigation_result != PX4LITE_OK) && (system_result != PX4LITE_OK) && (environment_result != PX4LITE_OK) && (status_fallback_loaded == 0U)) { return DISPLAY_NOT_READY; }
+  if (remote_mode == PX4LITE_REMOTE_MODE_REMOTE) {
+    if ((remote_result != PX4LITE_OK) && (system_result != PX4LITE_OK) && (status_fallback_loaded == 0U)) { return DISPLAY_NOT_READY; }
+  } else {
+    if ((navigation_result != PX4LITE_OK) && (system_result != PX4LITE_OK) && (environment_result != PX4LITE_OK) && (status_fallback_loaded == 0U)) { return DISPLAY_NOT_READY; }
+  }
 
+  (void)date_time_result;
+  (void)motor_result;
   return DISPLAY_OK;
 }
-
 /**
  * @brief 优先刷新当前页内的强节奏字段。
  *
@@ -1456,6 +1567,7 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
   if (s_static_redraw_pending != 0U) {
     if (Display_PagesDrawStatic(s_current_page, Display_GetCachedValue) != DISPLAY_OK) { return DISPLAY_ERROR; }
     Display_DrawSelectedMotorTriangle();
+    Display_InvalidateCurrentPageDrawnState();
     s_static_redraw_pending = 0U;
     s_refresh_cursor        = 0U;
     return DISPLAY_NOT_READY;

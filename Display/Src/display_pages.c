@@ -775,6 +775,7 @@ Display_Result_t Display_PagesDrawHeader(Display_HmiPage_t page, Display_PagesVa
 {
   uint32_t network_status;
   uint32_t loss_rate;
+  uint32_t remote_mode;
   uint16_t title_width;
   uint16_t title_x;
 
@@ -784,10 +785,12 @@ Display_Result_t Display_PagesDrawHeader(Display_HmiPage_t page, Display_PagesVa
 
   network_status = Display_PagesReadValue(read_value, DISPLAY_HMI_VAR_LORA_STATUS, 0U);
   loss_rate      = Display_PagesReadValue(read_value, DISPLAY_HMI_VAR_LORA_LOSS_RATE, 0U);
+  remote_mode    = Display_PagesReadValue(read_value, DISPLAY_HMI_VAR_REMOTE_MODE, 0U);
 
   (void)Display_GfxFillRect(0U, 0U, DISPLAY_GFX_WIDTH, DISPLAY_HEADER_HEIGHT, DISPLAY_GFX_COLOR_DARK);
   title_width = Display_TextGetCompanyTitleWidth();
   title_x     = (DISPLAY_GFX_WIDTH > title_width) ? (uint16_t)((DISPLAY_GFX_WIDTH - title_width) / 2U) : 0U;
+  (void)Display_GfxDrawString(12U, 20U, (remote_mode != 0U) ? "REMOTE" : "LOCAL", DISPLAY_GFX_COLOR_WHITE, 1U);
   (void)Display_TextDrawCompanyTitle(title_x, 18U, DISPLAY_GFX_COLOR_WHITE);
   (void)Display_GfxDrawStatusDot(628U, 24U, 7U, Display_PagesGetStatusColor(network_status), DISPLAY_GFX_COLOR_WHITE);
   (void)Display_GfxDrawString(644U, 20U, "NET", DISPLAY_GFX_COLOR_WHITE, 1U);

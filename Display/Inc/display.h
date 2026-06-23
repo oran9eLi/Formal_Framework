@@ -1,4 +1,4 @@
-﻿#ifndef DISPLAY_H
+#ifndef DISPLAY_H
 #define DISPLAY_H
 
 #include <stdint.h>
@@ -102,6 +102,7 @@ typedef enum {
   DISPLAY_HMI_VAR_DATE,                  /* 本地显示日期，编码 YYYYMMDD，由业务层喂值*/
   DISPLAY_HMI_VAR_FLIGHT_TIME_S,         /* 飞行时间(上电后运行)，单位 s */
   DISPLAY_HMI_VAR_MESSAGE_LOG,           /* 消息日志缓冲版本号，变化即重绘日志区 */
+  DISPLAY_HMI_VAR_REMOTE_MODE,           /* 显示数据源模式：0 本机，1 远程 */
   DISPLAY_HMI_VAR_COUNT                  /* HMI 变量数量 */
 } Display_HmiVariableId_t;
 

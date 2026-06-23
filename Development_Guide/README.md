@@ -13,8 +13,9 @@
 9. `09_框架V2第一阶段与任务栈监控.md`
 10. `15_模块数据契约与评审门禁应答.md`
 11. `16_模块接入标准与评审清单.md`（新模块接入与合入门禁,以 GNSS/LoRa 为样板）
-12. `Example_Template/`
-13. `Business_Layer_Template/`
+12. `17_LoRa远程显示与可靠链路方案.md`
+13. `Example_Template/`
+14. `Business_Layer_Template/`
 
 历次架构整改和问题处理记录统一放入 `Change_History/`，文件名必须包含
 日期，不再散落在当前规范目录。

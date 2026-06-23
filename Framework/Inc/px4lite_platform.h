@@ -213,6 +213,21 @@ typedef enum {
  */
 uint8_t Px4Lite_ButtonPressed(Px4Lite_ButtonId_t button);
 
+
+#define PX4LITE_LORA_RX_PAYLOAD_MAX 255U /**< LoRa/MAVLink 接收 payload 最大长度，单位：byte。 */
+
+/**
+ * @brief 平台层复制出的 LoRa/MAVLink 接收帧。
+ */
+typedef struct {
+  uint16_t frame_len;                             /**< 完整 MAVLink 帧长度，单位：byte。 */
+  uint8_t system_id;                              /**< MAVLink system id。 */
+  uint8_t component_id;                           /**< MAVLink component id。 */
+  uint8_t sequence;                               /**< MAVLink packet sequence。 */
+  uint8_t payload_len;                            /**< payload 长度，单位：byte。 */
+  uint32_t msg_id;                                /**< MAVLink message id。 */
+  uint8_t data[PX4LITE_LORA_RX_PAYLOAD_MAX];      /**< MAVLink payload 副本。 */
+} Px4Lite_LoRaRxFrame_t;
 /**
  * @brief 初始化 LoRa E22 通信驱动。
  *
@@ -247,6 +262,15 @@ Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms);
  * 调用方在返回 OK 后可以立即复用自己的输入缓冲区。
  */
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief 复制一帧已解析的 LoRa/MAVLink 接收帧。
+ *
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ *
+ * @return 复制结果。
+ */
+Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_LoRaRxFrame_t *out);
 
 /**
  * @brief 获取 LoRa 模块当前公开状态。

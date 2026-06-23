@@ -442,6 +442,27 @@ Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len)
   return PX4LITE_IO_ERROR;
 }
 
+
+Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_LoRaRxFrame_t *out)
+{
+  Lora_RxFrame_t frame;
+  Lora_Result_t result;
+
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+
+  result = Lora_E22_CopyRxFrame(&frame);
+  if (result == LORA_RESULT_NO_DATA) { return PX4LITE_IDLE; }
+  if (result != LORA_RESULT_OK) { return PX4LITE_IO_ERROR; }
+
+  out->frame_len    = frame.frame_len;
+  out->system_id    = frame.system_id;
+  out->component_id = frame.component_id;
+  out->sequence     = frame.sequence;
+  out->payload_len  = frame.payload_len;
+  out->msg_id       = frame.msg_id;
+  memcpy(out->data, frame.data, frame.payload_len);
+  return PX4LITE_OK;
+}
 Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms)
 {
   switch (Lora_E22_GetState(now_ms, PX4LITE_LORA_OFFLINE_MS)) {
