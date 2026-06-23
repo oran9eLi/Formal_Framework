@@ -814,10 +814,16 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   if (result == PX4LITE_OK) {
     if (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) {
       Px4Lite_LoRaRxFrame_t rx_frame;
-      Px4Lite_Result_t rx_result = Px4Lite_LoRaCopyRxFrame(&rx_frame);
+      uint8_t rx_budget = 16U;
 
-      if (rx_result == PX4LITE_OK) { rx_result = Px4Lite_MavlinkRxHandleFrame(&rx_frame, now_ms); }
-      if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY) && (rx_result != PX4LITE_STALE) && (rx_result != PX4LITE_BUSY)) { result = rx_result; }
+      /* 一个 comm 周期内排空接收队列：多帧到达时若只处理一帧，低频字段(电机/状态)
+         会长期不刷新、远端字段过期归零，且远端改动同步延迟很高。rx_budget 为上限，
+         防止极端积压独占本周期。队列空时 CopyRxFrame 返回 IDLE，循环退出。 */
+      while ((rx_budget != 0U) && (Px4Lite_LoRaCopyRxFrame(&rx_frame) == PX4LITE_OK)) {
+        Px4Lite_Result_t rx_result = Px4Lite_MavlinkRxHandleFrame(&rx_frame, now_ms);
+        if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY) && (rx_result != PX4LITE_STALE) && (rx_result != PX4LITE_BUSY)) { result = rx_result; }
+        rx_budget--;
+      }
     } else {
       Px4Lite_Result_t tx_result = Px4Lite_MavlinkTxRun(now_ms);
       if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }

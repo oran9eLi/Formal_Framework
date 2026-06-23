@@ -8,6 +8,8 @@
 
 断链时不自动切回本地模式，屏幕继续停留在远程模式，并显示远端设备超时或数据过期。本机仍负责按钮、屏幕刷新、本地链路统计、超时判断和必要的显示端运行状态。
 
+远程模式下，电机滑块只作为远端电机占空比的只读显示控件使用。滑块触摸输入必须禁用或被忽略，不得调用本机电机控制 API，也不得经 LoRa 生成远端电机控制命令。只有 `LOCAL` 模式允许滑块提交本机控制。
+
 模式切换由 KEY0 触发，屏幕左上角显示当前模式。默认 `LOCAL`：显示本机数据，LoRa 只主动发送本机 MAVLink 遥测，不处理远端 MAVLink 数据。切到 `REMOTE` 后：停止主动发送本机周期遥测，开始接收和解析远端 MAVLink 遥测。`REMOTE` 下后续仍允许发送必要的链路控制帧或 MAVLink 控制确认，因此“停止发送”只表示停止主动遥测发送，不表示 UART 物理发送完全禁用。
 
 当前阶段不强制引入自定义 LoRa 帧格式。第一版先复用现有 MAVLink 发送链路，新增 MAVLink RX、远端快照和显示源切换，完成两台设备的 `LOCAL` 发送、`REMOTE` 接收显示验证。后续如果需要严格 ACK、绑定确认、分时双工或远程控制，再在 MAVLink 扩展消息或独立 LoRa Link 层中增强。
@@ -22,27 +24,23 @@
 | MAVLink 接收帧识别 | `Sensor/Src/lora_e22.c` | 基础完成 | 已用 `mavlink_parse_char()` 识别完整 MAVLink 帧，并保存最近一帧到 `s_rx_frame`。 |
 | LoRa 调试统计 | `Sensor/Inc/lora_e22.h`、`Framework/Src/px4lite_modules.c` | 已完成 | 已统计 RX/TX 帧数、发送忙、CRC/解析错误、溢出、最近收发时间和最近消息 ID。 |
 | Comm 任务调度 | `Framework/Src/px4lite_modules.c` | 已完成 | `Px4Lite_CommWorkRun()` 周期调用 `Px4Lite_LoRaService()` 和 `Px4Lite_MavlinkTxRun()`，并更新 LoRa 模块状态。 |
-| MAVLink 遥测发送 | `Framework/Src/px4lite_mavlink_tx.c` | 已完成 | 已按槽位发送 `HEARTBEAT`、`GPS_RAW_INT`、`GNSS_SAT`、`ATTITUDE`、`GLOBAL_POSITION_INT`、`SYS_STATUS`、`BATTERY_STATUS`、`SCALED_PRESSURE`、`STATUSTEXT`。 |
+| MAVLink 遥测发送 | `Framework/Src/px4lite_mavlink_tx.c` | 已完成 | 已按槽位发送 `HEARTBEAT`、`GPS_RAW_INT`、`GNSS_SAT`、`ATTITUDE`、`GLOBAL_POSITION_INT`、`SYS_STATUS`、`BATTERY_STATUS`、`SCALED_PRESSURE`、`STATUSTEXT`，并轮转 `TIME_LOC`、`DATE_LOC`、`HUMIDITY`、`MOTOR12`、`MOTOR34` 远程显示扩展；电机 PWM 变化时会优先发送并短时重复。 |
 | MAVLink 配置开关 | `Framework/Inc/px4lite_config.h` | 已完成 | 已提供各类 MAVLink 消息 enable 和 period 配置。 |
 | 本地显示数据链路 | `Display/Src/display.c`、`Business/Inc/app_data_api.h` | 已完成 | 当前显示通过 `App_CopyNavigation()`、`App_CopyDateTime()`、`App_CopySystem()`、`App_CopyAlarm()`、`App_CopyEnvironment()`、`App_CopyMotor()` 读取本机应用快照。 |
+| MAVLink RX 分发 | `Framework/Src/px4lite_mavlink_rx.c` | 已完成 | 已在 REMOTE 模式下解析远端标准遥测和 `NAMED_VALUE_INT` 扩展，非目标 `sysid` 不写远端快照。 |
+| RemoteTelemetry 远端快照 | `Framework/Src/px4lite_remote_telemetry.c` | 已完成 | 已保存目标 `sysid`、远端设备表、字段有效位、字段级更新时间、字段 stale 位和远端只读显示字段。 |
+| 远程显示数据源 | `Display/Src/display.c` | 已完成 | REMOTE 模式主字段来自远端快照；字段未收到时无效，已收到但短暂过期时保留最后值并由 `stale_mask` 标记。 |
+| 远程电机只读保护 | `Display/Src/display.c`、`Business/Src/app_data_api.c` | 已完成 | REMOTE 模式禁用电机滑块触摸和急停触摸写入，Business 控制 API 也拒绝写本机 Control。 |
 
 ## 3. 当前代码尚未完成的部分
 
 | 缺口 | 当前现象 | 后续要求 |
 |---|---|---|
-| 接收帧消费 | `Lora_E22_CopyRxFrame()` 只有定义和声明，框架层没有调用方。 | Comm 任务需要消费接收帧，并交给 `px4lite_mavlink_rx` 解码。 |
-| MAVLink RX 分发 | 当前只有 MAVLink TX，没有 Framework 层 RX 解码模块。 | 新增 `px4lite_mavlink_rx.c/h`，按 `msgid` 解码远端遥测并写入 `RemoteTelemetry`。 |
-| 接收缓存 | 当前只有一个 `s_rx_frame` 和 `s_rx_ready`。 | 第一版可在 Comm 任务内及时消费完整帧；如果两台设备实测出现覆盖，再改为有界接收队列。 |
-| 模式切换 | 当前没有本地/远程显示模式。 | 新增 `LOCAL` / `REMOTE` 状态，KEY0 边沿切换，显示头部左上角显示当前模式。 |
-| 设备识别 | 当前 MAVLink system id 为固定配置，不能区分很多设备。 | 第一版先使用 MAVLink `sysid` 作为远端设备 ID；后续再接入 `link_device_id` 或 Remote ID。 |
-| 设备选择 | 当前没有远程设备列表和目标过滤。 | 远程模式下根据 `HEARTBEAT` 建在线设备表，选择或固定目标 `sysid`，只显示目标设备数据。 |
-| 远程快照 | 当前没有 `RemoteTelemetry` topic 或 Business API。 | 需要新增远端快照，保存远端导航、姿态、环境、电源、系统、告警、电机状态和时间。 |
-| 显示数据源切换 | 当前 Display 只读取本机 App 快照。 | 需要增加本地/远程显示模式；远程模式主字段读取远端快照，本地只用于链路、按钮和显示端状态。 |
-| 远端时间 | 当前 MAVLink GPS 时间使用启动后时间，显示时间来自本机 RTC/GNSS 时间服务。 | 远程模式应优先显示远端时间；远端未提供或过期时显示无效，不能静默替换为本机时间。 |
-| 远端湿度 | 当前 `SCALED_PRESSURE` 只携带气压和温度。 | 远程显示若需要湿度，应后续通过 MAVLink 扩展消息、`NAMED_VALUE_*`、`TUNNEL` 或自定义 dialect 携带。 |
-| 远端电机状态 | 当前 MAVLink 不发送 `App_MotorSnapshot_t`。 | Motor 页远程模式需要四路 PWM/百分比、run_state、speed_level；第一版可先预留，后续通过扩展载荷补齐，只显示不接控制。 |
+| 远端设备列表 UI | Framework 已有远端设备观测表，但 Display 尚未绘制设备列表或选择控件。 | 后续 UI 阶段展示 `sysid`、状态、最近心跳、最近有效遥测和统计；第二阶段仍支持固定目标配置。 |
+| 设备强身份 | 当前仍依赖手动配置 MAVLink `sysid`，相同 `sysid` 的设备不能仅靠心跳区分。 | STM32 Unique ID 派生 `sysid` 或协议层身份先保留不做，后续评估兼容性后再接入。 |
 | 完整模块状态 | 当前 `SYS_STATUS` 只覆盖 GNSS/IMU/Baro 主要健康位。 | 远程显示需要 GNSS、IMU、Baro、Battery、LoRa、Storage、Display、Control 等模块状态和故障码。 |
 | 完整告警表 | 当前 `STATUSTEXT` 只发送最高活动告警。 | 告警页和消息日志需要活动告警表、最高告警、更新时间和来源。 |
+| 模式与链路事件日志 | 当前远程模式切换、目标变化和远端字段过期未写入日志模块。 | 后续写入消息日志或独立链路事件记录，便于现场回放。 |
 | ACK / 重发 | 当前 LoRa 遥测发送不等待对端 ACK。 | 第一版远程显示先不强制 ACK；后续如需可靠传输，再基于 MAVLink 扩展或 LoRa Link 实现 ACK、重发和去重。 |
 | LoRa 控制 | `PX4LITE_ENABLE_COMMAND` 当前为 0，无命令执行器。 | 当前阶段不做控制；后续控制必须经过权限、ACK、超时和本地急停门禁。 |
 
@@ -76,6 +74,8 @@ BSP LoRa
 
 第一版远程模式可以先使用固定目标 `sysid` 或简单设备列表。远程模式不自动连接最近设备，必须有明确的目标设备口径。
 
+MAVLink `HEARTBEAT` 在未绑定前只能用于发现和临时区分通信层设备：当多台设备的 `sysid` 不同时，本机可以把它们记录为不同远端设备；但 `HEARTBEAT` 不提供强身份认证，也不能证明双方已经建立可信连接。如果多台设备使用相同 `sysid`，仅靠 `HEARTBEAT` 无法区分。第二阶段文档和 UI 文案不得把收到心跳称为“连接成功”，应使用“发现设备”“目标设备”“目标有效遥测”等口径。
+
 ```text
 LOCAL 模式
   -> KEY0 切换到 REMOTE
@@ -101,10 +101,20 @@ LOCAL 模式
 | `last_msg_ms` | 最近收到任意有效遥测的本机毫秒时间。 |
 | `mav_type` | MAVLink 设备类型，来自 `HEARTBEAT`。 |
 | `base_mode` / `system_status` | MAVLink 心跳状态字段，用于显示远端基础状态。 |
-| `rx_count` / `parse_error_count` | 接收统计和解析错误统计。 |
+| `rx_count` / `filtered_count` / `unsupported_count` | 目标有效遥测、过滤消息和未支持消息统计。 |
 | `remote_id` | 后续 Remote ID 接入后填充，当前可为空。 |
 
-绑定成功的严格握手不作为第一版必要条件。第一版只要求选择或配置目标 `sysid` 后，未匹配设备的数据不会进入远程显示快照。后续如果需要更强的绑定确认，再增加 `COMMAND_LONG/COMMAND_ACK`、`TUNNEL` 或 LoRa Link 绑定流程。
+第二阶段远端设备状态口径：
+
+| 状态 | 含义 |
+|---|---|
+| `DISCOVERED` | 收到某个 `sysid` 的 `HEARTBEAT`，仅表示发现通信层设备。 |
+| `TARGETED` | 本机配置或选择该 `sysid` 作为远程显示目标。 |
+| `ACTIVE` | 已收到目标设备的有效遥测，`RemoteTelemetry` 正在由目标数据更新。 |
+| `STALE` | 目标设备曾经有效，但最近心跳或有效遥测已超时。 |
+| `BOUND` | 后续完成绑定握手、ACK 或可信身份确认后才能使用；第二阶段不实现。 |
+
+绑定成功的严格握手不作为第一版和第二阶段必要条件。第二阶段只要求选择或配置目标 `sysid` 后，未匹配设备的数据不会进入远程显示快照；收到目标有效遥测后进入 `ACTIVE` 显示。后续如果需要更强的绑定确认，再增加 `COMMAND_LONG/COMMAND_ACK`、`TUNNEL` 或 LoRa Link 绑定流程。
 
 当前版本不设置 `group_id`。如果后续出现多组同时教学或多套设备共场运行的需求，优先考虑通过 LoRa 信道、空中速率、E22 参数或协议层 `network_id` 隔离，不在第一版远程显示协议中提前引入分组字段。
 
@@ -126,7 +136,7 @@ Remote ID 后续接入时复用同一套设备身份源，但不直接替代第�
 | `BATTERY_STATUS` | 电池状态、电压、电流和剩余电量。 |
 | `SCALED_PRESSURE` | 气压和温度。 |
 | `STATUSTEXT` | 最高告警或文本状态。 |
-| `NAMED_VALUE_INT` | 当前已用于 GNSS 卫星数等轻量扩展。 |
+| `NAMED_VALUE_INT` | 当前已用于 `GNSS_SAT`、`TIME_LOC`、`DATE_LOC`、`HUMIDITY`、`MOTOR12`、`MOTOR34` 等轻量扩展。 |
 
 后续可靠性增强可分三种路径：
 
@@ -154,19 +164,20 @@ Display、Remote Telemetry 和 Business API 不应依赖具体调度算法，避
 | 载荷 | 第一版来源 | 字段 |
 |---|---|---|
 | 身份 | `HEARTBEAT` | `sysid`、`compid`、设备类型、系统状态、`remote_id` 预留。 |
-| 时间 | 后续扩展 | UTC 日期、UTC 时间、本地日期时间、远端 uptime、时间来源、校时状态。 |
+| 时间 | `NAMED_VALUE_INT` 扩展 | `TIME_LOC`、`DATE_LOC`，用于 REMOTE 模式显示远端本地日期时间。 |
 | 导航 | `GPS_RAW_INT` / `GLOBAL_POSITION_INT` | fix、经纬度、高度、速度、航向、HDOP、卫星数、导航质量。 |
 | 姿态 | `ATTITUDE` | roll、pitch、yaw、roll rate、pitch rate、yaw rate。 |
-| 环境与电源 | `SCALED_PRESSURE` / `SYS_STATUS` / `BATTERY_STATUS` | 气压、温度、电压、电流、电量百分比、低电压标志；湿度后续扩展。 |
+| 环境与电源 | `SCALED_PRESSURE` / `SYS_STATUS` / `BATTERY_STATUS` / `NAMED_VALUE_INT` 扩展 | 气压、温度、湿度、电压、电流、电量百分比、低电压标志。 |
 | 系统状态 | `HEARTBEAT` / `SYS_STATUS` | 系统 ready、基础模块状态、故障码预留、状态版本。 |
 | 告警 | `STATUSTEXT` | 最高告警或文本状态；完整活动告警表后续扩展。 |
-| 电机状态 | 后续扩展 | 四路 PWM/百分比、run_state、speed_level。当前只显示，不作为控制命令。 |
+| 电机状态 | `NAMED_VALUE_INT` 扩展 | `MOTOR12`、`MOTOR34` 携带四路占空比、run_state、speed_level。REMOTE 模式下只用于滑块只读显示，不作为控制命令。 |
 | 链路统计 | 本机 RX 统计 | 接收帧数、解析错误、过滤丢弃、重复消息、最后接收时间、目标 `sysid`。 |
 
 本机数据使用原则：
 
 - 远程模式主字段不使用本机 Navigation、Environment、System、Alarm、Motor 快照。
 - 本机 RTC 可用于计算远端数据年龄和屏幕自身时间，但不能冒充远端设备时间。
+- 远程模式下本机电机滑块触摸必须禁用；滑块位置只由远端电机状态载荷刷新，远端电机字段未收到时显示无效，已收到但过期时保留最后值并通过 stale 状态提示。
 - 如果显示端也需要显示自身电量，应新增“本机/显示端电量”字段，不复用远端电量字段。
 
 ## 8. 实现清单
@@ -205,17 +216,39 @@ Display、Remote Telemetry 和 Business API 不应依赖具体调度算法，避
 未完成，保留到后续阶段：
 
 - 远程设备列表 UI 和人工选择目标设备。
-- 远端时间、湿度、电机状态、完整模块状态和完整告警表补齐。
+- 完整模块状态和完整告警表补齐。
 - ACK、重发、绑定握手、分时双工和远程控制权限。
 - 模式切换、远端超时、非法设备等事件写入日志模块。
+
 ### 8.2 第二阶段：设备选择与字段补齐
 
 1. 根据 `HEARTBEAT` 建远程设备表，显示 `sysid`、在线/超时、基础状态和链路质量。
-2. 增加目标设备选择或固定目标配置，未匹配 `sysid` 的数据不进入远端快照。
-3. 补齐远端时间载荷，可优先使用 MAVLink `SYSTEM_TIME` 或后续扩展消息。
-4. 补齐湿度、电机状态、完整模块状态和完整告警表。
-5. 配置低速链路发送周期，避免 9600 bps 下持续发送导致接收堆积或显示数据过期。
-6. 增加远程数据字段级有效位，避免部分字段过期仍显示为有效。
+2. 明确设备发现不等于绑定或连接成功：`HEARTBEAT` 只进入 `DISCOVERED`，收到目标有效遥测后才进入 `ACTIVE` 显示；`BOUND` 留到后续可靠链路阶段。
+3. 增加目标设备选择或固定目标配置，未匹配 `sysid` 的数据不进入远端快照。
+4. 补齐远端时间载荷，当前使用 `NAMED_VALUE_INT` 的 `TIME_LOC` / `DATE_LOC`。
+5. 补齐湿度和电机状态，当前使用 `HUMIDITY`、`MOTOR12`、`MOTOR34`；完整模块状态和完整告警表保留后续阶段。
+6. 将 REMOTE 模式电机滑块定义为只读显示控件：禁用触摸写入，滑块位置仅来自远端电机占空比；远端字段未收到时无效，已收到但过期时保留最后值并标记 stale。
+7. 在 Display 触摸层和 Business 控制入口形成双层保护，确保 REMOTE 模式不会调用 `App_SetMotorThrottlePercent()`、不会写本机 PWM、不会发送远端控制帧。
+8. 配置低速链路发送周期，避免 9600 bps 下持续发送导致接收堆积或显示数据过期。
+9. 增加远程数据字段级有效位和 stale 位，避免部分字段短暂过期时归零，同时让显示层可区分“未收到”和“旧值”。
+
+### 8.2.1 第二阶段实现状态
+
+已完成：
+
+- `Px4Lite_RemoteTelemetryCopyDevices()` 远端设备观测表，记录 `DISCOVERED`、`TARGETED`、`ACTIVE`、`STALE` 状态；`BOUND` 仅预留。
+- 手动 `sysid` 目标配置入口：`PX4LITE_REMOTE_TARGET_SYSID_DEFAULT` 和 `Px4Lite_RemoteTelemetrySetTargetSysId()`。
+- 目标过滤：非目标 `sysid` 的遥测不写入远端显示快照，只更新过滤统计或设备表。
+- 远端时间、湿度、电机占空比通过 `NAMED_VALUE_INT` 轻量扩展轮转发送和接收，电机占空比变化时优先发送并短时重复。
+- 远端快照字段级更新时间、字段级 stale 判断和过期旧值保留。
+- REMOTE 模式电机滑块只读显示；Display 触摸层和 Business 控制 API 双层拒绝写本机电机控制。
+- 桌面侧 `test_mavlink_rx_remote_telemetry` 和 Keil Rebuild 验证已通过。
+
+未完成，保留到后续阶段：
+
+- 远端设备表 UI 和屏幕上的人工选择控件。
+- STM32 Unique ID 派生 `sysid` 或更强身份方案。
+- 完整模块状态、完整告警表和链路事件日志。
 
 ### 8.3 第三阶段：可靠性与控制预留
 
@@ -234,10 +267,10 @@ Display、Remote Telemetry 和 Business API 不应依赖具体调度算法，避
 | LOCAL 模式 | 显示本机数据，左上角显示 `LOCAL`，LoRa 只主动发送本机 MAVLink 遥测，不处理远端 MAVLink 数据。 |
 | REMOTE 模式 | KEY0 切换后左上角显示 `REMOTE`，停止主动发送本机周期遥测，开始处理远端 MAVLink 数据。 |
 | MAVLink RX | 能解析远端 `HEARTBEAT`、定位、姿态、电池、气压温度和状态文本等消息。 |
-| 设备过滤 | 只将目标 `sysid` 的数据写入远程显示快照，其他设备只更新统计或设备表。 |
+| 设备发现 | `HEARTBEAT` 只将设备登记为 `DISCOVERED`，不得显示为绑定或连接成功；相同 `sysid` 设备无法仅靠心跳区分。 |
+| 设备过滤 | 只将目标 `sysid` 的数据写入远程显示快照，其他设备只更新统计或设备表；收到目标有效遥测后才进入 `ACTIVE` 显示。 |
 | 远程显示 | 屏幕主字段来自 `RemoteTelemetry`，不读取本机传感器快照冒充远端数据。 |
 | 远程断链 | 停留远程模式并显示远端超时，不自动切回本地。 |
-| 数据有效位 | 未收到或已过期字段显示无效，不静默使用本机字段替代。 |
+| 数据有效位 | 未收到字段显示无效；已收到但过期字段保留最后远端值并标记 stale，不静默使用本机字段替代。 |
 | 带宽 | 9600 bps 下接收帧数、解析错误、过滤丢弃和数据过期统计可观察，周期可配置。 |
-| 控制安全 | 当前阶段没有远程电机控制执行路径。 |
-
+| 控制安全 | 当前阶段没有远程电机控制执行路径；REMOTE 模式下电机滑块为只读显示，触摸不会调用本机电机控制 API，也不会发送远程控制帧。 |

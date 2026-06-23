@@ -15,6 +15,7 @@
 #include "px4lite_config.h"
 #include "px4lite_alarm.h"
 #include "px4lite_platform.h"
+#include "px4lite_time.h"
 #include "px4lite_topics.h"
 
 #if defined(__CC_ARM)
@@ -38,6 +39,9 @@ typedef enum {
   MAV_TX_SLOT_SYS_STATUS,
   MAV_TX_SLOT_BATTERY_STATUS,
   MAV_TX_SLOT_SCALED_PRESSURE,
+  MAV_TX_SLOT_REMOTE_DETAIL,
+  MAV_TX_SLOT_REMOTE_MOTOR,
+  MAV_TX_SLOT_REMOTE_STATUS,
   MAV_TX_SLOT_STATUSTEXT,
   MAV_TX_SLOT_COUNT
 } MavTx_Slot_t;
@@ -55,10 +59,24 @@ static uint32_t s_next_position_ms;
 static uint32_t s_next_sys_status_ms;
 static uint32_t s_next_battery_ms;
 static uint32_t s_next_pressure_ms;
+static uint32_t s_next_remote_detail_ms;
+static uint32_t s_next_remote_motor_ms;
+static uint32_t s_next_remote_status_ms;
 static uint32_t s_next_statustext_ms;
+static uint8_t s_remote_detail_index;
+static uint8_t s_remote_motor_index;
+static uint8_t s_remote_status_index;
+static Px4Lite_MotorOutputs_t s_last_remote_motor;
+static uint8_t s_last_remote_motor_valid;
+static uint8_t s_remote_motor_urgent_remaining;
+static uint8_t s_remote_motor_urgent_pair;
 static uint8_t s_slot;
 
 #define MAV_TX_DEG100_TO_RAD 0.0001745329252f
+#define MAV_TX_REMOTE_DETAIL_COUNT 3U
+#define MAV_TX_REMOTE_MOTOR_COUNT 2U
+#define MAV_TX_REMOTE_STATUS_COUNT 3U
+#define MAV_TX_REMOTE_MOTOR_URGENT_FRAMES 4U
 
 /**
  * @brief 使用回绕安全差值判断一个毫秒截止时间是否到期。
@@ -103,6 +121,14 @@ static int16_t MavTx_SaturateCentiAmp(int32_t current_ma)
   if (centi_amp > INT16_MAX) { return INT16_MAX; }
   if (centi_amp < INT16_MIN) { return INT16_MIN; }
   return (int16_t)centi_amp;
+}
+
+/**
+ * @brief 将百分比限制到 0 到 100。
+ */
+static uint8_t MavTx_SaturatePercent(uint8_t value)
+{
+  return (value > 100U) ? 100U : value;
 }
 
 /**
@@ -284,6 +310,303 @@ static Px4Lite_Result_t MavTx_SendGnssDetail(uint32_t now_ms)
 
   result = MavTx_SendPrepared();
   if (result == PX4LITE_OK) { s_stats.last_detail_sequence = gnss.header.sequence; }
+  return result;
+}
+
+/**
+ * @brief 编码并发送 NAMED_VALUE_INT 扩展字段。
+ */
+static Px4Lite_Result_t MavTx_SendNamedValueInt(uint32_t now_ms, const char *name, uint8_t name_len, int32_t value)
+{
+  mavlink_named_value_int_t packet;
+
+  if ((name == 0) || (name_len > 10U)) { return PX4LITE_INVALID_PARAM; }
+
+  memset(&packet, 0, sizeof(packet));
+  packet.time_boot_ms = now_ms;
+  packet.value        = value;
+  memcpy(packet.name, name, name_len);
+
+  (void)mavlink_msg_named_value_int_encode_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+
+  return MavTx_SendPrepared();
+}
+
+/**
+ * @brief 发送远程显示使用的本地日期或时间。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteTime(uint32_t now_ms, uint8_t send_date)
+{
+  Px4Lite_TimeSnapshot_t time_snapshot;
+
+  if (Px4Lite_CopyTime(&time_snapshot) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&time_snapshot.header, now_ms, PX4LITE_TIME_STALE_MS) == 0U) { return PX4LITE_STALE; }
+
+  if (send_date != 0U) {
+    return MavTx_SendNamedValueInt(now_ms, "DATE_LOC", 8U, (int32_t)time_snapshot.local_date_ymd);
+  }
+  return MavTx_SendNamedValueInt(now_ms, "TIME_LOC", 8U, (int32_t)time_snapshot.local_time_hhmmss);
+}
+
+/**
+ * @brief 发送远程显示使用的相对湿度。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteHumidity(uint32_t now_ms)
+{
+  Px4Lite_SensorBaro_t baro;
+  int32_t humidity_tenths;
+
+  if (Px4Lite_CopyBaro(&baro) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&baro.header, now_ms, PX4LITE_BARO_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
+
+  humidity_tenths = (int32_t)((baro.relative_humidity_pct * 10.0f) + 0.5f);
+  if (humidity_tenths < 0) { humidity_tenths = 0; }
+  if (humidity_tenths > 1000) { humidity_tenths = 1000; }
+  return MavTx_SendNamedValueInt(now_ms, "HUMIDITY", 8U, humidity_tenths);
+}
+
+/**
+ * @brief 发送远程显示使用的电机占空比对。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteMotorPair(uint32_t now_ms, uint8_t pair_index)
+{
+  Px4Lite_MotorOutputs_t motor;
+  uint32_t packed;
+  uint8_t first;
+
+  if (Px4Lite_CopyMotor(&motor) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&motor.header, now_ms, PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS * 5U) == 0U) { return PX4LITE_STALE; }
+
+  first  = (pair_index == 0U) ? 0U : 2U;
+  packed = (uint32_t)MavTx_SaturatePercent(motor.duty_percent[first]);
+  packed |= ((uint32_t)MavTx_SaturatePercent(motor.duty_percent[first + 1U]) << 8U);
+  packed |= ((uint32_t)motor.run_state << 16U);
+  packed |= ((uint32_t)MavTx_SaturatePercent(motor.speed_level) << 24U);
+
+  return MavTx_SendNamedValueInt(now_ms, (pair_index == 0U) ? "MOTOR12" : "MOTOR34", 7U, (int32_t)packed);
+}
+
+/**
+ * @brief 判断电机远程显示字段是否发生变化。
+ */
+static uint8_t MavTx_RemoteMotorChanged(const Px4Lite_MotorOutputs_t *motor)
+{
+  if (s_last_remote_motor_valid == 0U) { return 1U; }
+  if (memcmp(s_last_remote_motor.duty_percent, motor->duty_percent, sizeof(motor->duty_percent)) != 0) { return 1U; }
+  if (s_last_remote_motor.run_state != motor->run_state) { return 1U; }
+  if (s_last_remote_motor.speed_level != motor->speed_level) { return 1U; }
+  return 0U;
+}
+
+/**
+ * @brief 检测电机变化并安排短时高优先级重发。
+ */
+static void MavTx_UpdateRemoteMotorUrgent(uint32_t now_ms)
+{
+  Px4Lite_MotorOutputs_t motor;
+
+  if (Px4Lite_CopyMotor(&motor) != PX4LITE_OK) { return; }
+  if (Px4Lite_IsFresh(&motor.header, now_ms, PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS * 5U) == 0U) { return; }
+  if (MavTx_RemoteMotorChanged(&motor) == 0U) { return; }
+
+  s_last_remote_motor = motor;
+  s_last_remote_motor_valid = 1U;
+  s_remote_motor_urgent_remaining = MAV_TX_REMOTE_MOTOR_URGENT_FRAMES;
+  s_remote_motor_urgent_pair = 0U;
+}
+
+/**
+ * @brief 在普通遥测轮转前优先发送电机变化帧。
+ */
+static Px4Lite_Result_t MavTx_RunRemoteMotorUrgent(uint32_t now_ms)
+{
+  Px4Lite_Result_t result;
+
+  MavTx_UpdateRemoteMotorUrgent(now_ms);
+  if ((PX4LITE_MAVLINK_ENABLE_REMOTE_MOTOR == 0U) || (s_remote_motor_urgent_remaining == 0U)) { return PX4LITE_IDLE; }
+
+  result = MavTx_SendRemoteMotorPair(now_ms, s_remote_motor_urgent_pair);
+  if (result == PX4LITE_OK) {
+    s_remote_motor_urgent_pair = (uint8_t)((s_remote_motor_urgent_pair + 1U) % MAV_TX_REMOTE_MOTOR_COUNT);
+    s_remote_motor_urgent_remaining--;
+    s_stats.remote_motor_count++;
+    s_stats.last_message_id = MAVLINK_MSG_ID_NAMED_VALUE_INT;
+  } else if (result == PX4LITE_BUSY) {
+    s_stats.busy_count++;
+  } else if (result == PX4LITE_STALE) {
+    s_stats.stale_count++;
+  } else if ((result != PX4LITE_IDLE) && (result != PX4LITE_NOT_READY)) {
+    s_stats.error_count++;
+  }
+  return result;
+}
+
+/**
+ * @brief 轮转发送远程显示扩展字段（时间、日期、湿度）。
+ *
+ * @details
+ * 电机占空比已拆到独立的 MAV_TX_SLOT_REMOTE_MOTOR 高频槽，不再走本轮转。
+ * BUSY 或发送错误时保持轮转位置，下次重试同一条，避免该字段被丢一整圈。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteDetail(uint32_t now_ms)
+{
+  Px4Lite_Result_t result = PX4LITE_NOT_READY;
+  uint8_t attempt;
+
+  for (attempt = 0U; attempt < MAV_TX_REMOTE_DETAIL_COUNT; ++attempt) {
+    uint8_t current = s_remote_detail_index;
+
+    switch (current) {
+      case 0U:
+        result = MavTx_SendRemoteTime(now_ms, 0U);
+        break;
+      case 1U:
+        result = MavTx_SendRemoteTime(now_ms, 1U);
+        break;
+      default:
+        result = MavTx_SendRemoteHumidity(now_ms);
+        break;
+    }
+
+    /* BUSY/发送错误：本条已就绪但未发出，保持位置下次重试。 */
+    if ((result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR) || (result == PX4LITE_INVALID_PARAM)) { return result; }
+
+    /* OK 或本条无数据：推进到下一条。 */
+    s_remote_detail_index = (uint8_t)((s_remote_detail_index + 1U) % MAV_TX_REMOTE_DETAIL_COUNT);
+    if (result == PX4LITE_OK) { return result; }
+  }
+
+  return result;
+}
+
+/**
+ * @brief 轮转发送远程电机占空比对（MOTOR12 / MOTOR34）。
+ *
+ * @details
+ * 单独占用 MAV_TX_SLOT_REMOTE_MOTOR，按 PX4LITE_MAVLINK_REMOTE_MOTOR_PERIOD_MS
+ * 两路交替发送，使每路刷新周期明显小于接收端字段超时，避免远程电机滑块周期性归零。
+ * BUSY 或发送错误时保持轮转位置，下次重试同一对。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteMotor(uint32_t now_ms)
+{
+  Px4Lite_Result_t result = PX4LITE_NOT_READY;
+  uint8_t attempt;
+
+  for (attempt = 0U; attempt < MAV_TX_REMOTE_MOTOR_COUNT; ++attempt) {
+    uint8_t current = s_remote_motor_index;
+
+    result = MavTx_SendRemoteMotorPair(now_ms, current);
+
+    /* BUSY/发送错误：本对已就绪但未发出，保持位置下次重试。 */
+    if ((result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR) || (result == PX4LITE_INVALID_PARAM)) { return result; }
+
+    /* OK 或本对无数据：推进到下一对。 */
+    s_remote_motor_index = (uint8_t)((s_remote_motor_index + 1U) % MAV_TX_REMOTE_MOTOR_COUNT);
+    if (result == PX4LITE_OK) { return result; }
+  }
+
+  return result;
+}
+
+/**
+ * @brief 发送远程显示模块状态灯与系统就绪。
+ *
+ * @details
+ * name 固定为 "MODSTAT"。uint32 布局每 4 位一个模块状态(Px4Lite_State_t)：
+ * 0..3 GNSS，4..7 IMU，8..11 Baro，12..15 5G，16..19 Storage，20..23 Control，
+ * bit24 system_ready。LoRa 状态由显示端本机提供，不在此发送。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteModuleStatus(uint32_t now_ms)
+{
+  Px4Lite_SystemHealth_t health;
+  uint32_t packed;
+  uint8_t system_ready;
+
+  if (Px4Lite_CopyHealth(&health) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&health.header, now_ms, PX4LITE_HEALTH_PERIOD_MS * 5U) == 0U) { return PX4LITE_STALE; }
+
+  system_ready = ((health.blocking_fault_mask == 0U) && (health.not_ready_mask == 0U)) ? 1U : 0U;
+  packed  = ((uint32_t)health.module_state[PX4LITE_MODULE_GNSS] & 0x0FU);
+  packed |= ((uint32_t)health.module_state[PX4LITE_MODULE_IMU] & 0x0FU) << 4U;
+  packed |= ((uint32_t)health.module_state[PX4LITE_MODULE_BARO] & 0x0FU) << 8U;
+  packed |= ((uint32_t)health.module_state[PX4LITE_MODULE_5G] & 0x0FU) << 12U;
+  packed |= ((uint32_t)health.module_state[PX4LITE_MODULE_STORAGE] & 0x0FU) << 16U;
+  packed |= ((uint32_t)health.module_state[PX4LITE_MODULE_CONTROL] & 0x0FU) << 20U;
+  packed |= ((uint32_t)system_ready & 0x01U) << 24U;
+
+  return MavTx_SendNamedValueInt(now_ms, "MODSTAT", 7U, (int32_t)packed);
+}
+
+/**
+ * @brief 发送远程显示告警摘要：最高告警或活动来源位图。
+ *
+ * @param[in] send_mask 1 表示发送 "ALRMMSK" 活动来源位图，0 表示发送 "ALRMHI" 最高告警。
+ *
+ * @details
+ * "ALRMHI" 布局：0..15 fault_code，16..23 source_id，24..27 severity。
+ * "ALRMMSK" 为活动来源位图，bit 对应 source_id。无活动告警时两者均发 0，
+ * 使显示端能据此清除远端告警显示。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteAlarmSummary(uint32_t now_ms, uint8_t send_mask)
+{
+  Px4Lite_AlarmSnapshot_t alarm;
+  uint32_t packed;
+  uint16_t i;
+
+  if (Px4Lite_CopyAlarmSnapshot(&alarm) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&alarm.header, now_ms, PX4LITE_HEALTH_PERIOD_MS * 10U) == 0U) { return PX4LITE_STALE; }
+
+  if (send_mask != 0U) {
+    packed = 0U;
+    for (i = 0U; i < (uint16_t)PX4LITE_MODULE_COUNT; ++i) {
+      const Px4Lite_AlarmRecord_t *record = &alarm.records[i];
+      if ((record->active != 0U) && (record->fault_code != 0U) && (record->source_id < 32U)) {
+        packed |= (1UL << record->source_id);
+      }
+    }
+    return MavTx_SendNamedValueInt(now_ms, "ALRMMSK", 7U, (int32_t)packed);
+  }
+
+  packed  = ((uint32_t)alarm.highest_fault_code & 0xFFFFU);
+  packed |= ((uint32_t)(alarm.highest_source_id & 0xFFU)) << 16U;
+  packed |= ((uint32_t)((uint8_t)alarm.highest_severity & 0x0FU)) << 24U;
+  return MavTx_SendNamedValueInt(now_ms, "ALRMHI", 6U, (int32_t)packed);
+}
+
+/**
+ * @brief 轮转发送远程显示状态字段（模块状态灯、最高告警、活动告警位图）。
+ *
+ * @details
+ * BUSY 或发送错误时保持轮转位置，下次重试同一条，避免该字段被丢一整圈。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteStatus(uint32_t now_ms)
+{
+  Px4Lite_Result_t result = PX4LITE_NOT_READY;
+  uint8_t attempt;
+
+  for (attempt = 0U; attempt < MAV_TX_REMOTE_STATUS_COUNT; ++attempt) {
+    uint8_t current = s_remote_status_index;
+
+    switch (current) {
+      case 0U:
+        result = MavTx_SendRemoteModuleStatus(now_ms);
+        break;
+      case 1U:
+        result = MavTx_SendRemoteAlarmSummary(now_ms, 0U);
+        break;
+      default:
+        result = MavTx_SendRemoteAlarmSummary(now_ms, 1U);
+        break;
+    }
+
+    /* BUSY/发送错误：本条已就绪但未发出，保持位置下次重试。 */
+    if ((result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR) || (result == PX4LITE_INVALID_PARAM)) { return result; }
+
+    /* OK 或本条无数据：推进到下一条。 */
+    s_remote_status_index = (uint8_t)((s_remote_status_index + 1U) % MAV_TX_REMOTE_STATUS_COUNT);
+    if (result == PX4LITE_OK) { return result; }
+  }
+
   return result;
 }
 
@@ -643,7 +966,17 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_next_sys_status_ms  = now_ms + 300U;
   s_next_battery_ms     = now_ms + 350U;
   s_next_pressure_ms    = now_ms + 400U;
-  s_next_statustext_ms  = now_ms + 450U;
+  s_next_remote_detail_ms = now_ms + 450U;
+  s_next_remote_motor_ms  = now_ms + 250U;
+  s_next_remote_status_ms = now_ms + 550U;
+  s_next_statustext_ms  = now_ms + 500U;
+  s_remote_detail_index = 0U;
+  s_remote_motor_index  = 0U;
+  s_remote_status_index = 0U;
+  memset(&s_last_remote_motor, 0, sizeof(s_last_remote_motor));
+  s_last_remote_motor_valid = 0U;
+  s_remote_motor_urgent_remaining = 0U;
+  s_remote_motor_urgent_pair = 0U;
   s_slot                = (uint8_t)MAV_TX_SLOT_HEARTBEAT;
   return PX4LITE_OK;
 }
@@ -652,6 +985,9 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
 {
   Px4Lite_Result_t result;
   uint8_t checked;
+
+  result = MavTx_RunRemoteMotorUrgent(now_ms);
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
 
   for (checked = 0U; checked < (uint8_t)MAV_TX_SLOT_COUNT; ++checked) {
     MavTx_Slot_t current = (MavTx_Slot_t)s_slot;
@@ -711,6 +1047,27 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
         if ((PX4LITE_MAVLINK_ENABLE_SCALED_PRESSURE == 0U) || (MavTx_TimeReached(now_ms, s_next_pressure_ms) == 0U)) { continue; }
         result = MavTx_SendScaledPressure(now_ms);
         MavTx_RecordResult(result, now_ms, PX4LITE_MAVLINK_PRESSURE_PERIOD_MS, &s_next_pressure_ms, MAVLINK_MSG_ID_SCALED_PRESSURE, &s_stats.scaled_pressure_count);
+        if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
+        continue;
+
+      case MAV_TX_SLOT_REMOTE_DETAIL:
+        if ((PX4LITE_MAVLINK_ENABLE_REMOTE_DETAIL == 0U) || (MavTx_TimeReached(now_ms, s_next_remote_detail_ms) == 0U)) { continue; }
+        result = MavTx_SendRemoteDetail(now_ms);
+        MavTx_RecordResult(result, now_ms, PX4LITE_MAVLINK_REMOTE_DETAIL_PERIOD_MS, &s_next_remote_detail_ms, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_stats.remote_detail_count);
+        if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
+        continue;
+
+      case MAV_TX_SLOT_REMOTE_MOTOR:
+        if ((PX4LITE_MAVLINK_ENABLE_REMOTE_MOTOR == 0U) || (MavTx_TimeReached(now_ms, s_next_remote_motor_ms) == 0U)) { continue; }
+        result = MavTx_SendRemoteMotor(now_ms);
+        MavTx_RecordResult(result, now_ms, PX4LITE_MAVLINK_REMOTE_MOTOR_PERIOD_MS, &s_next_remote_motor_ms, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_stats.remote_motor_count);
+        if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
+        continue;
+
+      case MAV_TX_SLOT_REMOTE_STATUS:
+        if ((PX4LITE_MAVLINK_ENABLE_REMOTE_STATUS == 0U) || (MavTx_TimeReached(now_ms, s_next_remote_status_ms) == 0U)) { continue; }
+        result = MavTx_SendRemoteStatus(now_ms);
+        MavTx_RecordResult(result, now_ms, PX4LITE_MAVLINK_REMOTE_STATUS_PERIOD_MS, &s_next_remote_status_ms, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_stats.remote_status_count);
         if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
         continue;
 

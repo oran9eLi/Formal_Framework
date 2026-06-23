@@ -1,8 +1,8 @@
 version: "4.1"
 name: formal_framework
 type: ARM
-deviceName: null
-packDir: null
+deviceName: STM32F407ZGTx
+packDir: .pack/Keil/STM32F4xx_DFP.2.14.0
 srcDirs: []
 virtualFolder:
   name: <virtual_root>

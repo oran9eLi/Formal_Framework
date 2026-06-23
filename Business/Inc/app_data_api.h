@@ -221,6 +221,7 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms);
  * @param[in] throttle_percent 目标油门百分比，范围 0 到 100，超过 100 时由 Control 限幅。
  *
  * @return 设置结果。
+ * @retval PX4LITE_NOT_READY 当前为 REMOTE 显示模式，电机滑块只读，拒绝写本机 Control。
  */
 Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent);
 

@@ -227,6 +227,7 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
 
 Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
 {
+  if (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) { return PX4LITE_NOT_READY; }
   return Px4Lite_ControlSetMotorThrottlePercent(motor_index, throttle_percent);
 }
 

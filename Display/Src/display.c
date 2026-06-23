@@ -436,6 +436,7 @@ static const Display_HmiVariableConfig_t *Display_FindMotorSliderAt(uint16_t x, 
   uint16_t i;
 
   if (s_current_page != DISPLAY_HMI_PAGE_MOTOR) { return 0; }
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return 0; }
 
   for (i = 0U; i < DISPLAY_ARRAY_SIZE(s_hmi_variables); i++) {
     const Display_HmiVariableConfig_t *variable = &s_hmi_variables[i];
@@ -474,6 +475,7 @@ static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariabl
   uint8_t selection_changed;
 
   if ((variable == 0) || (Display_MotorIndexFromId(variable->id, &motor_index) == 0U)) { return DISPLAY_ERROR; }
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
   if (throttle_percent > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { throttle_percent = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
 
   if (App_SetMotorThrottlePercent(motor_index, (uint8_t)throttle_percent) != PX4LITE_OK) { return DISPLAY_ERROR; }
@@ -506,6 +508,8 @@ static Display_Result_t Display_HandleMotorSliderTouch(const Display_HmiVariable
 static Display_Result_t Display_MotorEmergencyStop(void)
 {
   uint8_t i;
+
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
 
   for (i = 0U; i < 4U; i++) {
     const Display_HmiVariableConfig_t *variable = Display_FindMotorSliderByIndex(i);
@@ -952,6 +956,7 @@ static void Display_ClearMotorFields(void)
 }
 
 static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *environment);
+static void Display_ClearDateTimeSnapshot(void);
 
 static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
 {
@@ -961,6 +966,23 @@ static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, motor->duty_percent[1]);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_3, motor->duty_percent[2]);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, motor->duty_percent[3]);
+}
+
+static void Display_LoadRemoteMotorSnapshot(const Px4Lite_RemoteTelemetrySnapshot_t *remote)
+{
+  App_MotorSnapshot_t motor;
+  uint8_t i;
+
+  if (remote == 0) { return; }
+
+  memset(&motor, 0, sizeof(motor));
+  motor.header      = remote->header;
+  motor.run_state   = remote->motor_run_state;
+  motor.speed_level = remote->motor_speed_level;
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; ++i) {
+    motor.duty_percent[i] = remote->motor_duty_percent[i];
+  }
+  Display_LoadMotorSnapshot(&motor);
 }
 
 /*
@@ -1031,15 +1053,30 @@ static void Display_LoadRemoteTelemetrySnapshot(const Px4Lite_RemoteTelemetrySna
 
   if ((remote->valid_mask & (PX4LITE_REMOTE_VALID_ENVIRONMENT | PX4LITE_REMOTE_VALID_POWER)) != 0U) {
     memset(&environment, 0, sizeof(environment));
-    environment.header          = remote->header;
-    environment.pressure_pa     = remote->pressure_pa;
-    environment.temperature_c   = remote->temperature_c;
-    environment.voltage_mv      = remote->voltage_mv;
-    environment.battery_percent = remote->battery_percent;
+    environment.header                = remote->header;
+    environment.pressure_pa           = remote->pressure_pa;
+    environment.temperature_c         = remote->temperature_c;
+    environment.relative_humidity_pct = remote->relative_humidity_pct;
+    environment.voltage_mv            = remote->voltage_mv;
+    environment.battery_percent       = remote->battery_percent;
     Display_LoadEnvironmentSnapshot(&environment);
   } else {
     Display_ClearEnvironmentFields();
     Display_ClearBatteryFields();
+  }
+
+  if ((remote->valid_mask & PX4LITE_REMOTE_VALID_TIME) != 0U) {
+    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, remote->time_hhmmss);
+    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_CLOCK_TIME, remote->time_hhmmss);
+    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, remote->date_ymd);
+  } else {
+    Display_ClearDateTimeSnapshot();
+  }
+
+  if ((remote->valid_mask & PX4LITE_REMOTE_VALID_MOTOR) != 0U) {
+    Display_LoadRemoteMotorSnapshot(remote);
+  } else {
+    Display_ClearMotorFields();
   }
 }
 static void Display_LoadDateTimeSnapshot(const App_DateTimeSnapshot_t *date_time)
@@ -1250,6 +1287,73 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
 }
 
 /*
+ * 远程模式：模块状态灯与系统就绪取自远端快照。LoRa 灯不在此处理，由
+ * Display_LoadLocalLoraLight 保持本机来源。远端模块状态无效时灯置未知(0)。
+ */
+static void Display_LoadRemoteModuleStatus(const Px4Lite_RemoteTelemetrySnapshot_t *remote)
+{
+  if ((remote == 0) || ((remote->valid_mask & PX4LITE_REMOTE_VALID_MODULES) == 0U)) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SYSTEM_STATUS, 0U);
+    return;
+  }
+
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_GNSS]));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_IMU]));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_BARO]));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_STORAGE]));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_CONTROL]));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_CONTROL]));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_CONTROL]));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_CONTROL]));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_5G]));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SYSTEM_STATUS, (remote->system_ready != 0U) ? 2U : 1U);
+}
+
+/*
+ * 远程模式：告警摘要(最高告警 + 活动来源位图)取自远端快照。多行告警表(ROW2-5)
+ * 与自检页错误码指纹框留待后续阶段补齐，本阶段先清零避免残留本机告警。
+ */
+static void Display_LoadRemoteAlarm(const Px4Lite_RemoteTelemetrySnapshot_t *remote)
+{
+  uint32_t alarm_row;
+  uint8_t has_alarm = ((remote != 0) && ((remote->valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U)) ? 1U : 0U;
+
+  alarm_row = (has_alarm != 0U) && (remote->highest_fault_code != 0U)
+                ? (((uint32_t)remote->highest_source_id << 16) | remote->highest_fault_code)
+                : 0U;
+
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ALARM_CODE, (has_alarm != 0U) ? remote->highest_fault_code : 0U);
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, (has_alarm != 0U) ? remote->alarm_active_mask : 0U);
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW1_CODE, alarm_row);
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW2_CODE, 0U);
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW3_CODE, 0U);
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW4_CODE, 0U);
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW5_CODE, 0U);
+}
+
+/*
+ * 远程模式：LoRa 自检灯与 LoRa 状态永远取本机模块状态(显示端自身链路)。
+ */
+static void Display_LoadLocalLoraLight(void)
+{
+  Px4Lite_ModuleStatus_t status;
+
+  if (App_GetModuleStatus(PX4LITE_MODULE_LORA, &status) == PX4LITE_OK) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, Display_MapStateValue(status.state));
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, Display_MapStateValue(status.state));
+  }
+}
+
+/*
  * 将系统状态快照字段写入 Display 缓存。
  */
 static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
@@ -1449,9 +1553,9 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
       Display_ClearNavigationSnapshot();
       Display_ClearEnvironmentFields();
       Display_ClearBatteryFields();
+      Display_ClearDateTimeSnapshot();
+      Display_ClearMotorFields();
     }
-    Display_ClearDateTimeSnapshot();
-    Display_ClearMotorFields();
   } else {
     navigation_result = App_CopyNavigation(&navigation, now_ms);
     if (navigation_result == PX4LITE_OK) {
@@ -1484,17 +1588,25 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   }
 
   system_result = App_CopySystem(&system, now_ms);
-  if (system_result == PX4LITE_OK) {
-    Display_LoadSystemSnapshot(&system);
-    msglog_highest = system.highest_fault_code;
+  if (remote_mode == PX4LITE_REMOTE_MODE_REMOTE) {
+    /* 模块状态灯/系统就绪/告警走远端快照；LoRa 灯与消息日志保持本机来源。 */
+    Display_LoadRemoteModuleStatus((remote_result == PX4LITE_OK) ? &remote : 0);
+    Display_LoadRemoteAlarm((remote_result == PX4LITE_OK) ? &remote : 0);
+    Display_LoadLocalLoraLight();
+    if (system_result == PX4LITE_OK) { msglog_highest = system.highest_fault_code; }
   } else {
-    status_fallback_loaded = Display_LoadModuleStatusFallback();
-  }
+    if (system_result == PX4LITE_OK) {
+      Display_LoadSystemSnapshot(&system);
+      msglog_highest = system.highest_fault_code;
+    } else {
+      status_fallback_loaded = Display_LoadModuleStatusFallback();
+    }
 
-  alarm_result = App_CopyAlarm(&alarm, now_ms);
-  if (alarm_result == PX4LITE_OK) {
-    Display_LoadAlarmSnapshot(&alarm);
-    msglog_highest = alarm.highest_fault_code;
+    alarm_result = App_CopyAlarm(&alarm, now_ms);
+    if (alarm_result == PX4LITE_OK) {
+      Display_LoadAlarmSnapshot(&alarm);
+      msglog_highest = alarm.highest_fault_code;
+    }
   }
 
   /* 消息日志与自检灯/告警表同源(App_GetModuleStatus + 告警码)，

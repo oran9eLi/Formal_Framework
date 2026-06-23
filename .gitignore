@@ -1,6 +1,7 @@
 # Keil MDK generated build outputs
 MDK-ARM/Objects/
 MDK-ARM/Listings/
+.pack/
 MDK-ARM/*.log
 MDK-ARM/*.uvguix.*
 MDK-ARM/*.uvgui.*

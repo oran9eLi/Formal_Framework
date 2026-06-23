@@ -24,8 +24,17 @@
 #endif
 #include <string.h>
 
-static Lora_RxFrame_t s_rx_frame;
-static volatile uint8_t s_rx_ready;
+/* 接收帧有界队列：一个 comm 周期内可能解析出多帧，必须全部入队由 comm 任务
+   排空消费。单帧缓冲会在多帧到达时只保留最后一帧，导致低频字段长期不刷新、
+   远端字段过期归零、远端改动同步延迟高。 */
+#define LORA_RX_QUEUE_LEN 8U
+/* 单次 Service 最多处理的 RX 字节数。远端持续发包或切换模式后存在积压时，
+   不能在 comm 任务内无界清空 UART 环形缓冲，否则心跳会延后并触发 watchdog。 */
+#define LORA_E22_RX_SERVICE_BYTE_BUDGET 128U
+static Lora_RxFrame_t s_rx_queue[LORA_RX_QUEUE_LEN];
+static volatile uint16_t s_rx_q_head;  /**< 生产者写入位置(comm 任务内 Service)。 */
+static volatile uint16_t s_rx_q_tail;  /**< 消费者读取位置(comm 任务内 CopyRxFrame)。 */
+static volatile uint16_t s_rx_q_count; /**< 当前队列内帧数。 */
 
 static mavlink_status_t s_parse_status;
 static mavlink_message_t s_parse_msg;
@@ -77,8 +86,10 @@ Lora_Result_t Lora_E22_Init(void)
     if ((uint32_t)(BSP_Time_GetTickMs() - start_ms) > 500U) { return LORA_RESULT_BUSY; }
   }
 
-  memset(&s_rx_frame, 0, sizeof(s_rx_frame));
-  s_rx_ready = 0U;
+  memset(s_rx_queue, 0, sizeof(s_rx_queue));
+  s_rx_q_head = 0U;
+  s_rx_q_tail = 0U;
+  s_rx_q_count = 0U;
   memset(&s_parse_status, 0, sizeof(s_parse_status));
   memset(&s_parse_msg, 0, sizeof(s_parse_msg));
 
@@ -111,6 +122,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
   uint8_t temp[128];
   uint16_t available;
   uint16_t received;
+  uint16_t rx_budget = LORA_E22_RX_SERVICE_BYTE_BUDGET;
   uint16_t i;
 
   if (s_reinit_request != 0U) {
@@ -118,10 +130,14 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
     (void)Lora_E22_Init();
   }
 
-  while ((available = BSP_LoRa_GetRxCount()) > 0U) {
-    received = BSP_LoRa_GetRxData(temp, (available > sizeof(temp)) ? (uint16_t)sizeof(temp) : available);
+  while ((rx_budget != 0U) && ((available = BSP_LoRa_GetRxCount()) > 0U)) {
+    uint16_t chunk_len = (available > sizeof(temp)) ? (uint16_t)sizeof(temp) : available;
+    if (chunk_len > rx_budget) { chunk_len = rx_budget; }
+
+    received = BSP_LoRa_GetRxData(temp, chunk_len);
 
     if (received == 0U) { break; }
+    rx_budget = (received >= rx_budget) ? 0U : (uint16_t)(rx_budget - received);
     s_rx_byte_count += received;
 
     for (i = 0U; i < received; i++) {
@@ -129,20 +145,31 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
       uint16_t drop_before       = s_parse_status.packet_rx_drop_count;
 
       if (mavlink_parse_char(MAVLINK_COMM_0, temp[i], &s_parse_msg, &s_parse_status) != 0) {
-        /* --- complete MAVLink frame received --- */
+        /* --- complete MAVLink frame received: 入队，不覆盖 --- */
         uint32_t primask;
+        Lora_RxFrame_t *slot;
 
         primask = __get_PRIMASK();
         __disable_irq();
 
-        s_rx_frame.frame_len    = s_parse_msg.len + MAVLINK_NUM_HEADER_BYTES + MAVLINK_NUM_CHECKSUM_BYTES;
-        s_rx_frame.system_id    = s_parse_msg.sysid;
-        s_rx_frame.component_id = s_parse_msg.compid;
-        s_rx_frame.sequence     = s_parse_msg.seq;
-        s_rx_frame.payload_len  = s_parse_msg.len;
-        s_rx_frame.msg_id       = s_parse_msg.msgid;
-        memcpy(s_rx_frame.data, _MAV_PAYLOAD(&s_parse_msg), s_parse_msg.len);
-        s_rx_ready = 1U;
+        if (s_rx_q_count >= LORA_RX_QUEUE_LEN) {
+          /* 队列满：丢弃最旧一帧保留较新数据，并计入丢弃统计。 */
+          s_rx_q_tail = (uint16_t)((s_rx_q_tail + 1U) % LORA_RX_QUEUE_LEN);
+          s_rx_q_count--;
+          s_rx_drop_count++;
+        }
+
+        slot               = &s_rx_queue[s_rx_q_head];
+        slot->frame_len    = s_parse_msg.len + MAVLINK_NUM_HEADER_BYTES + MAVLINK_NUM_CHECKSUM_BYTES;
+        slot->system_id    = s_parse_msg.sysid;
+        slot->component_id = s_parse_msg.compid;
+        slot->sequence     = s_parse_msg.seq;
+        slot->payload_len  = s_parse_msg.len;
+        slot->msg_id       = s_parse_msg.msgid;
+        memcpy(slot->data, _MAV_PAYLOAD(&s_parse_msg), s_parse_msg.len);
+        s_rx_q_head = (uint16_t)((s_rx_q_head + 1U) % LORA_RX_QUEUE_LEN);
+        s_rx_q_count++;
+
         s_rx_frame_count++;
         s_last_rx_ms  = now_ms;
         s_last_msg_id = s_parse_msg.msgid;
@@ -172,13 +199,14 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out)
   primask = __get_PRIMASK();
   __disable_irq();
 
-  if (s_rx_ready == 0U) {
+  if (s_rx_q_count == 0U) {
     if (primask == 0U) { __enable_irq(); }
     return LORA_RESULT_NO_DATA;
   }
 
-  *out       = s_rx_frame;
-  s_rx_ready = 0U;
+  *out        = s_rx_queue[s_rx_q_tail];
+  s_rx_q_tail = (uint16_t)((s_rx_q_tail + 1U) % LORA_RX_QUEUE_LEN);
+  s_rx_q_count--;
 
   if (primask == 0U) { __enable_irq(); }
   return LORA_RESULT_OK;
