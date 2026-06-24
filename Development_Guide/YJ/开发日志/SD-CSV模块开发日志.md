@@ -31,8 +31,8 @@ FatFS 通过 `diskio_sd_spi.c` 适配到底层 SD SPI 协议，Storage 上层不
 
 新增 `storage_csv.c`：
 
-- 生成 `SENSOR.CSV` 表头；
-- 生成 `ERROR.CSV` 表头；
+- 生成 `YYMMDD_D.CSV` 数据日志表头；
+- 生成 `YYMMDD_E.CSV` 事件日志表头；
 - 格式化数据行；
 - 格式化错误行；
 - 避免浮点 printf。
@@ -79,8 +79,8 @@ FatFS 通过 `diskio_sd_spi.c` 适配到底层 SD SPI 协议，Storage 上层不
 - 固定长度记录队列；
 - Framework Storage 模块；
 - Storage 模块状态发布；
-- 数据文件 `SENSOR.CSV`；
-- 错误文件 `ERROR.CSV`。
+- 数据文件 `YYMMDD_D.CSV`；
+- 事件文件 `YYMMDD_E.CSV`。
 
 模块状态可按“基础完成”理解：软件链路和隔离策略已建立，仍需结合真实 SD 卡做插拔、掉电和长时间写入测试。
 

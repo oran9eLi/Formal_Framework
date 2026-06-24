@@ -24,8 +24,8 @@ Framework Topics
 | 总线 | SPI3 |
 | 引脚 | PB3/SCK，PB4/MISO，PB5/MOSI，PA15/CS |
 | 文件系统 | FatFS |
-| 数据文件 | `SENSOR.CSV` |
-| 错误文件 | `ERROR.CSV` |
+| 数据文件 | `YYMMDD_D.CSV`，例如 `260622_D.CSV`；时间无效时为 `UNSYNC_D.CSV` |
+| 事件文件 | `YYMMDD_E.CSV`，例如 `260622_E.CSV`；时间无效时为 `UNSYNC_E.CSV` |
 | 服务周期 | 50 ms |
 | 数据记录周期 | 1000 ms |
 | 同步周期 | 5000 ms |
@@ -47,13 +47,13 @@ PB3、PB4、PA15 与 JTAG 复用，调试时应使用 SWD，避免 JTAG 占用 S
 
 ## 4. CSV 格式
 
-`SENSOR.CSV` 表头：
+`YYMMDD_D.CSV` 表头：
 
 ```csv
 time_ms,gnss_valid,lat_e7,lon_e7,roll_deg,pitch_deg,temp_c,pressure_hpa,humidity_pct,voltage_v,battery_pct
 ```
 
-`ERROR.CSV` 表头：
+`YYMMDD_E.CSV` 表头：
 
 ```csv
 time_ms,module,state,fault,error_count,message
@@ -101,11 +101,11 @@ Storage 使用固定长度静态队列，当前长度为 8。
 | 温度、气压、湿度 | Baro Topic |
 | 电压、电量 | Battery Topic |
 
-缺失数据不会静默写入假值，而是向 `ERROR.CSV` 记录如 `nav_not_ready`、`baro_not_ready`、`battery_not_ready` 等错误事件。
+缺失数据不会静默写入假值，而是向 `YYMMDD_E.CSV` 记录如 `nav_not_ready`、`baro_not_ready`、`battery_not_ready` 等错误事件。RTC/GNSS 日期尚未有效时，记录写入 `UNSYNC_E.CSV`，行内 `local_date` 和 `local_time` 为 0。
 
 ## 8. 验收要点
 
-- 插卡启动后根目录生成 `SENSOR.CSV` 和 `ERROR.CSV`。
+- 插卡启动后根目录按日期生成 `YYMMDD_D.CSV` 和 `YYMMDD_E.CSV`；时间未同步前生成 `UNSYNC_D.CSV` 和 `UNSYNC_E.CSV`。
 - 无卡启动或写入失败时系统继续运行，Storage 进入 DEGRADED。
 - SD 写入不能影响 GNSS、IMU、BME280、ADC 采集。
 - `storage` 任务栈监控应保持安全余量。

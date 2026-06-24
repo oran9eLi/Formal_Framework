@@ -3,6 +3,7 @@
 
 #include "bsp_config.h"
 #include "bsp_status.h"
+#include "sensor_power_config.h"
 #include "sensor_power.h"
 
 static const uint32_t *s_voltage_sequence;
@@ -84,8 +85,8 @@ static int TestPublishedVoltageKeepsMillivoltPrecision(void)
 
 static int TestBatteryPercentClampsAndUsesFivePercentSteps(void)
 {
-  static const uint32_t voltages_mv[] = {9800U, 9900U, 10199U, 10200U, 10499U, 10500U, 11525U, 12600U};
-  static const uint8_t expected_pct[] = {0U, 5U, 5U, 10U, 10U, 10U, 55U, 100U};
+  static const uint32_t voltages_mv[] = {9800U, 9900U, 10200U, 10500U, 10800U, 11100U, 11400U, 11700U, 11950U, 12150U, 12300U, 12450U, 12550U, 12600U};
+  static const uint8_t expected_pct[] = {0U, 0U, 5U, 10U, 20U, 30U, 40U, 50U, 60U, 70U, 80U, 90U, 100U, 100U};
   uint32_t i;
   int ok = 1;
 
@@ -104,7 +105,7 @@ static int TestBatteryPercentClampsAndUsesFivePercentSteps(void)
 
 static int TestBatteryLowVoltageFlagFollowsZeroBand(void)
 {
-  static const uint32_t voltages_mv[] = {9800U, 9900U};
+  static const uint32_t voltages_mv[] = {9800U, POWER_PERCENT_TABLE_EMPTY_MV};
   static const uint8_t expected_low[] = {1U, 0U};
   uint32_t i;
   int ok = 1;
@@ -130,7 +131,7 @@ static int TestBatteryLowVoltageFlagFollowsZeroBand(void)
 
 static int TestBatteryPercentRequiresTenConsecutiveNewSteps(void)
 {
-  static const uint32_t initial_mv = 11525U;
+  static const uint32_t initial_mv = 11700U;
   static const uint32_t higher_mv  = 12550U;
   uint32_t i;
   int ok = 1;
@@ -141,7 +142,7 @@ static int TestBatteryPercentRequiresTenConsecutiveNewSteps(void)
     printf("initial service failed\n");
     return 0;
   }
-  ok &= ExpectUint32("initial battery step", SnapshotPercent(), 55U);
+  ok &= ExpectUint32("initial battery step", SnapshotPercent(), 50U);
 
   LoadVoltageSequence(&higher_mv, 1U);
   for (i = 0U; i < 9U; ++i) {
@@ -149,7 +150,7 @@ static int TestBatteryPercentRequiresTenConsecutiveNewSteps(void)
       printf("pre-confirm service failed at sample %lu\n", (unsigned long)i);
       return 0;
     }
-    ok &= ExpectUint32("battery step before confirm", SnapshotPercent(), 55U);
+    ok &= ExpectUint32("battery step before confirm", SnapshotPercent(), 50U);
   }
 
   if (Sensor_Power_Service(11000U) != POWER_RESULT_OK) {
@@ -163,8 +164,8 @@ static int TestBatteryPercentRequiresTenConsecutiveNewSteps(void)
 
 static int TestBatteryPercentIgnoresBoundaryNoise(void)
 {
-  static const uint32_t initial_mv = 11525U;
-  static const uint32_t noisy_mv   = 11640U;
+  static const uint32_t initial_mv = 11700U;
+  static const uint32_t noisy_mv   = 11820U;
   uint32_t i;
   int ok = 1;
 
@@ -174,7 +175,7 @@ static int TestBatteryPercentIgnoresBoundaryNoise(void)
     printf("initial service failed for boundary noise test\n");
     return 0;
   }
-  ok &= ExpectUint32("initial boundary step", SnapshotPercent(), 55U);
+  ok &= ExpectUint32("initial boundary step", SnapshotPercent(), 50U);
 
   LoadVoltageSequence(&noisy_mv, 1U);
   for (i = 0U; i < 12U; ++i) {
@@ -182,7 +183,7 @@ static int TestBatteryPercentIgnoresBoundaryNoise(void)
       printf("noise service failed at sample %lu\n", (unsigned long)i);
       return 0;
     }
-    ok &= ExpectUint32("battery step should ignore boundary noise", SnapshotPercent(), 55U);
+    ok &= ExpectUint32("battery step should ignore boundary noise", SnapshotPercent(), 50U);
   }
 
   return ok;

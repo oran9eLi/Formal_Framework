@@ -65,6 +65,25 @@ CURR        -> 暂不接
 
 同时保留电压滤波，避免 ADC 抖动造成显示跳变。
 
+### 2.5 电压校准参数配置化与曲线优化
+
+本次将 Sensor 层的二次校准参数集中到 `Sensor/Inc/sensor_power_config.h`：
+
+- `POWER_CAL_GAIN_NUM / POWER_CAL_GAIN_DEN`：用于现场比例校准；
+- `POWER_CAL_OFFSET_MV`：用于固定偏移校准；
+- `POWER_LOAD_COMPENSATION_ENABLE / POWER_LOAD_COMPENSATION_MV`：用于可选负载压降补偿，默认关闭；
+- `POWER_PERCENT_TABLE_xx_MV`：用于配置电量百分比曲线点。
+
+电量曲线由原先低电量分段加中间线性换算，改为完整曲线表：
+
+```text
+9.90V=0%, 10.20V=5%, 10.50V=10%, 10.80V=20%,
+11.10V=30%, 11.40V=40%, 11.70V=50%, 11.95V=60%,
+12.15V=70%, 12.30V=80%, 12.45V=90%, 12.55V=100%
+```
+
+曲线点之间仍使用线性插值，并按 5% 档位显示；10 次连续确认和 200mV 滞回规则继续保留。
+
 ## 3. 调试记录
 
 实测现象：
@@ -84,8 +103,9 @@ CURR        -> 暂不接
 
 - PA5 / ADC1_IN5 采集；
 - 电流计 `VOLT` 校准；
+- Sensor 层 gain、offset、负载补偿参数配置化；
 - 电压 mV 换算；
-- 5% 电量档位；
+- 表驱动电量曲线和 5% 电量档位；
 - 10 次连续确认防跳变；
 - Battery Topic 发布；
 - Storage CSV 电压、电量字段接入；

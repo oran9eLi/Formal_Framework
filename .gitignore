@@ -24,6 +24,8 @@ Release/Latest/*.log
 .idea/
 .vs/
 .cursor/
+tmp/
+.pack/
 *.code-workspace
 
 # OS generated files

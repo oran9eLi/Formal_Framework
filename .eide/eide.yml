@@ -2,7 +2,7 @@ version: "4.1"
 name: formal_framework
 type: ARM
 deviceName: null
-packDir: null
+packDir: .pack/Keil/STM32F4xx_DFP.2.14.0
 srcDirs: []
 virtualFolder:
   name: <virtual_root>
@@ -25,8 +25,6 @@ virtualFolder:
         - path: Framework/Src/px4lite_mavlink_tx.c
         - path: Framework/Src/px4lite_attitude.c
         - path: Framework/Src/px4lite_alarm.c
-        - path: Framework/Src/px4lite_time.c
-        - path: Framework/Src/px4lite_control.c
         - path: Framework/Src/px4lite_topics.c
         - path: Framework/Src/px4lite_platform_f407.c
         - path: Framework/Src/px4lite_registry.c
@@ -56,7 +54,6 @@ virtualFolder:
         - path: Bsp/Src/bsp.c
         - path: Bsp/Src/bsp_uart.c
         - path: Bsp/Src/bsp_gnss.c
-        - path: Bsp/Src/bsp_rtc.c
         - path: Bsp/Src/bsp_lora.c
         - path: Bsp/Src/bsp_lcd_fsmc.c
         - path: Bsp/Src/bsp_touch_port.c
@@ -64,8 +61,6 @@ virtualFolder:
         - path: Bsp/Src/bsp_adc.c
         - path: Bsp/Src/bsp_time.c
         - path: Bsp/Src/bsp_spi.c
-        - path: Bsp/Src/bsp_pwm.c
-        - path: Bsp/Src/bsp_button.c
       folders: []
     - name: Display
       files:
@@ -103,8 +98,6 @@ virtualFolder:
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr_ex.c
-        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc.c
-        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc_ex.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_sram.c
         - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_fsmc.c
       folders: []
@@ -140,6 +133,7 @@ targets:
         - STM32F407xx
         - USE_HAL_DRIVER
       incList:
+        - .
         - Core/Inc
         - Debug/Inc
         - Bsp/Inc
@@ -276,14 +270,4 @@ targets:
         otherCmds: ""
         proType: 1
         speed: 8000
-      STLink:
-        address: "0x8000000"
-        bin: ""
-        elFile: None
-        optionBytes: .eide/target 1.st.option.bytes.ini
-        otherCmds: ""
-        proType: SWD
-        resetMode: default
-        runAfterProgram: true
-        speed: 4000
-    uploader: STLink
+    uploader: JLink

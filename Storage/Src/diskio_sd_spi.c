@@ -9,6 +9,7 @@
 #include "bsp_spi.h"
 #include "bsp_time.h"
 #include "storage_config.h"
+#include "storage_time.h"
 
 #define SD_DUMMY_BYTE         0xFFU
 #define SD_BLOCK_SIZE         512U
@@ -326,7 +327,7 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)
 
 DWORD get_fattime(void)
 {
-  return ((DWORD)(2026U - 1980U) << 25) | ((DWORD)1U << 21) | ((DWORD)1U << 16);
+  return (DWORD)Storage_TimeGetFatFsTime();
 }
 
 uint8_t DiskioSdSpi_IsInitialized(void)

@@ -6,4 +6,7 @@
 #ifndef TEST_UNIT_TASK_H
 #define TEST_UNIT_TASK_H
 
+#define taskENTER_CRITICAL() do { } while (0)
+#define taskEXIT_CRITICAL()  do { } while (0)
+
 #endif

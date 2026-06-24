@@ -23,6 +23,7 @@ static int TestExtendedHeader(void)
   int failures       = 0;
 
   failures += ExpectContains("header local date", header, "local_date");
+  failures += ExpectContains("header yaw", header, "roll_deg,pitch_deg,yaw_deg");
   failures += ExpectContains("header motor", header, "motor1_pct");
   failures += ExpectContains("header alarm", header, "active_alarm_count");
   failures += ExpectContains("header lora", header, "lora_parse_error_count");
@@ -46,6 +47,7 @@ static int TestExtendedDataLine(void)
   data.longitude_e7           = 1181234567L;
   data.roll_deg100            = 123;
   data.pitch_deg100           = -456;
+  data.yaw_deg100             = 7890;
   data.temperature_c100       = 2789;
   data.pressure_hpa100        = 101325U;
   data.humidity_pct100        = 5566U;
@@ -71,9 +73,44 @@ static int TestExtendedDataLine(void)
   }
 
   failures += ExpectContains("line date time sync", line, "20260622,153045,2");
+  failures += ExpectContains("line attitude", line, ",+1.23,-4.56,+78.90,");
   failures += ExpectContains("line motors", line, ",10,20,30,40,1,");
   failures += ExpectContains("line alarm", line, ",2,8961,");
   failures += ExpectContains("line lora storage", line, ",11,12,3,4,5,6");
+  return failures;
+}
+
+static int TestEventHeaderAndLine(void)
+{
+  Storage_CsvEvent_t event;
+  char line[256];
+  const char *header = StorageCsv_EventHeader();
+  int failures       = 0;
+
+  failures += ExpectContains("event header type", header, "event_type");
+  failures += ExpectContains("event header active", header, "active");
+  failures += ExpectContains("event header message", header, "message");
+
+  memset(&event, 0, sizeof(event));
+  event.time_ms           = 2233U;
+  event.local_date_ymd    = 20260622U;
+  event.local_time_hhmmss = 93005U;
+  event.event_type        = "ALARM_ACTIVE";
+  event.source            = "BATTERY";
+  event.state             = 2U;
+  event.fault             = 0x2301U;
+  event.severity          = 3U;
+  event.active            = 1U;
+  event.count             = 4U;
+  event.message           = "low_voltage";
+
+  if (StorageCsv_FormatEventLine(&event, line, sizeof(line)) != PX4LITE_OK) {
+    printf("FAIL event format result\n");
+    return 1;
+  }
+
+  failures += ExpectContains("event line date", line, "20260622,093005,ALARM_ACTIVE");
+  failures += ExpectContains("event line source", line, ",BATTERY,2,8961,3,1,4,low_voltage");
   return failures;
 }
 
@@ -83,6 +120,7 @@ int main(void)
 
   failures += TestExtendedHeader();
   failures += TestExtendedDataLine();
+  failures += TestEventHeaderAndLine();
 
   if (failures != 0) {
     printf("storage csv extended field tests failed: %d\n", failures);

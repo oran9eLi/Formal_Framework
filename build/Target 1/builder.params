@@ -3,16 +3,17 @@
     "target": "Target 1",
     "toolchain": "AC5",
     "toolchainLocation": "D:\\keil\\ARM\\ARMCC",
-    "toolchainCfgFile": "c:\\Users\\13377\\.vscode\\extensions\\cl.eide-3.27.2\\res\\data\\models/arm.v5.model.json",
+    "toolchainCfgFile": "c:\\Users\\admin\\.vscode\\extensions\\cl.eide-3.27.2\\res\\data\\models/arm.v5.model.json",
     "buildMode": "fast|multhread",
     "showRepathOnLog": true,
-    "threadNum": 32,
-    "rootDir": "c:\\Users\\13377\\Desktop\\NW3",
+    "threadNum": 16,
+    "rootDir": "c:\\Users\\admin\\Desktop\\NW3",
     "dumpPath": "build\\Target 1",
     "outDir": "build\\Target 1",
     "ram": 131072,
     "rom": 1048576,
     "incDirs": [
+        ".",
         "Core/Inc",
         "Debug/Inc",
         "Bsp/Inc",
@@ -156,22 +157,22 @@
             "rw-base": "0x20000000",
             "xo-base": "",
             "link-scatter": [
-                "\"c:/Users/13377/Desktop/NW3/build/Target 1/formal_framework.sct\""
+                "\"c:/Users/admin/Desktop/NW3/build/Target 1/formal_framework.sct\""
             ]
         }
     },
     "env": {
         "KEIL_OUTPUT_DIR": "Objects",
-        "workspaceFolder": "c:\\Users\\13377\\Desktop\\NW3",
+        "workspaceFolder": "c:\\Users\\admin\\Desktop\\NW3",
         "workspaceFolderBasename": "NW3",
-        "OutDir": "c:\\Users\\13377\\Desktop\\NW3\\build\\Target 1",
+        "OutDir": "c:\\Users\\admin\\Desktop\\NW3\\build\\Target 1",
         "OutDirRoot": "build",
         "OutDirBase": "build\\Target 1",
         "ProjectName": "formal_framework",
         "ConfigName": "Target 1",
-        "ProjectRoot": "c:\\Users\\13377\\Desktop\\NW3",
-        "ExecutableName": "c:\\Users\\13377\\Desktop\\NW3\\build\\Target 1\\formal_framework",
-        "ChipPackDir": "",
+        "ProjectRoot": "c:\\Users\\admin\\Desktop\\NW3",
+        "ExecutableName": "c:\\Users\\admin\\Desktop\\NW3\\build\\Target 1\\formal_framework",
+        "ChipPackDir": ".pack/Keil/STM32F4xx_DFP.2.14.0",
         "ChipName": "",
         "SYS_Platform": "win32",
         "SYS_DirSep": "\\",
@@ -179,10 +180,10 @@
         "SYS_PathSep": ";",
         "SYS_PathSeparator": ";",
         "SYS_EOL": "\r\n",
-        "EIDE_BUILDER_DIR": "c:\\Users\\13377\\.vscode\\extensions\\cl.eide-3.27.2\\res\\tools\\win32\\unify_builder",
+        "EIDE_BUILDER_DIR": "c:\\Users\\admin\\.vscode\\extensions\\cl.eide-3.27.2\\res\\tools\\win32\\unify_builder",
         "EIDE_BINARIES_VER": "12.1.1",
-        "EIDE_MSYS": "C:\\Users\\13377\\.eide\\bin\\builder\\msys\\bin",
-        "EIDE_PY3_CMD": "C:\\Users\\13377\\.eide\\bin\\python36\\python3.exe",
+        "EIDE_MSYS": "C:\\Users\\admin\\.eide\\bin\\builder\\msys\\bin",
+        "EIDE_PY3_CMD": "C:\\Users\\admin\\.eide\\bin\\python36\\python3.exe",
         "ToolchainRoot": "D:\\keil\\ARM\\ARMCC"
     },
     "sysPaths": []

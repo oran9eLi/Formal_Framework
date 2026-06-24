@@ -19,7 +19,8 @@
  */
 typedef enum {
   STORAGE_RECORD_DATA  = 0, /**< 常规传感器/业务数据记录。 */
-  STORAGE_RECORD_ERROR = 1  /**< 错误、告警或状态记录。 */
+  STORAGE_RECORD_EVENT = 1, /**< 告警、故障或状态变化事件记录。 */
+  STORAGE_RECORD_ERROR = STORAGE_RECORD_EVENT
 } Storage_RecordType_t;
 
 /**
@@ -28,6 +29,8 @@ typedef enum {
 typedef struct {
   Storage_RecordType_t type;       /**< 记录类型，决定写入哪个 CSV 文件。 */
   uint32_t enqueue_time_ms;        /**< 入队时间，单位：ms。 */
+  uint32_t target_date_ymd;        /**< 目标日志文件日期，编码：YYYYMMDD。 */
+  uint32_t target_time_hhmmss;     /**< 记录产生时的本地时间，编码：HHMMSS。 */
   char line[STORAGE_CSV_LINE_MAX]; /**< 完整 CSV 行，包含行尾换行或结束符由实现约定。 */
 } Storage_Record_t;
 

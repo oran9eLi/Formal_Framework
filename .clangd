@@ -1,0 +1,23 @@
+CompileFlags:
+  Add:
+    - -isystemnull\include
+    - -ferror-limit=0
+  Remove:
+    - --cpu
+    - --li
+    - --c99
+    - --split_sections
+    - --diag_suppress=*
+    - --no_depend_system_headers
+    - --depend
+    - --strict
+    - --enum_is_int
+    - --gnu
+    - --apcs=*
+    - --signed_chars
+    - --split_ldm
+    - --execute_only
+    - -Otime
+  CompilationDatabase: ./build/Target 1
+Diagnostics:
+  Suppress: "*"

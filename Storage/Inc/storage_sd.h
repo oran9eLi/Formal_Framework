@@ -59,7 +59,7 @@ void Storage_SD_Service(uint32_t now_ms);
  *
  * @return 写入结果。
  */
-Px4Lite_Result_t Storage_SD_WriteDataLine(const char *line, uint32_t now_ms);
+Px4Lite_Result_t Storage_SD_WriteDataLine(const char *line, uint32_t target_date_ymd, uint32_t now_ms);
 
 /**
  * @brief 写入一行错误记录 CSV。
@@ -69,7 +69,12 @@ Px4Lite_Result_t Storage_SD_WriteDataLine(const char *line, uint32_t now_ms);
  *
  * @return 写入结果。
  */
-Px4Lite_Result_t Storage_SD_WriteErrorLine(const char *line, uint32_t now_ms);
+Px4Lite_Result_t Storage_SD_WriteEventLine(const char *line, uint32_t target_date_ymd, uint32_t now_ms);
+
+/**
+ * @brief 兼容旧错误记录入口，内部按事件日志写入。
+ */
+Px4Lite_Result_t Storage_SD_WriteErrorLine(const char *line, uint32_t target_date_ymd, uint32_t now_ms);
 
 /**
  * @brief 同步 SD 文件缓存。
