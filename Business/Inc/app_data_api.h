@@ -111,10 +111,12 @@ typedef struct {
   float pressure_pa;            /**< 气压，单位：Pa。 */
   float temperature_c;          /**< 温度，单位：摄氏度。 */
   float relative_humidity_pct;  /**< 相对湿度，单位：%。 */
-  uint32_t voltage_mv;          /**< 电池或输入电压，单位：mV。 */
-  uint8_t battery_percent;      /**< 电量百分比，范围：0 到 100。 */
-  uint8_t low_voltage;          /**< 低电压标志，1 表示低电压。 */
-  uint16_t reserved;            /**< 保留字段，保持结构体对齐。 */
+  uint32_t voltage_mv;          /**< 电池 1 电压，单位：mV。 */
+  uint32_t voltage2_mv;         /**< 电池 2 电压，单位：mV。 */
+  uint8_t battery_percent;      /**< 电池 1 电量百分比，范围：0 到 100。 */
+  uint8_t low_voltage;          /**< 电池 1 低电压标志，1 表示低电压。 */
+  uint8_t battery2_percent;     /**< 电池 2 电量百分比，范围：0 到 100。 */
+  uint8_t low_voltage2;         /**< 电池 2 低电压标志，1 表示低电压。 */
 } App_EnvironmentSnapshot_t;
 
 /**

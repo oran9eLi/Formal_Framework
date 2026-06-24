@@ -127,6 +127,12 @@ void Business_DisplayServiceTask(void *argument)
       next_refresh_ms = now_ms + BUSINESS_DISPLAY_REFRESH_PERIOD_MS;
     }
 
+    /* 切页等事件需要整页重绘时，不等 200ms 常规节拍，下一个 10ms tick 立即开始刷新。
+       静态骨架用现有缓存值绘制，数据仍由常规节拍的快照更新，故无需在此重取快照。 */
+    if (Business_DisplayNeedsImmediateRefresh() != 0U) {
+      refresh_pending = 1U;
+    }
+
     if (refresh_pending != 0U) {
       result = Business_DisplayRefreshStep(now_ms, BUSINESS_DISPLAY_REFRESH_BUDGET_US);
       if (result == BUSINESS_SERVICE_OK) {

@@ -29,6 +29,14 @@ Business_ServiceResult_t Business_DisplayPollTouch(uint32_t now_ms)
 }
 
 /**
+ * @brief 查询显示层是否有待处理的整页重绘(切页触发)。
+ */
+uint8_t Business_DisplayNeedsImmediateRefresh(void)
+{
+  return Display_HasPendingRedraw();
+}
+
+/**
  * @brief 从应用只读 API 准备一份一致的显示快照。
  */
 Business_ServiceResult_t Business_DisplayPrepareSnapshot(uint32_t now_ms)

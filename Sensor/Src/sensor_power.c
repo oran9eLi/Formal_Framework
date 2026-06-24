@@ -22,12 +22,14 @@
 #define POWER_PERCENT_STEP          5U
 #define POWER_PERCENT_CONFIRM_COUNT 10U
 #define POWER_PERCENT_HYSTERESIS_MV 200U
+#define POWER_PRESENT_MV            5000U
 
 static Power_Snapshot_t s_snapshot;
 static uint32_t s_filtered_voltage_mv;
 static uint8_t s_pending_percent_count;
 static uint8_t s_initialized;
 static uint8_t s_filter_valid;
+static uint8_t s_present;
 static volatile uint8_t s_reinit_request;
 
 /**
@@ -148,6 +150,7 @@ Power_Result_t Sensor_Power_Init(void)
   s_filtered_voltage_mv   = 0U;
   s_pending_percent_count = 0U;
   s_filter_valid          = 0U;
+  s_present               = 0U;
   s_initialized           = 1U;
   return POWER_RESULT_OK;
 }
@@ -162,6 +165,8 @@ Power_Result_t Sensor_Power_Service(uint32_t now_ms)
   uint32_t voltage_mv = 0U;
   uint32_t filtered_voltage_mv;
   uint8_t candidate_percent;
+  uint8_t now_present;
+  uint8_t fresh_insert;
 
   if (s_reinit_request != 0U) {
     s_reinit_request = 0U;
@@ -174,14 +179,26 @@ Power_Result_t Sensor_Power_Service(uint32_t now_ms)
     return POWER_RESULT_IO_ERROR;
   }
 
+  /* 接入跳变检测：电压由"未接入"(< 接入门限)跳到"接入"视为热插拔。此时以本次
+     读数(BSP 已做 8x 过采样)重新播种滤波并直接采用候选电量、跳过 10 次确认，
+     使插上瞬间立即给出真实电量；其后恢复常规滤波/确认以抑制带载抖动。 */
+  now_present  = (voltage_mv >= POWER_PRESENT_MV) ? 1U : 0U;
+  fresh_insert = ((now_present != 0U) && (s_present == 0U)) ? 1U : 0U;
+  s_present    = now_present;
+
   s_snapshot.rx_sequence++;
   if (s_snapshot.rx_sequence == 0U) { s_snapshot.rx_sequence = 1U; }
   s_snapshot.sample_time_ms = now_ms;
-  s_snapshot.voltage_v      = ((float)voltage_mv) / 1000.0f;
-  filtered_voltage_mv       = Power_FilterVoltage(voltage_mv);
-  candidate_percent         = Power_CalcPercent(filtered_voltage_mv);
-  s_snapshot.percent        = (s_snapshot.rx_sequence == 1U) ? candidate_percent : Power_ApplyPercentConfirm(s_snapshot.percent, candidate_percent, filtered_voltage_mv);
-  s_snapshot.low_voltage    = (voltage_mv < POWER_ZERO_MV) ? 1U : 0U;
+
+  if (fresh_insert != 0U) {
+    s_filter_valid          = 0U;
+    s_pending_percent_count = 0U;
+  }
+  filtered_voltage_mv = Power_FilterVoltage(voltage_mv);
+  s_snapshot.voltage_v = ((float)filtered_voltage_mv) / 1000.0f;
+  candidate_percent   = Power_CalcPercent(filtered_voltage_mv);
+  s_snapshot.percent  = ((s_snapshot.rx_sequence == 1U) || (fresh_insert != 0U)) ? candidate_percent : Power_ApplyPercentConfirm(s_snapshot.percent, candidate_percent, filtered_voltage_mv);
+  s_snapshot.low_voltage = (voltage_mv < POWER_ZERO_MV) ? 1U : 0U;
 
   return POWER_RESULT_OK;
 }

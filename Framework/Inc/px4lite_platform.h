@@ -168,6 +168,17 @@ Px4Lite_Result_t Px4Lite_BatteryInit(void);
 Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement);
 
 /**
+ * @brief 将第二块电池(PA4/ADC2_IN4)最新电源驱动快照转换为 Framework 电池状态。
+ *
+ * @param[out] measurement 输出缓冲区，不能为 NULL。
+ *
+ * @return 转换结果；无新样本时返回 PX4LITE_IDLE。
+ *
+ * @note 与 Px4Lite_BatteryRead 对等，由 battery2 工作块周期调用并发布到 battery2 topic。
+ */
+Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement);
+
+/**
  * @brief 初始化电机 PWM 输出并强制进入安全脉宽。
  *
  * @return 初始化结果。

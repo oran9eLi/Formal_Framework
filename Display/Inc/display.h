@@ -22,8 +22,8 @@ typedef enum {
 } Display_HmiDataType_t;
 
 typedef enum {
-  DISPLAY_HMI_PAGE_LOGO = 0,   /* Logo 开机页：触屏任意位置进入自检页 */
-  DISPLAY_HMI_PAGE_SELF_CHECK, /* 上电自检页：进度、模块状态和故障码 */
+  DISPLAY_HMI_PAGE_LOGO = 0,   /* 已废弃：开机 Logo 页已移除，保留枚举值以维持路由 ID 稳定 */
+  DISPLAY_HMI_PAGE_SELF_CHECK, /* 上电首页/自检页：进度、模块状态和故障码 */
   DISPLAY_HMI_PAGE_FLIGHT,     /* 飞行数据页：系统栏、时间/电源/温湿度气压、消息日志*/
   DISPLAY_HMI_PAGE_AIRCRAFT,   /* 飞机情况页：系统栏、姿态/LoRa 通信、消息日志*/
   DISPLAY_HMI_PAGE_DATA,       /* 定位数据页：系统、GNSS 定位、消息日志*/
@@ -65,9 +65,11 @@ typedef enum {
   DISPLAY_HMI_VAR_DATA_SELFCHECK_RESULT, /* 自检结果位图 (uint32) */
   DISPLAY_HMI_VAR_SYSTEM_STATUS,         /* 系统总状态，来源 CNS_State.system */
   DISPLAY_HMI_VAR_UPTIME_MS,             /* 系统运行时间，单位 ms */
-  DISPLAY_HMI_VAR_BATTERY_VOLTAGE,       /* 电池电压，单位 0.01V */
-  DISPLAY_HMI_VAR_BATTERY_PERCENT,       /* 电量百分比，单位 % */
-  DISPLAY_HMI_VAR_GNSS_FIX,              /* GNSS 定位状态*/
+  DISPLAY_HMI_VAR_BATTERY_VOLTAGE,       /* 主控电池电压(ADC1)，单位 0.01V */
+  DISPLAY_HMI_VAR_BATTERY_PERCENT,       /* 主控电池电量(ADC1)，单位 % */
+  DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE,     /* 电机电池电压(ADC2)，单位 0.01V */
+  DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT,     /* 电机电池电量(ADC2)，单位 % */
+  DISPLAY_HMI_VAR_GNSS_FIX,              /* GNSS 信号状态：0=断开，非0=正常 */
   DISPLAY_HMI_VAR_GNSS_SAT_COUNT,        /* GNSS 使用卫星数量 */
   DISPLAY_HMI_VAR_GNSS_HDOP,             /* GNSS HDOP，单位 0.01 */
   DISPLAY_HMI_VAR_LATITUDE,              /* 纬度，单位 1e-7 度*/
@@ -243,6 +245,14 @@ Display_Result_t Display_SetHmiPage(Display_HmiPage_t page);
  * @retval      Display_HmiPage_t: 当前页面 ID
  */
 Display_HmiPage_t Display_GetCurrentHmiPage(void);
+
+/**
+ * @brief       查询是否有待处理的整页静态重绘(切页触发)
+ * @param       无
+ * @retval      uint8_t: 非 0 表示需要尽快重绘当前页
+ * @note        供显示任务在常规刷新周期之外立即触发一次刷新，缩短切页延迟
+ */
+uint8_t Display_HasPendingRedraw(void);
 
 /**
  * @brief       轮询触摸输入并处理页面导航或变量写入

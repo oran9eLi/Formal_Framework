@@ -28,12 +28,14 @@ static uint32_t s_gnss_sequence;
 static uint32_t s_imu_sequence;
 static uint32_t s_baro_sequence;
 static uint32_t s_battery_sequence;
+static uint32_t s_battery2_sequence;
 static uint32_t s_navigation_sequence;
 static uint32_t s_health_sequence;
 static uint32_t s_start_ms;
 static uint32_t s_last_imu_work_ms;
 static uint32_t s_last_baro_work_ms;
 static uint32_t s_last_battery_work_ms;
+static uint32_t s_last_battery2_work_ms;
 static Px4Lite_AttitudeState_t s_attitude_state;
 
 /**
@@ -214,11 +216,13 @@ Px4Lite_Result_t Px4Lite_ModulesInit(void)
   s_imu_sequence         = 0U;
   s_baro_sequence        = 0U;
   s_battery_sequence     = 0U;
+  s_battery2_sequence    = 0U;
   s_navigation_sequence  = 0U;
   s_health_sequence      = 0U;
   s_last_imu_work_ms     = 0U;
   s_last_baro_work_ms    = 0U;
   s_last_battery_work_ms = 0U;
+  s_last_battery2_work_ms = 0U;
   s_start_ms             = Px4Lite_PlatformGetMs();
   return PX4LITE_OK;
 }
@@ -467,6 +471,28 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
       Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms);
     }
   }
+
+  /* 第二块电池(ADC2/PA4)：与电池 1 同周期采样并发布到 battery2 topic。
+     数据链路对等，但不接入模块注册表的健康/离线监控(无独立模块槽)。 */
+  if ((s_last_battery2_work_ms == 0U) || ((uint32_t)(now_ms - s_last_battery2_work_ms) >= PX4LITE_BATTERY_WORK_PERIOD_MS)) {
+    Px4Lite_BatteryStatus_t battery2;
+    Px4Lite_Result_t result;
+
+    s_last_battery2_work_ms = now_ms;
+    memset(&battery2, 0, sizeof(battery2));
+    result = Px4Lite_Battery2Read(&battery2);
+    if (result == PX4LITE_OK) {
+      battery2.header.sample_time_ms  = (battery2.header.sample_time_ms != 0U) ? battery2.header.sample_time_ms : now_ms;
+      battery2.header.publish_time_ms = now_ms;
+      battery2.header.sequence        = ++s_battery2_sequence;
+      battery2.header.device_id       = (uint16_t)PX4LITE_MODULE_BATTERY;
+      battery2.header.valid           = 1U;
+      battery2.header.quality         = (battery2.low_voltage != 0U) ? 50U : 100U;
+      battery2.header.flags           = PX4LITE_DATA_VALID;
+      if (battery2.low_voltage != 0U) { battery2.header.flags |= PX4LITE_DATA_DEGRADED; }
+      Px4Lite_PublishBattery2(&battery2);
+    }
+  }
 #endif
 
 #if !PX4LITE_ENABLE_GNSS && !PX4LITE_ENABLE_IMU && !PX4LITE_ENABLE_BARO && !PX4LITE_ENABLE_BATTERY
@@ -612,8 +638,12 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   taskEXIT_CRITICAL();
 
 #if PX4LITE_ENABLE_GNSS
-  if ((gnss_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, last_rx_ms) > PX4LITE_GNSS_OFFLINE_MS)) {
-    if ((last_rx_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_GNSS_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms); }
+  if (gnss_state != PX4LITE_STATE_FAILED) {
+    if ((last_rx_ms == 0U) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_GNSS_INSERT_CHECK_MS)) {
+      Px4Lite_SetStatus(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms);
+    } else if ((last_rx_ms != 0U) && (Px4Lite_ElapsedMs(now_ms, last_rx_ms) > PX4LITE_GNSS_OFFLINE_MS)) {
+      Px4Lite_SetStatus(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms);
+    }
   }
 #else
   (void)gnss_state;
@@ -813,8 +843,9 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   Px4Lite_LoRaGetDebugInfo(&info);
   state = Px4Lite_LoRaGetState(now_ms);
 
+  /* 通信"有效活动"只看 RX：收到对端帧才算链路在线。本机 TX 不计入，
+     否则没插模块/无对端时本机持续发送会让 Health 永不超时、误判在线。 */
   last_valid_ms = info.last_rx_ms;
-  if ((last_valid_ms == 0U) || ((info.last_tx_ms != 0U) && ((int32_t)(info.last_tx_ms - last_valid_ms) > 0))) { last_valid_ms = info.last_tx_ms; }
 
   taskENTER_CRITICAL();
   s_status[PX4LITE_MODULE_LORA].last_rx_ms    = info.last_rx_ms;

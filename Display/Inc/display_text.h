@@ -75,6 +75,7 @@ typedef enum {
   DISPLAY_TITLE_FLIGHT,
   DISPLAY_TITLE_AIRCRAFT,
   DISPLAY_TXT_DATE,
+  DISPLAY_TXT_HDOP,
   DISPLAY_TEXT_COUNT
 } Display_TextLabel_t;
 
@@ -99,6 +100,8 @@ typedef enum {
   DISPLAY_LOGMSG_STORAGE_OK,       /* 存储正常 */
   DISPLAY_LOGMSG_STORAGE_LOST,     /* 存储断开 */
   DISPLAY_LOGMSG_MOTOR_OK,         /* 电机正常 */
+  DISPLAY_LOGMSG_MOTOR_DISCONNECT, /* 电机断开 */
+  DISPLAY_LOGMSG_MOTOR_LOWPOWER,   /* 电机供电不足 */
   DISPLAY_LOGMSG_MOTOR1_FAIL,      /* 1号电机故障 */
   DISPLAY_LOGMSG_MOTOR2_FAIL,      /* 2号电机故障 */
   DISPLAY_LOGMSG_MOTOR3_FAIL,      /* 3号电机故障 */
@@ -140,6 +143,21 @@ Display_GfxResult_t Display_TextDrawMotorTitle(uint16_t x, uint16_t y, uint16_t 
  * @retval      Display_GfxResult_t: 绘制结果
  */
 Display_GfxResult_t Display_TextDrawEstop(uint16_t x, uint16_t y, uint16_t color);
+
+/**
+ * @brief       绘制双电池来源标签：主控/电机 + 电压/电池(共4字，16px高)。
+ * @param       x: 左上角 X 坐标
+ * @param       y: 左上角 Y 坐标
+ * @param       is_motor: 0=主控(ADC1)，非0=电机(ADC2)
+ * @param       is_battery: 0=电压，非0=电池(电量)
+ * @param       color: RGB565 颜色值
+ * @retval      Display_GfxResult_t: 绘制结果
+ */
+Display_GfxResult_t Display_TextDrawBatteryLabel(uint16_t x, uint16_t y, uint8_t is_motor, uint8_t is_battery, uint16_t color);
+
+Display_GfxResult_t Display_TextDrawVoltageLabel(uint16_t x, uint16_t y, uint16_t color);
+
+Display_GfxResult_t Display_TextDrawRawBitmap(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t bytes_per_row, const uint8_t *data, uint16_t color);
 
 /**
  * @brief       绘制一条消息日志短语（单字字模拼接，字高 16px）

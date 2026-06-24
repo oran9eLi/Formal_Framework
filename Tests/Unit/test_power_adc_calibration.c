@@ -63,9 +63,10 @@ static int TestDividerMatchesMeasuredCalibration(void)
   return ok;
 }
 
-static int TestPublishedVoltageKeepsMillivoltPrecision(void)
+static int TestPublishedVoltageUsesFilteredMillivolts(void)
 {
   static const uint32_t voltages_mv[] = {10750U, 10790U, 10740U, 10760U};
+  static const uint32_t expected_mv[] = {10750U, 10760U, 10755U, 10756U};
   uint32_t i;
   int ok = 1;
 
@@ -77,7 +78,7 @@ static int TestPublishedVoltageKeepsMillivoltPrecision(void)
       printf("service failed at sample %lu\n", (unsigned long)i);
       return 0;
     }
-    ok &= ExpectUint32("millivolt voltage output", SnapshotVoltageMv(), voltages_mv[i]);
+    ok &= ExpectUint32("filtered millivolt voltage output", SnapshotVoltageMv(), expected_mv[i]);
   }
   return ok;
 }
@@ -188,16 +189,45 @@ static int TestBatteryPercentIgnoresBoundaryNoise(void)
   return ok;
 }
 
+static int TestBatteryReinsertPublishesImmediately(void)
+{
+  static const uint32_t absent_mv   = 0U;     /* 拔出/未接入：电压远低于接入门限 */
+  static const uint32_t inserted_mv = 12550U; /* 热插入满电电池 */
+  uint32_t i;
+  int ok = 1;
+
+  LoadVoltageSequence(&absent_mv, 1U);
+  (void)Sensor_Power_Init();
+  for (i = 0U; i < 3U; ++i) {
+    if (Sensor_Power_Service((i + 1U) * 1000U) != POWER_RESULT_OK) {
+      printf("absent service failed at sample %lu\n", (unsigned long)i);
+      return 0;
+    }
+  }
+  ok &= ExpectUint32("absent battery percent", SnapshotPercent(), 0U);
+
+  /* 热插拔接入：下一拍就应直接给出真实电量，而不是从 0 经 10 次确认缓慢爬升。 */
+  LoadVoltageSequence(&inserted_mv, 1U);
+  if (Sensor_Power_Service(4000U) != POWER_RESULT_OK) {
+    printf("reinsert service failed\n");
+    return 0;
+  }
+  ok &= ExpectUint32("reinserted battery percent jumps immediately", SnapshotPercent(), 100U);
+
+  return ok;
+}
+
 int main(void)
 {
   int ok = 1;
 
   ok &= TestDividerMatchesMeasuredCalibration();
-  ok &= TestPublishedVoltageKeepsMillivoltPrecision();
+  ok &= TestPublishedVoltageUsesFilteredMillivolts();
   ok &= TestBatteryPercentClampsAndUsesFivePercentSteps();
   ok &= TestBatteryLowVoltageFlagFollowsZeroBand();
   ok &= TestBatteryPercentRequiresTenConsecutiveNewSteps();
   ok &= TestBatteryPercentIgnoresBoundaryNoise();
+  ok &= TestBatteryReinsertPublishesImmediately();
 
   if (ok != 0) {
     printf("power adc calibration tests passed\n");

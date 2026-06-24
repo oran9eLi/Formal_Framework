@@ -216,9 +216,18 @@ Display_GfxResult_t Display_GfxDrawChar(uint16_t x, uint16_t y, char ch, uint16_
   if (((uint32_t)x + (5U * scale)) > DISPLAY_GFX_WIDTH || ((uint32_t)y + (7U * scale)) > DISPLAY_GFX_HEIGHT) { return DISPLAY_GFX_PARAM_ERROR; }
 
   glyph = Display_GfxGetGlyph(ch);
-  for (col = 0U; col < 5U; col++) {
-    for (row = 0U; row < 7U; row++) {
-      if ((glyph[col] & (uint8_t)(1U << row)) != 0U) { (void)Display_GfxFillRect((uint16_t)(x + ((uint16_t)col * scale)), (uint16_t)(y + ((uint16_t)row * scale)), scale, scale, color); }
+  /* 按行扫描，把同一行连续的亮点合并成一次已窗口化的 FillRect，
+     减少底层 SetWindow 次数；着色像素与逐点绘制完全一致。 */
+  for (row = 0U; row < 7U; row++) {
+    col = 0U;
+    while (col < 5U) {
+      if ((glyph[col] & (uint8_t)(1U << row)) != 0U) {
+        uint8_t run_start = col;
+        while ((col < 5U) && ((glyph[col] & (uint8_t)(1U << row)) != 0U)) { col++; }
+        (void)Display_GfxFillRect((uint16_t)(x + ((uint16_t)run_start * scale)), (uint16_t)(y + ((uint16_t)row * scale)), (uint16_t)((uint16_t)(col - run_start) * scale), scale, color);
+      } else {
+        col++;
+      }
     }
   }
 

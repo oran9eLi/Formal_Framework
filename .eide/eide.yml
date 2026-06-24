@@ -50,6 +50,7 @@ virtualFolder:
         - path: Sensor/Src/sensor_bme280.c
         - path: Sensor/Src/sensor_mpu6050.c
         - path: Sensor/Src/sensor_power.c
+        - path: Sensor/Src/sensor_power2.c
       folders: []
     - name: BSP
       files:
@@ -62,6 +63,7 @@ virtualFolder:
         - path: Bsp/Src/bsp_touch_port.c
         - path: Bsp/Src/bsp_i2c.c
         - path: Bsp/Src/bsp_adc.c
+        - path: Bsp/Src/bsp_adc2.c
         - path: Bsp/Src/bsp_time.c
         - path: Bsp/Src/bsp_spi.c
         - path: Bsp/Src/bsp_pwm.c
@@ -73,7 +75,6 @@ virtualFolder:
         - path: Display/Src/display_gfx.c
         - path: Display/Src/display_gt911.c
         - path: Display/Src/display_logo.c
-        - path: Display/Src/display_logo_data.c
         - path: Display/Src/display_pages.c
         - path: Display/Src/display_ssd1963.c
         - path: Display/Src/display_text.c

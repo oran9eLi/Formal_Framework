@@ -181,6 +181,7 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
 {
   Px4Lite_SensorBaro_t baro;
   Px4Lite_BatteryStatus_t battery;
+  Px4Lite_BatteryStatus_t battery2;
   uint8_t copied = 0U;
 
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
@@ -200,6 +201,14 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
     out->battery_percent = battery.percent;
     out->low_voltage     = battery.low_voltage;
     copied               = 1U;
+  }
+
+  if ((Px4Lite_CopyBattery2(&battery2) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery2.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
+    if (copied == 0U) { out->header = battery2.header; }
+    out->voltage2_mv      = battery2.voltage_mv;
+    out->battery2_percent = battery2.percent;
+    out->low_voltage2     = battery2.low_voltage;
+    copied                = 1U;
   }
 
   return (copied != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;

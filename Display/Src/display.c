@@ -5,12 +5,15 @@
 
 #include "display.h"
 #include "app_data_api.h"
+#include "px4lite_faults.h"
+#include "px4lite_platform.h"
 #include "display_gfx.h"
 #include "display_gt911.h"
 #include "display_pages.h"
 #include "display_logo.h"
 #include "display_ssd1963.h"
 #include "debug_console.h"
+#include <string.h>
 
 /*
  * ATK-MD0700 显示骨架。
@@ -58,7 +61,7 @@ typedef enum {
 /*
  * 页面 ID 用于 App 和调试链路路由，枚举值保持稳定。
  */
-static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_LOGO, 0x0003U, "logo", 0U}, {DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_MOTOR, 0x0006U, "motor", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}};
+static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_MOTOR, 0x0006U, "motor", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}};
 
 /*
  * ATK-MD0700 800x480 显示变量配置。
@@ -80,9 +83,7 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_SELF_CHECK_BUZZER, DISPLAY_HMI_PAGE_SELF_CHECK, 0x1006U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "self_check_buzzer", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_KEY, DISPLAY_HMI_PAGE_SELF_CHECK, 0x1007U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "self_check_key", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_DEBUG, DISPLAY_HMI_PAGE_SELF_CHECK, 0x1008U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "self_check_debug", "-", "App_Registry"},
-    {DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE, DISPLAY_HMI_PAGE_SELF_CHECK, 0x100BU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 480U, 82U, 312U, 310U, "self_check_errcode", "-", "App_Registry"},
-    {DISPLAY_HMI_VAR_LORA_STATUS, DISPLAY_HMI_PAGE_SELF_CHECK, 0x1400U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 616U, 16U, 24U, 16U, "self_header_lora_status", "-", "CNS_State.lora"},
-    {DISPLAY_HMI_VAR_SELF_CHECK_GNSS, DISPLAY_HMI_PAGE_DATA, 0x1009U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 122U, 24U, 16U, "data_status_gnss", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE, DISPLAY_HMI_PAGE_SELF_CHECK, 0x100BU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 480U, 82U, 312U, 310U, "self_check_errcode", "-", "App_Registry"},    {DISPLAY_HMI_VAR_SELF_CHECK_GNSS, DISPLAY_HMI_PAGE_DATA, 0x1009U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 122U, 24U, 16U, "data_status_gnss", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, DISPLAY_HMI_PAGE_DATA, 0x1001U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 152U, 24U, 16U, "data_status_mpu", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_BME280, DISPLAY_HMI_PAGE_DATA, 0x1002U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 182U, 24U, 16U, "data_status_bme", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_LORA, DISPLAY_HMI_PAGE_DATA, 0x100AU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 212U, 24U, 16U, "data_status_lora", "-", "App_Registry"},
@@ -113,9 +114,7 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
      "C",
      "CNS_State.sensor"},
     {DISPLAY_HMI_VAR_HUMIDITY, DISPLAY_HMI_PAGE_DATA, 0x1303U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "humidity", "%", "CNS_State.sensor"},
-    {DISPLAY_HMI_VAR_PRESSURE, DISPLAY_HMI_PAGE_DATA, 0x1304U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "pressure", "Pa", "CNS_State.sensor"},
-    {DISPLAY_HMI_VAR_LORA_STATUS, DISPLAY_HMI_PAGE_DATA, 0x1400U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 616U, 16U, 24U, 16U, "data_header_lora_status", "-", "CNS_State.lora"},
-    {DISPLAY_HMI_VAR_LORA_TX_COUNT, DISPLAY_HMI_PAGE_DATA, 0x1401U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "lora_tx_count", "-", "CNS_State.lora"},
+    {DISPLAY_HMI_VAR_PRESSURE, DISPLAY_HMI_PAGE_DATA, 0x1304U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "pressure", "Pa", "CNS_State.sensor"},    {DISPLAY_HMI_VAR_LORA_TX_COUNT, DISPLAY_HMI_PAGE_DATA, 0x1401U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "lora_tx_count", "-", "CNS_State.lora"},
     {DISPLAY_HMI_VAR_LORA_RX_COUNT, DISPLAY_HMI_PAGE_DATA, 0x1403U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "lora_rx_count", "-", "CNS_State.lora"},
     {DISPLAY_HMI_VAR_LORA_HEARTBEAT, DISPLAY_HMI_PAGE_DATA, 0x1407U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 0U, 0U, 0U, 0U, "lora_heartbeat", "-", "CNS_State.lora"},
     {DISPLAY_HMI_VAR_LORA_ACK_COUNT, DISPLAY_HMI_PAGE_DATA, 0x1408U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "lora_ack_count", "-", "CNS_State.lora"},
@@ -137,17 +136,15 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, DISPLAY_HMI_PAGE_FLIGHT, 0x100CU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 302U, 24U, 16U, "flight_status_motor2", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, DISPLAY_HMI_PAGE_FLIGHT, 0x100DU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 332U, 24U, 16U, "flight_status_motor3", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, DISPLAY_HMI_PAGE_FLIGHT, 0x100EU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 362U, 24U, 16U, "flight_status_motor4", "-", "App_Registry"},
-    {DISPLAY_HMI_VAR_LORA_STATUS, DISPLAY_HMI_PAGE_FLIGHT, 0x1400U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 616U, 16U, 24U, 16U, "flight_header_lora_status", "-", "CNS_State.lora"},
-
-    /* 飞行数据页 -- 中间栏：时间/飞行时间/电压/电量/温度/湿度/气压 */
-    {DISPLAY_HMI_VAR_DATE, DISPLAY_HMI_PAGE_FLIGHT, 0x1107U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 116U, 124U, 22U, "clock_date", "-", "HMI/Clock"},
-    {DISPLAY_HMI_VAR_CLOCK_TIME, DISPLAY_HMI_PAGE_FLIGHT, 0x1105U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 152U, 124U, 22U, "clock_time", "-", "HMI/Clock"},
+    /* 飞行数据页 -- 中间栏：主控/电机电池、飞行时间、温度/湿度/气压 */
+    {DISPLAY_HMI_VAR_BATTERY_VOLTAGE, DISPLAY_HMI_PAGE_FLIGHT, 0x1103U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 116U, 124U, 22U, "flight_main_voltage", "V", "CNS_State.power"},
+    {DISPLAY_HMI_VAR_BATTERY_PERCENT, DISPLAY_HMI_PAGE_FLIGHT, 0x1104U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 152U, 124U, 22U, "flight_main_battery", "%", "CNS_State.power"},
+    {DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, DISPLAY_HMI_PAGE_FLIGHT, 0x1105U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 188U, 124U, 22U, "flight_motor_voltage", "V", "CNS_State.power"},
+    {DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, DISPLAY_HMI_PAGE_FLIGHT, 0x1107U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 224U, 124U, 22U, "flight_motor_battery", "%", "CNS_State.power"},
     {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_DATA, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 540U, 76U, 252U, 330U, "msg_log_data", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_FLIGHT, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 540U, 76U, 252U, 330U, "msg_log_flight", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_AIRCRAFT, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 540U, 76U, 252U, 330U, "msg_log_aircraft", "-", "App_Registry"},
-    {DISPLAY_HMI_VAR_FLIGHT_TIME_S, DISPLAY_HMI_PAGE_FLIGHT, 0x1106U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 188U, 124U, 22U, "flight_time_s", "-", "CNS_State.system"},
-    {DISPLAY_HMI_VAR_BATTERY_VOLTAGE, DISPLAY_HMI_PAGE_FLIGHT, 0x1103U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 224U, 124U, 22U, "battery_voltage", "V", "CNS_State.power"},
-    {DISPLAY_HMI_VAR_BATTERY_PERCENT, DISPLAY_HMI_PAGE_FLIGHT, 0x1104U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 260U, 124U, 22U, "battery_percent", "%", "CNS_State.power"},
+    {DISPLAY_HMI_VAR_FLIGHT_TIME_S, DISPLAY_HMI_PAGE_FLIGHT, 0x1106U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 260U, 124U, 22U, "flight_time_s", "-", "CNS_State.system"},
     {DISPLAY_HMI_VAR_TEMPERATURE, DISPLAY_HMI_PAGE_FLIGHT, 0x1302U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 296U, 124U, 22U, "temperature",
      "\xB0"
      "C",
@@ -165,14 +162,12 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, DISPLAY_HMI_PAGE_AIRCRAFT, 0x100CU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 302U, 24U, 16U, "ac_status_motor2", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, DISPLAY_HMI_PAGE_AIRCRAFT, 0x100DU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 332U, 24U, 16U, "ac_status_motor3", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, DISPLAY_HMI_PAGE_AIRCRAFT, 0x100EU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 362U, 24U, 16U, "ac_status_motor4", "-", "App_Registry"},
-    {DISPLAY_HMI_VAR_LORA_STATUS, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1400U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 616U, 16U, 24U, 16U, "ac_header_lora_status", "-", "CNS_State.lora"},
-
     /* 飞机情况页 -- 中间栏：横滚、俯仰、偏航、LoRa 发送/接收 */
-    {DISPLAY_HMI_VAR_ROLL, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1300U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 140U, 124U, 22U, "ac_roll", "\xB0", "CNS_State.sensor"},
-    {DISPLAY_HMI_VAR_PITCH, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1301U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 190U, 124U, 22U, "ac_pitch", "\xB0", "CNS_State.sensor"},
-    {DISPLAY_HMI_VAR_YAW, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1305U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 240U, 124U, 22U, "ac_yaw", "\xB0", "CNS_State.navigation"},
-    {DISPLAY_HMI_VAR_LORA_TX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1401U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 290U, 124U, 22U, "ac_lora_tx", "-", "CNS_State.lora"},
-    {DISPLAY_HMI_VAR_LORA_RX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1403U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 340U, 124U, 22U, "ac_lora_rx", "-", "CNS_State.lora"},
+    {DISPLAY_HMI_VAR_ROLL, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1300U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 118U, 124U, 22U, "ac_roll", "\xB0", "CNS_State.sensor"},
+    {DISPLAY_HMI_VAR_PITCH, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1301U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 150U, 124U, 22U, "ac_pitch", "\xB0", "CNS_State.sensor"},
+    {DISPLAY_HMI_VAR_YAW, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1305U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 182U, 124U, 22U, "ac_yaw", "\xB0", "CNS_State.navigation"},
+    {DISPLAY_HMI_VAR_LORA_TX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1401U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 214U, 124U, 22U, "ac_lora_tx", "-", "CNS_State.lora"},
+    {DISPLAY_HMI_VAR_LORA_RX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1403U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 246U, 124U, 22U, "ac_lora_rx", "-", "CNS_State.lora"},
 
     /* 电机控制页 -- 左侧状态栏、四路竖向油门滑条和右侧消息日志 */
     {DISPLAY_HMI_VAR_SELF_CHECK_GNSS, DISPLAY_HMI_PAGE_MOTOR, 0x1009U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 122U, 24U, 16U, "mc_status_gnss", "-", "App_Registry"},
@@ -183,17 +178,13 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, DISPLAY_HMI_PAGE_MOTOR, 0x1004U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 272U, 24U, 16U, "mc_status_motor1", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, DISPLAY_HMI_PAGE_MOTOR, 0x100CU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 302U, 24U, 16U, "mc_status_motor2", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, DISPLAY_HMI_PAGE_MOTOR, 0x100DU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 332U, 24U, 16U, "mc_status_motor3", "-", "App_Registry"},
-    {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, DISPLAY_HMI_PAGE_MOTOR, 0x100EU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 362U, 24U, 16U, "mc_status_motor4", "-", "App_Registry"},
-    {DISPLAY_HMI_VAR_LORA_STATUS, DISPLAY_HMI_PAGE_MOTOR, 0x1400U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 616U, 16U, 24U, 16U, "motor_header_lora_status", "-", "CNS_State.lora"},
-    {DISPLAY_HMI_VAR_MOTOR_PWM_1, DISPLAY_HMI_PAGE_MOTOR, 0x1600U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK1_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_1", "%", "HMI/Motor"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, DISPLAY_HMI_PAGE_MOTOR, 0x100EU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 18U, 362U, 24U, 16U, "mc_status_motor4", "-", "App_Registry"},    {DISPLAY_HMI_VAR_MOTOR_PWM_1, DISPLAY_HMI_PAGE_MOTOR, 0x1600U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK1_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_1", "%", "HMI/Motor"},
     {DISPLAY_HMI_VAR_MOTOR_PWM_2, DISPLAY_HMI_PAGE_MOTOR, 0x1601U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK2_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_2", "%", "HMI/Motor"},
     {DISPLAY_HMI_VAR_MOTOR_PWM_3, DISPLAY_HMI_PAGE_MOTOR, 0x1602U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK3_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_3", "%", "HMI/Motor"},
     {DISPLAY_HMI_VAR_MOTOR_PWM_4, DISPLAY_HMI_PAGE_MOTOR, 0x1603U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK4_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_4", "%", "HMI/Motor"},
     {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_MOTOR, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 616U, 76U, 176U, 330U, "msg_log_motor", "-", "App_Registry"},
 
-    /* 告警页 -- 运行期告警项 */
-    {DISPLAY_HMI_VAR_LORA_STATUS, DISPLAY_HMI_PAGE_ALARM, 0x1400U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 616U, 16U, 24U, 16U, "alarm_header_lora_status", "-", "CNS_State.lora"},
-    {DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, DISPLAY_HMI_PAGE_ALARM, 0x1700U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 52U, 72U, 696U, 38U, "alarm_active_mask", "-", "App_Alarm"},
+    /* 告警页 -- 运行期告警项 */    {DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, DISPLAY_HMI_PAGE_ALARM, 0x1700U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 52U, 72U, 696U, 38U, "alarm_active_mask", "-", "App_Alarm"},
     {DISPLAY_HMI_VAR_ALARM_ROW1_CODE, DISPLAY_HMI_PAGE_ALARM, 0x1701U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 42U, 150U, 716U, 48U, "alarm_row1_code", "-", "App_Alarm"},
     {DISPLAY_HMI_VAR_ALARM_ROW2_CODE, DISPLAY_HMI_PAGE_ALARM, 0x1702U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 42U, 200U, 716U, 48U, "alarm_row2_code", "-", "App_Alarm"},
     {DISPLAY_HMI_VAR_ALARM_ROW3_CODE, DISPLAY_HMI_PAGE_ALARM, 0x1703U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 42U, 250U, 716U, 48U, "alarm_row3_code", "-", "App_Alarm"},
@@ -201,7 +192,7 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_ALARM_ROW5_CODE, DISPLAY_HMI_PAGE_ALARM, 0x1705U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 42U, 350U, 716U, 48U, "alarm_row5_code", "-", "App_Alarm"}};
 
 static Display_ValueCache_t s_hmi_values[DISPLAY_HMI_VAR_COUNT];
-static Display_HmiPage_t s_current_page       = DISPLAY_HMI_PAGE_LOGO;
+static Display_HmiPage_t s_current_page       = DISPLAY_HMI_PAGE_SELF_CHECK;
 static uint8_t s_display_ready                = 0U;
 static uint8_t s_touch_ready                  = 0U;
 static uint8_t s_touch_down                   = 0U;
@@ -617,6 +608,8 @@ static void Display_LoadMockValues(void)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_FLIGHT_TIME_S, 768U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, 1180U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, 86U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, 1200U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, 90U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, 2U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, 12U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, 95U);
@@ -730,7 +723,7 @@ Display_Result_t Display_Init(void)
 
   s_display_ready         = 1U;
   s_display_initialized   = 1U;
-  s_current_page          = DISPLAY_HMI_PAGE_LOGO;
+  s_current_page          = DISPLAY_HMI_PAGE_SELF_CHECK;
   s_touch_down            = 0U;
   s_touch_nav_latched     = DISPLAY_NAV_TOUCH_NONE;
   s_touch_slider_latched  = 0;
@@ -742,10 +735,6 @@ Display_Result_t Display_Init(void)
 #endif
 
   if (Display_PagesDrawStatic(s_current_page, Display_GetCachedValue) != DISPLAY_OK) { return DISPLAY_ERROR; }
-
-  if (s_current_page != DISPLAY_HMI_PAGE_LOGO) {
-    if (Display_PagesDrawAlarmIcon(0U, Display_GetCachedValue, 1U) != DISPLAY_OK) { return DISPLAY_ERROR; }
-  }
 
   return DISPLAY_OK;
 }
@@ -799,9 +788,7 @@ Display_Result_t Display_Refresh(uint32_t now_ms)
     cache->dirty           = 0U;
   }
 
-  if (s_current_page == DISPLAY_HMI_PAGE_LOGO) { return DISPLAY_OK; }
-
-  (void)Display_PagesDrawAlarmIcon(now_ms, Display_GetCachedValue, 0U);
+  (void)Display_PagesDrawHeaderDynamic(Display_GetCachedValue, 0U);
 
   return DISPLAY_OK;
 }
@@ -879,6 +866,11 @@ static uint8_t Display_StateHasUsableData(Px4Lite_State_t state)
   return ((state == PX4LITE_STATE_ONLINE) || (state == PX4LITE_STATE_DEGRADED)) ? 1U : 0U;
 }
 
+static uint16_t Display_GnssSignalValue(Px4Lite_State_t state)
+{
+  return (state == PX4LITE_STATE_ONLINE) ? 1U : 0U;
+}
+
 static void Display_ClearNavigationSnapshot(void)
 {
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, 0U);
@@ -907,10 +899,39 @@ static void Display_ClearEnvironmentFields(void)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_PRESSURE, 0U);
 }
 
+/* 电机自检灯门限：电机电池(ADC2)电压低于此值视为断开。 */
+#define DISPLAY_MOTOR_BAT_PRESENT_MV 9000U
+/* 电机供电正常门限：达到 9.9V 才转正常。 */
+#define DISPLAY_MOTOR_BAT_OK_MV      9900U
+
+/*
+ * 依据电机电池(ADC2)电压决定电机自检灯颜色：
+ * 电压 < 9.0V 红灯(3)，9.0V~9.9V 黄灯(1)，>=9.9V 绿灯(2)。
+ */
+static uint16_t Display_MotorSelfCheckValue(uint32_t voltage2_mv)
+{
+  if (voltage2_mv < DISPLAY_MOTOR_BAT_PRESENT_MV) { return 3U; }
+  if (voltage2_mv < DISPLAY_MOTOR_BAT_OK_MV) { return 1U; }
+  return 2U;
+}
+
+/* 4 个电机自检灯共用同一块电机电池(ADC2)状态，统一刷新。 */
+static void Display_SetMotorSelfCheckLights(uint16_t value)
+{
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, value);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, value);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, value);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, value);
+}
+
 static void Display_ClearBatteryFields(void)
 {
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, 0U);
+  /* 电机电池数据无效(未接入/掉线)，电机自检灯一律红灯。 */
+  Display_SetMotorSelfCheckLights(3U);
 }
 
 static void Display_ClearMotorFields(void)
@@ -943,7 +964,6 @@ static void Display_LoadNavigationSnapshot(const App_NavigationSnapshot_t *navig
   ground_speed_cms = Display_AbsCmsToU16(navigation->velocity_north_cms);
   if (Display_AbsCmsToU16(navigation->velocity_east_cms) > ground_speed_cms) { ground_speed_cms = Display_AbsCmsToU16(navigation->velocity_east_cms); }
 
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, (uint16_t)navigation->gnss_fix_type);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, (uint16_t)navigation->satellites_used);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, navigation->hdop_x100);
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LATITUDE, navigation->latitude_e7);
@@ -1028,12 +1048,13 @@ static void Display_LogCommitInitial(Display_LogDebounce_t *d, Display_LogMsg_t 
   d->since_ms  = now_ms;
 }
 
-/* GPS 三态：在线=正常，掉线/失败=断开，其余(启动/降级)=无信号。 */
-static Display_LogMsg_t Display_GpsLogMsg(Px4Lite_State_t state)
+/* GPS 三态：在线=正常；已收到模块数据但无定位=无信号；未收到数据/掉线=断开。 */
+static Display_LogMsg_t Display_GpsLogMsg(const Px4Lite_ModuleStatus_t *status)
 {
-  if (state == PX4LITE_STATE_ONLINE) { return DISPLAY_LOGMSG_GPS_OK; }
-  if ((state == PX4LITE_STATE_OFFLINE) || (state == PX4LITE_STATE_FAILED)) { return DISPLAY_LOGMSG_GPS_LOST; }
-  return DISPLAY_LOGMSG_GPS_NOSIG;
+  if (status == 0) { return DISPLAY_LOGMSG_GPS_LOST; }
+  if (status->state == PX4LITE_STATE_ONLINE) { return DISPLAY_LOGMSG_GPS_OK; }
+  if ((status->state == PX4LITE_STATE_DEGRADED) && (status->last_rx_ms != 0U)) { return DISPLAY_LOGMSG_GPS_NOSIG; }
+  return DISPLAY_LOGMSG_GPS_LOST;
 }
 
 /* 二态：在线=正常，否则断开。 */
@@ -1048,6 +1069,17 @@ static Px4Lite_State_t Display_LogModuleState(Px4Lite_ModuleId_t id)
   Px4Lite_ModuleStatus_t status;
 
   if (App_GetModuleStatus(id, &status) == PX4LITE_OK) { return status.state; }
+  return PX4LITE_STATE_OFFLINE;
+}
+
+static Px4Lite_State_t Display_LogModuleStatus(Px4Lite_ModuleId_t id, Px4Lite_ModuleStatus_t *status)
+{
+  if ((status != 0) && (App_GetModuleStatus(id, status) == PX4LITE_OK)) { return status->state; }
+  if (status != 0) {
+    memset(status, 0, sizeof(*status));
+    status->module_id = id;
+    status->state     = PX4LITE_STATE_OFFLINE;
+  }
   return PX4LITE_STATE_OFFLINE;
 }
 
@@ -1073,11 +1105,23 @@ static Display_LogMsg_t Display_SelfCheckLogMsg(const Px4Lite_State_t *states, u
   return DISPLAY_LOGMSG_SELFCHECK_PART;
 }
 
+/* 电机三态(来源电机电池 ADC2，与电机自检灯同门限)：电压<9.0V=断开，
+   9.0V~9.9V=供电不足，>=9.9V=正常。 */
+static Display_LogMsg_t Display_MotorLogMsg(uint32_t now_ms)
+{
+  App_EnvironmentSnapshot_t env;
+
+  if (App_CopyEnvironment(&env, now_ms) != PX4LITE_OK) { return DISPLAY_LOGMSG_MOTOR_DISCONNECT; }
+  if (env.voltage2_mv < DISPLAY_MOTOR_BAT_PRESENT_MV) { return DISPLAY_LOGMSG_MOTOR_DISCONNECT; }
+  if (env.voltage2_mv < DISPLAY_MOTOR_BAT_OK_MV) { return DISPLAY_LOGMSG_MOTOR_LOWPOWER; }
+  return DISPLAY_LOGMSG_MOTOR_OK;
+}
+
 /*
  * 检测各类状态变化并写入消息日志。数据源与自检灯/告警表同源:
  * 模块状态用 App_GetModuleStatus 逐个取，告警码由调用方传入。
  * 不依赖完整 system 快照，因此 system 快照不可用时日志仍能更新。
- * 电机暂无真实数据源，相关条目暂不产生。
+ * 电机状态来源电机电池(ADC2)，正常/断开/供电不足三态实时追加。
  */
 static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_code)
 {
@@ -1088,6 +1132,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
   static Display_LogDebounce_t db_env   = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
   static Display_LogDebounce_t db_comm  = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
   static Display_LogDebounce_t db_store = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
+  static Display_LogDebounce_t db_motor = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
   static Display_LogDebounce_t db_alarm = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
   static Display_LogMsg_t boot_self     = DISPLAY_LOGMSG_COUNT;
   static Display_LogMsg_t boot_gps      = DISPLAY_LOGMSG_COUNT;
@@ -1098,6 +1143,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
   static Display_LogMsg_t boot_alarm    = DISPLAY_LOGMSG_COUNT;
   static uint32_t boot_since_ms         = 0U;
   static uint32_t boot_start_t          = 0U;
+  Px4Lite_ModuleStatus_t gnss_status;
   Px4Lite_State_t states[5];
   uint32_t t = Display_NowHhmmss(now_ms);
   Display_LogMsg_t now_self;
@@ -1106,23 +1152,27 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
   Display_LogMsg_t now_env;
   Display_LogMsg_t now_comm;
   Display_LogMsg_t now_store;
+  Display_LogMsg_t now_motor;
   Display_LogMsg_t now_alarm;
 
-  states[0] = Display_LogModuleState(PX4LITE_MODULE_GNSS);
+  states[0] = Display_LogModuleStatus(PX4LITE_MODULE_GNSS, &gnss_status);
   states[1] = Display_LogModuleState(PX4LITE_MODULE_IMU);
   states[2] = Display_LogModuleState(PX4LITE_MODULE_BARO);
   states[3] = Display_LogModuleState(PX4LITE_MODULE_LORA);
   states[4] = Display_LogModuleState(PX4LITE_MODULE_STORAGE);
 
   now_self  = Display_SelfCheckLogMsg(states, 5U);
-  now_gps   = Display_GpsLogMsg(states[0]);
+  now_gps   = Display_GpsLogMsg(&gnss_status);
   now_att   = Display_TwoStateLogMsg(states[1], DISPLAY_LOGMSG_ATT_OK, DISPLAY_LOGMSG_ATT_LOST);
   now_env   = Display_TwoStateLogMsg(states[2], DISPLAY_LOGMSG_ENV_OK, DISPLAY_LOGMSG_ENV_LOST);
   now_comm  = Display_TwoStateLogMsg(states[3], DISPLAY_LOGMSG_COMM_OK, DISPLAY_LOGMSG_COMM_LOST);
   now_store = Display_TwoStateLogMsg(states[4], DISPLAY_LOGMSG_STORAGE_OK, DISPLAY_LOGMSG_STORAGE_LOST);
+  now_motor = Display_MotorLogMsg(now_ms);
   now_alarm = (highest_fault_code != 0U) ? DISPLAY_LOGMSG_ALARM_ACTIVE : DISPLAY_LOGMSG_ALARM_NONE;
 
   if (boot_done == 0U) {
+    /* 电机电量收敛慢(滤波+多次确认)，不纳入启动门控，否则会拖慢整批自检日志；
+       提交时直接取电机当前状态，运行阶段再按真实变化追加。 */
     if ((boot_tracking == 0U) || (now_self != boot_self) || (now_gps != boot_gps) || (now_att != boot_att) || (now_env != boot_env) || (now_comm != boot_comm) || (now_store != boot_store) || (now_alarm != boot_alarm)) {
       boot_self     = now_self;
       boot_gps      = now_gps;
@@ -1148,6 +1198,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
     Display_PagesPushLogMessage(boot_env, t);
     Display_PagesPushLogMessage(boot_comm, t);
     Display_PagesPushLogMessage(boot_store, t);
+    Display_PagesPushLogMessage(now_motor, t);
     Display_PagesPushLogMessage(boot_alarm, t);
 
     Display_LogCommitInitial(&db_gps, boot_gps, now_ms);
@@ -1155,6 +1206,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
     Display_LogCommitInitial(&db_env, boot_env, now_ms);
     Display_LogCommitInitial(&db_comm, boot_comm, now_ms);
     Display_LogCommitInitial(&db_store, boot_store, now_ms);
+    Display_LogCommitInitial(&db_motor, now_motor, now_ms);
     Display_LogCommitInitial(&db_alarm, boot_alarm, now_ms);
     boot_done = 1U;
     return;
@@ -1166,6 +1218,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
   (void)Display_LogDebounce(&db_env, now_env, now_ms, t);
   (void)Display_LogDebounce(&db_comm, now_comm, now_ms, t);
   (void)Display_LogDebounce(&db_store, now_store, now_ms, t);
+  (void)Display_LogDebounce(&db_motor, now_motor, now_ms, t);
   (void)Display_LogDebounce(&db_alarm, now_alarm, now_ms, t);
 }
 
@@ -1187,30 +1240,40 @@ static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW1_CODE, alarm_row);
 
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, Display_MapStateValue(system->modules[PX4LITE_MODULE_GNSS].state));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, Display_GnssSignalValue(system->modules[PX4LITE_MODULE_GNSS].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, Display_MapStateValue(system->modules[PX4LITE_MODULE_IMU].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, Display_MapStateValue(system->modules[PX4LITE_MODULE_BARO].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, Display_MapStateValue(system->modules[PX4LITE_MODULE_LORA].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, Display_MapStateValue(system->modules[PX4LITE_MODULE_LORA].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue(system->modules[PX4LITE_MODULE_STORAGE].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
+  /* 电机 4 个状态灯改由 Display_LoadEnvironmentSnapshot 依据电机电池(ADC2)
+     电压驱动：<9.0V 红灯，9.0V~9.9V 黄灯，>=9.9V 绿灯，此处不再覆盖。 */
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, Display_MapStateValue(system->modules[PX4LITE_MODULE_5G].state));
   /* 自检页错误码表由 Display_LoadAlarmSnapshot 按激活故障列表整体刷新，
      此处不再用单个 highest_fault_code 驱动。 */
 }
 
-static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm)
+/* 由电机电池(ADC2)推导电机告警码：电压<9.0V 视为电机断开，电压<9.9V 视为供电不足。
+   阈值与电机自检灯/消息日志一致(DISPLAY_MOTOR_BAT_PRESENT_MV / _OK_MV)。 */
+static uint16_t Display_EvalMotorFault(const App_EnvironmentSnapshot_t *environment)
+{
+  if (environment == 0) { return 0U; }
+  if (environment->voltage2_mv < DISPLAY_MOTOR_BAT_PRESENT_MV) { return (uint16_t)PX4LITE_FAULT_MOTOR_DISCONNECT; }
+  if (environment->voltage2_mv < DISPLAY_MOTOR_BAT_OK_MV) { return (uint16_t)PX4LITE_FAULT_MOTOR_POWER_LOW; }
+  return 0U;
+}
+
+static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm, uint16_t motor_fault)
 {
   static const Display_HmiVariableId_t row_ids[] = {DISPLAY_HMI_VAR_ALARM_ROW1_CODE, DISPLAY_HMI_VAR_ALARM_ROW2_CODE, DISPLAY_HMI_VAR_ALARM_ROW3_CODE, DISPLAY_HMI_VAR_ALARM_ROW4_CODE, DISPLAY_HMI_VAR_ALARM_ROW5_CODE};
   int32_t severity;
   uint16_t record_index;
   uint16_t row_index   = 0U;
   uint32_t active_mask = 0U;
-  uint32_t selfcheck_faults[PX4LITE_MODULE_COUNT];
+  uint32_t selfcheck_faults[PX4LITE_MODULE_COUNT + 1U];
   uint16_t selfcheck_count = 0U;
   uint32_t selfcheck_fp    = 0U;
+  uint32_t motor_packed    = ((uint32_t)0xFFFFU << 16) | (uint32_t)motor_fault;
 
   if (alarm == 0) { return; }
 
@@ -1233,6 +1296,13 @@ static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm)
     }
   }
 
+  /* 电机断开/供电不足由电机电池(ADC2)推导，不在框架告警记录里，单独追加到两张表。 */
+  if ((motor_fault != 0U) && (selfcheck_count < (uint16_t)(PX4LITE_MODULE_COUNT + 1U))) {
+    selfcheck_faults[selfcheck_count] = motor_packed;
+    selfcheck_count++;
+    selfcheck_fp = (selfcheck_fp * 31U) + motor_packed;
+  }
+
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, active_mask);
 
   /* 把当前激活故障列表交给绘制层，并用集合指纹驱动错误码表重绘：
@@ -1252,6 +1322,11 @@ static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm)
     }
   }
 
+  if ((motor_fault != 0U) && (row_index < DISPLAY_ARRAY_SIZE(row_ids))) {
+    (void)Display_SetHmiValueU32(row_ids[row_index], motor_packed);
+    row_index++;
+  }
+
   while (row_index < DISPLAY_ARRAY_SIZE(row_ids)) {
     (void)Display_SetHmiValueU32(row_ids[row_index], 0U);
     row_index++;
@@ -1265,6 +1340,7 @@ static uint8_t Display_LoadModuleStatusFallback(void)
 
   if (App_GetModuleStatus(PX4LITE_MODULE_GNSS, &status) == PX4LITE_OK) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, Display_MapStateValue(status.state));
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, Display_GnssSignalValue(status.state));
     loaded = 1U;
   }
   if (App_GetModuleStatus(PX4LITE_MODULE_IMU, &status) == PX4LITE_OK) {
@@ -1306,6 +1382,10 @@ static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *env
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_PRESSURE, Display_FloatPaToU32(environment->pressure_pa));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, (uint16_t)((environment->voltage_mv + 5U) / 10U));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, environment->battery_percent);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, (uint16_t)((environment->voltage2_mv + 5U) / 10U));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, environment->battery2_percent);
+  /* 电机自检灯跟随电机电池(ADC2)：<9.0V 红灯，9.0V~9.9V 黄灯，>=9.9V 绿灯。 */
+  Display_SetMotorSelfCheckLights(Display_MotorSelfCheckValue(environment->voltage2_mv));
 }
 
 /*
@@ -1339,6 +1419,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   Px4Lite_Result_t alarm_result;
   Px4Lite_Result_t date_time_result;
   Px4Lite_Result_t motor_result;
+  uint16_t motor_fault = 0U;
   uint8_t status_fallback_loaded = 0U;
   uint16_t msglog_highest        = 0U;
 
@@ -1370,9 +1451,13 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
     status_fallback_loaded = Display_LoadModuleStatusFallback();
   }
 
+  /* 环境快照提前取，先算出电机告警(断开/供电不足)，再注入告警表与自检错误码表。 */
+  environment_result = App_CopyEnvironment(&environment, now_ms);
+  motor_fault        = (environment_result == PX4LITE_OK) ? Display_EvalMotorFault(&environment) : 0U;
+
   alarm_result = App_CopyAlarm(&alarm, now_ms);
   if (alarm_result == PX4LITE_OK) {
-    Display_LoadAlarmSnapshot(&alarm);
+    Display_LoadAlarmSnapshot(&alarm, motor_fault);
     msglog_highest = alarm.highest_fault_code;
   }
 
@@ -1380,7 +1465,6 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
      无论完整 system 快照是否可用都更新，避免日志一直空白。 */
   Display_UpdateMessageLog(now_ms, msglog_highest);
 
-  environment_result = App_CopyEnvironment(&environment, now_ms);
   if (environment_result == PX4LITE_OK) {
     Display_LoadEnvironmentSnapshot(&environment);
   } else {
@@ -1449,8 +1533,8 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
 {
   Display_Result_t result;
   uint16_t scanned;
+  uint32_t start_us;
 
-  (void)budget_us;
   if (Display_EnsureInit() != DISPLAY_OK) { return DISPLAY_NOT_READY; }
 
   if (s_static_redraw_pending != 0U) {
@@ -1466,6 +1550,11 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
 
   result = Display_RefreshPriorityField(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms);
   if (result != DISPLAY_OK) { return result; }
+
+  /* 一次调用内扫描整张变量表，绘制当前页所有到期字段；每画完一个字段检查
+     时间预算，超出即让出，剩余字段在下个节拍续绘。扫满整表(scanned 上界)是
+     硬性终止条件，即使微秒时基异常也不会卡死或漏刷。 */
+  start_us = Px4Lite_PlatformGetUs();
 
   for (scanned = 0U; scanned < DISPLAY_ARRAY_SIZE(s_hmi_variables); scanned++) {
     const Display_HmiVariableConfig_t *variable;
@@ -1492,10 +1581,13 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
     cache->drawn_valid     = 1U;
     cache->last_refresh_ms = now_ms;
     cache->dirty           = 0U;
-    return DISPLAY_NOT_READY;
+
+    if ((budget_us != 0U) && ((uint32_t)(Px4Lite_PlatformGetUs() - start_us) >= budget_us)) {
+      return DISPLAY_NOT_READY;
+    }
   }
 
-  if (s_current_page != DISPLAY_HMI_PAGE_LOGO) { (void)Display_PagesDrawAlarmIcon(now_ms, Display_GetCachedValue, 0U); }
+  (void)Display_PagesDrawHeaderDynamic(Display_GetCachedValue, 0U);
 
   return DISPLAY_OK;
 }
@@ -1531,6 +1623,15 @@ Display_Result_t Display_SetHmiPage(Display_HmiPage_t page)
 Display_HmiPage_t Display_GetCurrentHmiPage(void)
 {
   return s_current_page;
+}
+
+/*
+ * 是否有待处理的整页静态重绘(切页触发)，供显示任务在 200ms 常规节拍之外
+ * 立即触发一次刷新，缩短切页响应延迟。
+ */
+uint8_t Display_HasPendingRedraw(void)
+{
+  return s_static_redraw_pending;
 }
 
 void Display_ShowBootCode(uint8_t code)
@@ -1571,7 +1672,6 @@ Display_Result_t Display_PollTouch(void)
     s_touch_retry_count = 0U;
     if (s_touch_down == 0U) {
       s_touch_down = 1U;
-      if (s_current_page == DISPLAY_HMI_PAGE_LOGO) { return Display_HandleTouch(x, y, 0, 0); }
       if (Display_IsMotorEstopTouch(x, y) != 0U) {
         s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
         return Display_MotorEmergencyStop();
@@ -1630,7 +1730,6 @@ Display_Result_t Display_HandleTouch(uint16_t x, uint16_t y, Display_HmiVariable
   if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
 
   nav_touch = Display_GetNavTouch(x, y);
-  if (s_current_page == DISPLAY_HMI_PAGE_LOGO) { return Display_SetHmiPage(DISPLAY_HMI_PAGE_SELF_CHECK); }
 
   if (Display_IsMotorEstopTouch(x, y) != 0U) {
     if (id != 0) { *id = DISPLAY_HMI_VAR_COUNT; }

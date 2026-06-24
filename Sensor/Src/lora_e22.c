@@ -187,8 +187,10 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out)
 Lora_State_t Lora_E22_GetState(uint32_t now_ms, uint32_t offline_timeout_ms)
 {
   if (s_initialized == 0U) { return LORA_STATE_NOT_READY; }
-  if ((s_last_rx_ms == 0U) && (s_last_tx_ms == 0U)) { return LORA_STATE_NOT_READY; }
-  if (((s_last_rx_ms != 0U) && ((uint32_t)(now_ms - s_last_rx_ms) <= offline_timeout_ms)) || ((s_last_tx_ms != 0U) && ((uint32_t)(now_ms - s_last_tx_ms) <= offline_timeout_ms))) { return LORA_STATE_ONLINE; }
+  /* 在线判定只认实际收到对端帧(RX)。本机 TX 是开环串口发送，不插模块/无对端时
+     也会"发出去"，不能作为通信在线的依据，否则会误判为在线并随 AUX 悬空来回抖动。 */
+  if (s_last_rx_ms == 0U) { return LORA_STATE_NOT_READY; }
+  if ((uint32_t)(now_ms - s_last_rx_ms) <= offline_timeout_ms) { return LORA_STATE_ONLINE; }
   return LORA_STATE_OFFLINE;
 }
 

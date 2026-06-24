@@ -66,7 +66,13 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
  */
 Display_Result_t Display_PagesDrawMotorSliderField(const Display_HmiVariableConfig_t *variable, uint32_t old_value, uint32_t value, uint8_t full_redraw, uint8_t draw_percent);
 
-Display_Result_t Display_PagesDrawAlarmIcon(uint32_t now_ms, Display_PagesValueReader_t read_value, uint8_t force_draw);
+/**
+ * @brief       绘制页眉动态区：左侧日期/时间，右侧丢包率
+ * @param       read_value: 变量缓存读取回调
+ * @param       force: 非 0 强制全部重绘，否则仅重绘发生变化的部分
+ * @retval      Display_Result_t: 绘制结果
+ */
+Display_Result_t Display_PagesDrawHeaderDynamic(Display_PagesValueReader_t read_value, uint8_t force);
 
 /**
  * @brief       更新自检页错误码表的当前激活故障列表

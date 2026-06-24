@@ -8,13 +8,17 @@
 extern "C" {
 #endif
 
-#define DISPLAY_LOGO_WIDTH             550U
-#define DISPLAY_LOGO_HEIGHT            326U
-#define DISPLAY_LOGO_TRANSPARENT_COLOR 0x0000U
+#define DISPLAY_HEADER_LOGO_WIDTH             64U
+#define DISPLAY_HEADER_LOGO_HEIGHT            64U
+#define DISPLAY_HEADER_LOGO_TRANSPARENT_COLOR 0x0000U
 
-extern const uint8_t s_logo_data[];
-
-Display_Result_t Display_PagesDrawLogoLayout(void);
+/**
+ * @brief       在指定左上角坐标绘制 64x64 页面标题栏 Logo
+ * @param       x: 左上角 X 坐标
+ * @param       y: 左上角 Y 坐标
+ * @retval      Display_Result_t: 绘制结果
+ */
+Display_Result_t Display_PagesDrawHeaderLogo(uint16_t x, uint16_t y);
 
 #ifdef __cplusplus
 }
