@@ -24,13 +24,14 @@
 | MAVLink 接收帧识别 | `Sensor/Src/lora_e22.c` | 基础完成 | 已用 `mavlink_parse_char()` 识别完整 MAVLink 帧，并保存最近一帧到 `s_rx_frame`。 |
 | LoRa 调试统计 | `Sensor/Inc/lora_e22.h`、`Framework/Src/px4lite_modules.c` | 已完成 | 已统计 RX/TX 帧数、发送忙、CRC/解析错误、溢出、最近收发时间和最近消息 ID。 |
 | Comm 任务调度 | `Framework/Src/px4lite_modules.c` | 已完成 | `Px4Lite_CommWorkRun()` 周期调用 `Px4Lite_LoRaService()` 和 `Px4Lite_MavlinkTxRun()`，并更新 LoRa 模块状态。 |
-| MAVLink 遥测发送 | `Framework/Src/px4lite_mavlink_tx.c` | 已完成 | 已按槽位发送 `HEARTBEAT`、`GPS_RAW_INT`、`GNSS_SAT`、`ATTITUDE`、`GLOBAL_POSITION_INT`、`SYS_STATUS`、`BATTERY_STATUS`、`SCALED_PRESSURE`、`STATUSTEXT`，并轮转 `TIME_LOC`、`DATE_LOC`、`HUMIDITY`、`MOTOR12`、`MOTOR34` 远程显示扩展；电机 PWM 变化时会优先发送并短时重复。 |
+| MAVLink 遥测发送 | `Framework/Src/px4lite_mavlink_tx.c` | 已完成 | 已按槽位发送 `HEARTBEAT`、`GPS_RAW_INT`、`GNSS_SAT`、`ATTITUDE`、`GLOBAL_POSITION_INT`、`SYS_STATUS`、`BATTERY_STATUS`、`SCALED_PRESSURE`、`STATUSTEXT`，并轮转 `TIME_LOC`、`DATE_LOC`、`HUMIDITY`、`MOTOR12`、`MOTOR34`、`MODSTAT` 等远程显示扩展；电机 PWM 变化时会优先发送并短时重复。 |
 | MAVLink 配置开关 | `Framework/Inc/px4lite_config.h` | 已完成 | 已提供各类 MAVLink 消息 enable 和 period 配置。 |
 | 本地显示数据链路 | `Display/Src/display.c`、`Business/Inc/app_data_api.h` | 已完成 | 当前显示通过 `App_CopyNavigation()`、`App_CopyDateTime()`、`App_CopySystem()`、`App_CopyAlarm()`、`App_CopyEnvironment()`、`App_CopyMotor()` 读取本机应用快照。 |
 | MAVLink RX 分发 | `Framework/Src/px4lite_mavlink_rx.c` | 已完成 | 已在 REMOTE 模式下解析远端标准遥测和 `NAMED_VALUE_INT` 扩展，非目标 `sysid` 不写远端快照。 |
 | RemoteTelemetry 远端快照 | `Framework/Src/px4lite_remote_telemetry.c` | 已完成 | 已保存目标 `sysid`、远端设备表、字段有效位、字段级更新时间、字段 stale 位和远端只读显示字段。 |
 | 远程显示数据源 | `Display/Src/display.c` | 已完成 | REMOTE 模式主字段来自远端快照；字段未收到时无效，已收到但短暂过期时保留最后值并由 `stale_mask` 标记。 |
 | 远程电机只读保护 | `Display/Src/display.c`、`Business/Src/app_data_api.c` | 已完成 | REMOTE 模式禁用电机滑块触摸和急停触摸写入，Business 控制 API 也拒绝写本机 Control。 |
+| 电机状态灯口径 | `Display/Src/display.c`、`Framework/Src/px4lite_mavlink_tx.c` | 已完成 | 当前硬件没有 ESC/电机真实存在检测，四个电机状态灯固定绿灯；该灯不表示真实电机在线，只表示此项不参与故障判定。 |
 
 ## 3. 当前代码尚未完成的部分
 
@@ -256,7 +257,7 @@ Display、Remote Telemetry 和 Business API 不应依赖具体调度算法，避
 2. 绑定、模式切换或控制命令优先使用 MAVLink `COMMAND_LONG` / `COMMAND_ACK`。
 3. 远端完整快照、电机状态和告警表可使用 `TUNNEL`、`V2_EXTENSION` 或自定义 MAVLink dialect。
 4. 只有在 MAVLink 扩展不足或需要统一链路层可靠性时，才新增 LoRa Link 帧头、stop-and-wait、去重和重发。
-5. 保留分时双工调度字段或调度模块入口，例如 `slot_id`、`window_ms`、`link_epoch`，但不在第一阶段实现。
+5. 保留时分双工调度字段或调度模块入口，例如 `slot_id`、`window_ms`、`link_epoch`，但不在第一阶段实现。
 6. 不在远程显示阶段执行电机控制命令。
 7. 后续启用控制前，必须补充本地急停、命令白名单、权限超时和执行 ACK。
 

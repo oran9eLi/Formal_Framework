@@ -572,10 +572,10 @@ static void Display_InitSelfCheckValues(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, 2U);
 }
 
 /*
@@ -860,6 +860,17 @@ static uint16_t Display_MapStateValue(Px4Lite_State_t state)
 static uint16_t Display_MapStorageStateValue(Px4Lite_State_t state)
 {
   return (state == PX4LITE_STATE_ONLINE) ? 2U : 3U;
+}
+
+/*
+ * 当前硬件没有 ESC/电机真实存在检测，电机状态灯只作为界面占位显示。
+ */
+static void Display_SetMotorStatusLightsOnline(void)
+{
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, 2U);
 }
 
 /*
@@ -1288,7 +1299,8 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
 
 /*
  * 远程模式：模块状态灯与系统就绪取自远端快照。LoRa 灯不在此处理，由
- * Display_LoadLocalLoraLight 保持本机来源。远端模块状态无效时灯置未知(0)。
+ * Display_LoadLocalLoraLight 保持本机来源。远端模块状态无效时普通模块灯置未知(0)。
+ * 当前硬件没有 ESC/电机真实存在检测，四个电机灯固定为绿灯。
  */
 static void Display_LoadRemoteModuleStatus(const Px4Lite_RemoteTelemetrySnapshot_t *remote)
 {
@@ -1297,10 +1309,7 @@ static void Display_LoadRemoteModuleStatus(const Px4Lite_RemoteTelemetrySnapshot
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, 0U);
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, 0U);
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, 0U);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, 0U);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, 0U);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, 0U);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, 0U);
+    Display_SetMotorStatusLightsOnline();
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, 0U);
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SYSTEM_STATUS, 0U);
     return;
@@ -1310,10 +1319,7 @@ static void Display_LoadRemoteModuleStatus(const Px4Lite_RemoteTelemetrySnapshot
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_IMU]));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_BARO]));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_STORAGE]));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_CONTROL]));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_CONTROL]));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_CONTROL]));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_CONTROL]));
+  Display_SetMotorStatusLightsOnline();
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, Display_MapStateValue((Px4Lite_State_t)remote->module_state[PX4LITE_MODULE_5G]));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SYSTEM_STATUS, (remote->system_ready != 0U) ? 2U : 1U);
 }
@@ -1376,10 +1382,7 @@ static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, Display_MapStateValue(system->modules[PX4LITE_MODULE_LORA].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, Display_MapStateValue(system->modules[PX4LITE_MODULE_LORA].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue(system->modules[PX4LITE_MODULE_STORAGE].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, Display_MapStateValue(system->modules[PX4LITE_MODULE_CONTROL].state));
+  Display_SetMotorStatusLightsOnline();
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, Display_MapStateValue(system->modules[PX4LITE_MODULE_5G].state));
   /* 自检页错误码表由 Display_LoadAlarmSnapshot 按激活故障列表整体刷新，
      此处不再用单个 highest_fault_code 驱动。 */
@@ -1468,6 +1471,7 @@ static uint8_t Display_LoadModuleStatusFallback(void)
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue(status.state));
     loaded = 1U;
   }
+  Display_SetMotorStatusLightsOnline();
 
   return loaded;
 }

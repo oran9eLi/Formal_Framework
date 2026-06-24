@@ -513,8 +513,9 @@ static Px4Lite_Result_t MavTx_SendRemoteMotor(uint32_t now_ms)
  *
  * @details
  * name 固定为 "MODSTAT"。uint32 布局每 4 位一个模块状态(Px4Lite_State_t)：
- * 0..3 GNSS，4..7 IMU，8..11 Baro，12..15 5G，16..19 Storage，20..23 Control，
- * bit24 system_ready。LoRa 状态由显示端本机提供，不在此发送。
+ * 0..3 GNSS，4..7 IMU，8..11 Baro，12..15 5G，16..19 Storage，20..23 电机显示，
+ * bit24 system_ready。LoRa 状态由显示端本机提供，不在此发送。当前硬件没有
+ * ESC/电机真实存在检测，电机显示状态固定为 ONLINE，只表示该状态灯不参与故障判定。
  */
 static Px4Lite_Result_t MavTx_SendRemoteModuleStatus(uint32_t now_ms)
 {
@@ -531,7 +532,7 @@ static Px4Lite_Result_t MavTx_SendRemoteModuleStatus(uint32_t now_ms)
   packed |= ((uint32_t)health.module_state[PX4LITE_MODULE_BARO] & 0x0FU) << 8U;
   packed |= ((uint32_t)health.module_state[PX4LITE_MODULE_5G] & 0x0FU) << 12U;
   packed |= ((uint32_t)health.module_state[PX4LITE_MODULE_STORAGE] & 0x0FU) << 16U;
-  packed |= ((uint32_t)health.module_state[PX4LITE_MODULE_CONTROL] & 0x0FU) << 20U;
+  packed |= ((uint32_t)PX4LITE_STATE_ONLINE & 0x0FU) << 20U;
   packed |= ((uint32_t)system_ready & 0x01U) << 24U;
 
   return MavTx_SendNamedValueInt(now_ms, "MODSTAT", 7U, (int32_t)packed);
