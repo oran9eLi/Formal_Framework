@@ -29,6 +29,7 @@ typedef enum {
   DISPLAY_HMI_PAGE_DATA,       /* 定位数据页：系统、GNSS 定位、消息日志*/
   DISPLAY_HMI_PAGE_MOTOR,      /* 电机控制页：四路油门滑条和急停入口 */
   DISPLAY_HMI_PAGE_ALARM,      /* 告警页：运行期告警码和原因表*/
+  DISPLAY_HMI_PAGE_HIDDEN,     /* 隐藏页：仅由 KEY0 弹出，只保留标题栏，正文留白；不参与翻页导航 */
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 
@@ -260,6 +261,14 @@ uint8_t Display_HasPendingRedraw(void);
  * @retval      Display_Result_t: 处理结果
  */
 Display_Result_t Display_PollTouch(void);
+
+/**
+ * @brief       轮询 KEY0 按键，按下边沿切换隐藏页
+ * @param       无
+ * @retval      Display_Result_t: 处理结果
+ * @note        非隐藏页按下时记忆当前页并弹出隐藏页，隐藏页按下时返回原页面
+ */
+Display_Result_t Display_PollKey(void);
 
 /**
  * @brief       在屏幕底部显示启动阶段码

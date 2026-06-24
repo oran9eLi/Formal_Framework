@@ -61,7 +61,7 @@ typedef enum {
 /*
  * 页面 ID 用于 App 和调试链路路由，枚举值保持稳定。
  */
-static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_MOTOR, 0x0006U, "motor", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}};
+static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_MOTOR, 0x0006U, "motor", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}, {DISPLAY_HMI_PAGE_HIDDEN, 0x0007U, "hidden", 0U}};
 
 /*
  * ATK-MD0700 800x480 显示变量配置。
@@ -205,6 +205,12 @@ static uint8_t s_display_initialized          = 0U;
 static volatile uint8_t s_recover_requested   = 0U;
 static uint16_t s_refresh_cursor              = 0U;
 static uint8_t s_static_redraw_pending        = 0U;
+static Display_HmiPage_t s_page_before_hidden = DISPLAY_HMI_PAGE_SELF_CHECK; /* 进入隐藏页前的页面，供 KEY0 返回 */
+static uint8_t s_key0_last_raw                = 0U;
+static uint8_t s_key0_stable                  = 0U;
+static uint8_t s_key0_count                   = 0U;
+
+#define DISPLAY_KEY_DEBOUNCE_CYCLES 2U
 
 /*
  * Check whether a point is inside an inclusive rectangle.
@@ -643,6 +649,13 @@ static void Display_LoadMockValues(void)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW3_CODE, 0U);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW4_CODE, 0U);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW5_CODE, 0U);
+
+  /* LoRa 连接页演示数据：9 个在线节点，触发滚动翻页(占位，待真实节点发现接入) */
+  {
+    static const Display_LoraNode_t mock_nodes[] = {
+        {0x12U, 1U, 143158U}, {0x13U, 2U, 143202U}, {0x15U, 3U, 143010U}, {0x1AU, 5U, 142955U}, {0x21U, 7U, 143140U}, {0x24U, 8U, 143300U}, {0x2FU, 11U, 142847U}, {0x31U, 12U, 143312U}, {0x3AU, 15U, 143350U}};
+    Display_PagesSetLoraNodes(mock_nodes, (uint16_t)(sizeof(mock_nodes) / sizeof(mock_nodes[0])));
+  }
 }
 #endif
 
@@ -1589,6 +1602,11 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
 
   (void)Display_PagesDrawHeaderDynamic(Display_GetCachedValue, 0U);
 
+  /* LoRa 连接页内容由版本号驱动重绘（业务回写节点/连接状态时触发） */
+  if ((s_current_page == DISPLAY_HMI_PAGE_HIDDEN) && (Display_PagesLoraContentDirty() != 0U)) {
+    Display_PagesDrawLoraContent();
+  }
+
   return DISPLAY_OK;
 }
 
@@ -1672,6 +1690,11 @@ Display_Result_t Display_PollTouch(void)
     s_touch_retry_count = 0U;
     if (s_touch_down == 0U) {
       s_touch_down = 1U;
+      if (s_current_page == DISPLAY_HMI_PAGE_HIDDEN) {
+        s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
+        if (Display_PagesLoraHandleTouch(x, y) != DISPLAY_LORA_TOUCH_NONE) { Display_PagesDrawLoraContent(); }
+        return DISPLAY_OK;
+      }
       if (Display_IsMotorEstopTouch(x, y) != 0U) {
         s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
         return Display_MotorEmergencyStop();
@@ -1716,6 +1739,37 @@ Display_Result_t Display_PollTouch(void)
     s_touch_ready       = (Display_Gt911_Init() == DISPLAY_GT911_OK) ? 1U : 0U;
     s_touch_retry_count = 0U;
   }
+  return DISPLAY_OK;
+}
+
+/*
+ * 轮询 KEY0 并做简易去抖，检测到按下边沿时切换隐藏页。
+ * 非隐藏页按下：记忆当前页并弹出隐藏页；隐藏页按下：返回原页面。
+ */
+Display_Result_t Display_PollKey(void)
+{
+  uint8_t raw;
+
+  if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
+
+  raw = Px4Lite_ButtonPressed(PX4LITE_BUTTON_KEY0);
+  if (raw == s_key0_last_raw) {
+    if (s_key0_count < DISPLAY_KEY_DEBOUNCE_CYCLES) { s_key0_count++; }
+  } else {
+    s_key0_last_raw = raw;
+    s_key0_count    = 1U;
+  }
+
+  if ((s_key0_count >= DISPLAY_KEY_DEBOUNCE_CYCLES) && (raw != s_key0_stable)) {
+    s_key0_stable = raw;
+    if (raw != 0U) {
+      if (s_current_page == DISPLAY_HMI_PAGE_HIDDEN) { return Display_SetHmiPage(s_page_before_hidden); }
+
+      s_page_before_hidden = s_current_page;
+      return Display_SetHmiPage(DISPLAY_HMI_PAGE_HIDDEN);
+    }
+  }
+
   return DISPLAY_OK;
 }
 

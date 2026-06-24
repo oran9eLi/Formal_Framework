@@ -95,6 +95,85 @@ void Display_PagesPushLogMessage(Display_LogMsg_t msg, uint32_t time_hhmmss);
  */
 uint32_t Display_PagesGetLogVersion(void);
 
+/* ============================ LoRa 连接页（隐藏页）数据接口 ============================ */
+
+#define DISPLAY_LORA_MAX_NODES     16U /**< 列表缓存的最大在线节点数。 */
+#define DISPLAY_LORA_ROWS_PER_PAGE 7U  /**< 列表每页显示行数。 */
+
+/**
+ * @brief LoRa 在线节点条目。
+ * @note  业务层只传入“在线”节点；离线节点不进入列表，由调用方过滤。
+ */
+typedef struct {
+  uint16_t node_id;          /**< 节点地址/ID，列表与详情显示为 0xXX。 */
+  uint16_t label;            /**< 节点序号，列表显示为“节点 NN”。 */
+  uint32_t last_comm_hhmmss; /**< 上次通信时间，编码 HHMMSS；未知为 0。 */
+} Display_LoraNode_t;
+
+/**
+ * @brief 选中行连接命令回调。
+ * @param node_id 目标节点 ID。
+ * @param connect 1 表示请求连接，0 表示请求断开。
+ * @note  由业务/通信层注册；显示层在按钮按下时调用，不直接访问 LoRa 硬件。
+ */
+typedef void (*Display_LoraConnectHandler_t)(uint16_t node_id, uint8_t connect);
+
+/**
+ * @brief       更新 LoRa 连接页的在线节点列表（只在线节点）。
+ * @param       nodes: 节点数组，超过 DISPLAY_LORA_MAX_NODES 时截断。
+ * @param       count: 节点条数。
+ * @note        选中项按 node_id 跟随；原选中节点不在新列表时回退到首行。
+ */
+void Display_PagesSetLoraNodes(const Display_LoraNode_t *nodes, uint16_t count);
+
+/**
+ * @brief       设置 LoRa 当前连接状态（由业务/通信层回写真实状态）。
+ * @param       connected: 1 表示已连接，0 表示未连接。
+ * @param       node_id:   已连接的节点 ID，connected 为 0 时忽略。
+ */
+void Display_PagesSetLoraConnected(uint8_t connected, uint16_t node_id);
+
+/**
+ * @brief       注册连接/断开命令回调。
+ * @param       handler: 回调函数，传 0 清除。
+ */
+void Display_PagesSetLoraConnectHandler(Display_LoraConnectHandler_t handler);
+
+/**
+ * @brief       获取 LoRa 连接页内容版本号（列表/选中/连接状态变化即 +1，用于驱动重绘）。
+ * @retval      uint32_t: 当前版本号。
+ */
+uint32_t Display_PagesGetLoraVersion(void);
+
+/**
+ * @brief LoRa 连接页触摸处理结果。
+ */
+typedef enum {
+  DISPLAY_LORA_TOUCH_NONE = 0, /**< 未命中任何控件，无需重绘。 */
+  DISPLAY_LORA_TOUCH_REDRAW,   /**< 选中行/翻页变化，需重绘内容。 */
+  DISPLAY_LORA_TOUCH_COMMAND   /**< 连接/断开按钮触发，已调用回调，需重绘内容。 */
+} Display_LoraTouchResult_t;
+
+/**
+ * @brief       处理 LoRa 连接页的一次按下触摸（点行选中 / 翻页 / 连接按钮）。
+ * @param       x: 触摸 X 坐标。
+ * @param       y: 触摸 Y 坐标。
+ * @retval      Display_LoraTouchResult_t: 处理结果。
+ */
+Display_LoraTouchResult_t Display_PagesLoraHandleTouch(uint16_t x, uint16_t y);
+
+/**
+ * @brief       绘制 LoRa 连接页动态内容（列表行、选中、翻页、详情、按钮）。
+ * @note        固定边框由 Display_PagesDrawStatic 在切页时绘制。
+ */
+void Display_PagesDrawLoraContent(void);
+
+/**
+ * @brief       查询 LoRa 连接页内容是否需要重绘（版本号变化）。
+ * @retval      uint8_t: 非 0 表示需要调用 Display_PagesDrawLoraContent。
+ */
+uint8_t Display_PagesLoraContentDirty(void);
+
 #ifdef __cplusplus
 }
 #endif

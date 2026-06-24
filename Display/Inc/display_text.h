@@ -157,6 +157,15 @@ Display_GfxResult_t Display_TextDrawBatteryLabel(uint16_t x, uint16_t y, uint8_t
 
 Display_GfxResult_t Display_TextDrawVoltageLabel(uint16_t x, uint16_t y, uint16_t color);
 
+/* LoRa 连接页中文词标签（16px 高，单字字模拼接）。 */
+Display_GfxResult_t Display_TextDrawNodeLabel(uint16_t x, uint16_t y, uint16_t color);       /* 节点 */
+Display_GfxResult_t Display_TextDrawConnectLabel(uint16_t x, uint16_t y, uint16_t color);    /* 连接 */
+Display_GfxResult_t Display_TextDrawDisconnectLabel(uint16_t x, uint16_t y, uint16_t color); /* 断开 */
+Display_GfxResult_t Display_TextDrawSelectTitle(uint16_t x, uint16_t y, uint16_t color);     /* 当前选择 */
+Display_GfxResult_t Display_TextDrawWaitConnectLabel(uint16_t x, uint16_t y, uint16_t color);/* 待连接 */
+Display_GfxResult_t Display_TextDrawConnectedLabel(uint16_t x, uint16_t y, uint16_t color);  /* 已连接 */
+Display_GfxResult_t Display_TextDrawLastCommLabel(uint16_t x, uint16_t y, uint16_t color);   /* 上次通信 */
+
 Display_GfxResult_t Display_TextDrawRawBitmap(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t bytes_per_row, const uint8_t *data, uint16_t color);
 
 /**

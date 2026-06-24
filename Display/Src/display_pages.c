@@ -148,11 +148,11 @@ static void Display_PagesDrawFooter(Display_HmiPage_t page)
   (void)Display_GfxDrawFrame(542U, 426U, 250U, 48U, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
   (void)Display_TextDrawLabel(630U, 442U, DISPLAY_TEXT_NEXT, DISPLAY_GFX_COLOR_DARK);
 
-  /* 页码圆点以屏幕中线为中心，随页面数量自动居中 */
-  dot_count = (uint16_t)(DISPLAY_HMI_PAGE_COUNT - DISPLAY_HMI_PAGE_SELF_CHECK);
+  /* 页码圆点以屏幕中线为中心，随页面数量自动居中；隐藏页不计入 */
+  dot_count = (uint16_t)(DISPLAY_HMI_PAGE_HIDDEN - DISPLAY_HMI_PAGE_SELF_CHECK);
   start_x   = (uint16_t)((DISPLAY_GFX_WIDTH / 2U) - (((dot_count - 1U) * DISPLAY_PAGES_DOT_SPACING) / 2U));
 
-  for (i = (uint16_t)DISPLAY_HMI_PAGE_SELF_CHECK; i < DISPLAY_HMI_PAGE_COUNT; i++) {
+  for (i = (uint16_t)DISPLAY_HMI_PAGE_SELF_CHECK; i < DISPLAY_HMI_PAGE_HIDDEN; i++) {
     dot_x = (uint16_t)(start_x + ((i - (uint16_t)DISPLAY_HMI_PAGE_SELF_CHECK) * DISPLAY_PAGES_DOT_SPACING));
     (void)Display_GfxDrawStatusDot(dot_x, 450U, 6U, (i == (uint16_t)page) ? DISPLAY_GFX_COLOR_BLUE : DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_BLACK);
   }
@@ -1621,6 +1621,352 @@ static const Display_AlarmCn_t *Display_PagesGetAlarmReasonCn(uint32_t code)
   return &s_acn_rsn_unknown;
 }
 
+/* ============================ LoRa 连接页（隐藏页） ============================ */
+#define DISPLAY_LORA_LIST_X     8U
+#define DISPLAY_LORA_LIST_Y     72U
+#define DISPLAY_LORA_LIST_W     580U
+#define DISPLAY_LORA_LIST_H     400U
+#define DISPLAY_LORA_HEAD_Y     104U /* 标题行下分隔线 */
+#define DISPLAY_LORA_ROW_Y0     108U
+#define DISPLAY_LORA_ROW_H      52U
+#define DISPLAY_LORA_ROW_RIGHT  552U /* 行内容右界(滚动列左侧) */
+#define DISPLAY_LORA_DOT_CX     30U
+#define DISPLAY_LORA_NAME_X     48U
+#define DISPLAY_LORA_ID_X       250U
+#define DISPLAY_LORA_ONLINE_X   430U
+#define DISPLAY_LORA_SCROLL_X   556U
+#define DISPLAY_LORA_SCROLL_W   28U
+#define DISPLAY_LORA_UP_Y       108U
+#define DISPLAY_LORA_DOWN_Y     424U
+#define DISPLAY_LORA_SBTN_H     40U
+#define DISPLAY_LORA_TRACK_X    562U
+#define DISPLAY_LORA_TRACK_Y    152U
+#define DISPLAY_LORA_TRACK_W    16U
+#define DISPLAY_LORA_TRACK_H    268U
+#define DISPLAY_LORA_INFO_X     596U
+#define DISPLAY_LORA_INFO_Y     72U
+#define DISPLAY_LORA_INFO_W     196U
+#define DISPLAY_LORA_INFO_H     300U
+#define DISPLAY_LORA_CBTN_X     596U
+#define DISPLAY_LORA_CBTN_Y     388U
+#define DISPLAY_LORA_CBTN_W     196U
+#define DISPLAY_LORA_CBTN_H     64U
+#define DISPLAY_LORA_SEL_FILL   0xCEFBU /* 浅蓝选中底色 */
+#define DISPLAY_LORA_TRACK_BG   0xE71CU /* 滚动条轨道底色 */
+#define DISPLAY_LORA_NO_SEL     0xFFFFU
+
+static Display_LoraNode_t s_lora_nodes[DISPLAY_LORA_MAX_NODES];
+static uint16_t s_lora_count;
+static uint16_t s_lora_sel_id        = DISPLAY_LORA_NO_SEL; /* 当前选中节点 ID */
+static uint16_t s_lora_page;                               /* 当前页，0 基 */
+static uint8_t s_lora_connected;                           /* 是否已连接 */
+static uint16_t s_lora_conn_id;                            /* 已连接的节点 ID */
+static uint32_t s_lora_version;                            /* 内容版本号 */
+static uint32_t s_lora_drawn_version = 0xFFFFFFFFU;        /* 上次已绘制版本 */
+static Display_LoraConnectHandler_t s_lora_handler;
+
+static uint16_t Display_LoraPageCount(void)
+{
+  if (s_lora_count == 0U) { return 1U; }
+  return (uint16_t)((s_lora_count + DISPLAY_LORA_ROWS_PER_PAGE - 1U) / DISPLAY_LORA_ROWS_PER_PAGE);
+}
+
+/* 返回当前选中节点在列表中的下标，未选中或不在表内返回 -1。 */
+static int32_t Display_LoraSelIndex(void)
+{
+  uint16_t i;
+  if (s_lora_sel_id == DISPLAY_LORA_NO_SEL) { return -1; }
+  for (i = 0U; i < s_lora_count; i++) {
+    if (s_lora_nodes[i].node_id == s_lora_sel_id) { return (int32_t)i; }
+  }
+  return -1;
+}
+
+static char Display_LoraHexDigit(uint8_t v)
+{
+  v = (uint8_t)(v & 0x0FU);
+  return (v < 10U) ? (char)('0' + v) : (char)('A' + (v - 10U));
+}
+
+/* 把节点 ID 格式化为 "0xXX"（>0xFF 时 4 位）。 */
+static void Display_LoraFmtId(char *buf, uint16_t id)
+{
+  uint8_t p = 0U;
+  buf[p++]  = '0';
+  buf[p++]  = 'x';
+  if (id > 0xFFU) {
+    buf[p++] = Display_LoraHexDigit((uint8_t)(id >> 12));
+    buf[p++] = Display_LoraHexDigit((uint8_t)(id >> 8));
+  }
+  buf[p++] = Display_LoraHexDigit((uint8_t)(id >> 4));
+  buf[p++] = Display_LoraHexDigit((uint8_t)id);
+  buf[p]   = '\0';
+}
+
+/* 把数值格式化为两位十进制（截断到 0..99）。 */
+static void Display_LoraFmt2(char *buf, uint16_t v)
+{
+  if (v > 99U) { v = (uint16_t)(v % 100U); }
+  buf[0] = (char)('0' + (v / 10U));
+  buf[1] = (char)('0' + (v % 10U));
+  buf[2] = '\0';
+}
+
+void Display_PagesSetLoraNodes(const Display_LoraNode_t *nodes, uint16_t count)
+{
+  uint16_t i;
+
+  if (nodes == 0) { count = 0U; }
+  if (count > DISPLAY_LORA_MAX_NODES) { count = DISPLAY_LORA_MAX_NODES; }
+  for (i = 0U; i < count; i++) { s_lora_nodes[i] = nodes[i]; }
+  s_lora_count = count;
+
+  if (Display_LoraSelIndex() < 0) { s_lora_sel_id = (count > 0U) ? s_lora_nodes[0].node_id : DISPLAY_LORA_NO_SEL; }
+  if (s_lora_page >= Display_LoraPageCount()) { s_lora_page = (uint16_t)(Display_LoraPageCount() - 1U); }
+  s_lora_version++;
+}
+
+void Display_PagesSetLoraConnected(uint8_t connected, uint16_t node_id)
+{
+  s_lora_connected = (connected != 0U) ? 1U : 0U;
+  s_lora_conn_id   = node_id;
+  s_lora_version++;
+}
+
+void Display_PagesSetLoraConnectHandler(Display_LoraConnectHandler_t handler)
+{
+  s_lora_handler = handler;
+}
+
+uint32_t Display_PagesGetLoraVersion(void)
+{
+  return s_lora_version;
+}
+
+uint8_t Display_PagesLoraContentDirty(void)
+{
+  return (s_lora_version != s_lora_drawn_version) ? 1U : 0U;
+}
+
+/* 是否已连接到指定节点。 */
+static uint8_t Display_LoraIsConnectedTo(uint16_t node_id)
+{
+  return ((s_lora_connected != 0U) && (s_lora_conn_id == node_id)) ? 1U : 0U;
+}
+
+/* 绘制一个三角箭头(up 非 0 向上，否则向下)。 */
+static void Display_LoraDrawArrow(uint16_t cx, uint16_t cy, uint8_t up)
+{
+  uint16_t i;
+  for (i = 0U; i < 7U; i++) {
+    uint16_t w  = (uint16_t)(2U + (i * 2U));
+    uint16_t yy = (up != 0U) ? (uint16_t)(cy - 6U + i) : (uint16_t)(cy + 6U - i);
+    (void)Display_GfxFillRect((uint16_t)(cx - (w / 2U)), yy, w, 1U, DISPLAY_GFX_COLOR_DARK);
+  }
+}
+
+static void Display_LoraDrawRow(uint16_t row, uint16_t idx)
+{
+  uint16_t top = (uint16_t)(DISPLAY_LORA_ROW_Y0 + (row * DISPLAY_LORA_ROW_H));
+  uint16_t ty  = (uint16_t)(top + 18U);
+  uint8_t sel  = (s_lora_nodes[idx].node_id == s_lora_sel_id) ? 1U : 0U;
+  char buf[8];
+
+  (void)Display_GfxFillRect(9U, top, (uint16_t)(DISPLAY_LORA_ROW_RIGHT - 9U), DISPLAY_LORA_ROW_H, sel ? DISPLAY_LORA_SEL_FILL : DISPLAY_GFX_COLOR_WHITE);
+  if (sel != 0U) { (void)Display_GfxFillRect(9U, top, 4U, DISPLAY_LORA_ROW_H, DISPLAY_GFX_COLOR_BLUE); }
+
+  (void)Display_GfxDrawStatusDot(DISPLAY_LORA_DOT_CX, (uint16_t)(top + (DISPLAY_LORA_ROW_H / 2U)), 6U, DISPLAY_GFX_COLOR_GREEN, DISPLAY_GFX_COLOR_BLACK);
+  (void)Display_TextDrawNodeLabel(DISPLAY_LORA_NAME_X, ty, DISPLAY_GFX_COLOR_DARK);
+  Display_LoraFmt2(buf, s_lora_nodes[idx].label);
+  (void)Display_GfxDrawString((uint16_t)(DISPLAY_LORA_NAME_X + 38U), (uint16_t)(ty + 1U), buf, DISPLAY_GFX_COLOR_DARK, 2U);
+  Display_LoraFmtId(buf, s_lora_nodes[idx].node_id);
+  (void)Display_GfxDrawString(DISPLAY_LORA_ID_X, (uint16_t)(ty + 1U), buf, DISPLAY_GFX_COLOR_DARK, 2U);
+  (void)Display_TextDrawLabel(DISPLAY_LORA_ONLINE_X, ty, DISPLAY_TXT_ONLINE, DISPLAY_GFX_COLOR_GREEN);
+
+  (void)Display_GfxDrawHLine(DISPLAY_LORA_LIST_X, (uint16_t)(top + DISPLAY_LORA_ROW_H), (uint16_t)(DISPLAY_LORA_ROW_RIGHT - DISPLAY_LORA_LIST_X), DISPLAY_GFX_COLOR_GRAY);
+}
+
+static void Display_LoraDrawInfo(void)
+{
+  int32_t sel = Display_LoraSelIndex();
+  char buf[12];
+  uint16_t x = (uint16_t)(DISPLAY_LORA_INFO_X + 14U);
+  uint16_t status_w;
+
+  (void)Display_GfxFillRect((uint16_t)(DISPLAY_LORA_INFO_X + 1U), 106U, (uint16_t)(DISPLAY_LORA_INFO_W - 2U), (uint16_t)((DISPLAY_LORA_INFO_Y + DISPLAY_LORA_INFO_H) - 107U), DISPLAY_GFX_COLOR_WHITE);
+  if (sel < 0) { return; }
+
+  (void)Display_TextDrawNodeLabel(x, 120U, DISPLAY_GFX_COLOR_DARK);
+  Display_LoraFmt2(buf, s_lora_nodes[sel].label);
+  (void)Display_GfxDrawString((uint16_t)(x + 38U), 121U, buf, DISPLAY_GFX_COLOR_DARK, 2U);
+
+  (void)Display_GfxDrawString(x, 162U, "ID", DISPLAY_GFX_COLOR_GRAY, 2U);
+  Display_LoraFmtId(buf, s_lora_nodes[sel].node_id);
+  (void)Display_GfxDrawString((uint16_t)(x + 42U), 162U, buf, DISPLAY_GFX_COLOR_DARK, 2U);
+
+  (void)Display_TextDrawLabel(x, 202U, DISPLAY_TXT_STATUS, DISPLAY_GFX_COLOR_DARK);
+  status_w = (uint16_t)(Display_TextGetLabelWidth(DISPLAY_TXT_STATUS) + 8U);
+  if (Display_LoraIsConnectedTo(s_lora_nodes[sel].node_id) != 0U) {
+    (void)Display_TextDrawConnectedLabel((uint16_t)(x + status_w), 202U, DISPLAY_GFX_COLOR_GREEN);
+  } else {
+    (void)Display_TextDrawWaitConnectLabel((uint16_t)(x + status_w), 202U, DISPLAY_GFX_COLOR_YELLOW);
+  }
+
+  (void)Display_TextDrawLastCommLabel(x, 246U, DISPLAY_GFX_COLOR_GRAY);
+  Display_PagesFmtClock(buf, s_lora_nodes[sel].last_comm_hhmmss);
+  (void)Display_GfxDrawString(x, 274U, buf, DISPLAY_GFX_COLOR_DARK, 2U);
+}
+
+static void Display_LoraDrawButton(void)
+{
+  int32_t sel   = Display_LoraSelIndex();
+  uint8_t conn  = (sel >= 0) ? Display_LoraIsConnectedTo(s_lora_nodes[sel].node_id) : 0U;
+  uint16_t fill = (sel < 0) ? DISPLAY_GFX_COLOR_GRAY : ((conn != 0U) ? DISPLAY_GFX_COLOR_RED : DISPLAY_GFX_COLOR_GREEN);
+  uint16_t lx   = (uint16_t)(DISPLAY_LORA_CBTN_X + ((DISPLAY_LORA_CBTN_W - 32U) / 2U));
+  uint16_t ly   = (uint16_t)(DISPLAY_LORA_CBTN_Y + ((DISPLAY_LORA_CBTN_H - 16U) / 2U));
+
+  (void)Display_GfxFillRect(DISPLAY_LORA_CBTN_X, DISPLAY_LORA_CBTN_Y, DISPLAY_LORA_CBTN_W, DISPLAY_LORA_CBTN_H, fill);
+  if (conn != 0U) {
+    (void)Display_TextDrawDisconnectLabel(lx, ly, DISPLAY_GFX_COLOR_WHITE);
+  } else {
+    (void)Display_TextDrawConnectLabel(lx, ly, DISPLAY_GFX_COLOR_WHITE);
+  }
+}
+
+void Display_PagesDrawLoraContent(void)
+{
+  uint16_t row;
+  uint16_t page_top;
+  uint16_t pages;
+  uint16_t online_w;
+  uint16_t thumb_h;
+  uint16_t thumb_y;
+  char buf[8];
+  char pbuf[6];
+
+  if (Display_GfxIsReady() == 0U) { return; }
+
+  pages = Display_LoraPageCount();
+  if (s_lora_page >= pages) { s_lora_page = (uint16_t)(pages - 1U); }
+  page_top = (uint16_t)(s_lora_page * DISPLAY_LORA_ROWS_PER_PAGE);
+
+  /* 标题行右侧：在线数 + 页码 */
+  (void)Display_GfxFillRect(300U, (uint16_t)(DISPLAY_LORA_LIST_Y + 6U), 244U, 22U, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_TextDrawLabel(300U, (uint16_t)(DISPLAY_LORA_LIST_Y + 8U), DISPLAY_TXT_ONLINE, DISPLAY_GFX_COLOR_GREEN);
+  online_w = (uint16_t)(Display_TextGetLabelWidth(DISPLAY_TXT_ONLINE) + 6U);
+  Display_LoraFmt2(buf, s_lora_count);
+  (void)Display_GfxDrawString((uint16_t)(300U + online_w), (uint16_t)(DISPLAY_LORA_LIST_Y + 9U), buf, DISPLAY_GFX_COLOR_DARK, 2U);
+  pbuf[0] = 'P';
+  pbuf[1] = ' ';
+  pbuf[2] = (char)('0' + ((s_lora_page + 1U) % 10U));
+  pbuf[3] = '/';
+  pbuf[4] = (char)('0' + (pages % 10U));
+  pbuf[5] = '\0';
+  (void)Display_GfxDrawString(456U, (uint16_t)(DISPLAY_LORA_LIST_Y + 9U), pbuf, DISPLAY_GFX_COLOR_GRAY, 2U);
+
+  /* 列表正文 */
+  (void)Display_GfxFillRect(9U, DISPLAY_LORA_ROW_Y0, (uint16_t)(DISPLAY_LORA_ROW_RIGHT - 9U), (uint16_t)((DISPLAY_LORA_LIST_Y + DISPLAY_LORA_LIST_H) - DISPLAY_LORA_ROW_Y0 - 1U), DISPLAY_GFX_COLOR_WHITE);
+  /* 列表为空时正文留白；标题行已显示“在线 00”表明无在线节点 */
+  for (row = 0U; row < DISPLAY_LORA_ROWS_PER_PAGE; row++) {
+    uint16_t idx = (uint16_t)(page_top + row);
+    if (idx >= s_lora_count) { break; }
+    Display_LoraDrawRow(row, idx);
+  }
+
+  /* 滚动条滑块 */
+  (void)Display_GfxFillRect(DISPLAY_LORA_TRACK_X, DISPLAY_LORA_TRACK_Y, DISPLAY_LORA_TRACK_W, DISPLAY_LORA_TRACK_H, DISPLAY_LORA_TRACK_BG);
+  thumb_h = (uint16_t)(DISPLAY_LORA_TRACK_H / pages);
+  if (thumb_h < 24U) { thumb_h = 24U; }
+  thumb_y = (pages > 1U) ? (uint16_t)(DISPLAY_LORA_TRACK_Y + (((DISPLAY_LORA_TRACK_H - thumb_h) * s_lora_page) / (pages - 1U))) : DISPLAY_LORA_TRACK_Y;
+  (void)Display_GfxFillRect(DISPLAY_LORA_TRACK_X, thumb_y, DISPLAY_LORA_TRACK_W, thumb_h, DISPLAY_GFX_COLOR_GRAY);
+
+  Display_LoraDrawInfo();
+  Display_LoraDrawButton();
+
+  s_lora_drawn_version = s_lora_version;
+}
+
+static void Display_PagesDrawLoraLayout(void)
+{
+  /* 列表外框 + 标题 "LoRa 连接" */
+  (void)Display_GfxDrawFrame(DISPLAY_LORA_LIST_X, DISPLAY_LORA_LIST_Y, DISPLAY_LORA_LIST_W, DISPLAY_LORA_LIST_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxDrawString((uint16_t)(DISPLAY_LORA_LIST_X + 14U), (uint16_t)(DISPLAY_LORA_LIST_Y + 9U), "LoRa", DISPLAY_GFX_COLOR_BLUE, 2U);
+  (void)Display_TextDrawConnectLabel((uint16_t)(DISPLAY_LORA_LIST_X + 72U), (uint16_t)(DISPLAY_LORA_LIST_Y + 8U), DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_GfxDrawHLine(DISPLAY_LORA_LIST_X, DISPLAY_LORA_HEAD_Y, DISPLAY_LORA_LIST_W, DISPLAY_GFX_COLOR_GRAY);
+
+  /* 滚动列分隔线 + 上下翻页按钮 + 轨道 */
+  (void)Display_GfxDrawVLine((uint16_t)(DISPLAY_LORA_SCROLL_X - 4U), DISPLAY_LORA_HEAD_Y, (uint16_t)((DISPLAY_LORA_LIST_Y + DISPLAY_LORA_LIST_H) - DISPLAY_LORA_HEAD_Y), DISPLAY_GFX_COLOR_GRAY);
+  (void)Display_GfxDrawFrame(DISPLAY_LORA_SCROLL_X, DISPLAY_LORA_UP_Y, DISPLAY_LORA_SCROLL_W, DISPLAY_LORA_SBTN_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_LORA_TRACK_BG);
+  Display_LoraDrawArrow((uint16_t)(DISPLAY_LORA_SCROLL_X + (DISPLAY_LORA_SCROLL_W / 2U)), (uint16_t)(DISPLAY_LORA_UP_Y + (DISPLAY_LORA_SBTN_H / 2U)), 1U);
+  (void)Display_GfxDrawFrame(DISPLAY_LORA_SCROLL_X, DISPLAY_LORA_DOWN_Y, DISPLAY_LORA_SCROLL_W, DISPLAY_LORA_SBTN_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_LORA_TRACK_BG);
+  Display_LoraDrawArrow((uint16_t)(DISPLAY_LORA_SCROLL_X + (DISPLAY_LORA_SCROLL_W / 2U)), (uint16_t)(DISPLAY_LORA_DOWN_Y + (DISPLAY_LORA_SBTN_H / 2U)), 0U);
+
+  /* 右侧详情框 + 标题 "当前选择" */
+  (void)Display_GfxDrawFrame(DISPLAY_LORA_INFO_X, DISPLAY_LORA_INFO_Y, DISPLAY_LORA_INFO_W, DISPLAY_LORA_INFO_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_TextDrawSelectTitle((uint16_t)(DISPLAY_LORA_INFO_X + 14U), (uint16_t)(DISPLAY_LORA_INFO_Y + 9U), DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_GfxDrawHLine(DISPLAY_LORA_INFO_X, (uint16_t)(DISPLAY_LORA_INFO_Y + 32U), DISPLAY_LORA_INFO_W, DISPLAY_GFX_COLOR_GRAY);
+
+  Display_PagesDrawLoraContent();
+}
+
+Display_LoraTouchResult_t Display_PagesLoraHandleTouch(uint16_t x, uint16_t y)
+{
+  uint16_t pages = Display_LoraPageCount();
+
+  /* 连接/断开按钮 */
+  if ((x >= DISPLAY_LORA_CBTN_X) && (x < (DISPLAY_LORA_CBTN_X + DISPLAY_LORA_CBTN_W)) && (y >= DISPLAY_LORA_CBTN_Y) && (y < (DISPLAY_LORA_CBTN_Y + DISPLAY_LORA_CBTN_H))) {
+    int32_t sel = Display_LoraSelIndex();
+    uint16_t id;
+    uint8_t want_connect;
+    if (sel < 0) { return DISPLAY_LORA_TOUCH_NONE; }
+    id           = s_lora_nodes[sel].node_id;
+    want_connect = (Display_LoraIsConnectedTo(id) != 0U) ? 0U : 1U;
+    if (want_connect != 0U) {
+      s_lora_connected = 1U;
+      s_lora_conn_id   = id;
+    } else {
+      s_lora_connected = 0U;
+    }
+    if (s_lora_handler != 0) { s_lora_handler(id, want_connect); }
+    s_lora_version++;
+    return DISPLAY_LORA_TOUCH_COMMAND;
+  }
+
+  /* 上翻页 */
+  if ((x >= DISPLAY_LORA_SCROLL_X) && (x < (DISPLAY_LORA_SCROLL_X + DISPLAY_LORA_SCROLL_W)) && (y >= DISPLAY_LORA_UP_Y) && (y < (DISPLAY_LORA_UP_Y + DISPLAY_LORA_SBTN_H))) {
+    if (s_lora_page > 0U) {
+      s_lora_page--;
+      s_lora_version++;
+      return DISPLAY_LORA_TOUCH_REDRAW;
+    }
+    return DISPLAY_LORA_TOUCH_NONE;
+  }
+
+  /* 下翻页 */
+  if ((x >= DISPLAY_LORA_SCROLL_X) && (x < (DISPLAY_LORA_SCROLL_X + DISPLAY_LORA_SCROLL_W)) && (y >= DISPLAY_LORA_DOWN_Y) && (y < (DISPLAY_LORA_DOWN_Y + DISPLAY_LORA_SBTN_H))) {
+    if ((uint16_t)(s_lora_page + 1U) < pages) {
+      s_lora_page++;
+      s_lora_version++;
+      return DISPLAY_LORA_TOUCH_REDRAW;
+    }
+    return DISPLAY_LORA_TOUCH_NONE;
+  }
+
+  /* 列表行选中 */
+  if ((x >= DISPLAY_LORA_LIST_X) && (x < DISPLAY_LORA_ROW_RIGHT) && (y >= DISPLAY_LORA_ROW_Y0) && (y < (uint16_t)(DISPLAY_LORA_ROW_Y0 + (DISPLAY_LORA_ROWS_PER_PAGE * DISPLAY_LORA_ROW_H)))) {
+    uint16_t row = (uint16_t)((y - DISPLAY_LORA_ROW_Y0) / DISPLAY_LORA_ROW_H);
+    uint16_t idx = (uint16_t)((s_lora_page * DISPLAY_LORA_ROWS_PER_PAGE) + row);
+    if ((idx < s_lora_count) && (s_lora_sel_id != s_lora_nodes[idx].node_id)) {
+      s_lora_sel_id = s_lora_nodes[idx].node_id;
+      s_lora_version++;
+      return DISPLAY_LORA_TOUCH_REDRAW;
+    }
+    return DISPLAY_LORA_TOUCH_NONE;
+  }
+
+  return DISPLAY_LORA_TOUCH_NONE;
+}
+
 /*
  * 获取当前页面的上一页，首尾循环。
  */
@@ -1636,7 +1982,8 @@ Display_HmiPage_t Display_PagesGetPrevPage(Display_HmiPage_t page)
  */
 Display_HmiPage_t Display_PagesGetNextPage(Display_HmiPage_t page)
 {
-  if (((uint16_t)page + 1U) >= DISPLAY_HMI_PAGE_COUNT) { return DISPLAY_HMI_PAGE_SELF_CHECK; }
+  /* 隐藏页不参与翻页循环，导航在自检页与告警页之间首尾相接 */
+  if (((uint16_t)page + 1U) >= DISPLAY_HMI_PAGE_HIDDEN) { return DISPLAY_HMI_PAGE_SELF_CHECK; }
 
   return (Display_HmiPage_t)((uint16_t)page + 1U);
 }
@@ -1714,12 +2061,14 @@ Display_Result_t Display_PagesDrawStatic(Display_HmiPage_t page, Display_PagesVa
     Display_PagesDrawMotorLayout();
   } else if (page == DISPLAY_HMI_PAGE_ALARM) {
     Display_PagesDrawAlarmStaticLayout();
+  } else if (page == DISPLAY_HMI_PAGE_HIDDEN) {
+    Display_PagesDrawLoraLayout(); /* LoRa 连接页：列表 + 详情 + 连接按钮，无底部翻页栏 */
   } else {
     return DISPLAY_ERROR;
   }
 
   (void)Display_PagesDrawHeader(page, read_value);
-  Display_PagesDrawFooter(page);
+  if (page != DISPLAY_HMI_PAGE_HIDDEN) { Display_PagesDrawFooter(page); }
 
   return DISPLAY_OK;
 }

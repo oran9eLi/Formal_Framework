@@ -507,6 +507,32 @@ static const uint8_t s_mlg_zu[]        = {/* 'zu'   enough (足) */
 static const uint8_t s_mlg_bu_not[]    = {/* 'bu'   not/negation (不) */
                                     0x00, 0x00, 0x7F, 0xFC, 0x00, 0x80, 0x00, 0x80, 0x01, 0x00, 0x01, 0x00, 0x03, 0x40, 0x05, 0x20, 0x09, 0x10, 0x11, 0x08, 0x21, 0x04, 0x41, 0x04, 0x81, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00};
 
+/* LoRa connect page glyphs (16x16, same format as above). */
+static const uint8_t s_mlg_jie_node[] = {/* 'jie'  node-1 */
+                                         0x08, 0x20, 0x08, 0x20, 0xFF, 0xFE, 0x08, 0x20, 0x08, 0x20, 0x00, 0x00, 0x7F, 0xF8, 0x02, 0x08, 0x02, 0x08, 0x02, 0x08, 0x02, 0x08, 0x02, 0x50, 0x02, 0x20, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00};
+static const uint8_t s_mlg_dian_pt[] = {/* 'dian' node-2 */
+                                        0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x03, 0xFC, 0x02, 0x00, 0x02, 0x00, 0x3F, 0xF0, 0x20, 0x10, 0x20, 0x10, 0x20, 0x10, 0x3F, 0xF0, 0x00, 0x00, 0x24, 0x88, 0x22, 0x44, 0x42, 0x44, 0x80, 0x04};
+static const uint8_t s_mlg_lian[] = {/* 'lian' connect-1 */
+                                     0x00, 0x40, 0x20, 0x40, 0x17, 0xFE, 0x10, 0x80, 0x00, 0xA0, 0x01, 0x20, 0xF3, 0xFC, 0x10, 0x20, 0x10, 0x20, 0x10, 0x20, 0x17, 0xFE, 0x10, 0x20, 0x10, 0x20, 0x28, 0x20, 0x47, 0xFE, 0x00, 0x00};
+static const uint8_t s_mlg_jie_conn[] = {/* 'jie'  connect-2 */
+                                         0x10, 0x80, 0x10, 0x40, 0x13, 0xFC, 0x10, 0x00, 0xFD, 0x08, 0x10, 0x90, 0x17, 0xFE, 0x10, 0x40, 0x18, 0x40, 0x37, 0xFE, 0xD0, 0x88, 0x11, 0x08, 0x10, 0x90, 0x10, 0x60, 0x51, 0x98, 0x26, 0x04};
+static const uint8_t s_mlg_dang[] = {/* 'dang' current-1 */
+                                     0x01, 0x00, 0x21, 0x08, 0x11, 0x08, 0x09, 0x10, 0x09, 0x20, 0x01, 0x00, 0x7F, 0xF8, 0x00, 0x08, 0x00, 0x08, 0x00, 0x08, 0x3F, 0xF8, 0x00, 0x08, 0x00, 0x08, 0x00, 0x08, 0x7F, 0xF8, 0x00, 0x08};
+static const uint8_t s_mlg_qian[] = {/* 'qian' current-2 */
+                                     0x10, 0x10, 0x08, 0x10, 0x08, 0x20, 0xFF, 0xFE, 0x00, 0x00, 0x3E, 0x08, 0x22, 0x48, 0x22, 0x48, 0x3E, 0x48, 0x22, 0x48, 0x22, 0x48, 0x3E, 0x48, 0x22, 0x08, 0x22, 0x08, 0x2A, 0x28, 0x24, 0x10};
+static const uint8_t s_mlg_xuan[] = {/* 'xuan' select-1 */
+                                     0x00, 0x40, 0x22, 0x40, 0x12, 0x40, 0x13, 0xF8, 0x04, 0x40, 0x00, 0x40, 0xF7, 0xFC, 0x11, 0x20, 0x11, 0x20, 0x11, 0x20, 0x12, 0x24, 0x12, 0x24, 0x14, 0x1C, 0x28, 0x00, 0x47, 0xFE, 0x00, 0x00};
+static const uint8_t s_mlg_ze[] = {/* 'ze'   select-2 */
+                                   0x20, 0x00, 0x27, 0xF8, 0x22, 0x08, 0x21, 0x10, 0xF0, 0xA0, 0x20, 0x40, 0x21, 0xB0, 0x26, 0x4E, 0x30, 0x40, 0xE3, 0xF8, 0x20, 0x40, 0x20, 0x40, 0x27, 0xFC, 0x20, 0x40, 0xA0, 0x40, 0x40, 0x40};
+static const uint8_t s_mlg_dai[] = {/* 'dai'  wait */
+                                    0x08, 0x40, 0x08, 0x40, 0x10, 0x40, 0x23, 0xFC, 0x48, 0x40, 0x08, 0x40, 0x17, 0xFE, 0x30, 0x10, 0x50, 0x10, 0x97, 0xFE, 0x10, 0x10, 0x12, 0x10, 0x11, 0x10, 0x11, 0x10, 0x10, 0x50, 0x10, 0x20};
+static const uint8_t s_mlg_yi[] = {/* 'yi'   already */
+                                   0x00, 0x00, 0x3F, 0xF0, 0x00, 0x10, 0x00, 0x10, 0x00, 0x10, 0x20, 0x10, 0x20, 0x10, 0x3F, 0xF0, 0x20, 0x00, 0x20, 0x00, 0x20, 0x00, 0x20, 0x04, 0x20, 0x04, 0x20, 0x04, 0x1F, 0xFC, 0x00, 0x00};
+static const uint8_t s_mlg_shang[] = {/* 'shang' last-1 */
+                                      0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x03, 0xF8, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0xFF, 0xFE, 0x00, 0x00};
+static const uint8_t s_mlg_ci[] = {/* 'ci'   last-2 */
+                                   0x00, 0x80, 0x40, 0x80, 0x20, 0x80, 0x20, 0xFC, 0x01, 0x04, 0x09, 0x08, 0x0A, 0x40, 0x14, 0x40, 0x10, 0x40, 0xE0, 0xA0, 0x20, 0xA0, 0x21, 0x10, 0x21, 0x10, 0x22, 0x08, 0x24, 0x04, 0x08, 0x02};
+
 typedef enum {
   MLG_WU = 0,
   MLG_XIN,
@@ -553,11 +579,24 @@ typedef enum {
   MLG_GONG,
   MLG_ZU,
   MLG_BU_NOT,
+  MLG_JIE_NODE,
+  MLG_DIAN_PT,
+  MLG_LIAN,
+  MLG_JIE_CONN,
+  MLG_DANG,
+  MLG_QIAN,
+  MLG_XUAN,
+  MLG_ZE,
+  MLG_DAI,
+  MLG_YI,
+  MLG_SHANG,
+  MLG_CI,
   MLG_COUNT
 } Display_MsgGlyph_t;
 
 static const Display_TextBitmap_t s_mlg_table[MLG_COUNT] = {{16U, 16U, 2U, s_mlg_wu},   {16U, 16U, 2U, s_mlg_xin}, {16U, 16U, 2U, s_mlg_hao}, {16U, 16U, 2U, s_mlg_duan}, {16U, 16U, 2U, s_mlg_kai},       {16U, 16U, 2U, s_mlg_zi_pose}, {16U, 16U, 2U, s_mlg_tai},  {16U, 16U, 2U, s_mlg_zheng}, {16U, 16U, 2U, s_mlg_chang}, {16U, 16U, 2U, s_mlg_huan}, {16U, 16U, 2U, s_mlg_jing_env}, {16U, 16U, 2U, s_mlg_tong}, {16U, 16U, 2U, s_mlg_cun}, {16U, 16U, 2U, s_mlg_chu}, {16U, 16U, 2U, s_mlg_dian},     {16U, 16U, 2U, s_mlg_ji}, {16U, 16U, 2U, s_mlg_gu},  {16U, 16U, 2U, s_mlg_zhang},
-                                                            {16U, 16U, 2U, s_mlg_quan}, {16U, 16U, 2U, s_mlg_bu},  {16U, 16U, 2U, s_mlg_you}, {16U, 16U, 2U, s_mlg_gao},  {16U, 16U, 2U, s_mlg_jing_warn}, {16U, 16U, 2U, s_mlg_zi_self}, {16U, 16U, 2U, s_mlg_jian}, {16U, 16U, 2U, s_mlg_fen},   {16U, 16U, 2U, s_mlg_guo},   {16U, 16U, 2U, s_mlg_wei},  {8U, 16U, 1U, s_mlg_g},         {8U, 16U, 1U, s_mlg_p},     {8U, 16U, 1U, s_mlg_s},    {16U, 16U, 2U, s_mlg_xi},  {16U, 16U, 2U, s_mlg_tong_sys}, {16U, 16U, 2U, s_mlg_qi}, {16U, 16U, 2U, s_mlg_dong}, {16U, 16U, 2U, s_mlg_kong}, {16U, 16U, 2U, s_mlg_zhi}, {16U, 16U, 2U, s_mlg_ji_urg}, {16U, 16U, 2U, s_mlg_ting}, {16U, 16U, 2U, s_mlg_zhu}, {16U, 16U, 2U, s_mlg_ya}, {16U, 16U, 2U, s_mlg_chi}, {16U, 16U, 2U, s_mlg_gong}, {16U, 16U, 2U, s_mlg_zu}, {16U, 16U, 2U, s_mlg_bu_not}};
+                                                            {16U, 16U, 2U, s_mlg_quan}, {16U, 16U, 2U, s_mlg_bu},  {16U, 16U, 2U, s_mlg_you}, {16U, 16U, 2U, s_mlg_gao},  {16U, 16U, 2U, s_mlg_jing_warn}, {16U, 16U, 2U, s_mlg_zi_self}, {16U, 16U, 2U, s_mlg_jian}, {16U, 16U, 2U, s_mlg_fen},   {16U, 16U, 2U, s_mlg_guo},   {16U, 16U, 2U, s_mlg_wei},  {8U, 16U, 1U, s_mlg_g},         {8U, 16U, 1U, s_mlg_p},     {8U, 16U, 1U, s_mlg_s},    {16U, 16U, 2U, s_mlg_xi},  {16U, 16U, 2U, s_mlg_tong_sys}, {16U, 16U, 2U, s_mlg_qi}, {16U, 16U, 2U, s_mlg_dong}, {16U, 16U, 2U, s_mlg_kong}, {16U, 16U, 2U, s_mlg_zhi}, {16U, 16U, 2U, s_mlg_ji_urg}, {16U, 16U, 2U, s_mlg_ting}, {16U, 16U, 2U, s_mlg_zhu}, {16U, 16U, 2U, s_mlg_ya}, {16U, 16U, 2U, s_mlg_chi}, {16U, 16U, 2U, s_mlg_gong}, {16U, 16U, 2U, s_mlg_zu}, {16U, 16U, 2U, s_mlg_bu_not},
+                                                            {16U, 16U, 2U, s_mlg_jie_node}, {16U, 16U, 2U, s_mlg_dian_pt}, {16U, 16U, 2U, s_mlg_lian}, {16U, 16U, 2U, s_mlg_jie_conn}, {16U, 16U, 2U, s_mlg_dang}, {16U, 16U, 2U, s_mlg_qian}, {16U, 16U, 2U, s_mlg_xuan}, {16U, 16U, 2U, s_mlg_ze}, {16U, 16U, 2U, s_mlg_dai}, {16U, 16U, 2U, s_mlg_yi}, {16U, 16U, 2U, s_mlg_shang}, {16U, 16U, 2U, s_mlg_ci}};
 static const Display_TextBitmap_t s_mlg_kong_aircraft_bitmap = {16U, 16U, 2U, s_mlg_kong_aircraft};
 
 /* Draw one glyph, return advance width in pixels. */
@@ -650,6 +689,69 @@ Display_GfxResult_t Display_TextDrawVoltageLabel(uint16_t x, uint16_t y, uint16_
 
   cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_DIAN, color));
   (void)Display_TextDrawGlyph(cx, y, MLG_YA, color);
+  return DISPLAY_GFX_OK;
+}
+
+/* LoRa connect page word labels, composed from single glyphs. */
+Display_GfxResult_t Display_TextDrawNodeLabel(uint16_t x, uint16_t y, uint16_t color)
+{
+  uint16_t cx = x;
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_JIE_NODE, color));
+  (void)Display_TextDrawGlyph(cx, y, MLG_DIAN_PT, color);
+  return DISPLAY_GFX_OK;
+}
+
+Display_GfxResult_t Display_TextDrawConnectLabel(uint16_t x, uint16_t y, uint16_t color)
+{
+  uint16_t cx = x;
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_LIAN, color));
+  (void)Display_TextDrawGlyph(cx, y, MLG_JIE_CONN, color);
+  return DISPLAY_GFX_OK;
+}
+
+Display_GfxResult_t Display_TextDrawDisconnectLabel(uint16_t x, uint16_t y, uint16_t color)
+{
+  uint16_t cx = x;
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_DUAN, color));
+  (void)Display_TextDrawGlyph(cx, y, MLG_KAI, color);
+  return DISPLAY_GFX_OK;
+}
+
+Display_GfxResult_t Display_TextDrawSelectTitle(uint16_t x, uint16_t y, uint16_t color)
+{
+  uint16_t cx = x;
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_DANG, color));
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_QIAN, color));
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_XUAN, color));
+  (void)Display_TextDrawGlyph(cx, y, MLG_ZE, color);
+  return DISPLAY_GFX_OK;
+}
+
+Display_GfxResult_t Display_TextDrawWaitConnectLabel(uint16_t x, uint16_t y, uint16_t color)
+{
+  uint16_t cx = x;
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_DAI, color));
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_LIAN, color));
+  (void)Display_TextDrawGlyph(cx, y, MLG_JIE_CONN, color);
+  return DISPLAY_GFX_OK;
+}
+
+Display_GfxResult_t Display_TextDrawConnectedLabel(uint16_t x, uint16_t y, uint16_t color)
+{
+  uint16_t cx = x;
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_YI, color));
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_LIAN, color));
+  (void)Display_TextDrawGlyph(cx, y, MLG_JIE_CONN, color);
+  return DISPLAY_GFX_OK;
+}
+
+Display_GfxResult_t Display_TextDrawLastCommLabel(uint16_t x, uint16_t y, uint16_t color)
+{
+  uint16_t cx = x;
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_SHANG, color));
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_CI, color));
+  cx          = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_TONG, color));
+  (void)Display_TextDrawGlyph(cx, y, MLG_XIN, color);
   return DISPLAY_GFX_OK;
 }
 

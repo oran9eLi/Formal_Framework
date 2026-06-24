@@ -29,6 +29,15 @@ Business_ServiceResult_t Business_DisplayPollTouch(uint32_t now_ms)
 }
 
 /**
+ * @brief 通过真实 Display 模块轮询 KEY0 按键(弹出隐藏页)。
+ */
+Business_ServiceResult_t Business_DisplayPollKey(uint32_t now_ms)
+{
+  (void)now_ms;
+  return Business_DisplayMapResult(Display_PollKey());
+}
+
+/**
  * @brief 查询显示层是否有待处理的整页重绘(切页触发)。
  */
 uint8_t Business_DisplayNeedsImmediateRefresh(void)

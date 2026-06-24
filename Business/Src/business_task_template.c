@@ -117,6 +117,10 @@ void Business_DisplayServiceTask(void *argument)
     result = Business_DisplayPollTouch(now_ms);
     if ((result != BUSINESS_SERVICE_OK) && (result != BUSINESS_SERVICE_IDLE)) { Business_DisplayReportResult(result, now_ms); }
 
+    /* KEY0 弹出隐藏页：按下边沿即切页，整页重绘由下方立即刷新路径处理 */
+    result = Business_DisplayPollKey(now_ms);
+    if ((result != BUSINESS_SERVICE_OK) && (result != BUSINESS_SERVICE_IDLE)) { Business_DisplayReportResult(result, now_ms); }
+
     if (Business_TimeReached(now_ms, next_refresh_ms) != 0U) {
       result = Business_DisplayPrepareSnapshot(now_ms);
       if (result == BUSINESS_SERVICE_OK) {
