@@ -474,6 +474,11 @@ Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len)
   return PX4LITE_IO_ERROR;
 }
 
+uint8_t Px4Lite_LoRaIsPresent(void)
+{
+  return Lora_E22_IsPresent();
+}
+
 Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms)
 {
   switch (Lora_E22_GetState(now_ms, PX4LITE_LORA_OFFLINE_MS)) {

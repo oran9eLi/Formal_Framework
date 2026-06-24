@@ -42,6 +42,7 @@ static uint32_t s_rx_drop_count;
 static uint32_t s_last_tx_ms;
 static uint32_t s_last_msg_id;
 static uint8_t s_initialized;
+static uint8_t s_present; /* 模块是否在位(配置寄存器读回握手判定) */
 static volatile uint8_t s_reinit_request;
 
 /* Non-blocking transmit state machine, advanced from Lora_E22_Service().
@@ -66,14 +67,31 @@ static uint32_t s_tx_state_ms;
 
 static void Lora_E22_TxStep(uint32_t now_ms);
 
+/* E22 在位检测（基于 AUX 引脚）：
+   E22 的 AUX 为推挽输出，模块在位且就绪时主动把 AUX 拉高。BSP 把 AUX 配成内部下拉
+   输入，于是：模块在位 -> AUX 被模块驱动为高；模块未接入 -> 下拉到低。
+   因此 init 顶部的“等待 AUX 就绪”循环若在超时内变高，即说明模块在位；若超时(无模块
+   下拉恒低)则 init 返回 BUSY，上层据此判 FAILED(红)。本函数在就绪等待通过后调用，
+   再多采样几次以避开模块忙(AUX 暂时拉低)的瞬态。 */
+static uint8_t Lora_E22_AuxPresent(void)
+{
+  uint32_t t0 = BSP_Time_GetTickMs();
+  while ((uint32_t)(BSP_Time_GetTickMs() - t0) < 30U) {
+    if (BSP_LoRa_IsReady() != 0U) { return 1U; }
+  }
+  return 0U;
+}
+
 Lora_Result_t Lora_E22_Init(void)
 {
   uint32_t start_ms;
 
   s_initialized = 0U;
+  s_present     = 0U;
   BSP_LoRa_SetMode(0U); /* normal mode M0=0 M1=0 */
   start_ms = BSP_Time_GetTickMs();
   while (BSP_LoRa_IsReady() == 0U) {
+    /* AUX 下拉：无模块时恒低，超时即判定未接入并让 init 失败。 */
     if ((uint32_t)(BSP_Time_GetTickMs() - start_ms) > 500U) { return LORA_RESULT_BUSY; }
   }
 
@@ -98,7 +116,16 @@ Lora_Result_t Lora_E22_Init(void)
   s_tx_state_ms       = 0U;
   s_initialized       = 1U;
 
+  /* 走到这里说明 AUX 已就绪(变高)，即模块在位；再采样确认避开瞬态忙。 */
+  s_present = Lora_E22_AuxPresent();
+
   return LORA_RESULT_OK;
+}
+
+/* 模块是否在位。 */
+uint8_t Lora_E22_IsPresent(void)
+{
+  return s_present;
 }
 
 void Lora_E22_RequestReinit(void)
@@ -238,6 +265,9 @@ static void Lora_E22_TxStep(uint32_t now_ms)
 Lora_Result_t Lora_E22_Send(const uint8_t *data, uint16_t len)
 {
   if (data == 0 || len == 0U || len > LORA_E22_TX_BUF_SIZE) { return LORA_RESULT_INVALID_PARAM; }
+
+  /* 模块未接入时不发送，发送计数保持为 0。 */
+  if (s_present == 0U) { return LORA_RESULT_BUSY; }
 
   /* One frame in flight at a time. While a frame is staged or sending,
      report BUSY so the MAVLink scheduler retries after its short backoff

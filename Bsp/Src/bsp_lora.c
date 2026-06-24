@@ -125,9 +125,11 @@ int32_t BSP_LoRa_Init(void)
   gpio.Pin = BSP_LORA_M1_PIN;
   HAL_GPIO_Init(BSP_LORA_M1_PORT, &gpio);
 
-  /* AUX 引脚：PF0，输入。 */
+  /* AUX 引脚：PF0，输入下拉。
+   * E22 的 AUX 为推挽输出：模块在位且就绪时主动拉高，未接入时由内部下拉拉低。
+   * 用作模块在位检测的依据（见 lora_e22.c），同时不影响在位时的就绪/忙判定。 */
   gpio.Mode = GPIO_MODE_INPUT;
-  gpio.Pull = GPIO_NOPULL;
+  gpio.Pull = GPIO_PULLDOWN;
   gpio.Pin  = BSP_LORA_AUX_PIN;
   HAL_GPIO_Init(BSP_LORA_AUX_PORT, &gpio);
 

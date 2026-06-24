@@ -679,14 +679,12 @@ void Px4Lite_HealthRun(uint32_t now_ms)
 
 #if PX4LITE_ENABLE_LORA
   /*
-   * Comm-module OFFLINE is owned by Health (single writer, spec 13.5),
-   * mirroring the sensor modules. The comm task only records activity and
-   * promotes ONLINE/DEGRADED; Health times the recorded activity
-   * (last_valid_ms = max of last RX and last TX) out to OFFLINE.
+   * LoRa 状态改由 comm 任务按“在位 + 链路”单写者发布三态(见 Px4Lite_CommWorkRun)：
+   * 未接入=FAILED(红)、已接入未链接=STARTING(黄)、已链接=ONLINE(绿)。Health 不再
+   * 把 LoRa 下调为 OFFLINE，避免“已接入但暂无对端”被误判为红色离线。
    */
-  if ((lora_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, lora_last_valid_ms) > PX4LITE_LORA_OFFLINE_MS)) {
-    if ((lora_last_valid_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_LORA_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms); }
-  }
+  (void)lora_state;
+  (void)lora_last_valid_ms;
 #else
   (void)lora_state;
   (void)lora_last_valid_ms;
@@ -834,7 +832,8 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   uint32_t last_valid_ms;
 
   result = Px4Lite_LoRaService(now_ms);
-  if (result == PX4LITE_OK) {
+  /* 仅在模块在位时发送：未接入时不发，发送/接收计数保持为 0。 */
+  if ((result == PX4LITE_OK) && (Px4Lite_LoRaIsPresent() != 0U)) {
     tx_result = Px4Lite_MavlinkTxRun(now_ms);
     if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
   }
@@ -855,13 +854,20 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   taskEXIT_CRITICAL();
 
   /*
-     * 状态单写者规则：comm 任务只记录活动事实，并发布 ONLINE/DEGRADED；
-     * OFFLINE 由 Health 根据 last_valid_ms 超时统一判定。
-     */
-  if (result != PX4LITE_OK) {
+   * LoRa 三态由 comm 任务单写者按“在位 + 链路”发布（Health 不再下调 LoRa 离线）：
+   *   未接入            -> FAILED   (红, 通信断开故障)
+   *   已接入 + 收到对端  -> ONLINE   (绿)
+   *   已接入 + 未链接对端 -> STARTING (黄, 无故障，等待对端)
+   *   服务异常          -> DEGRADED (黄, 通信超时告警)
+   */
+  if (Px4Lite_LoRaIsPresent() == 0U) {
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_FAILED, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  } else if (result != PX4LITE_OK) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
   } else if (state == PX4LITE_STATE_ONLINE) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
+  } else {
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_STARTING, PX4LITE_FAULT_NONE, now_ms);
   }
 #else
   (void)now_ms;

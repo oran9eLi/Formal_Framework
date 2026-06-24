@@ -269,6 +269,13 @@ Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
 Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms);
 
 /**
+ * @brief 查询 LoRa 模块是否在位。
+ *
+ * @return 1 表示模块在位，0 表示未接入。
+ */
+uint8_t Px4Lite_LoRaIsPresent(void);
+
+/**
  * @brief 复制 LoRa/MAVLink 通信统计。
  *
  * @param[out] out 输出缓冲区，不能为 NULL。
