@@ -18,9 +18,9 @@
 
 | 能力 | 当前代码位置 | 状态 | 说明 |
 |---|---|---|---|
-| LoRa 硬件配置 | `Bsp/Inc/bsp_config.h` | 已完成 | E22 使用 USART3，PB10/PB11，9600 8N1，RX DMA 为 `DMA1_Stream1`，TX DMA 为 `DMA1_Stream3`，M0/M1/AUX 接到 PF1/PF2/PF0。 |
-| LoRa BSP 收发 | `Bsp/Src/bsp_lora.c` | 已完成 | 已实现 UART DMA RX 环形缓冲、IDLE 推进、TX DMA 单帧发送、AUX 判断、TX abort 和 USART 错误恢复。 |
-| LoRa 驱动发送状态机 | `Sensor/Src/lora_e22.c` | 已完成 | 已实现 `IDLE -> WAIT_AUX -> SENDING` 非阻塞发送状态机，单帧在飞，发送完成以 UART TX DMA 完成回调为准。 |
+| LoRa 硬件配置 | `Bsp/Inc/bsp_config.h` | 已完成 | E22 使用 USART3，PB10/PB11，UART 为 9600 8N1，当前外部配置的 E22 空中速率按 `BSP_LORA_AIR_BPS=2400` 记录；RX DMA 为 `DMA1_Stream1`，TX DMA 为 `DMA1_Stream3`，M0/M1/AUX 接到 PF1/PF2/PF0。 |
+| LoRa BSP 收发 | `Bsp/Src/bsp_lora.c` | 已完成 | 已实现 UART DMA RX 环形缓冲、IDLE 推进、TX DMA 单帧发送、AUX 判断、TX abort、USART 错误恢复，并向驱动暴露 UART 波特率和空中速率配置值。 |
+| LoRa 驱动发送状态机 | `Sensor/Src/lora_e22.c` | 已完成 | 已实现 `IDLE -> WAIT_AUX -> SENDING` 非阻塞发送状态机，单帧在飞，发送完成以 UART TX DMA 完成回调为准；AUX 等待超时按最大帧空中耗时计算，UART DMA 卡死超时按当前帧串口耗时计算。 |
 | MAVLink 接收帧识别 | `Sensor/Src/lora_e22.c` | 基础完成 | 已用 `mavlink_parse_char()` 识别完整 MAVLink 帧，并保存最近一帧到 `s_rx_frame`。 |
 | LoRa 调试统计 | `Sensor/Inc/lora_e22.h`、`Framework/Src/px4lite_modules.c` | 已完成 | 已统计 RX/TX 帧数、发送忙、CRC/解析错误、溢出、最近收发时间和最近消息 ID。 |
 | Comm 任务调度 | `Framework/Src/px4lite_modules.c` | 已完成 | `Px4Lite_CommWorkRun()` 周期调用 `Px4Lite_LoRaService()` 和 `Px4Lite_MavlinkTxRun()`，并更新 LoRa 模块状态。 |
@@ -230,7 +230,7 @@ Display、Remote Telemetry 和 Business API 不应依赖具体调度算法，避
 5. 补齐湿度和电机状态，当前使用 `HUMIDITY`、`MOTOR12`、`MOTOR34`；完整模块状态和完整告警表保留后续阶段。
 6. 将 REMOTE 模式电机滑块定义为只读显示控件：禁用触摸写入，滑块位置仅来自远端电机占空比；远端字段未收到时无效，已收到但过期时保留最后值并标记 stale。
 7. 在 Display 触摸层和 Business 控制入口形成双层保护，确保 REMOTE 模式不会调用 `App_SetMotorThrottlePercent()`、不会写本机 PWM、不会发送远端控制帧。
-8. 配置低速链路发送周期，避免 9600 bps 下持续发送导致接收堆积或显示数据过期。
+8. 配置低速链路发送周期，按 UART 波特率和 E22 空中速率分别计算发送预算，避免空中速率低于串口速率时持续发送导致接收堆积或显示数据过期。
 9. 增加远程数据字段级有效位和 stale 位，避免部分字段短暂过期时归零，同时让显示层可区分“未收到”和“旧值”。
 
 ### 8.2.1 第二阶段实现状态
@@ -273,5 +273,5 @@ Display、Remote Telemetry 和 Business API 不应依赖具体调度算法，避
 | 远程显示 | 屏幕主字段来自 `RemoteTelemetry`，不读取本机传感器快照冒充远端数据。 |
 | 远程断链 | 停留远程模式并显示远端超时，不自动切回本地。 |
 | 数据有效位 | 未收到字段显示无效；已收到但过期字段保留最后远端值并标记 stale，不静默使用本机字段替代。 |
-| 带宽 | 9600 bps 下接收帧数、解析错误、过滤丢弃和数据过期统计可观察，周期可配置。 |
+| 带宽 | UART 9600 bps、E22 空中速率 2400 bps 下接收帧数、解析错误、过滤丢弃和数据过期统计可观察，发送周期和链路超时可配置。 |
 | 控制安全 | 当前阶段没有远程电机控制执行路径；REMOTE 模式下电机滑块为只读显示，触摸不会调用本机电机控制 API，也不会发送远程控制帧。 |

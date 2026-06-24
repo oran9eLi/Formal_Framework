@@ -30,6 +30,14 @@ void BSP_LoRa_SetMode(uint8_t m);
  */
 uint8_t BSP_LoRa_IsReady(void);
 /**
+ * @brief 返回 LoRa UART 口波特率配置，单位 bit/s。
+ */
+uint32_t BSP_LoRa_GetUartBaud(void);
+/**
+ * @brief 返回 LoRa E22 空中速率配置，单位 bit/s。
+ */
+uint32_t BSP_LoRa_GetAirBps(void);
+/**
  * @brief 判断 E22 是否正忙。
  */
 uint8_t BSP_LoRa_IsBusy(void);

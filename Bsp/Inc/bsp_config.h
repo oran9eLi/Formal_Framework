@@ -237,10 +237,15 @@
     __HAL_RCC_GPIOF_CLK_ENABLE();                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      \
   } while (0)
 
-/* LoRa E22-400T30D：USART3，PB10(TX)/PB11(RX)，9600 8N1；M0=PF1，M1=PF2，AUX=PF0。 */
+/*
+ * LoRa E22-400T30D：USART3，PB10(TX)/PB11(RX)，9600 8N1；M0=PF1，M1=PF2，
+ * AUX=PF0。`BSP_LORA_AIR_BPS` 必须与外部工具写入 E22 模块的空中速率一致，
+ * 当前固件只按该值计算发送等待超时，不在启动时改写 E22 寄存器。
+ */
 #define BSP_LORA_ENABLE         1U
 #define BSP_LORA_UART           USART3
 #define BSP_LORA_UART_BAUD      9600U
+#define BSP_LORA_AIR_BPS        2400U
 #define BSP_LORA_UART_WORD      UART_WORDLENGTH_8B
 #define BSP_LORA_UART_STOP      UART_STOPBITS_1
 #define BSP_LORA_UART_PARITY    UART_PARITY_NONE

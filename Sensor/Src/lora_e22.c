@@ -1,6 +1,10 @@
 /**
  * @file lora_e22.c
- * @brief Implement typed E22 driver on top of BSP_LoRa and MAVLink parser.
+ * @brief 在 BSP LoRa 收发之上实现 E22 驱动状态机和 MAVLink 帧识别。
+ *
+ * @details
+ * 本文件属于 Sensor Driver 层，只通过 BSP_LoRa 接口访问 UART、DMA、AUX 和模式脚。
+ * 驱动负责非阻塞发送、接收字节预算、MAVLink 帧边界识别和通信统计，不解释业务命令。
  */
 
 #include "lora_e22.h"
@@ -57,8 +61,10 @@ static volatile uint8_t s_reinit_request;
    The comm task never blocks on the air interface: a frame is staged here,
    the machine waits (without spinning) for AUX to go idle, starts a USART3
    TX DMA, then returns to IDLE when the DMA + UART transfer completes. */
-#define LORA_E22_TX_AUX_TIMEOUT_MS 200U /* give up waiting for AUX idle */
-#define LORA_E22_TX_DMA_TIMEOUT_MS 500U /* backstop for a stuck DMA */
+#define LORA_E22_BITS_PER_BYTE          10U
+#define LORA_E22_TIMEOUT_MIN_MS         20U
+#define LORA_E22_AIR_TIMEOUT_MARGIN_MS  200U
+#define LORA_E22_UART_TIMEOUT_MARGIN_MS 100U
 
 typedef enum {
   LORA_TX_IDLE = 0,
@@ -73,6 +79,9 @@ static uint8_t s_tx_pending[LORA_E22_TX_BUF_SIZE];
 static uint16_t s_tx_pending_len;
 static uint32_t s_tx_state_ms;
 
+static uint32_t Lora_E22_CalcTimeoutMs(uint16_t length_bytes, uint32_t bitrate_bps, uint32_t margin_ms);
+static uint32_t Lora_E22_GetAuxWaitTimeoutMs(void);
+static uint32_t Lora_E22_GetUartDmaTimeoutMs(uint16_t length_bytes);
 static void Lora_E22_TxStep(uint32_t now_ms);
 
 Lora_Result_t Lora_E22_Init(void)
@@ -220,10 +229,62 @@ Lora_State_t Lora_E22_GetState(uint32_t now_ms, uint32_t offline_timeout_ms)
   return LORA_STATE_OFFLINE;
 }
 
-/* Advance the transmit state machine. Called every comm cycle from
-   Lora_E22_Service() and once from Lora_E22_Send(). Never blocks. */
+/**
+ * @brief 根据链路速率计算发送耗时超时值。
+ *
+ * @param[in] length_bytes 待发送长度，单位 byte。
+ * @param[in] bitrate_bps 链路速率，单位 bit/s。
+ * @param[in] margin_ms 额外裕量，单位 ms。
+ *
+ * @return 回绕安全状态机使用的超时时间，单位 ms。
+ */
+static uint32_t Lora_E22_CalcTimeoutMs(uint16_t length_bytes, uint32_t bitrate_bps, uint32_t margin_ms)
+{
+  uint32_t transfer_ms;
+  uint32_t timeout_ms;
+  uint32_t bits;
+
+  if ((length_bytes == 0U) || (bitrate_bps == 0U)) { return LORA_E22_TIMEOUT_MIN_MS; }
+
+  bits = (uint32_t)length_bytes * LORA_E22_BITS_PER_BYTE;
+  transfer_ms = ((bits * 1000U) + bitrate_bps - 1U) / bitrate_bps;
+  timeout_ms = transfer_ms + margin_ms;
+  return (timeout_ms < LORA_E22_TIMEOUT_MIN_MS) ? LORA_E22_TIMEOUT_MIN_MS : timeout_ms;
+}
+
+/**
+ * @brief 返回等待 E22 AUX 释放的超时时间。
+ *
+ * @details
+ * AUX 忙通常表示上一帧仍在模块内排队或空口发送。等待时间按最大 MAVLink 帧长度和
+ * 已配置空中速率计算，避免 2.4 kbps 等低速配置下把正常空口发送误判为卡死。
+ */
+static uint32_t Lora_E22_GetAuxWaitTimeoutMs(void)
+{
+  return Lora_E22_CalcTimeoutMs(LORA_E22_TX_BUF_SIZE, BSP_LoRa_GetAirBps(), LORA_E22_AIR_TIMEOUT_MARGIN_MS);
+}
+
+/**
+ * @brief 返回当前 UART DMA 发送的卡死兜底超时时间。
+ *
+ * @param[in] length_bytes 当前提交给 USART3 DMA 的帧长，单位 byte。
+ */
+static uint32_t Lora_E22_GetUartDmaTimeoutMs(uint16_t length_bytes)
+{
+  return Lora_E22_CalcTimeoutMs(length_bytes, BSP_LoRa_GetUartBaud(), LORA_E22_UART_TIMEOUT_MARGIN_MS);
+}
+
+/**
+ * @brief 推进 LoRa 非阻塞发送状态机。
+ *
+ * @param[in] now_ms 当前系统时间，单位 ms。
+ *
+ * @note 本函数由 CommTask 周期调用和 Lora_E22_Send() 提交后即时调用，不阻塞等待。
+ */
 static void Lora_E22_TxStep(uint32_t now_ms)
 {
+  uint32_t timeout_ms;
+
   switch (s_tx_state) {
     case LORA_TX_WAIT_AUX:
       if (BSP_LoRa_IsBusy() == 0U) {
@@ -237,7 +298,8 @@ static void Lora_E22_TxStep(uint32_t now_ms)
         }
         /* r == 1: DMA still busy, stay and retry (bounded below). */
       }
-      if ((s_tx_state == LORA_TX_WAIT_AUX) && ((uint32_t)(now_ms - s_tx_state_ms) > LORA_E22_TX_AUX_TIMEOUT_MS)) {
+      timeout_ms = Lora_E22_GetAuxWaitTimeoutMs();
+      if ((s_tx_state == LORA_TX_WAIT_AUX) && ((uint32_t)(now_ms - s_tx_state_ms) > timeout_ms)) {
         s_tx_busy_count++;
         s_tx_state = LORA_TX_IDLE;
       }
@@ -248,10 +310,13 @@ static void Lora_E22_TxStep(uint32_t now_ms)
         s_tx_frame_count++;
         s_last_tx_ms = now_ms;
         s_tx_state   = LORA_TX_IDLE;
-      } else if ((uint32_t)(now_ms - s_tx_state_ms) > LORA_E22_TX_DMA_TIMEOUT_MS) {
-        BSP_LoRa_AbortTx();
-        s_send_error_count++;
-        s_tx_state = LORA_TX_IDLE;
+      } else {
+        timeout_ms = Lora_E22_GetUartDmaTimeoutMs(s_tx_pending_len);
+        if ((uint32_t)(now_ms - s_tx_state_ms) > timeout_ms) {
+          BSP_LoRa_AbortTx();
+          s_send_error_count++;
+          s_tx_state = LORA_TX_IDLE;
+        }
       }
       break;
 
