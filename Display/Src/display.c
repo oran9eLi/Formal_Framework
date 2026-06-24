@@ -205,6 +205,9 @@ static uint8_t s_display_initialized          = 0U;
 static volatile uint8_t s_recover_requested   = 0U;
 static uint16_t s_refresh_cursor              = 0U;
 static uint8_t s_static_redraw_pending        = 0U;
+static uint8_t s_motor_bat_cutoff             = 0U; /* 电机电池电压不足：停机并锁定 PWM 滑块 */
+static uint8_t s_motor_band                   = 4U; /* 电机电池档位(带滞回)，初值=正常 */
+static uint8_t s_main_band                    = 2U; /* 主控电池档位(带滞回)，初值=正常 */
 static Display_HmiPage_t s_page_before_hidden = DISPLAY_HMI_PAGE_SELF_CHECK; /* 进入隐藏页前的页面，供 KEY0 返回 */
 static uint8_t s_key0_last_raw                = 0U;
 static uint8_t s_key0_stable                  = 0U;
@@ -448,6 +451,10 @@ static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariabl
   uint8_t selection_changed;
 
   if ((variable == 0) || (Display_MotorIndexFromId(variable->id, &motor_index) == 0U)) { return DISPLAY_ERROR; }
+
+  /* 电机电池<9.0V：锁定 PWM，滑动滑块无反应（电机已由快照强制停机）。 */
+  if (s_motor_bat_cutoff != 0U) { return DISPLAY_OK; }
+
   if (throttle_percent > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { throttle_percent = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
 
   if (App_SetMotorThrottlePercent(motor_index, (uint8_t)throttle_percent) != PX4LITE_OK) { return DISPLAY_ERROR; }
@@ -492,6 +499,19 @@ static Display_Result_t Display_MotorEmergencyStop(void)
   }
 
   return DISPLAY_OK;
+}
+
+/* 电机电池<9.0V 时把四路油门强制清零(电机停机)；滑块重绘交由常规刷新处理。 */
+static void Display_ForceMotorsOff(void)
+{
+  uint8_t i;
+
+  for (i = 0U; i < 4U; i++) {
+    const Display_HmiVariableConfig_t *variable = Display_FindMotorSliderByIndex(i);
+
+    (void)App_SetMotorThrottlePercent(i, 0U);
+    if (variable != 0) { (void)Display_SetHmiValueU16(variable->id, 0U); }
+  }
 }
 
 static uint8_t Display_IsMotorEstopTouch(uint16_t x, uint16_t y)
@@ -912,19 +932,40 @@ static void Display_ClearEnvironmentFields(void)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_PRESSURE, 0U);
 }
 
-/* 电机自检灯门限：电机电池(ADC2)电压低于此值视为断开。 */
-#define DISPLAY_MOTOR_BAT_PRESENT_MV 9000U
-/* 电机供电正常门限：达到 9.9V 才转正常。 */
-#define DISPLAY_MOTOR_BAT_OK_MV      9900U
+/* 电机电池(ADC2)门限(单位 mV)：
+ *   <9.0V  没电：电量/电压显示 0、电机停机、锁 PWM；
+ *   9.0~9.9V 供电不足：电机仍不能启动(停机/锁 PWM)，消息+告警提示供电不足；
+ *   9.9~10.5V 低电：电机可运行，提示充电；
+ *   >=10.5V 正常。 */
+#define DISPLAY_MOTOR_BAT_CONNECT_MV 5000U  /* 在位门限：<5V 视为未插电池(电机断开)，电量/电压显示 0 */
+#define DISPLAY_MOTOR_BAT_DEAD_MV    9000U  /* 没电门限：已插电池但 <9.0V */
+#define DISPLAY_MOTOR_BAT_RUN_MV     9900U  /* 电机可启动门限：<9.9V 停机并锁 PWM */
+#define DISPLAY_MOTOR_BAT_OK_MV      10500U /* 充电提示门限：<10.5V 提示充电 */
+/* 主控电池(ADC1)门限：在位门限(显示 0)5.0V；低于 10.5V 提示充电。 */
+#define DISPLAY_MAIN_BAT_PRESENT_MV  5000U
+#define DISPLAY_MAIN_BAT_CHARGE_MV   10500U
+
+/* 档位滞回余量：进入某档后，电压需反向越过阈值此值才换档，吸收 ~0.1V 噪声防横跳。 */
+#define DISPLAY_BAT_HYST_MV          200U
+/* 电机电池档位 */
+#define DISPLAY_MOTOR_BAND_DISCONNECT 0U /* <5.0V 未插电池 */
+#define DISPLAY_MOTOR_BAND_DEAD       1U /* 5.0~9.0V 没电 */
+#define DISPLAY_MOTOR_BAND_LOWPOWER   2U /* 9.0~9.9V 供电不足 */
+#define DISPLAY_MOTOR_BAND_CHARGE     3U /* 9.9~10.5V 需充电 */
+#define DISPLAY_MOTOR_BAND_OK         4U /* >=10.5V 正常 */
+/* 主控电池档位 */
+#define DISPLAY_MAIN_BAND_ABSENT      0U /* <5.0V 未接入 */
+#define DISPLAY_MAIN_BAND_CHARGE      1U /* 5.0~10.5V 需充电 */
+#define DISPLAY_MAIN_BAND_OK          2U /* >=10.5V 正常 */
 
 /*
- * 依据电机电池(ADC2)电压决定电机自检灯颜色：
- * 电压 < 9.0V 红灯(3)，9.0V~9.9V 黄灯(1)，>=9.9V 绿灯(2)。
+ * 依据电机电池档位(带滞回)决定电机自检灯颜色：
+ * <9.9V(断开/没电/供电不足) 红灯(3)，9.9~10.5V(需充电) 黄灯(1)，>=10.5V 绿灯(2)。
  */
-static uint16_t Display_MotorSelfCheckValue(uint32_t voltage2_mv)
+static uint16_t Display_MotorSelfCheckValue(void)
 {
-  if (voltage2_mv < DISPLAY_MOTOR_BAT_PRESENT_MV) { return 3U; }
-  if (voltage2_mv < DISPLAY_MOTOR_BAT_OK_MV) { return 1U; }
+  if (s_motor_band <= DISPLAY_MOTOR_BAND_LOWPOWER) { return 3U; }
+  if (s_motor_band == DISPLAY_MOTOR_BAND_CHARGE) { return 1U; }
   return 2U;
 }
 
@@ -1118,16 +1159,29 @@ static Display_LogMsg_t Display_SelfCheckLogMsg(const Px4Lite_State_t *states, u
   return DISPLAY_LOGMSG_SELFCHECK_PART;
 }
 
-/* 电机三态(来源电机电池 ADC2，与电机自检灯同门限)：电压<9.0V=断开，
-   9.0V~9.9V=供电不足，>=9.9V=正常。 */
+/* 电机电池分档消息(读带滞回的档位)：断开/没电/供电不足/需充电/正常。 */
 static Display_LogMsg_t Display_MotorLogMsg(uint32_t now_ms)
 {
-  App_EnvironmentSnapshot_t env;
+  (void)now_ms;
+  switch (s_motor_band) {
+    case DISPLAY_MOTOR_BAND_DISCONNECT:
+      return DISPLAY_LOGMSG_MOTOR_DISCONNECT;
+    case DISPLAY_MOTOR_BAND_DEAD:
+      return DISPLAY_LOGMSG_MOTOR_DEAD;
+    case DISPLAY_MOTOR_BAND_LOWPOWER:
+      return DISPLAY_LOGMSG_MOTOR_LOWPOWER;
+    case DISPLAY_MOTOR_BAND_CHARGE:
+      return DISPLAY_LOGMSG_MOTOR_CHARGE;
+    default:
+      return DISPLAY_LOGMSG_MOTOR_OK;
+  }
+}
 
-  if (App_CopyEnvironment(&env, now_ms) != PX4LITE_OK) { return DISPLAY_LOGMSG_MOTOR_DISCONNECT; }
-  if (env.voltage2_mv < DISPLAY_MOTOR_BAT_PRESENT_MV) { return DISPLAY_LOGMSG_MOTOR_DISCONNECT; }
-  if (env.voltage2_mv < DISPLAY_MOTOR_BAT_OK_MV) { return DISPLAY_LOGMSG_MOTOR_LOWPOWER; }
-  return DISPLAY_LOGMSG_MOTOR_OK;
+/* 主控电池(读带滞回的档位)：5~10.5V 提示需充电；未接入或正常返回 COUNT(不追加日志)。 */
+static Display_LogMsg_t Display_MainBatteryLogMsg(uint32_t now_ms)
+{
+  (void)now_ms;
+  return (s_main_band == DISPLAY_MAIN_BAND_CHARGE) ? DISPLAY_LOGMSG_MAIN_CHARGE : DISPLAY_LOGMSG_COUNT;
 }
 
 /*
@@ -1146,6 +1200,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
   static Display_LogDebounce_t db_comm  = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
   static Display_LogDebounce_t db_store = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
   static Display_LogDebounce_t db_motor = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
+  static Display_LogDebounce_t db_main  = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
   static Display_LogDebounce_t db_alarm = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
   static Display_LogMsg_t boot_self     = DISPLAY_LOGMSG_COUNT;
   static Display_LogMsg_t boot_gps      = DISPLAY_LOGMSG_COUNT;
@@ -1166,6 +1221,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
   Display_LogMsg_t now_comm;
   Display_LogMsg_t now_store;
   Display_LogMsg_t now_motor;
+  Display_LogMsg_t now_main;
   Display_LogMsg_t now_alarm;
 
   states[0] = Display_LogModuleStatus(PX4LITE_MODULE_GNSS, &gnss_status);
@@ -1181,6 +1237,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
   now_comm  = Display_TwoStateLogMsg(states[3], DISPLAY_LOGMSG_COMM_OK, DISPLAY_LOGMSG_COMM_LOST);
   now_store = Display_TwoStateLogMsg(states[4], DISPLAY_LOGMSG_STORAGE_OK, DISPLAY_LOGMSG_STORAGE_LOST);
   now_motor = Display_MotorLogMsg(now_ms);
+  now_main  = Display_MainBatteryLogMsg(now_ms);
   now_alarm = (highest_fault_code != 0U) ? DISPLAY_LOGMSG_ALARM_ACTIVE : DISPLAY_LOGMSG_ALARM_NONE;
 
   if (boot_done == 0U) {
@@ -1220,6 +1277,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
     Display_LogCommitInitial(&db_comm, boot_comm, now_ms);
     Display_LogCommitInitial(&db_store, boot_store, now_ms);
     Display_LogCommitInitial(&db_motor, now_motor, now_ms);
+    Display_LogCommitInitial(&db_main, now_main, now_ms);
     Display_LogCommitInitial(&db_alarm, boot_alarm, now_ms);
     boot_done = 1U;
     return;
@@ -1232,6 +1290,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
   (void)Display_LogDebounce(&db_comm, now_comm, now_ms, t);
   (void)Display_LogDebounce(&db_store, now_store, now_ms, t);
   (void)Display_LogDebounce(&db_motor, now_motor, now_ms, t);
+  (void)Display_LogDebounce(&db_main, now_main, now_ms, t);
   (void)Display_LogDebounce(&db_alarm, now_alarm, now_ms, t);
 }
 
@@ -1266,27 +1325,71 @@ static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
      此处不再用单个 highest_fault_code 驱动。 */
 }
 
-/* 由电机电池(ADC2)推导电机告警码：电压<9.0V 视为电机断开，电压<9.9V 视为供电不足。
-   阈值与电机自检灯/消息日志一致(DISPLAY_MOTOR_BAT_PRESENT_MV / _OK_MV)。 */
-static uint16_t Display_EvalMotorFault(const App_EnvironmentSnapshot_t *environment)
+/* 由电机电池(ADC2)推导电机告警码：<9.0V 没电(电机断开告警)，9.0~9.9V 供电不足告警。
+   9.9~10.5V 仅消息提示充电、不报告警。阈值与电机自检灯/消息日志一致。 */
+/* 带滞回的升降档：阈值升序 t[0..n-1] 分出 n+1 档(0..n)。
+   升档需越过本档上界 + 滞回余量；降档需跌破本档下界 - 滞回余量；否则保持当前档。 */
+static uint8_t Display_BatBandHyst(uint8_t cur, uint32_t mv, const uint32_t *t, uint8_t n)
 {
-  if (environment == 0) { return 0U; }
-  if (environment->voltage2_mv < DISPLAY_MOTOR_BAT_PRESENT_MV) { return (uint16_t)PX4LITE_FAULT_MOTOR_DISCONNECT; }
-  if (environment->voltage2_mv < DISPLAY_MOTOR_BAT_OK_MV) { return (uint16_t)PX4LITE_FAULT_MOTOR_POWER_LOW; }
-  return 0U;
+  uint8_t plain = 0U;
+
+  while ((plain < n) && (mv >= t[plain])) { plain++; }
+
+  if (plain > cur) {
+    if (mv >= (uint32_t)(t[cur] + DISPLAY_BAT_HYST_MV)) { return plain; }
+  } else if (plain < cur) {
+    if ((mv + DISPLAY_BAT_HYST_MV) < t[cur - 1U]) { return plain; }
+  }
+  return cur;
 }
 
-static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm, uint16_t motor_fault)
+/* 每次快照按电压更新电机/主控电池档位(带滞回)，所有判定统一读档位避免阈值附近横跳。 */
+static void Display_UpdateBatteryBands(const App_EnvironmentSnapshot_t *environment)
+{
+  static const uint32_t motor_t[4] = {DISPLAY_MOTOR_BAT_CONNECT_MV, DISPLAY_MOTOR_BAT_DEAD_MV, DISPLAY_MOTOR_BAT_RUN_MV, DISPLAY_MOTOR_BAT_OK_MV};
+  static const uint32_t main_t[2]  = {DISPLAY_MAIN_BAT_PRESENT_MV, DISPLAY_MAIN_BAT_CHARGE_MV};
+
+  if (environment == 0) { return; }
+  s_motor_band = Display_BatBandHyst(s_motor_band, environment->voltage2_mv, motor_t, 4U);
+  s_main_band  = Display_BatBandHyst(s_main_band, environment->voltage_mv, main_t, 2U);
+}
+
+static uint16_t Display_EvalMotorFault(const App_EnvironmentSnapshot_t *environment)
+{
+  (void)environment;
+  switch (s_motor_band) {
+    case DISPLAY_MOTOR_BAND_DISCONNECT:
+      return (uint16_t)PX4LITE_FAULT_MOTOR_DISCONNECT;
+    case DISPLAY_MOTOR_BAND_DEAD:
+      return (uint16_t)PX4LITE_FAULT_MOTOR_DEAD;
+    case DISPLAY_MOTOR_BAND_LOWPOWER:
+      return (uint16_t)PX4LITE_FAULT_MOTOR_POWER_LOW;
+    case DISPLAY_MOTOR_BAND_CHARGE:
+      return (uint16_t)PX4LITE_FAULT_MOTOR_CHARGE;
+    default:
+      return 0U;
+  }
+}
+
+/* 主控电池告警：5~10.5V 报“需充电”；未接入或正常不报。 */
+static uint16_t Display_EvalMainFault(const App_EnvironmentSnapshot_t *environment)
+{
+  (void)environment;
+  return (s_main_band == DISPLAY_MAIN_BAND_CHARGE) ? (uint16_t)PX4LITE_FAULT_POWER_CHARGE : 0U;
+}
+
+static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm, uint16_t motor_fault, uint16_t main_fault)
 {
   static const Display_HmiVariableId_t row_ids[] = {DISPLAY_HMI_VAR_ALARM_ROW1_CODE, DISPLAY_HMI_VAR_ALARM_ROW2_CODE, DISPLAY_HMI_VAR_ALARM_ROW3_CODE, DISPLAY_HMI_VAR_ALARM_ROW4_CODE, DISPLAY_HMI_VAR_ALARM_ROW5_CODE};
   int32_t severity;
   uint16_t record_index;
   uint16_t row_index   = 0U;
   uint32_t active_mask = 0U;
-  uint32_t selfcheck_faults[PX4LITE_MODULE_COUNT + 1U];
+  uint32_t selfcheck_faults[PX4LITE_MODULE_COUNT + 2U];
   uint16_t selfcheck_count = 0U;
   uint32_t selfcheck_fp    = 0U;
   uint32_t motor_packed    = ((uint32_t)0xFFFFU << 16) | (uint32_t)motor_fault;
+  uint32_t main_packed     = ((uint32_t)PX4LITE_MODULE_BATTERY << 16) | (uint32_t)main_fault;
 
   if (alarm == 0) { return; }
 
@@ -1309,11 +1412,16 @@ static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm, uint16_t
     }
   }
 
-  /* 电机断开/供电不足由电机电池(ADC2)推导，不在框架告警记录里，单独追加到两张表。 */
-  if ((motor_fault != 0U) && (selfcheck_count < (uint16_t)(PX4LITE_MODULE_COUNT + 1U))) {
+  /* 电机/主控电池告警由 ADC 电压推导，不在框架告警记录里，单独追加到两张表。 */
+  if ((motor_fault != 0U) && (selfcheck_count < (uint16_t)(PX4LITE_MODULE_COUNT + 2U))) {
     selfcheck_faults[selfcheck_count] = motor_packed;
     selfcheck_count++;
     selfcheck_fp = (selfcheck_fp * 31U) + motor_packed;
+  }
+  if ((main_fault != 0U) && (selfcheck_count < (uint16_t)(PX4LITE_MODULE_COUNT + 2U))) {
+    selfcheck_faults[selfcheck_count] = main_packed;
+    selfcheck_count++;
+    selfcheck_fp = (selfcheck_fp * 31U) + main_packed;
   }
 
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, active_mask);
@@ -1337,6 +1445,10 @@ static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm, uint16_t
 
   if ((motor_fault != 0U) && (row_index < DISPLAY_ARRAY_SIZE(row_ids))) {
     (void)Display_SetHmiValueU32(row_ids[row_index], motor_packed);
+    row_index++;
+  }
+  if ((main_fault != 0U) && (row_index < DISPLAY_ARRAY_SIZE(row_ids))) {
+    (void)Display_SetHmiValueU32(row_ids[row_index], main_packed);
     row_index++;
   }
 
@@ -1393,12 +1505,30 @@ static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *env
   (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_TEMPERATURE, Display_FloatToI16Tenths(environment->temperature_c));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_HUMIDITY, Display_FloatToU16Tenths(environment->relative_humidity_pct));
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_PRESSURE, Display_FloatPaToU32(environment->pressure_pa));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, (uint16_t)((environment->voltage_mv + 5U) / 10U));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, environment->battery_percent);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, (uint16_t)((environment->voltage2_mv + 5U) / 10U));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, environment->battery2_percent);
-  /* 电机自检灯跟随电机电池(ADC2)：<9.0V 红灯，9.0V~9.9V 黄灯，>=9.9V 绿灯。 */
-  Display_SetMotorSelfCheckLights(Display_MotorSelfCheckValue(environment->voltage2_mv));
+
+  /* 主控/电机电池：未接入(档位为未接入/断开)时电压与电量都显示 0，接入后才显示真实值；
+     电压保留一位小数由显示层格式化。档位带滞回，避免噪声横跳。 */
+  {
+    uint16_t main_cv  = (s_main_band != DISPLAY_MAIN_BAND_ABSENT) ? (uint16_t)((environment->voltage_mv + 5U) / 10U) : 0U;
+    uint8_t main_pct  = (s_main_band != DISPLAY_MAIN_BAND_ABSENT) ? environment->battery_percent : 0U;
+    uint16_t motor_cv = (s_motor_band != DISPLAY_MOTOR_BAND_DISCONNECT) ? (uint16_t)((environment->voltage2_mv + 5U) / 10U) : 0U;
+    uint8_t motor_pct = (s_motor_band != DISPLAY_MOTOR_BAND_DISCONNECT) ? environment->battery2_percent : 0U;
+
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, main_cv);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, main_pct);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, motor_cv);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, motor_pct);
+  }
+
+  /* 电机电池<9.9V(断开/没电/供电不足档)：电机不能启动，强制停机并锁定 PWM；回到正常/需充电档自动解锁。 */
+  if (s_motor_band <= DISPLAY_MOTOR_BAND_LOWPOWER) {
+    s_motor_bat_cutoff = 1U;
+    Display_ForceMotorsOff();
+  } else {
+    s_motor_bat_cutoff = 0U;
+  }
+  /* 电机自检灯跟随电机电池档位：<9.9V 红灯，9.9~10.5V 黄灯，>=10.5V 绿灯。 */
+  Display_SetMotorSelfCheckLights(Display_MotorSelfCheckValue());
 }
 
 /*
@@ -1433,6 +1563,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   Px4Lite_Result_t date_time_result;
   Px4Lite_Result_t motor_result;
   uint16_t motor_fault = 0U;
+  uint16_t main_fault  = 0U;
   uint8_t status_fallback_loaded = 0U;
   uint16_t msglog_highest        = 0U;
 
@@ -1464,13 +1595,15 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
     status_fallback_loaded = Display_LoadModuleStatusFallback();
   }
 
-  /* 环境快照提前取，先算出电机告警(断开/供电不足)，再注入告警表与自检错误码表。 */
+  /* 环境快照提前取，先用带滞回的档位刷新，再算电机/主控电池告警注入告警表与自检错误码表。 */
   environment_result = App_CopyEnvironment(&environment, now_ms);
-  motor_fault        = (environment_result == PX4LITE_OK) ? Display_EvalMotorFault(&environment) : 0U;
+  if (environment_result == PX4LITE_OK) { Display_UpdateBatteryBands(&environment); }
+  motor_fault = (environment_result == PX4LITE_OK) ? Display_EvalMotorFault(&environment) : 0U;
+  main_fault  = (environment_result == PX4LITE_OK) ? Display_EvalMainFault(&environment) : 0U;
 
   alarm_result = App_CopyAlarm(&alarm, now_ms);
   if (alarm_result == PX4LITE_OK) {
-    Display_LoadAlarmSnapshot(&alarm, motor_fault);
+    Display_LoadAlarmSnapshot(&alarm, motor_fault, main_fault);
     msglog_highest = alarm.highest_fault_code;
   }
 

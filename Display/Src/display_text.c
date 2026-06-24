@@ -532,6 +532,15 @@ static const uint8_t s_mlg_shang[] = {/* 'shang' last-1 */
                                       0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x03, 0xF8, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0x02, 0x00, 0xFF, 0xFE, 0x00, 0x00};
 static const uint8_t s_mlg_ci[] = {/* 'ci'   last-2 */
                                    0x00, 0x80, 0x40, 0x80, 0x20, 0x80, 0x20, 0xFC, 0x01, 0x04, 0x09, 0x08, 0x0A, 0x40, 0x14, 0x40, 0x10, 0x40, 0xE0, 0xA0, 0x20, 0xA0, 0x21, 0x10, 0x21, 0x10, 0x22, 0x08, 0x24, 0x04, 0x08, 0x02};
+/* Battery message glyphs. */
+static const uint8_t s_mlg_mei[] = {/* 'mei'  no/none (没) */
+                                    0x00, 0x00, 0x21, 0xF0, 0x11, 0x10, 0x11, 0x10, 0x81, 0x10, 0x42, 0x10, 0x54, 0x0E, 0x18, 0x00, 0x13, 0xF8, 0x22, 0x08, 0xE1, 0x08, 0x21, 0x10, 0x20, 0xA0, 0x20, 0x40, 0x21, 0xB0, 0x0E, 0x0E};
+static const uint8_t s_mlg_chong[] = {/* 'chong' charge (充) */
+                                      0x02, 0x00, 0x01, 0x00, 0xFF, 0xFE, 0x04, 0x00, 0x04, 0x00, 0x08, 0x20, 0x10, 0x10, 0x3F, 0xF8, 0x04, 0x48, 0x04, 0x40, 0x04, 0x40, 0x04, 0x40, 0x08, 0x44, 0x08, 0x44, 0x10, 0x44, 0x60, 0x3C};
+static const uint8_t s_mlg_xu[] = {/* 'xu'   need (需) */
+                                   0x00, 0x00, 0x3F, 0xF8, 0x01, 0x00, 0x7F, 0xFE, 0x41, 0x02, 0x9D, 0x74, 0x01, 0x00, 0x1D, 0x70, 0x00, 0x00, 0xFF, 0xFE, 0x02, 0x00, 0x3F, 0xF8, 0x24, 0x88, 0x24, 0x88, 0x24, 0xA8, 0x20, 0x10};
+static const uint8_t s_mlg_yao[] = {/* 'yao'  want (要) */
+                                    0x00, 0x00, 0x7F, 0xFC, 0x04, 0x40, 0x04, 0x40, 0x3F, 0xF8, 0x24, 0x48, 0x24, 0x48, 0x3F, 0xF8, 0x02, 0x00, 0x7F, 0xFC, 0x04, 0x20, 0x08, 0x40, 0x1C, 0x80, 0x03, 0x80, 0x06, 0x70, 0x38, 0x08};
 
 typedef enum {
   MLG_WU = 0,
@@ -591,12 +600,16 @@ typedef enum {
   MLG_YI,
   MLG_SHANG,
   MLG_CI,
+  MLG_MEI,
+  MLG_CHONG,
+  MLG_XU,
+  MLG_YAO,
   MLG_COUNT
 } Display_MsgGlyph_t;
 
 static const Display_TextBitmap_t s_mlg_table[MLG_COUNT] = {{16U, 16U, 2U, s_mlg_wu},   {16U, 16U, 2U, s_mlg_xin}, {16U, 16U, 2U, s_mlg_hao}, {16U, 16U, 2U, s_mlg_duan}, {16U, 16U, 2U, s_mlg_kai},       {16U, 16U, 2U, s_mlg_zi_pose}, {16U, 16U, 2U, s_mlg_tai},  {16U, 16U, 2U, s_mlg_zheng}, {16U, 16U, 2U, s_mlg_chang}, {16U, 16U, 2U, s_mlg_huan}, {16U, 16U, 2U, s_mlg_jing_env}, {16U, 16U, 2U, s_mlg_tong}, {16U, 16U, 2U, s_mlg_cun}, {16U, 16U, 2U, s_mlg_chu}, {16U, 16U, 2U, s_mlg_dian},     {16U, 16U, 2U, s_mlg_ji}, {16U, 16U, 2U, s_mlg_gu},  {16U, 16U, 2U, s_mlg_zhang},
                                                             {16U, 16U, 2U, s_mlg_quan}, {16U, 16U, 2U, s_mlg_bu},  {16U, 16U, 2U, s_mlg_you}, {16U, 16U, 2U, s_mlg_gao},  {16U, 16U, 2U, s_mlg_jing_warn}, {16U, 16U, 2U, s_mlg_zi_self}, {16U, 16U, 2U, s_mlg_jian}, {16U, 16U, 2U, s_mlg_fen},   {16U, 16U, 2U, s_mlg_guo},   {16U, 16U, 2U, s_mlg_wei},  {8U, 16U, 1U, s_mlg_g},         {8U, 16U, 1U, s_mlg_p},     {8U, 16U, 1U, s_mlg_s},    {16U, 16U, 2U, s_mlg_xi},  {16U, 16U, 2U, s_mlg_tong_sys}, {16U, 16U, 2U, s_mlg_qi}, {16U, 16U, 2U, s_mlg_dong}, {16U, 16U, 2U, s_mlg_kong}, {16U, 16U, 2U, s_mlg_zhi}, {16U, 16U, 2U, s_mlg_ji_urg}, {16U, 16U, 2U, s_mlg_ting}, {16U, 16U, 2U, s_mlg_zhu}, {16U, 16U, 2U, s_mlg_ya}, {16U, 16U, 2U, s_mlg_chi}, {16U, 16U, 2U, s_mlg_gong}, {16U, 16U, 2U, s_mlg_zu}, {16U, 16U, 2U, s_mlg_bu_not},
-                                                            {16U, 16U, 2U, s_mlg_jie_node}, {16U, 16U, 2U, s_mlg_dian_pt}, {16U, 16U, 2U, s_mlg_lian}, {16U, 16U, 2U, s_mlg_jie_conn}, {16U, 16U, 2U, s_mlg_dang}, {16U, 16U, 2U, s_mlg_qian}, {16U, 16U, 2U, s_mlg_xuan}, {16U, 16U, 2U, s_mlg_ze}, {16U, 16U, 2U, s_mlg_dai}, {16U, 16U, 2U, s_mlg_yi}, {16U, 16U, 2U, s_mlg_shang}, {16U, 16U, 2U, s_mlg_ci}};
+                                                            {16U, 16U, 2U, s_mlg_jie_node}, {16U, 16U, 2U, s_mlg_dian_pt}, {16U, 16U, 2U, s_mlg_lian}, {16U, 16U, 2U, s_mlg_jie_conn}, {16U, 16U, 2U, s_mlg_dang}, {16U, 16U, 2U, s_mlg_qian}, {16U, 16U, 2U, s_mlg_xuan}, {16U, 16U, 2U, s_mlg_ze}, {16U, 16U, 2U, s_mlg_dai}, {16U, 16U, 2U, s_mlg_yi}, {16U, 16U, 2U, s_mlg_shang}, {16U, 16U, 2U, s_mlg_ci}, {16U, 16U, 2U, s_mlg_mei}, {16U, 16U, 2U, s_mlg_chong}, {16U, 16U, 2U, s_mlg_xu}, {16U, 16U, 2U, s_mlg_yao}};
 static const Display_TextBitmap_t s_mlg_kong_aircraft_bitmap = {16U, 16U, 2U, s_mlg_kong_aircraft};
 
 /* Draw one glyph, return advance width in pixels. */
@@ -940,6 +953,36 @@ Display_GfxResult_t Display_TextDrawLogMessage(uint16_t x, uint16_t y, Display_L
       cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_JI, color));
       cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_GU, color));
       (void)Display_TextDrawGlyph(cx, y, MLG_ZHANG, color);
+      break;
+
+    case DISPLAY_LOGMSG_MOTOR_DEAD: /* 电机电池没电 */
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_DIAN, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_JI, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_DIAN, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_CHI, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_MEI, color));
+      (void)Display_TextDrawGlyph(cx, y, MLG_DIAN, color);
+      break;
+
+    case DISPLAY_LOGMSG_MOTOR_CHARGE: /* 电机电池需充电 */
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_DIAN, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_JI, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_DIAN, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_CHI, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_XU, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_CHONG, color));
+      (void)Display_TextDrawGlyph(cx, y, MLG_DIAN, color);
+      break;
+
+    case DISPLAY_LOGMSG_MAIN_CHARGE: /* 主控电池需充电 */
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_ZHU, color));
+      (void)Display_TextDrawBitmap(cx, y, &s_mlg_kong_aircraft_bitmap, color); /* 控：用与“主控”标签一致的字模 */
+      cx = (uint16_t)(cx + s_mlg_kong_aircraft_bitmap.width);
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_DIAN, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_CHI, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_XU, color));
+      cx = (uint16_t)(cx + Display_TextDrawGlyph(cx, y, MLG_CHONG, color));
+      (void)Display_TextDrawGlyph(cx, y, MLG_DIAN, color);
       break;
 
     case DISPLAY_LOGMSG_ALARM_ACTIVE:

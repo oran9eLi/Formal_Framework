@@ -1389,7 +1389,7 @@ static const Display_AlarmCn_t s_acn_rsn_powerlow = {64U, 8U, acn_rsn_powerlow};
 static const char *Display_PagesGetAlarmModule(uint16_t source_id, uint16_t code)
 {
   /* 电机无独立模块 ID，按故障码优先归类，不受 source_id 影响。 */
-  if ((code == PX4LITE_FAULT_MOTOR_DISCONNECT) || (code == PX4LITE_FAULT_MOTOR_POWER_LOW)) { return "MOTOR"; }
+  if ((code == PX4LITE_FAULT_MOTOR_DISCONNECT) || (code == PX4LITE_FAULT_MOTOR_POWER_LOW) || (code == PX4LITE_FAULT_MOTOR_DEAD) || (code == PX4LITE_FAULT_MOTOR_CHARGE)) { return "MOTOR"; }
 
   switch ((Px4Lite_ModuleId_t)source_id) {
     case PX4LITE_MODULE_GNSS:
@@ -1536,7 +1536,7 @@ static const char *Display_PagesGetAlarmReason(uint32_t code)
 static const Display_AlarmCn_t *Display_PagesGetAlarmModuleCn(uint16_t source_id, uint16_t code)
 {
   /* 电机无独立模块 ID，按故障码优先归类，不受 source_id 影响。 */
-  if ((code == PX4LITE_FAULT_MOTOR_DISCONNECT) || (code == PX4LITE_FAULT_MOTOR_POWER_LOW)) { return &s_acn_mod_motor; }
+  if ((code == PX4LITE_FAULT_MOTOR_DISCONNECT) || (code == PX4LITE_FAULT_MOTOR_POWER_LOW) || (code == PX4LITE_FAULT_MOTOR_DEAD) || (code == PX4LITE_FAULT_MOTOR_CHARGE)) { return &s_acn_mod_motor; }
 
   switch ((Px4Lite_ModuleId_t)source_id) {
     case PX4LITE_MODULE_GNSS: return &s_acn_mod_gnss;
@@ -1615,10 +1615,24 @@ static const Display_AlarmCn_t *Display_PagesGetAlarmReasonCn(uint32_t code)
     case PX4LITE_FAULT_ESTIMATOR_DIVERGE: return &s_acn_rsn_estdiverge;
     case PX4LITE_FAULT_MOTOR_DISCONNECT: return &s_acn_rsn_motordisc;
     case PX4LITE_FAULT_MOTOR_POWER_LOW: return &s_acn_rsn_powerlow;
+    /* 电机没电/需充电、主控需充电 用消息日志字模拼绘，不走宽位图，见 Display_PagesAlarmReasonLogMsg。 */
+    case PX4LITE_FAULT_MOTOR_DEAD:
+    case PX4LITE_FAULT_MOTOR_CHARGE:
+    case PX4LITE_FAULT_POWER_CHARGE: return 0;
     default: break;
   }
 
   return &s_acn_rsn_unknown;
+}
+
+/* 电池类告警原因改用消息日志字模拼绘(复用 没/充/需/电/池 等单字)；
+   返回 DISPLAY_LOGMSG_COUNT 表示该故障走原有中文宽位图/ASCII。 */
+static Display_LogMsg_t Display_PagesAlarmReasonLogMsg(uint16_t code)
+{
+  if (code == (uint16_t)PX4LITE_FAULT_MOTOR_DEAD) { return DISPLAY_LOGMSG_MOTOR_DEAD; }
+  if (code == (uint16_t)PX4LITE_FAULT_MOTOR_CHARGE) { return DISPLAY_LOGMSG_MOTOR_CHARGE; }
+  if (code == (uint16_t)PX4LITE_FAULT_POWER_CHARGE) { return DISPLAY_LOGMSG_MAIN_CHARGE; }
+  return DISPLAY_LOGMSG_COUNT;
 }
 
 /* ============================ LoRa 连接页（隐藏页） ============================ */
@@ -2230,10 +2244,15 @@ static void Display_PagesDrawAlarmRow(const Display_HmiVariableConfig_t *variabl
       (void)Display_GfxDrawString((uint16_t)(DISPLAY_ALARM_CODE_X + 20U), (uint16_t)(row_y + 16U), Display_PagesGetAlarmModule(source_id, fault_code), DISPLAY_GFX_COLOR_DARK, 2U);
     }
 
-    if (reason_cn != 0) {
-      (void)Display_TextDrawRawBitmap((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 15U), reason_cn->width, 16U, reason_cn->bpr, reason_cn->data, DISPLAY_GFX_COLOR_DARK);
-    } else {
-      (void)Display_GfxDrawString((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 16U), Display_PagesGetAlarmReason(fault_code), DISPLAY_GFX_COLOR_DARK, 2U);
+    {
+      Display_LogMsg_t reason_msg = Display_PagesAlarmReasonLogMsg(fault_code);
+      if (reason_msg != DISPLAY_LOGMSG_COUNT) {
+        (void)Display_TextDrawLogMessage((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 15U), reason_msg, DISPLAY_GFX_COLOR_DARK);
+      } else if (reason_cn != 0) {
+        (void)Display_TextDrawRawBitmap((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 15U), reason_cn->width, 16U, reason_cn->bpr, reason_cn->data, DISPLAY_GFX_COLOR_DARK);
+      } else {
+        (void)Display_GfxDrawString((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 16U), Display_PagesGetAlarmReason(fault_code), DISPLAY_GFX_COLOR_DARK, 2U);
+      }
     }
   }
 }
@@ -2753,7 +2772,7 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
   if ((variable->id == DISPLAY_HMI_VAR_BATTERY_VOLTAGE) || (variable->id == DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE)) {
     whole = value / 100U;
     frac  = value % 100U;
-    Display_PagesFmtUnsigned(fmt_buf, whole, frac, 2U, 100U);
+    Display_PagesFmtUnsigned(fmt_buf, whole, frac, 1U, 100U); /* 电压只显示一位小数 */
     (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
     (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
     drawn_w = (uint16_t)(Display_PagesStrLen(fmt_buf) * 12U);

@@ -14,10 +14,9 @@
 
 #include <string.h>
 
-#define POWER2_ZERO_MV               9900U
-#define POWER2_STEP5_MV              10200U
-#define POWER2_STEP10_MV             10500U
-#define POWER2_FULL_MV               12550U
+/* 与电池1(sensor_power.c)同款：9.0~12.6V 线性、5% 步进。 */
+#define POWER2_EMPTY_MV              9000U  /* 0%，下限 */
+#define POWER2_FULL_MV             12600U /* 100% */
 #define POWER2_FILTER_OLD_WEIGHT     3U
 #define POWER2_FILTER_TOTAL          4U
 #define POWER2_PERCENT_STEP          5U
@@ -42,17 +41,13 @@ static volatile uint8_t s_reinit_request2;
  */
 static uint8_t Power2_CalcPercent(uint32_t voltage_mv)
 {
-  uint32_t range_mv;
   uint32_t percent;
 
-  if (voltage_mv < POWER2_ZERO_MV) { return 0U; }
-  if (voltage_mv < POWER2_STEP5_MV) { return 5U; }
-  if (voltage_mv < POWER2_STEP10_MV) { return 10U; }
+  if (voltage_mv <= POWER2_EMPTY_MV) { return 0U; }
   if (voltage_mv >= POWER2_FULL_MV) { return 100U; }
 
-  range_mv = POWER2_FULL_MV - POWER2_STEP10_MV;
-  percent  = 10U + ((((voltage_mv - POWER2_STEP10_MV) * 90U) + (range_mv / 2U)) / range_mv);
-  percent  = ((percent + (POWER2_PERCENT_STEP / 2U)) / POWER2_PERCENT_STEP) * POWER2_PERCENT_STEP;
+  percent = (((voltage_mv - POWER2_EMPTY_MV) * 100U) / (POWER2_FULL_MV - POWER2_EMPTY_MV));
+  percent = ((percent + (POWER2_PERCENT_STEP / 2U)) / POWER2_PERCENT_STEP) * POWER2_PERCENT_STEP;
   if (percent > 100U) { percent = 100U; }
   return (uint8_t)percent;
 }
@@ -85,17 +80,9 @@ static uint32_t Power2_FilterVoltage(uint32_t voltage_mv)
  */
 static uint32_t Power2_PercentCenterMv(uint8_t percent)
 {
-  uint32_t range_mv;
-  uint32_t scaled_mv;
-
-  if (percent == 0U) { return POWER2_ZERO_MV; }
-  if (percent == 5U) { return (POWER2_ZERO_MV + POWER2_STEP5_MV) / 2U; }
-  if (percent <= 10U) { return POWER2_STEP10_MV; }
+  if (percent == 0U) { return POWER2_EMPTY_MV; }
   if (percent >= 100U) { return POWER2_FULL_MV; }
-
-  range_mv  = POWER2_FULL_MV - POWER2_STEP10_MV;
-  scaled_mv = (((uint32_t)(percent - 10U)) * range_mv) / 90U;
-  return POWER2_STEP10_MV + scaled_mv;
+  return POWER2_EMPTY_MV + (((uint32_t)percent * (POWER2_FULL_MV - POWER2_EMPTY_MV)) / 100U);
 }
 
 /**
@@ -199,7 +186,7 @@ Power_Result_t Sensor_Power2_Service(uint32_t now_ms)
   s_snapshot2.voltage_v = ((float)filtered_voltage_mv) / 1000.0f;
   candidate_percent   = Power2_CalcPercent(filtered_voltage_mv);
   s_snapshot2.percent = ((s_snapshot2.rx_sequence == 1U) || (fresh_insert != 0U)) ? candidate_percent : Power2_ApplyPercentConfirm(s_snapshot2.percent, candidate_percent, filtered_voltage_mv);
-  s_snapshot2.low_voltage = (voltage_mv < POWER2_ZERO_MV) ? 1U : 0U;
+  s_snapshot2.low_voltage = (voltage_mv < POWER2_EMPTY_MV) ? 1U : 0U;
 
   return POWER_RESULT_OK;
 }

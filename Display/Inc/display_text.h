@@ -107,6 +107,9 @@ typedef enum {
   DISPLAY_LOGMSG_MOTOR3_FAIL,      /* 3号电机故障 */
   DISPLAY_LOGMSG_MOTOR4_FAIL,      /* 4号电机故障 */
   DISPLAY_LOGMSG_MOTOR_ALL_FAIL,   /* 全部电机故障 */
+  DISPLAY_LOGMSG_MOTOR_DEAD,       /* 电机电池没电 (5.0~9.0V) */
+  DISPLAY_LOGMSG_MOTOR_CHARGE,     /* 电机电池需充电 (9.9~10.5V) */
+  DISPLAY_LOGMSG_MAIN_CHARGE,      /* 主控电池需充电 (5.0~10.5V) */
   DISPLAY_LOGMSG_ALARM_ACTIVE,     /* 有告警 */
   DISPLAY_LOGMSG_ALARM_NONE,       /* 无告警 */
   DISPLAY_LOGMSG_COUNT
