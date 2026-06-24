@@ -40,4 +40,12 @@ BSP_Status_t BSP_ADC_ReadAverage(uint32_t *raw, uint8_t count);
  */
 BSP_Status_t BSP_ADC_ReadVoltageMv(uint32_t *voltage_mv);
 
+/**
+ * @brief 用内部 VREFINT 实测当前 VDDA(模拟供电)电压，单位 mV。
+ *
+ * @details VREFINT 仅接 ADC1，故由本模块测量；VDDA 为 ADC1/ADC2 公共供电，
+ *          ADC2 也应使用此返回值做比例换算。读取失败时返回标称 3300mV。
+ */
+uint32_t BSP_ADC_GetVddaMv(void);
+
 #endif

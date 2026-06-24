@@ -7,13 +7,15 @@
 
 #include "bsp_adc2.h"
 
+#include "bsp_adc.h" /* 复用 ADC1 的 VREFINT 实测 VDDA(VDDA 为公共供电) */
 #include "bsp_config.h"
 #include "stm32f4xx_hal.h"
 
 #define BSP_ADC2_TIMEOUT_MS    10U
-#define BSP_ADC2_AVERAGE_COUNT 8U
+#define BSP_ADC2_AVERAGE_COUNT 16U /* 加重滤波 */
 #define BSP_ADC2_REF_MV        3300U
 #define BSP_ADC2_RAW_MAX       4095U
+#define BSP_ADC2_SAMPLETIME    ADC_SAMPLETIME_480CYCLES /* 长采样：高阻分压充分建立 */
 
 static ADC_HandleTypeDef s_hadc2;
 static uint8_t s_initialized2;
@@ -56,7 +58,7 @@ BSP_Status_t BSP_ADC2_Init(void)
 
   channel.Channel      = BSP_ADC2_CH;
   channel.Rank         = 1U;
-  channel.SamplingTime = ADC_SAMPLETIME_144CYCLES;
+  channel.SamplingTime = BSP_ADC2_SAMPLETIME;
   channel.Offset       = 0U;
 
   if (HAL_ADC_ConfigChannel(&s_hadc2, &channel) != HAL_OK) { return BSP_STATUS_ERROR; }
@@ -122,17 +124,19 @@ BSP_Status_t BSP_ADC2_ReadAverage(uint32_t *raw, uint8_t count)
 BSP_Status_t BSP_ADC2_ReadVoltageMv(uint32_t *voltage_mv)
 {
   uint32_t raw = 0U;
+  uint32_t vdda;
   uint32_t pin_mv;
   BSP_Status_t result;
 
   if (voltage_mv == 0) { return BSP_STATUS_ERROR; }
 
+  vdda   = BSP_ADC_GetVddaMv(); /* VREFINT 仅接 ADC1，用其实测的公共 VDDA */
   result = BSP_ADC2_ReadAverage(&raw, BSP_ADC2_AVERAGE_COUNT);
   if (result != BSP_STATUS_OK) { return result; }
 
   if (raw > BSP_ADC2_RAW_MAX) { raw = BSP_ADC2_RAW_MAX; }
 
-  pin_mv      = ((raw * BSP_ADC2_REF_MV) + (BSP_ADC2_RAW_MAX / 2U)) / BSP_ADC2_RAW_MAX;
+  pin_mv      = ((raw * vdda) + (BSP_ADC2_RAW_MAX / 2U)) / BSP_ADC2_RAW_MAX;
   *voltage_mv = (pin_mv * BSP_ADC2_DIVIDER_NUM) / BSP_ADC2_DIVIDER_DEN;
   return BSP_STATUS_OK;
 }
