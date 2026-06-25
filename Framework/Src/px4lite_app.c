@@ -52,7 +52,12 @@ static const Px4Lite_ModuleDescriptor_t s_alarm_descriptor = {PX4LITE_MODULE_ALA
 #endif
 
 #if PX4LITE_ENABLE_LORA
-static const Px4Lite_ModuleDescriptor_t s_lora_descriptor = {PX4LITE_MODULE_LORA, "lora", PX4LITE_ENABLE_LORA, 0U, Px4Lite_CommModulesInit, 0, 0, 0, Px4Lite_LoraRecover};
+#if PX4LITE_LORA_RECOVERY_ENABLE
+#define PX4LITE_LORA_RECOVER_CALLBACK Px4Lite_LoraRecover
+#else
+#define PX4LITE_LORA_RECOVER_CALLBACK 0
+#endif
+static const Px4Lite_ModuleDescriptor_t s_lora_descriptor = {PX4LITE_MODULE_LORA, "lora", PX4LITE_ENABLE_LORA, 0U, Px4Lite_CommModulesInit, 0, 0, 0, PX4LITE_LORA_RECOVER_CALLBACK};
 #endif
 
 #if PX4LITE_ENABLE_STORAGE

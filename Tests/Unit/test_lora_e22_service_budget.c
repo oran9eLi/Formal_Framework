@@ -50,7 +50,10 @@ void BSP_LoRa_TxDmaIrqHandler(void) { }
 void BSP_LoRa_RxIdleCallback(uint16_t dummy) { (void)dummy; }
 void BSP_LoRa_DmaIrqHandler(void) { }
 void BSP_LoRa_RecoverRx(void) { }
-uint32_t BSP_Time_GetTickMs(void) { return s_now_ms; }
+uint32_t BSP_Time_GetTickMs(void)
+{
+  return s_now_ms++;
+}
 void BSP_Time_DelayMs(uint32_t delay_ms) { s_now_ms += delay_ms; }
 
 uint16_t BSP_LoRa_GetRxCount(void)
@@ -186,6 +189,34 @@ static int TestUartDmaTimeoutUsesConfiguredBaudrate(void)
   return failures;
 }
 
+static int TestRuntimeReinitDoesNotWaitForMissingAux(void)
+{
+  int failures = 0;
+  uint32_t before_ms;
+
+  s_rx_read_pos = 0U;
+  s_rx_available_len = 0U;
+  s_total_read = 0U;
+  s_now_ms = 4000U;
+  s_lora_ready = 1U;
+  s_uart_tx_busy = 0U;
+  s_start_send_count = 0U;
+  s_abort_count = 0U;
+
+  if (Lora_E22_Init() != LORA_RESULT_OK) {
+    printf("FAIL init runtime reinit\n");
+    return 1;
+  }
+
+  s_lora_ready = 0U;
+  before_ms = s_now_ms;
+  Lora_E22_RequestReinit();
+  failures += ExpectResult("runtime reinit service returns", Lora_E22_Service(4010U), LORA_RESULT_OK);
+  failures += ExpectU32("runtime reinit no aux wait", s_now_ms, before_ms);
+  failures += ExpectU32("runtime reinit no uart send", s_start_send_count, 0U);
+  return failures;
+}
+
 int main(void)
 {
   int failures = 0;
@@ -193,6 +224,7 @@ int main(void)
   failures += TestServiceLeavesRxBacklogForNextCycle();
   failures += TestAirRateBudgetKeepsAuxWaitDuringSlowAirTransfer();
   failures += TestUartDmaTimeoutUsesConfiguredBaudrate();
+  failures += TestRuntimeReinitDoesNotWaitForMissingAux();
 
   if (failures != 0) {
     printf("lora e22 service budget tests failed: %d\n", failures);

@@ -142,6 +142,7 @@ targets:
         - STM32F407xx
         - USE_HAL_DRIVER
       incList:
+        - .
         - Core/Inc
         - Debug/Inc
         - Bsp/Inc

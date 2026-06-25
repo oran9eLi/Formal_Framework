@@ -82,19 +82,18 @@ static uint32_t s_tx_state_ms;
 static uint32_t Lora_E22_CalcTimeoutMs(uint16_t length_bytes, uint32_t bitrate_bps, uint32_t margin_ms);
 static uint32_t Lora_E22_GetAuxWaitTimeoutMs(void);
 static uint32_t Lora_E22_GetUartDmaTimeoutMs(uint16_t length_bytes);
+static void Lora_E22_ResetRuntimeState(void);
 static void Lora_E22_TxStep(uint32_t now_ms);
 
-Lora_Result_t Lora_E22_Init(void)
+/**
+ * @brief 清空 LoRa 运行期解析、队列、统计和发送状态。
+ *
+ * @details
+ * 调用者必须已经确认模块处于可用状态。本函数不访问阻塞等待接口，供启动初始化和
+ * 通信任务内的非阻塞运行期重初始化共用。
+ */
+static void Lora_E22_ResetRuntimeState(void)
 {
-  uint32_t start_ms;
-
-  s_initialized = 0U;
-  BSP_LoRa_SetMode(0U); /* normal mode M0=0 M1=0 */
-  start_ms = BSP_Time_GetTickMs();
-  while (BSP_LoRa_IsReady() == 0U) {
-    if ((uint32_t)(BSP_Time_GetTickMs() - start_ms) > 500U) { return LORA_RESULT_BUSY; }
-  }
-
   memset(s_rx_queue, 0, sizeof(s_rx_queue));
   s_rx_q_head = 0U;
   s_rx_q_tail = 0U;
@@ -117,6 +116,20 @@ Lora_Result_t Lora_E22_Init(void)
   s_tx_pending_len    = 0U;
   s_tx_state_ms       = 0U;
   s_initialized       = 1U;
+}
+
+Lora_Result_t Lora_E22_Init(void)
+{
+  uint32_t start_ms;
+
+  s_initialized = 0U;
+  BSP_LoRa_SetMode(0U); /* normal mode M0=0 M1=0 */
+  start_ms = BSP_Time_GetTickMs();
+  while (BSP_LoRa_IsReady() == 0U) {
+    if ((uint32_t)(BSP_Time_GetTickMs() - start_ms) > 500U) { return LORA_RESULT_BUSY; }
+  }
+
+  Lora_E22_ResetRuntimeState();
 
   return LORA_RESULT_OK;
 }
@@ -135,8 +148,11 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
   uint16_t i;
 
   if (s_reinit_request != 0U) {
-    s_reinit_request = 0U;
-    (void)Lora_E22_Init();
+    BSP_LoRa_SetMode(0U);
+    if (BSP_LoRa_IsReady() != 0U) {
+      s_reinit_request = 0U;
+      Lora_E22_ResetRuntimeState();
+    }
   }
 
   while ((rx_budget != 0U) && ((available = BSP_LoRa_GetRxCount()) > 0U)) {
