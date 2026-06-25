@@ -127,7 +127,7 @@ int32_t BSP_LoRa_Init(void)
 
   /* AUX 引脚：PF0，输入。 */
   gpio.Mode = GPIO_MODE_INPUT;
-  gpio.Pull = GPIO_NOPULL;
+  gpio.Pull = GPIO_PULLDOWN;
   gpio.Pin  = BSP_LORA_AUX_PIN;
   HAL_GPIO_Init(BSP_LORA_AUX_PORT, &gpio);
 

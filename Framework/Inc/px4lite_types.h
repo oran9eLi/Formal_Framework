@@ -347,6 +347,7 @@ typedef struct {
   uint32_t rx_drop_count;             /**< 接收丢弃次数。 */
   uint32_t last_rx_ms;                /**< 最近接收帧时间，单位：ms。 */
   uint32_t last_tx_ms;                /**< 最近发送完成时间，单位：ms。 */
+  uint32_t last_ready_ms;             /**< 最近检测到本机 LoRa AUX ready 的时间，单位：ms。 */
   uint32_t last_msg_id;               /**< 最近接收的 MAVLink message id。 */
 } Px4Lite_CommDebugInfo_t;
 

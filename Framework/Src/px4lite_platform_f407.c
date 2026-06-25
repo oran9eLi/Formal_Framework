@@ -442,7 +442,6 @@ Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len)
   return PX4LITE_IO_ERROR;
 }
 
-
 Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_LoRaRxFrame_t *out)
 {
   Lora_RxFrame_t frame;
@@ -495,5 +494,6 @@ void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out)
   out->rx_drop_count     = info.rx_drop_count;
   out->last_rx_ms        = info.last_rx_ms;
   out->last_tx_ms        = info.last_tx_ms;
+  out->last_ready_ms     = info.last_ready_ms;
   out->last_msg_id       = info.last_msg_id;
 }

@@ -651,10 +651,10 @@ void Px4Lite_HealthRun(uint32_t now_ms)
 
 #if PX4LITE_ENABLE_LORA
   /*
-   * Comm-module OFFLINE is owned by Health (single writer, spec 13.5),
-   * mirroring the sensor modules. The comm task only records activity and
-   * promotes ONLINE/DEGRADED; Health times the recorded activity
-   * (last_valid_ms = max of last RX and last TX) out to OFFLINE.
+   * Comm-module OFFLINE is owned by Health (single writer, spec 13.5).
+   * LoRa module health is a local hardware fact: Health times out the last
+   * AUX-ready observation, not remote telemetry RX/TX activity. A silent
+   * transmitter must not make the local LoRa hardware lamp turn red.
    */
   if ((lora_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, lora_last_valid_ms) > PX4LITE_LORA_OFFLINE_MS)) {
     if ((lora_last_valid_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_LORA_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms); }
@@ -834,8 +834,7 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   Px4Lite_LoRaGetDebugInfo(&info);
   state = Px4Lite_LoRaGetState(now_ms);
 
-  last_valid_ms = info.last_rx_ms;
-  if ((last_valid_ms == 0U) || ((info.last_tx_ms != 0U) && ((int32_t)(info.last_tx_ms - last_valid_ms) > 0))) { last_valid_ms = info.last_tx_ms; }
+  last_valid_ms = info.last_ready_ms;
 
   taskENTER_CRITICAL();
   s_status[PX4LITE_MODULE_LORA].last_rx_ms    = info.last_rx_ms;

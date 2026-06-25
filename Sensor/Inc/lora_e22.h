@@ -30,9 +30,9 @@ typedef enum {
  * @brief LoRa 驱动公开状态。
  */
 typedef enum {
-  LORA_STATE_NOT_READY = 0, /**< 尚未初始化或尚无有效活动。 */
-  LORA_STATE_ONLINE,        /**< 在线。 */
-  LORA_STATE_OFFLINE,       /**< 超时离线。 */
+  LORA_STATE_NOT_READY = 0, /**< 尚未初始化或尚未确认硬件 ready。 */
+  LORA_STATE_ONLINE,        /**< 本机 E22 硬件 ready，和远端是否发包无关。 */
+  LORA_STATE_OFFLINE,       /**< AUX 长时间未 ready，判定本机 E22 硬件离线。 */
   LORA_STATE_FAILED         /**< 驱动失败。 */
 } Lora_State_t;
 
@@ -64,6 +64,7 @@ typedef struct {
   uint32_t rx_drop_count;     /**< 接收丢弃次数。 */
   uint32_t last_rx_ms;        /**< 最近接收完整帧时间，单位：ms。 */
   uint32_t last_tx_ms;        /**< 最近发送完成时间，单位：ms。 */
+  uint32_t last_ready_ms;     /**< 最近检测到 AUX ready 的时间，单位：ms。 */
   uint32_t last_msg_id;       /**< 最近接收的 MAVLink message id。 */
 } Lora_DebugInfo_t;
 
@@ -101,7 +102,7 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out);
  * @brief 获取 LoRa 当前状态。
  *
  * @param[in] now_ms 当前系统毫秒时间。
- * @param[in] offline_timeout_ms 离线判定超时时间，单位：ms。
+ * @param[in] offline_timeout_ms AUX 连续未 ready 的离线判定超时时间，单位：ms。
  *
  * @return LoRa 状态。
  */

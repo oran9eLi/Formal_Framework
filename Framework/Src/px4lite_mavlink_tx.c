@@ -389,12 +389,21 @@ static Px4Lite_Result_t MavTx_SendRemoteMotorPair(uint32_t now_ms, uint8_t pair_
 /**
  * @brief 判断电机远程显示字段是否发生变化。
  */
-static uint8_t MavTx_RemoteMotorChanged(const Px4Lite_MotorOutputs_t *motor)
+static uint8_t MavTx_RemoteMotorChanged(const Px4Lite_MotorOutputs_t *motor, uint8_t *first_pair)
 {
+  uint8_t pair0_changed;
+  uint8_t pair1_changed;
+
+  if (first_pair == 0) { return 0U; }
+  *first_pair = 0U;
   if (s_last_remote_motor_valid == 0U) { return 1U; }
-  if (memcmp(s_last_remote_motor.duty_percent, motor->duty_percent, sizeof(motor->duty_percent)) != 0) { return 1U; }
   if (s_last_remote_motor.run_state != motor->run_state) { return 1U; }
   if (s_last_remote_motor.speed_level != motor->speed_level) { return 1U; }
+
+  pair0_changed = ((s_last_remote_motor.duty_percent[0] != motor->duty_percent[0]) || (s_last_remote_motor.duty_percent[1] != motor->duty_percent[1])) ? 1U : 0U;
+  pair1_changed = ((s_last_remote_motor.duty_percent[2] != motor->duty_percent[2]) || (s_last_remote_motor.duty_percent[3] != motor->duty_percent[3])) ? 1U : 0U;
+  if ((pair1_changed != 0U) && (pair0_changed == 0U)) { *first_pair = 1U; }
+  if ((pair0_changed != 0U) || (pair1_changed != 0U)) { return 1U; }
   return 0U;
 }
 
@@ -404,15 +413,16 @@ static uint8_t MavTx_RemoteMotorChanged(const Px4Lite_MotorOutputs_t *motor)
 static void MavTx_UpdateRemoteMotorUrgent(uint32_t now_ms)
 {
   Px4Lite_MotorOutputs_t motor;
+  uint8_t first_pair;
 
   if (Px4Lite_CopyMotor(&motor) != PX4LITE_OK) { return; }
   if (Px4Lite_IsFresh(&motor.header, now_ms, PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS * 5U) == 0U) { return; }
-  if (MavTx_RemoteMotorChanged(&motor) == 0U) { return; }
+  if (MavTx_RemoteMotorChanged(&motor, &first_pair) == 0U) { return; }
 
   s_last_remote_motor = motor;
   s_last_remote_motor_valid = 1U;
   s_remote_motor_urgent_remaining = MAV_TX_REMOTE_MOTOR_URGENT_FRAMES;
-  s_remote_motor_urgent_pair = 0U;
+  s_remote_motor_urgent_pair = first_pair;
 }
 
 /**

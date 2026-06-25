@@ -217,6 +217,57 @@ static int TestRuntimeReinitDoesNotWaitForMissingAux(void)
   return failures;
 }
 
+static int TestHardwareStateDoesNotDependOnTraffic(void)
+{
+  int failures = 0;
+
+  s_rx_read_pos = 0U;
+  s_rx_available_len = 0U;
+  s_total_read = 0U;
+  s_now_ms = 5000U;
+  s_lora_ready = 1U;
+  s_uart_tx_busy = 0U;
+  s_start_send_count = 0U;
+  s_abort_count = 0U;
+
+  if (Lora_E22_Init() != LORA_RESULT_OK) {
+    printf("FAIL init hardware state\n");
+    return 1;
+  }
+
+  failures += ExpectU32("initialized hardware online without traffic", Lora_E22_GetState(9000U, 3000U), LORA_STATE_ONLINE);
+  return failures;
+}
+
+static int TestAuxLowTimeoutMarksHardwareOfflineAndRecovers(void)
+{
+  int failures = 0;
+
+  s_rx_read_pos = 0U;
+  s_rx_available_len = 0U;
+  s_total_read = 0U;
+  s_now_ms = 6000U;
+  s_lora_ready = 1U;
+  s_uart_tx_busy = 0U;
+  s_start_send_count = 0U;
+  s_abort_count = 0U;
+
+  if (Lora_E22_Init() != LORA_RESULT_OK) {
+    printf("FAIL init aux state\n");
+    return 1;
+  }
+
+  failures += ExpectResult("service with aux ready", Lora_E22_Service(6100U), LORA_RESULT_OK);
+  s_lora_ready = 0U;
+  failures += ExpectResult("service short aux low", Lora_E22_Service(6200U), LORA_RESULT_OK);
+  failures += ExpectU32("short aux low keeps online", Lora_E22_GetState(7000U, 3000U), LORA_STATE_ONLINE);
+  failures += ExpectU32("long aux low offline", Lora_E22_GetState(9301U, 3000U), LORA_STATE_OFFLINE);
+  s_lora_ready = 1U;
+  failures += ExpectResult("service after aux recovers", Lora_E22_Service(9400U), LORA_RESULT_OK);
+  failures += ExpectU32("aux high recovers online", Lora_E22_GetState(9400U, 3000U), LORA_STATE_ONLINE);
+  return failures;
+}
+
 int main(void)
 {
   int failures = 0;
@@ -225,6 +276,8 @@ int main(void)
   failures += TestAirRateBudgetKeepsAuxWaitDuringSlowAirTransfer();
   failures += TestUartDmaTimeoutUsesConfiguredBaudrate();
   failures += TestRuntimeReinitDoesNotWaitForMissingAux();
+  failures += TestHardwareStateDoesNotDependOnTraffic();
+  failures += TestAuxLowTimeoutMarksHardwareOfflineAndRecovers();
 
   if (failures != 0) {
     printf("lora e22 service budget tests failed: %d\n", failures);

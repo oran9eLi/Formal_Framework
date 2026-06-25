@@ -53,6 +53,7 @@ static uint32_t s_parse_error_count;
 static uint32_t s_rx_byte_count;
 static uint32_t s_rx_drop_count;
 static uint32_t s_last_tx_ms;
+static uint32_t s_last_ready_ms;
 static uint32_t s_last_msg_id;
 static uint8_t s_initialized;
 static volatile uint8_t s_reinit_request;
@@ -82,8 +83,24 @@ static uint32_t s_tx_state_ms;
 static uint32_t Lora_E22_CalcTimeoutMs(uint16_t length_bytes, uint32_t bitrate_bps, uint32_t margin_ms);
 static uint32_t Lora_E22_GetAuxWaitTimeoutMs(void);
 static uint32_t Lora_E22_GetUartDmaTimeoutMs(uint16_t length_bytes);
-static void Lora_E22_ResetRuntimeState(void);
+static void Lora_E22_ResetRuntimeState(uint32_t now_ms);
+static uint8_t Lora_E22_RecordAuxReady(uint32_t now_ms);
 static void Lora_E22_TxStep(uint32_t now_ms);
+
+/**
+ * @brief 记录 E22 AUX ready 硬件事实。
+ *
+ * @details
+ * AUX high 表示本机 E22 当前可接受操作。它不代表远端设备在线，也不代表空口有数据。
+ */
+static uint8_t Lora_E22_RecordAuxReady(uint32_t now_ms)
+{
+  if (BSP_LoRa_IsReady() != 0U) {
+    s_last_ready_ms = now_ms;
+    return 1U;
+  }
+  return 0U;
+}
 
 /**
  * @brief 清空 LoRa 运行期解析、队列、统计和发送状态。
@@ -92,7 +109,7 @@ static void Lora_E22_TxStep(uint32_t now_ms);
  * 调用者必须已经确认模块处于可用状态。本函数不访问阻塞等待接口，供启动初始化和
  * 通信任务内的非阻塞运行期重初始化共用。
  */
-static void Lora_E22_ResetRuntimeState(void)
+static void Lora_E22_ResetRuntimeState(uint32_t now_ms)
 {
   memset(s_rx_queue, 0, sizeof(s_rx_queue));
   s_rx_q_head = 0U;
@@ -111,6 +128,7 @@ static void Lora_E22_ResetRuntimeState(void)
   s_rx_byte_count     = 0U;
   s_rx_drop_count     = 0U;
   s_last_tx_ms        = 0U;
+  s_last_ready_ms     = now_ms;
   s_last_msg_id       = 0U;
   s_tx_state          = LORA_TX_IDLE;
   s_tx_pending_len    = 0U;
@@ -121,6 +139,7 @@ static void Lora_E22_ResetRuntimeState(void)
 Lora_Result_t Lora_E22_Init(void)
 {
   uint32_t start_ms;
+  uint32_t ready_ms;
 
   s_initialized = 0U;
   BSP_LoRa_SetMode(0U); /* normal mode M0=0 M1=0 */
@@ -129,7 +148,8 @@ Lora_Result_t Lora_E22_Init(void)
     if ((uint32_t)(BSP_Time_GetTickMs() - start_ms) > 500U) { return LORA_RESULT_BUSY; }
   }
 
-  Lora_E22_ResetRuntimeState();
+  ready_ms = BSP_Time_GetTickMs();
+  Lora_E22_ResetRuntimeState(ready_ms);
 
   return LORA_RESULT_OK;
 }
@@ -151,8 +171,10 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
     BSP_LoRa_SetMode(0U);
     if (BSP_LoRa_IsReady() != 0U) {
       s_reinit_request = 0U;
-      Lora_E22_ResetRuntimeState();
+      Lora_E22_ResetRuntimeState(now_ms);
     }
+  } else {
+    (void)Lora_E22_RecordAuxReady(now_ms);
   }
 
   while ((rx_budget != 0U) && ((available = BSP_LoRa_GetRxCount()) > 0U)) {
@@ -240,8 +262,9 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out)
 Lora_State_t Lora_E22_GetState(uint32_t now_ms, uint32_t offline_timeout_ms)
 {
   if (s_initialized == 0U) { return LORA_STATE_NOT_READY; }
-  if ((s_last_rx_ms == 0U) && (s_last_tx_ms == 0U)) { return LORA_STATE_NOT_READY; }
-  if (((s_last_rx_ms != 0U) && ((uint32_t)(now_ms - s_last_rx_ms) <= offline_timeout_ms)) || ((s_last_tx_ms != 0U) && ((uint32_t)(now_ms - s_last_tx_ms) <= offline_timeout_ms))) { return LORA_STATE_ONLINE; }
+  if (Lora_E22_RecordAuxReady(now_ms) != 0U) { return LORA_STATE_ONLINE; }
+  if (s_last_ready_ms == 0U) { return LORA_STATE_NOT_READY; }
+  if ((uint32_t)(now_ms - s_last_ready_ms) <= offline_timeout_ms) { return LORA_STATE_ONLINE; }
   return LORA_STATE_OFFLINE;
 }
 
@@ -384,6 +407,7 @@ void Lora_E22_GetDebugInfo(Lora_DebugInfo_t *info)
   info->rx_drop_count     = s_rx_drop_count;
   info->last_rx_ms        = s_last_rx_ms;
   info->last_tx_ms        = s_last_tx_ms;
+  info->last_ready_ms     = s_last_ready_ms;
   info->last_msg_id       = s_last_msg_id;
   if (primask == 0U) { __enable_irq(); }
 
