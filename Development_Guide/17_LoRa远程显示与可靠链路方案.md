@@ -18,7 +18,7 @@
 
 | 能力 | 当前代码位置 | 状态 | 说明 |
 |---|---|---|---|
-| LoRa 硬件配置 | `Bsp/Inc/bsp_config.h` | 已完成 | E22 使用 USART3，PB10/PB11，UART 为 9600 8N1，当前外部配置的 E22 空中速率按 `BSP_LORA_AIR_BPS=2400` 记录；RX DMA 为 `DMA1_Stream1`，TX DMA 为 `DMA1_Stream3`，M0/M1/AUX 接到 PF1/PF2/PF0。 |
+| LoRa 硬件配置 | `Bsp/Inc/bsp_config.h` | 已完成 | E22 使用 USART3，PB10/PB11，UART 为 9600 8N1，当前外部配置的 E22 空中速率按 `BSP_LORA_AIR_BPS=9600` 记录(已用配置软件从 2400 提到 9600，与 UART 速率匹配)；RX DMA 为 `DMA1_Stream1`，TX DMA 为 `DMA1_Stream3`，M0/M1/AUX 接到 PF1/PF2/PF0。 |
 | LoRa BSP 收发 | `Bsp/Src/bsp_lora.c` | 已完成 | 已实现 UART DMA RX 环形缓冲、IDLE 推进、TX DMA 单帧发送、AUX 判断、TX abort、USART 错误恢复，并向驱动暴露 UART 波特率和空中速率配置值；AUX 输入使用下拉，未接模块或 AUX 断线时更容易稳定读低。 |
 | LoRa 驱动发送状态机 | `Sensor/Src/lora_e22.c` | 已完成 | 已实现 `IDLE -> WAIT_AUX -> SENDING` 非阻塞发送状态机，单帧在飞，发送完成以 UART TX DMA 完成回调为准；AUX 等待超时按最大帧空中耗时计算，UART DMA 卡死超时按当前帧串口耗时计算。 |
 | LoRa 运行期恢复口径 | `Framework/Inc/px4lite_config.h`、`Framework/Src/px4lite_app.c`、`Sensor/Src/lora_e22.c` | 已完成 | `PX4LITE_LORA_RECOVERY_ENABLE` 默认开启，但 LoRa 状态灯和恢复只依据本机 E22 初始化结果与 AUX ready 超时；远程模式未收到发射端数据只表示远端无遥测，不触发硬件重初始化。运行期 reinit 只做非阻塞 AUX ready 检查，不在任务内忙等；未成功初始化前禁止把 MAVLink 帧排入 LoRa 发送状态机。 |
@@ -274,5 +274,5 @@ Display、Remote Telemetry 和 Business API 不应依赖具体调度算法，避
 | 远程显示 | 屏幕主字段来自 `RemoteTelemetry`，不读取本机传感器快照冒充远端数据。 |
 | 远程断链 | 停留远程模式并显示远端超时，不自动切回本地；没有运行的发送端或长时间收不到 LoRa 数据时，模式切换和显示刷新不得依赖外部设备，未收到的远端字段显示 0 或无效，`Display_PrepareSnapshot()` 不因远端快照缺失返回 `DISPLAY_NOT_READY`；本机 LoRa 状态灯不因远端无数据变红，只在本机 AUX 长时间未 ready 或初始化失败时变红。 |
 | 数据有效位 | 未收到字段显示无效；已收到但过期字段保留最后远端值并标记 stale，不静默使用本机字段替代。 |
-| 带宽 | UART 9600 bps、E22 空中速率 2400 bps 下接收帧数、解析错误、过滤丢弃和数据过期统计可观察，发送周期和链路超时可配置。 |
+| 带宽 | UART 9600 bps、E22 空中速率 9600 bps 下接收帧数、解析错误、过滤丢弃和数据过期统计可观察，发送周期和链路超时可配置。详细字节预算见 `18_LoRa远程显示第三阶段显示同构方案.md` 第 7 节。 |
 | 控制安全 | 当前阶段没有远程电机控制执行路径；REMOTE 模式下电机滑块为只读显示，触摸不会调用本机电机控制 API，也不会发送远程控制帧。 |
