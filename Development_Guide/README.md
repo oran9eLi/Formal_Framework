@@ -14,8 +14,10 @@
 10. `15_模块数据契约与评审门禁应答.md`
 11. `16_模块接入标准与评审清单.md`（新模块接入与合入门禁,以 GNSS/LoRa 为样板）
 12. `17_LoRa远程显示与可靠链路方案.md`
-13. `Example_Template/`
-14. `Business_Layer_Template/`
+13. `18_LoRa远程显示第三阶段显示同构方案.md`
+14. `19_显示取数统一接口与第三阶段收尾.md`
+15. `Example_Template/`
+16. `Business_Layer_Template/`
 
 历次架构整改和问题处理记录统一放入 `Change_History/`，文件名必须包含
 日期，不再散落在当前规范目录。
