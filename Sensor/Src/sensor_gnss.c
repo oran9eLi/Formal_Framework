@@ -5,10 +5,10 @@
 
 #include "sensor_gnss.h"
 
+#include "bsp_critical.h"
 #include "bsp_gnss.h"
 #include "sensor_nmea.h"
 
-#include "stm32f4xx.h"
 
 #include <string.h>
 
@@ -28,32 +28,6 @@ static void Gnss_ParseGsa(const Nmea_Sentence_t *sentence);
 
 static uint8_t Gnss_IsFixUsable(void);
 static uint8_t Gnss_CountGsaSatellites(const Nmea_Sentence_t *sentence);
-
-static uint32_t Gnss_EnterCritical(void);
-static void Gnss_ExitCritical(uint32_t primask);
-
-/**
- * @brief Save interrupt state and enter the short GNSS critical section.
- */
-static uint32_t Gnss_EnterCritical(void)
-{
-  uint32_t primask = __get_PRIMASK();
-
-  __disable_irq();
-  __DMB();
-
-  return primask;
-}
-
-/**
- * @brief Leave the GNSS critical section and restore the previous interrupt state.
- */
-static void Gnss_ExitCritical(uint32_t primask)
-{
-  __DMB();
-
-  if (primask == 0U) { __enable_irq(); }
-}
 
 /**
  * @brief Check whether the parsed GNSS fix is valid for navigation output.
@@ -120,7 +94,7 @@ static void Gnss_ParseGsv(const Nmea_Sentence_t *sentence)
 
   if (Gnss_ParseUint8Field(sentence, 3U, &visible_satellites) == 0U) { return; }
 
-  primask = Gnss_EnterCritical();
+  primask = BSP_Critical_Enter();
 
   if (memcmp(sentence->raw, "$GPGSV", 6U) == 0) {
     s_snapshot.gps_visible_sats = visible_satellites;
@@ -128,7 +102,7 @@ static void Gnss_ParseGsv(const Nmea_Sentence_t *sentence)
     s_snapshot.bds_visible_sats = visible_satellites;
   }
 
-  Gnss_ExitCritical(primask);
+  BSP_Critical_Exit(primask);
 }
 
 /**
@@ -164,7 +138,7 @@ static void Gnss_ParseGsa(const Nmea_Sentence_t *sentence)
   used_satellites = Gnss_CountGsaSatellites(sentence);
   if (Gnss_ParseUint8Field(sentence, 2U, &fix_dimension) == 0U) { fix_dimension = 0U; }
 
-  primask = Gnss_EnterCritical();
+  primask = BSP_Critical_Enter();
 
   if ((fix_dimension >= 1U) && (fix_dimension <= 3U)) { s_snapshot.fix_dimension = fix_dimension; }
 
@@ -174,7 +148,7 @@ static void Gnss_ParseGsa(const Nmea_Sentence_t *sentence)
     s_snapshot.bds_used_sats = used_satellites;
   }
 
-  Gnss_ExitCritical(primask);
+  BSP_Critical_Exit(primask);
 }
 
 /**
@@ -182,7 +156,7 @@ static void Gnss_ParseGsa(const Nmea_Sentence_t *sentence)
  */
 static void Gnss_UpdateState(void)
 {
-  uint32_t primask = Gnss_EnterCritical();
+  uint32_t primask = BSP_Critical_Enter();
 
   if (s_snapshot.rx_sequence == 0U) {
     s_snapshot.data_state = GNSS_DATA_NONE;
@@ -190,7 +164,7 @@ static void Gnss_UpdateState(void)
     s_snapshot.data_state = (s_snapshot.fix_valid != 0U) ? GNSS_DATA_FIX_OK : GNSS_DATA_NO_FIX;
   }
 
-  Gnss_ExitCritical(primask);
+  BSP_Critical_Exit(primask);
 }
 
 /**
@@ -238,9 +212,9 @@ Gnss_Result_t Sensor_GNSS_CopySnapshot(Gnss_Snapshot_t *out)
 
   if (out == NULL) { return GNSS_RESULT_INVALID_PARAM; }
 
-  primask = Gnss_EnterCritical();
+  primask = BSP_Critical_Enter();
   *out    = s_snapshot;
-  Gnss_ExitCritical(primask);
+  BSP_Critical_Exit(primask);
 
   if (out->rx_sequence == 0U) { return GNSS_RESULT_NO_DATA; }
   return (out->fix_valid != 0U) ? GNSS_RESULT_OK : GNSS_RESULT_NO_FIX;
@@ -255,14 +229,14 @@ Gnss_Result_t Sensor_GNSS_GetStatus(Gnss_Status_t *out)
 
   if (out == NULL) { return GNSS_RESULT_INVALID_PARAM; }
 
-  primask          = Gnss_EnterCritical();
+  primask          = BSP_Critical_Enter();
   out->data_state  = s_snapshot.data_state;
   out->fix_valid   = s_snapshot.fix_valid;
   out->satellites  = s_snapshot.satellites;
   out->rx_sequence = s_snapshot.rx_sequence;
   out->last_rx_ms  = s_snapshot.last_rx_ms;
   out->last_fix_ms = s_snapshot.last_fix_ms;
-  Gnss_ExitCritical(primask);
+  BSP_Critical_Exit(primask);
 
   return (out->rx_sequence == 0U) ? GNSS_RESULT_NO_DATA : GNSS_RESULT_OK;
 }
@@ -272,13 +246,13 @@ Gnss_Result_t Sensor_GNSS_GetStatus(Gnss_Status_t *out)
  */
 static void Gnss_RecordValidSentence(uint32_t now)
 {
-  uint32_t primask = Gnss_EnterCritical();
+  uint32_t primask = BSP_Critical_Enter();
 
   s_snapshot.last_rx_ms = now;
   s_snapshot.rx_sequence++;
   if (s_snapshot.rx_sequence == 0U) { s_snapshot.rx_sequence = 1U; }
 
-  Gnss_ExitCritical(primask);
+  BSP_Critical_Exit(primask);
 }
 
 /**
@@ -324,9 +298,9 @@ static void Gnss_FeedAndParse(uint32_t now)
                 Nmea_ParseGGA(&sentence, &s_geo);
                 s_geo_seen = 1U;
 
-                primask = Gnss_EnterCritical();
+                primask = BSP_Critical_Enter();
                 Gnss_UpdateSnapshotFromGeo(now);
-                Gnss_ExitCritical(primask);
+                BSP_Critical_Exit(primask);
                 break;
               }
 
@@ -335,9 +309,9 @@ static void Gnss_FeedAndParse(uint32_t now)
 
                 Nmea_ParseRMC(&sentence, &s_geo);
 
-                primask = Gnss_EnterCritical();
+                primask = BSP_Critical_Enter();
                 Gnss_UpdateSnapshotFromGeo(now);
-                Gnss_ExitCritical(primask);
+                BSP_Critical_Exit(primask);
                 break;
               }
 

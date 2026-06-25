@@ -4,9 +4,9 @@
  */
 
 #include "lora_e22.h"
+#include "bsp_critical.h"
 #include "bsp_lora.h"
 #include "bsp_time.h"
-#include "stm32f4xx.h"
 
 #if defined(__CC_ARM)
 /*
@@ -141,8 +141,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
         /* --- complete MAVLink frame received --- */
         uint32_t primask;
 
-        primask = __get_PRIMASK();
-        __disable_irq();
+        primask = BSP_Critical_Enter();
 
         s_rx_frame.rx_time_ms   = now_ms;
         s_rx_frame.frame_len    = s_parse_msg.len + MAVLINK_NUM_HEADER_BYTES + MAVLINK_NUM_CHECKSUM_BYTES;
@@ -157,7 +156,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
         s_last_rx_ms  = now_ms;
         s_last_msg_id = s_parse_msg.msgid;
 
-        if (primask == 0U) { __enable_irq(); }
+        BSP_Critical_Exit(primask);
       }
 
       if (s_parse_status.parse_error != parse_error_before) {
@@ -179,18 +178,17 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out)
 
   if (out == 0) { return LORA_RESULT_INVALID_PARAM; }
 
-  primask = __get_PRIMASK();
-  __disable_irq();
+  primask = BSP_Critical_Enter();
 
   if (s_rx_ready == 0U) {
-    if (primask == 0U) { __enable_irq(); }
+    BSP_Critical_Exit(primask);
     return LORA_RESULT_NO_DATA;
   }
 
   *out       = s_rx_frame;
   s_rx_ready = 0U;
 
-  if (primask == 0U) { __enable_irq(); }
+  BSP_Critical_Exit(primask);
   return LORA_RESULT_OK;
 }
 
@@ -283,8 +281,7 @@ void Lora_E22_GetDebugInfo(Lora_DebugInfo_t *info)
 
   if (info == 0) { return; }
 
-  primask = __get_PRIMASK();
-  __disable_irq();
+  primask = BSP_Critical_Enter();
   info->rx_frame_count    = s_rx_frame_count;
   info->tx_frame_count    = s_tx_frame_count;
   info->tx_busy_count     = s_tx_busy_count;
@@ -296,7 +293,7 @@ void Lora_E22_GetDebugInfo(Lora_DebugInfo_t *info)
   info->last_rx_ms        = s_last_rx_ms;
   info->last_tx_ms        = s_last_tx_ms;
   info->last_msg_id       = s_last_msg_id;
-  if (primask == 0U) { __enable_irq(); }
+  BSP_Critical_Exit(primask);
 
   info->rx_overflow_count = BSP_LoRa_GetRxOverflowCount();
 }

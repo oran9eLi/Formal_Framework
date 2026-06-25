@@ -10,13 +10,79 @@
 #include "business_task_template.h"
 
 #include <string.h>
+#include "business_template_config.h"
+#include "display.h"
 #include "app_data_api.h"
 #include "business_event_bus.h"
 #include "debug_console.h"
 #include "px4lite_modules.h"
 #include "px4lite_faults.h"
+#include "px4lite_config.h"
 #include "px4lite_platform.h"
+#include "px4lite_registry.h"
 
+#if BUSINESS_ENABLE_DISPLAY
+/**
+ * @brief Display 模块注册表 init 回调。
+ *
+ * @return 初始化结果。
+ */
+static Px4Lite_Result_t Business_DisplayModuleInit(void)
+{
+  return (Display_Init() == DISPLAY_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+}
+
+/**
+ * @brief Display 模块注册表 self_check 回调。
+ *
+ * @return 自检结果。
+ */
+static Px4Lite_Result_t Business_DisplayModuleSelfCheck(void)
+{
+  uint16_t error_code;
+
+  return (Display_SelfCheck(&error_code) == DISPLAY_OK) ? PX4LITE_OK : PX4LITE_NOT_READY;
+}
+
+/**
+ * @brief Display 模块注册表 recover 回调。
+ *
+ * @return 恢复请求结果。
+ *
+ * @note 本函数只请求显示模块恢复，实际恢复由显示服务上下文完成。
+ */
+static Px4Lite_Result_t Business_DisplayModuleRecover(void)
+{
+  Display_RequestRecover();
+  return PX4LITE_OK;
+}
+
+static const Px4Lite_ModuleDescriptor_t s_display_descriptor = {PX4LITE_MODULE_DISPLAY, "display", PX4LITE_ENABLE_DISPLAY, 0U, Business_DisplayModuleInit, Business_DisplayModuleSelfCheck, 0, 0, Business_DisplayModuleRecover};
+#endif
+
+/**
+ * @brief 注册 Business 拥有的 Framework 模块描述符。
+ */
+uint8_t Business_PlatformRegisterModules(void)
+{
+#if BUSINESS_ENABLE_DISPLAY
+  if (Px4Lite_RegistryRegister(&s_display_descriptor) != PX4LITE_OK) { return 0U; }
+#endif
+
+  return 1U;
+}
+
+/**
+ * @brief 将 Display 启动状态写入 Framework Registry。
+ */
+void Business_DisplayStatusStart(uint32_t now_ms)
+{
+#if BUSINESS_ENABLE_DISPLAY
+  (void)Px4Lite_RegistryStart(PX4LITE_MODULE_DISPLAY, now_ms);
+#else
+  (void)now_ms;
+#endif
+}
 /**
  * @brief 向 Business 代码返回平台单调毫秒时间。
  */

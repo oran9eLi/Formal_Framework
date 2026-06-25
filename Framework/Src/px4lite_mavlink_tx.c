@@ -537,25 +537,30 @@ static void MavTx_CopyText(char text[50], const char *prefix, const char *module
  */
 static Px4Lite_Result_t MavTx_SendStatusText(uint32_t now_ms)
 {
-  Px4Lite_AlarmSnapshot_t alarm;
   mavlink_statustext_t packet;
   Px4Lite_Result_t result;
+  uint32_t alarm_publish_ms;
+  uint32_t alarm_sequence;
+  uint16_t active_count;
+  uint16_t highest_fault_code;
+  uint16_t highest_source_id;
+  Px4Lite_AlarmSeverity_t highest_severity;
 
-  if (Px4Lite_CopyAlarmSnapshot(&alarm) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
-  if (Px4Lite_IsFresh(&alarm.header, now_ms, PX4LITE_HEALTH_PERIOD_MS * 10U) == 0U) { return PX4LITE_STALE; }
-  if (alarm.active_count == 0U) { return PX4LITE_NOT_READY; }
-  if (alarm.header.sequence == s_stats.last_alarm_sequence) { return PX4LITE_IDLE; }
+  if (Px4Lite_CopyAlarmSummary(&alarm_publish_ms, &alarm_sequence, &active_count, &highest_fault_code, &highest_source_id, &highest_severity) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if ((uint32_t)(now_ms - alarm_publish_ms) > (PX4LITE_HEALTH_PERIOD_MS * 10U)) { return PX4LITE_STALE; }
+  if (active_count == 0U) { return PX4LITE_NOT_READY; }
+  if (alarm_sequence == s_stats.last_alarm_sequence) { return PX4LITE_IDLE; }
 
   memset(&packet, 0, sizeof(packet));
-  packet.severity  = MavTx_MapSeverity(alarm.highest_severity);
-  packet.id        = alarm.highest_fault_code;
+  packet.severity  = MavTx_MapSeverity(highest_severity);
+  packet.id        = highest_fault_code;
   packet.chunk_seq = 0U;
-  MavTx_CopyText(packet.text, "PX4LITE ALARM", MavTx_ModuleName(alarm.highest_source_id), alarm.highest_fault_code);
+  MavTx_CopyText(packet.text, "PX4LITE ALARM", MavTx_ModuleName(highest_source_id), highest_fault_code);
 
   (void)mavlink_msg_statustext_encode_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
 
   result = MavTx_SendPrepared();
-  if (result == PX4LITE_OK) { s_stats.last_alarm_sequence = alarm.header.sequence; }
+  if (result == PX4LITE_OK) { s_stats.last_alarm_sequence = alarm_sequence; }
   return result;
 }
 

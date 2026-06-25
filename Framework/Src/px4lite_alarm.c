@@ -13,6 +13,8 @@
 #include "task.h"
 
 static Px4Lite_AlarmSnapshot_t s_alarm_snapshot;
+static Px4Lite_AlarmSnapshot_t s_alarm_old_snapshot;
+static Px4Lite_AlarmSnapshot_t s_alarm_new_snapshot;
 static uint32_t s_alarm_sequence;
 
 /**
@@ -197,22 +199,19 @@ Px4Lite_Result_t Px4Lite_AlarmInit(uint32_t now_ms)
 void Px4Lite_AlarmUpdateFromStatuses(const Px4Lite_ModuleStatus_t *status, uint16_t count, uint32_t now_ms)
 {
 #if PX4LITE_ENABLE_ALARM
-  Px4Lite_AlarmSnapshot_t old_snapshot;
-  Px4Lite_AlarmSnapshot_t new_snapshot;
-
   if ((status == 0) || (count > (uint16_t)PX4LITE_MODULE_COUNT)) { return; }
 
   taskENTER_CRITICAL();
-  old_snapshot = s_alarm_snapshot;
+  s_alarm_old_snapshot = s_alarm_snapshot;
   taskEXIT_CRITICAL();
 
-  Alarm_FillSnapshot(&new_snapshot, &old_snapshot, status, count, now_ms);
+  Alarm_FillSnapshot(&s_alarm_new_snapshot, &s_alarm_old_snapshot, status, count, now_ms);
 
   taskENTER_CRITICAL();
-  s_alarm_snapshot = new_snapshot;
+  s_alarm_snapshot = s_alarm_new_snapshot;
   taskEXIT_CRITICAL();
 
-  Alarm_PublishChanges(&old_snapshot, &new_snapshot, now_ms);
+  Alarm_PublishChanges(&s_alarm_old_snapshot, &s_alarm_new_snapshot, now_ms);
 #else
   (void)status;
   (void)count;
@@ -229,4 +228,35 @@ Px4Lite_Result_t Px4Lite_CopyAlarmSnapshot(Px4Lite_AlarmSnapshot_t *out)
   taskEXIT_CRITICAL();
 
   return (out->header.valid != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
+}
+
+Px4Lite_Result_t Px4Lite_CopyAlarmSummary(uint32_t *publish_time_ms, uint32_t *sequence, uint16_t *active_count, uint16_t *highest_fault_code, uint16_t *highest_source_id, Px4Lite_AlarmSeverity_t *highest_severity)
+{
+  uint8_t valid;
+
+  taskENTER_CRITICAL();
+  valid = s_alarm_snapshot.header.valid;
+  if (publish_time_ms != 0) { *publish_time_ms = s_alarm_snapshot.header.publish_time_ms; }
+  if (sequence != 0) { *sequence = s_alarm_snapshot.header.sequence; }
+  if (active_count != 0) { *active_count = s_alarm_snapshot.active_count; }
+  if (highest_fault_code != 0) { *highest_fault_code = s_alarm_snapshot.highest_fault_code; }
+  if (highest_source_id != 0) { *highest_source_id = s_alarm_snapshot.highest_source_id; }
+  if (highest_severity != 0) { *highest_severity = s_alarm_snapshot.highest_severity; }
+  taskEXIT_CRITICAL();
+
+  return (valid != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
+}
+
+Px4Lite_Result_t Px4Lite_CopyAlarmRecord(uint16_t index, Px4Lite_AlarmRecord_t *out)
+{
+  uint8_t valid;
+
+  if ((out == 0) || (index >= (uint16_t)PX4LITE_MODULE_COUNT)) { return PX4LITE_INVALID_PARAM; }
+
+  taskENTER_CRITICAL();
+  valid = s_alarm_snapshot.header.valid;
+  *out  = s_alarm_snapshot.records[index];
+  taskEXIT_CRITICAL();
+
+  return (valid != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
 }

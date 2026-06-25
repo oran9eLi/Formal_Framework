@@ -27,6 +27,20 @@
 #define APP_ALARM_MAX_AGE_MS       500U  /**< Alarm 快照最大可接受年龄，单位：ms。 */
 #define APP_MOTOR_MAX_AGE_MS       500U  /**< Motor 命令快照最大可接受年龄，单位：ms。 */
 #define APP_STATUS_COPY_RETRY_MAX  3U    /**< 状态版本一致性复制的最大重试次数。 */
+#define APP_DISPLAY_MOTOR_COUNT    4U    /**< Display 视图固定显示的电机数量。 */
+#define APP_DISPLAY_ALARM_MAX      16U   /**< Display 视图固定导出的告警记录容量。 */
+
+/**
+ * @brief 应用层显示状态灯语义。
+ */
+typedef enum {
+  APP_VIEW_STATE_UNKNOWN = 0, /**< 状态未知或尚未初始化。 */
+  APP_VIEW_STATE_STARTING,    /**< 模块启动中或等待首帧数据。 */
+  APP_VIEW_STATE_ONLINE,      /**< 模块在线且数据可用。 */
+  APP_VIEW_STATE_DEGRADED,    /**< 模块降级但仍有可用事实。 */
+  APP_VIEW_STATE_OFFLINE,     /**< 模块离线。 */
+  APP_VIEW_STATE_FAILED       /**< 模块失败。 */
+} App_ViewState_t;
 
 /**
  * @brief 应用层导航快照。
@@ -96,6 +110,17 @@ typedef struct {
 } App_AlarmRecord_t;
 
 /**
+ * @brief 应用层告警轻量摘要。
+ */
+typedef struct {
+  uint16_t active_count;       /**< 当前活动告警数量。 */
+  uint16_t highest_fault_code; /**< 当前最高严重度告警故障码。 */
+  uint16_t highest_source_id;  /**< 当前最高严重度告警来源 ID。 */
+  uint8_t highest_severity;    /**< 当前最高告警严重度。 */
+  uint8_t reserved;            /**< 保留字段，保持结构体对齐。 */
+} App_AlarmSummary_t;
+
+/**
  * @brief 应用层告警表快照。
  */
 typedef struct {
@@ -153,6 +178,76 @@ typedef struct {
 } App_DateTimeSnapshot_t;
 
 /**
+ * @brief Display 使用的模块状态视图。
+ */
+typedef struct {
+  App_ViewState_t state; /**< 应用层显示状态。 */
+  uint16_t fault_code;   /**< 当前故障码，0 表示无故障。 */
+  uint8_t severity;      /**< 告警严重度，值越大越严重。 */
+  uint8_t reserved;      /**< 保留字段，保持结构体对齐。 */
+} App_ModuleView_t;
+
+/**
+ * @brief Display 专用聚合视图。
+ *
+ * @details
+ * 本结构体把页面需要的 Framework 状态、模块编号、告警和有效位统一转换为 App 层字段。
+ * Display 只消费该视图，不直接依赖 Framework 模块枚举、故障枚举或 topic 有效位。
+ */
+typedef struct {
+  uint8_t navigation_valid;                              /**< 导航字段是否可显示。 */
+  uint8_t attitude_valid;                                /**< 姿态字段是否可显示。 */
+  uint8_t date_time_valid;                               /**< 日期时间是否可显示。 */
+  uint8_t system_valid;                                  /**< 系统状态快照是否可显示。 */
+  uint8_t alarm_valid;                                   /**< 告警表是否可显示。 */
+  uint8_t environment_valid;                             /**< 环境/电源字段是否可显示。 */
+  uint8_t motor_valid;                                   /**< 电机输出字段是否可显示。 */
+  uint8_t any_valid;                                     /**< 至少一个主要快照可用。 */
+  uint32_t status_version;                               /**< 模块状态版本号。 */
+  uint32_t warning_fault_mask;                           /**< 警告故障位图。 */
+  uint32_t blocking_fault_mask;                          /**< 阻塞故障位图。 */
+  uint16_t highest_fault_code;                           /**< 当前最高严重度告警故障码。 */
+  uint16_t highest_source_id;                            /**< 当前最高严重度告警来源 ID。 */
+  uint8_t system_ready;                                  /**< 系统就绪标志，1 表示就绪。 */
+  uint8_t reserved0[3];                                  /**< 保留字段，保持结构体对齐。 */
+  App_ModuleView_t gnss;                                 /**< GNSS 模块显示状态。 */
+  App_ModuleView_t imu;                                  /**< IMU 模块显示状态。 */
+  App_ModuleView_t baro;                                 /**< Baro 模块显示状态。 */
+  App_ModuleView_t battery;                              /**< Battery 模块显示状态。 */
+  App_ModuleView_t lora;                                 /**< LoRa 模块显示状态。 */
+  App_ModuleView_t storage;                              /**< Storage 模块显示状态。 */
+  App_ModuleView_t control;                              /**< Control 模块显示状态。 */
+  App_ModuleView_t five_g;                               /**< 5G-A 模块显示状态。 */
+  uint32_t gnss_utc_sec;                                 /**< GNSS UTC 当日秒数，单位：s。 */
+  uint32_t gnss_utc_date;                                /**< RMC 日期，压缩格式 yymmdd。 */
+  int32_t latitude_e7;                                   /**< 纬度，单位：degree * 1e7。 */
+  int32_t longitude_e7;                                  /**< 经度，单位：degree * 1e7。 */
+  int32_t altitude_mm;                                   /**< 高度，单位：mm。 */
+  int32_t velocity_north_cms;                            /**< 北向速度，单位：cm/s。 */
+  int32_t velocity_east_cms;                             /**< 东向速度，单位：cm/s。 */
+  int32_t roll_deg100;                                   /**< 横滚角，单位：degree * 100。 */
+  int32_t pitch_deg100;                                  /**< 俯仰角，单位：degree * 100。 */
+  int32_t yaw_deg100;                                    /**< 航向角，单位：degree * 100。 */
+  uint16_t hdop_x100;                                    /**< HDOP * 100。 */
+  uint8_t satellites_used;                               /**< 当前定位使用卫星数。 */
+  uint8_t gnss_fix_type;                                 /**< GNSS 定位类型。 */
+  uint32_t local_date_ymd;                               /**< 本地日期，编码 YYYYMMDD。 */
+  uint32_t local_time_hhmmss;                            /**< 本地时间，编码 HHMMSS。 */
+  float pressure_pa;                                     /**< 气压，单位：Pa。 */
+  float temperature_c;                                   /**< 温度，单位：摄氏度。 */
+  float relative_humidity_pct;                           /**< 相对湿度，单位：%。 */
+  uint32_t voltage_mv;                                   /**< 电压，单位：mV。 */
+  uint8_t battery_percent;                               /**< 电量百分比，范围 0 到 100。 */
+  uint8_t reserved1[3];                                  /**< 保留字段，保持结构体对齐。 */
+  uint8_t motor_duty_percent[APP_DISPLAY_MOTOR_COUNT];   /**< 每路电机目标油门百分比。 */
+  uint32_t lora_tx_count;                                /**< LoRa 本机发送完成帧计数。 */
+  uint32_t lora_rx_count;                                /**< LoRa 接收合法帧计数。 */
+  uint16_t alarm_active_count;                           /**< 活动告警数量。 */
+  uint16_t alarm_highest_fault_code;                     /**< 告警表最高故障码。 */
+  App_AlarmRecord_t alarms[APP_DISPLAY_ALARM_MAX];       /**< Display 使用的活动告警记录表。 */
+} App_DisplaySnapshot_t;
+
+/**
  * @brief 复制新鲜且一致的导航快照。
  *
  * @param[out] out 输出缓冲区，不能为 NULL。
@@ -196,6 +291,16 @@ Px4Lite_Result_t App_CopySystem(App_SystemSnapshot_t *out, uint32_t now_ms);
 Px4Lite_Result_t App_CopyAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms);
 
 /**
+ * @brief 复制告警轻量摘要，周期调试和状态显示优先使用本接口。
+ *
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间，用于新鲜度判断。
+ *
+ * @return 复制结果。
+ */
+Px4Lite_Result_t App_CopyAlarmSummary(App_AlarmSummary_t *out, uint32_t now_ms);
+
+/**
  * @brief 复制新鲜的环境和电源快照。
  *
  * @param[out] out 输出缓冲区，不能为 NULL。
@@ -229,6 +334,16 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms);
 Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent);
 
 /**
+ * @brief 设置单路电机目标油门百分比，并返回应用层布尔结果。
+ *
+ * @param[in] motor_index 电机编号，范围 0 到 `APP_DISPLAY_MOTOR_COUNT - 1`。
+ * @param[in] throttle_percent 目标油门百分比，范围 0 到 100。
+ *
+ * @return 1 表示设置成功，0 表示设置失败。
+ */
+uint8_t App_CommandMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent);
+
+/**
  * @brief 复制统一日期时间快照。
  *
  * @param[out] out 输出缓冲区，不能为 NULL。
@@ -241,6 +356,16 @@ Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t thrott
  * @retval PX4LITE_STALE 时间快照超过可接受年龄。
  */
 Px4Lite_Result_t App_CopyDateTime(App_DateTimeSnapshot_t *out, uint32_t now_ms);
+
+/**
+ * @brief 复制 Display 专用聚合视图。
+ *
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间，用于各快照新鲜度判断。
+ *
+ * @return 1 表示至少一个主要显示快照可用，0 表示无可用显示数据。
+ */
+uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
 
 /**
  * @brief 复制单个 Framework 模块的最新状态。
@@ -271,5 +396,26 @@ void App_GetCommStats(Px4Lite_CommDebugInfo_t *out);
  * @note 本接口只提供协议帧事实；后续远端外设状态和值应新增独立解码快照。
  */
 Px4Lite_Result_t App_CopyCommRxFrame(Px4Lite_CommRxFrame_t *out);
+
+/**
+ * @brief 获取模块或故障来源的显示名称。
+ *
+ * @param[in] source_id 模块或告警来源 ID。
+ * @param[in] fault_code 故障码；当 source_id 不是已知模块时用于按故障域回退。
+ *
+ * @return 指向静态只读字符串的指针，调用方不得修改或释放。
+ *
+ * @note 本接口用于 Display、日志等应用消费者，不向页面层暴露 Framework 故障枚举细节。
+ */
+const char *App_GetModuleDisplayName(uint16_t source_id, uint16_t fault_code);
+
+/**
+ * @brief 获取故障码对应的显示原因文本。
+ *
+ * @param[in] fault_code 故障码。
+ *
+ * @return 指向静态只读字符串的指针，未知故障返回通用告警文本。
+ */
+const char *App_GetFaultReasonText(uint16_t fault_code);
 
 #endif

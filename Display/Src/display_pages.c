@@ -7,7 +7,7 @@
 #include "display_gfx.h"
 #include "display_text.h"
 #include "display_logo.h"
-#include "px4lite_faults.h"
+#include "app_data_api.h"
 
 #define DISPLAY_HEADER_HEIGHT          64U
 #define DISPLAY_DASH_Y                 76U
@@ -550,140 +550,14 @@ static void Display_PagesDrawAlarmStaticLayout(void)
   Display_PagesDrawAlarmTitle(DISPLAY_ALARM_TITLE_X, DISPLAY_ALARM_TITLE_Y);
 }
 
-/* Alarm code reason text. */
 static const char *Display_PagesGetAlarmModule(uint16_t source_id, uint16_t code)
 {
-  switch ((Px4Lite_ModuleId_t)source_id) {
-    case PX4LITE_MODULE_GNSS:
-      return "GPS";
-    case PX4LITE_MODULE_IMU:
-      return "IMU";
-    case PX4LITE_MODULE_BARO:
-      return "BARO";
-    case PX4LITE_MODULE_BATTERY:
-      return "POWER";
-    case PX4LITE_MODULE_LORA:
-      return "LORA";
-    case PX4LITE_MODULE_5G:
-      return "5G";
-    case PX4LITE_MODULE_STORAGE:
-      return "SD";
-    case PX4LITE_MODULE_REMOTE_ID:
-      return "REMOTE ID";
-    case PX4LITE_MODULE_DISPLAY:
-      return "DISPLAY";
-    case PX4LITE_MODULE_CONTROL:
-      return "CONTROL";
-    case PX4LITE_MODULE_ALARM:
-      return "ALARM";
-    case PX4LITE_MODULE_SYSTEM:
-      return "SYSTEM";
-    case PX4LITE_MODULE_ESTIMATOR:
-      return "EST";
-    case PX4LITE_MODULE_BUSINESS:
-      return "BUSINESS";
-    default:
-      break;
-  }
-
-  switch (code) {
-    case PX4LITE_FAULT_SYSTEM_SELF_CHECK:
-    case PX4LITE_FAULT_SYSTEM_HEAP:
-    case PX4LITE_FAULT_SYSTEM_STACK:
-    case PX4LITE_FAULT_SYSTEM_TASK_LOST:
-      return "SYSTEM";
-
-    case PX4LITE_FAULT_SENSOR_INIT:
-    case PX4LITE_FAULT_SENSOR_OFFLINE:
-    case PX4LITE_FAULT_SENSOR_INVALID:
-    case PX4LITE_FAULT_SENSOR_NO_FIX:
-    case PX4LITE_FAULT_SENSOR_TIMEOUT:
-      return "SENSOR";
-
-    case PX4LITE_FAULT_COMM_OFFLINE:
-    case PX4LITE_FAULT_COMM_TIMEOUT:
-    case PX4LITE_FAULT_COMM_FRAME:
-      return "COMM";
-
-    case PX4LITE_FAULT_DISPLAY_OFFLINE:
-    case PX4LITE_FAULT_DISPLAY_REFRESH:
-      return "DISPLAY";
-
-    case PX4LITE_FAULT_STORAGE_NOT_READY:
-    case PX4LITE_FAULT_STORAGE_WRITE:
-    case PX4LITE_FAULT_STORAGE_FULL:
-      return "STORAGE";
-
-    case PX4LITE_FAULT_PROTOCOL_PARSE:
-    case PX4LITE_FAULT_PROTOCOL_CRC:
-      return "PROTO";
-
-    case PX4LITE_FAULT_APP_INVALID_DATA:
-      return "APP";
-
-    case PX4LITE_FAULT_ESTIMATOR_INPUT:
-    case PX4LITE_FAULT_ESTIMATOR_DIVERGE:
-      return "EST";
-
-    default:
-      break;
-  }
-
-  return "SYSTEM";
+  return App_GetModuleDisplayName(source_id, code);
 }
 
 static const char *Display_PagesGetAlarmReason(uint32_t code)
 {
-  switch ((uint16_t)code) {
-    case PX4LITE_FAULT_SYSTEM_SELF_CHECK:
-      return "SELF CHECK";
-    case PX4LITE_FAULT_SYSTEM_HEAP:
-      return "HEAP FAILED";
-    case PX4LITE_FAULT_SYSTEM_STACK:
-      return "STACK OVERFLOW";
-    case PX4LITE_FAULT_SYSTEM_TASK_LOST:
-      return "TASK LOST";
-    case PX4LITE_FAULT_SENSOR_INIT:
-      return "SENSOR INIT";
-    case PX4LITE_FAULT_SENSOR_OFFLINE:
-      return "SENSOR OFFLINE";
-    case PX4LITE_FAULT_SENSOR_INVALID:
-      return "SENSOR INVALID";
-    case PX4LITE_FAULT_SENSOR_NO_FIX:
-      return "NO FIX";
-    case PX4LITE_FAULT_SENSOR_TIMEOUT:
-      return "SENSOR TIMEOUT";
-    case PX4LITE_FAULT_COMM_OFFLINE:
-      return "COMM OFFLINE";
-    case PX4LITE_FAULT_COMM_TIMEOUT:
-      return "COMM TIMEOUT";
-    case PX4LITE_FAULT_COMM_FRAME:
-      return "COMM FRAME";
-    case PX4LITE_FAULT_DISPLAY_OFFLINE:
-      return "DISPLAY OFFLINE";
-    case PX4LITE_FAULT_DISPLAY_REFRESH:
-      return "DISPLAY REFRESH";
-    case PX4LITE_FAULT_STORAGE_NOT_READY:
-      return "STORAGE NOT READY";
-    case PX4LITE_FAULT_STORAGE_WRITE:
-      return "STORAGE WRITE";
-    case PX4LITE_FAULT_STORAGE_FULL:
-      return "STORAGE FULL";
-    case PX4LITE_FAULT_PROTOCOL_PARSE:
-      return "PROTO PARSE";
-    case PX4LITE_FAULT_PROTOCOL_CRC:
-      return "PROTO CRC";
-    case PX4LITE_FAULT_APP_INVALID_DATA:
-      return "APP INVALID";
-    case PX4LITE_FAULT_ESTIMATOR_INPUT:
-      return "EST INPUT";
-    case PX4LITE_FAULT_ESTIMATOR_DIVERGE:
-      return "EST DIVERGE";
-    default:
-      break;
-  }
-
-  return "UNKNOWN ALARM";
+  return App_GetFaultReasonText((uint16_t)code);
 }
 
 /*

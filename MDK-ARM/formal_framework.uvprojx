@@ -339,7 +339,7 @@
               <MiscControls></MiscControls>
               <Define>STM32F407xx,USE_HAL_DRIVER</Define>
               <Undefine></Undefine>
-              <IncludePath>..\Core\Inc;..\Debug\Inc;..\Bsp\Inc;..\Sensor\Inc;..\Framework\Inc;..\Business\Inc;..\Display\Inc;..\Storage\Inc;..\Third_Party\FatFs;..\Third_Party\Drivers\CMSIS\Device\ST\STM32F4xx\Include;..\Third_Party\Drivers\STM32F4xx_HAL_Driver\Inc;..\Third_Party\Drivers\STM32F4xx_HAL_Driver\Inc\Legacy;..\Third_Party\Middlewares\Source\include;..\Third_Party\Middlewares\Source\portable\RVDS\ARM_CM4F;..\Third_Party\Drivers\CMSIS\Include;..\Third_Party\mavlink</IncludePath>
+              <IncludePath>..\Core\Inc;..\Debug\Inc;..\Bsp\Inc;..\Sensor\Inc;..\Driver\Comm\Inc;..\Framework\Inc;..\Business\Inc;..\Display\Inc;..\Storage\Inc;..\Third_Party\FatFs;..\Third_Party\Drivers\CMSIS\Device\ST\STM32F4xx\Include;..\Third_Party\Drivers\STM32F4xx_HAL_Driver\Inc;..\Third_Party\Drivers\STM32F4xx_HAL_Driver\Inc\Legacy;..\Third_Party\Middlewares\Source\include;..\Third_Party\Middlewares\Source\portable\RVDS\ARM_CM4F;..\Third_Party\Drivers\CMSIS\Include;..\Third_Party\mavlink</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -521,7 +521,7 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>GNSS Driver</GroupName>
+          <GroupName>Device Driver</GroupName>
           <Files>
             <File>
               <FileName>sensor_gnss.c</FileName>
@@ -531,7 +531,7 @@
             <File>
               <FileName>lora_e22.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Sensor\Src\lora_e22.c</FilePath>
+              <FilePath>..\Driver\Comm\Src\lora_e22.c</FilePath>
             </File>
             <File>
               <FileName>sensor_nmea.c</FileName>

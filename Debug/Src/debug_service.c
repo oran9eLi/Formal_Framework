@@ -180,10 +180,10 @@ static void DebugService_ReportLoRa(uint32_t now_ms)
 #if DEBUG_ALARM_MONITOR_ENABLE
 static void DebugService_ReportAlarm(uint32_t now_ms)
 {
-  App_AlarmSnapshot_t alarm;
+  App_AlarmSummary_t alarm;
   Px4Lite_Result_t result;
 
-  result = App_CopyAlarm(&alarm, now_ms);
+  result = App_CopyAlarmSummary(&alarm, now_ms);
   if (result == PX4LITE_OK) {
     DBG_PRINT("ALARM: count=%u highest_src=%u fault=0x%04X sev=%u", (unsigned int)alarm.active_count, (unsigned int)alarm.highest_source_id, (unsigned int)alarm.highest_fault_code, (unsigned int)alarm.highest_severity);
   } else {

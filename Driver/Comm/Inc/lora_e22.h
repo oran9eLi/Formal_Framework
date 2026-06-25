@@ -1,6 +1,6 @@
 /**
  * @file lora_e22.h
- * @brief E22-400T30D LoRa 驱动接口和接收帧类型。
+ * @brief 通信 Driver 层 E22-400T30D LoRa 驱动接口和接收帧类型。
  *
  * @details
  * 本驱动负责 LoRa UART 收发、MAVLink 帧边界识别、发送忙状态和通信统计。

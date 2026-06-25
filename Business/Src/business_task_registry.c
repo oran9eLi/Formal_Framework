@@ -1,10 +1,8 @@
 /**
  * @file business_task_registry.c
- * @brief Business 层任务创建和 Display 模块注册实现。
+ * @brief Business 层任务创建和服务初始化实现。
  *
- * @details
- * 本文件负责初始化 Business 拥有的服务、注册 Display 模块描述符并创建固定
- * Business 任务集合。任务参数来自 `business_template_config.h`。
+ * @details`r`n * 本文件负责初始化 Business 拥有的服务并创建固定 Business 任务集合。Display`r`n * 模块描述符注册由 `business_platform_adapter.c` 统一收口。任务参数来自`r`n * `business_template_config.h`。
  */
 
 #include "business_task_registry.h"
@@ -13,47 +11,7 @@
 #include "business_task_template.h"
 #include "business_template_config.h"
 #include "debug_task_monitor.h"
-#include "display.h"
-#include "px4lite_config.h"
-#include "px4lite_registry.h"
 #include "task.h"
-
-/**
- * @brief Display 模块注册表 init 回调。
- *
- * @return 初始化结果。
- */
-static Px4Lite_Result_t Business_DisplayModuleInit(void)
-{
-  return (Display_Init() == DISPLAY_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
-}
-
-/**
- * @brief Display 模块注册表 self_check 回调。
- *
- * @return 自检结果。
- */
-static Px4Lite_Result_t Business_DisplayModuleSelfCheck(void)
-{
-  uint16_t error_code;
-
-  return (Display_SelfCheck(&error_code) == DISPLAY_OK) ? PX4LITE_OK : PX4LITE_NOT_READY;
-}
-
-/**
- * @brief Display 模块注册表 recover 回调。
- *
- * @return 恢复请求结果。
- *
- * @note 本函数只请求显示模块恢复，实际恢复由显示服务上下文完成。
- */
-static Px4Lite_Result_t Business_DisplayModuleRecover(void)
-{
-  Display_RequestRecover();
-  return PX4LITE_OK;
-}
-
-static const Px4Lite_ModuleDescriptor_t s_display_descriptor = {PX4LITE_MODULE_DISPLAY, "display", PX4LITE_ENABLE_DISPLAY, 0U, Business_DisplayModuleInit, Business_DisplayModuleSelfCheck, 0, 0, Business_DisplayModuleRecover};
 
 /**
  * @brief 初始化 Business 拥有的服务并创建 Business 任务。
@@ -65,7 +23,7 @@ BaseType_t Business_AppInit(void)
   if (Business_EventBusInit() != pdPASS) { return pdFAIL; }
 
 #if BUSINESS_ENABLE_DISPLAY
-  if (Px4Lite_RegistryRegister(&s_display_descriptor) != PX4LITE_OK) { return pdFAIL; }
+  if (Business_PlatformRegisterModules() == 0U) { return pdFAIL; }
 #endif
 
   return Business_CreateTasks();

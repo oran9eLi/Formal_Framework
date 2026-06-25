@@ -11,7 +11,6 @@
 
 #include "business_template_config.h"
 #include "FreeRTOS.h"
-#include "px4lite_registry.h"
 #include "task.h"
 
 #define BUSINESS_LOG_LEVEL_INFO 1U
@@ -104,7 +103,7 @@ void Business_DisplayServiceTask(void *argument)
   (void)argument;
   last_wake       = xTaskGetTickCount();
   next_refresh_ms = Business_PlatformGetMs();
-  (void)Px4Lite_RegistryStart(PX4LITE_MODULE_DISPLAY, next_refresh_ms);
+  Business_DisplayStatusStart(next_refresh_ms);
 
   for (;;) {
     Business_ServiceResult_t result;

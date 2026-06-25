@@ -61,6 +61,22 @@ uint32_t Business_PlatformGetMs(void);
 void Business_RegistryPoll(uint32_t now_ms);
 
 /**
+ * @brief 注册 Business 拥有、但需要挂入 Framework Registry 的平台模块。
+ *
+ * @return 1 表示注册成功，0 表示注册失败。
+ *
+ * @note 普通 Business 代码不得直接访问 Framework Registry，应通过本边界接口收口。
+ */
+uint8_t Business_PlatformRegisterModules(void);
+
+/**
+ * @brief 通知 Framework Display 模块已进入启动阶段。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ */
+void Business_DisplayStatusStart(uint32_t now_ms);
+
+/**
  * @brief 更新一个 Business 组件的心跳和在线状态。
  *
  * @param[in] component_id Business 组件编号。
