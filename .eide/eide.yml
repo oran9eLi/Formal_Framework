@@ -43,6 +43,7 @@ virtualFolder:
         - path: Business/Src/business_platform_adapter.c
         - path: Business/Src/business_display_placeholder.c
         - path: Business/Src/app_data_api.c
+        - path: Business/Src/app_display_model.c
       folders: []
     - name: GNSS Driver
       files:

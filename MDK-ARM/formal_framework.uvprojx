@@ -525,6 +525,11 @@
               <FileType>1</FileType>
               <FilePath>..\Business\Src\app_data_api.c</FilePath>
             </File>
+            <File>
+              <FileName>app_display_model.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Business\Src\app_display_model.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

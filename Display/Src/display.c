@@ -5,6 +5,7 @@
 
 #include "display.h"
 #include "app_data_api.h"
+#include "app_display_model.h"
 #include "display_gfx.h"
 #include "display_gt911.h"
 #include "display_pages.h"
@@ -979,23 +980,6 @@ static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, motor->duty_percent[3]);
 }
 
-static void Display_LoadRemoteMotorSnapshot(const Px4Lite_RemoteTelemetrySnapshot_t *remote)
-{
-  App_MotorSnapshot_t motor;
-  uint8_t i;
-
-  if (remote == 0) { return; }
-
-  memset(&motor, 0, sizeof(motor));
-  motor.header      = remote->header;
-  motor.run_state   = remote->motor_run_state;
-  motor.speed_level = remote->motor_speed_level;
-  for (i = 0U; i < PX4LITE_MOTOR_COUNT; ++i) {
-    motor.duty_percent[i] = remote->motor_duty_percent[i];
-  }
-  Display_LoadMotorSnapshot(&motor);
-}
-
 /*
  * 将导航快照字段写入 Display 缓存。
  */
@@ -1027,69 +1011,6 @@ static void Display_LoadNavigationSnapshot(const App_NavigationSnapshot_t *navig
 /*
  * 将统一日期时间快照写入 Display 缓存。
  */
-
-static void Display_LoadRemoteTelemetrySnapshot(const Px4Lite_RemoteTelemetrySnapshot_t *remote)
-{
-  App_NavigationSnapshot_t navigation;
-  App_EnvironmentSnapshot_t environment;
-
-  if (remote == 0) { return; }
-
-  if ((remote->valid_mask & (PX4LITE_REMOTE_VALID_NAVIGATION | PX4LITE_REMOTE_VALID_ATTITUDE)) != 0U) {
-    memset(&navigation, 0, sizeof(navigation));
-    navigation.header             = remote->header;
-    navigation.valid_mask         = 0U;
-    navigation.latitude_e7        = remote->latitude_e7;
-    navigation.longitude_e7       = remote->longitude_e7;
-    navigation.altitude_mm        = remote->altitude_mm;
-    navigation.velocity_north_cms = remote->velocity_north_cms;
-    navigation.velocity_east_cms  = remote->velocity_east_cms;
-    navigation.velocity_down_cms  = remote->velocity_down_cms;
-    navigation.roll_deg100        = remote->roll_deg100;
-    navigation.pitch_deg100       = remote->pitch_deg100;
-    navigation.yaw_deg100         = remote->yaw_deg100;
-    navigation.roll_rate_dps100   = remote->roll_rate_dps100;
-    navigation.pitch_rate_dps100  = remote->pitch_rate_dps100;
-    navigation.yaw_rate_dps100    = remote->yaw_rate_dps100;
-    navigation.hdop_x100          = remote->hdop_x100;
-    navigation.satellites_used    = remote->satellites_used;
-    navigation.gnss_fix_type      = remote->gnss_fix_type;
-    navigation.navigation_quality = 100U;
-    if ((remote->valid_mask & PX4LITE_REMOTE_VALID_NAVIGATION) != 0U) { navigation.valid_mask |= PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY | PX4LITE_NAV_VALID_ALTITUDE; }
-    if ((remote->valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) != 0U) { navigation.valid_mask |= PX4LITE_NAV_VALID_ATTITUDE; }
-    Display_LoadNavigationSnapshot(&navigation);
-  } else {
-    Display_ClearNavigationSnapshot();
-  }
-
-  if ((remote->valid_mask & (PX4LITE_REMOTE_VALID_ENVIRONMENT | PX4LITE_REMOTE_VALID_POWER)) != 0U) {
-    memset(&environment, 0, sizeof(environment));
-    environment.header                = remote->header;
-    environment.pressure_pa           = remote->pressure_pa;
-    environment.temperature_c         = remote->temperature_c;
-    environment.relative_humidity_pct = remote->relative_humidity_pct;
-    environment.voltage_mv            = remote->voltage_mv;
-    environment.battery_percent       = remote->battery_percent;
-    Display_LoadEnvironmentSnapshot(&environment);
-  } else {
-    Display_ClearEnvironmentFields();
-    Display_ClearBatteryFields();
-  }
-
-  if ((remote->valid_mask & PX4LITE_REMOTE_VALID_TIME) != 0U) {
-    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, remote->time_hhmmss);
-    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_CLOCK_TIME, remote->time_hhmmss);
-    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, remote->date_ymd);
-  } else {
-    Display_ClearDateTimeSnapshot();
-  }
-
-  if ((remote->valid_mask & PX4LITE_REMOTE_VALID_MOTOR) != 0U) {
-    Display_LoadRemoteMotorSnapshot(remote);
-  } else {
-    Display_ClearMotorFields();
-  }
-}
 static void Display_LoadDateTimeSnapshot(const App_DateTimeSnapshot_t *date_time)
 {
   if (date_time == 0) { return; }
@@ -1551,51 +1472,43 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   /* 飞行时间(上电后运行)，秒粒度，避免毫秒每帧抖动导致重绘 */
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms / 1000U);
 
-  if (remote_mode == PX4LITE_REMOTE_MODE_REMOTE) {
-    remote_result = App_CopyRemoteTelemetry(&remote, now_ms);
-    if (remote_result == PX4LITE_OK) {
-      Display_LoadRemoteTelemetrySnapshot(&remote);
-    } else {
-      Display_ClearNavigationSnapshot();
-      Display_ClearEnvironmentFields();
-      Display_ClearBatteryFields();
-      Display_ClearDateTimeSnapshot();
-      Display_ClearMotorFields();
-    }
+  /* 业务遥测域统一经 app_display_model 取数：内部按模式选源、远端归一并给出新鲜度。
+     OK/STALE 均加载(STALE 表示已收到但过期，保留最后值)，NOT_READY 清零。显示层不再判模式。 */
+  navigation_result = App_GetDisplayNavigation(&navigation, now_ms);
+  if ((navigation_result == PX4LITE_OK) || (navigation_result == PX4LITE_STALE)) {
+    Display_LoadNavigationSnapshot(&navigation);
   } else {
-    navigation_result = App_CopyNavigation(&navigation, now_ms);
-    if (navigation_result == PX4LITE_OK) {
-      Display_LoadNavigationSnapshot(&navigation);
-    } else {
-      Display_ClearNavigationSnapshot();
-    }
-
-    date_time_result = App_CopyDateTime(&date_time, now_ms);
-    if (date_time_result == PX4LITE_OK) {
-      Display_LoadDateTimeSnapshot(&date_time);
-    } else {
-      Display_ClearDateTimeSnapshot();
-    }
-
-    environment_result = App_CopyEnvironment(&environment, now_ms);
-    if (environment_result == PX4LITE_OK) {
-      Display_LoadEnvironmentSnapshot(&environment);
-    } else {
-      Display_ClearEnvironmentFields();
-      Display_ClearBatteryFields();
-    }
-
-    motor_result = App_CopyMotor(&motor, now_ms);
-    if (motor_result == PX4LITE_OK) {
-      Display_LoadMotorSnapshot(&motor);
-    } else {
-      Display_ClearMotorFields();
-    }
+    Display_ClearNavigationSnapshot();
   }
 
+  date_time_result = App_GetDisplayDateTime(&date_time, now_ms);
+  if ((date_time_result == PX4LITE_OK) || (date_time_result == PX4LITE_STALE)) {
+    Display_LoadDateTimeSnapshot(&date_time);
+  } else {
+    Display_ClearDateTimeSnapshot();
+  }
+
+  environment_result = App_GetDisplayEnvironment(&environment, now_ms);
+  if ((environment_result == PX4LITE_OK) || (environment_result == PX4LITE_STALE)) {
+    Display_LoadEnvironmentSnapshot(&environment);
+  } else {
+    Display_ClearEnvironmentFields();
+    Display_ClearBatteryFields();
+  }
+
+  motor_result = App_GetDisplayMotor(&motor, now_ms);
+  if ((motor_result == PX4LITE_OK) || (motor_result == PX4LITE_STALE)) {
+    Display_LoadMotorSnapshot(&motor);
+  } else {
+    Display_ClearMotorFields();
+  }
+
+  /* 系统/模块状态灯与告警表暂保持模式感知：远端只有告警摘要，完整告警表与远端日志属
+     第二阶段(见 doc 18/19)。消息日志的 highest 仍取本机 system/alarm。 */
   system_result = App_CopySystem(&system, now_ms);
   if (remote_mode == PX4LITE_REMOTE_MODE_REMOTE) {
     /* 模块状态灯/系统就绪/告警走远端快照；LoRa 灯与消息日志保持本机来源。 */
+    remote_result = App_CopyRemoteTelemetry(&remote, now_ms);
     Display_LoadRemoteModuleStatus((remote_result == PX4LITE_OK) ? &remote : 0);
     Display_LoadRemoteAlarm((remote_result == PX4LITE_OK) ? &remote : 0);
     Display_LoadLocalLoraLight();
