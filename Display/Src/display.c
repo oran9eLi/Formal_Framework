@@ -204,6 +204,7 @@ static Display_ValueCache_t s_hmi_values[DISPLAY_HMI_VAR_COUNT];
 static App_DisplaySnapshot_t s_display_snapshot;
 static uint32_t s_display_selfcheck_faults[APP_DISPLAY_ALARM_MAX];
 static Display_HmiPage_t s_current_page       = DISPLAY_HMI_PAGE_LOGO;
+static Display_DataSource_t s_data_source     = DISPLAY_DATA_SOURCE_LOCAL;
 static uint8_t s_display_ready                = 0U;
 static uint8_t s_touch_ready                  = 0U;
 static uint8_t s_touch_down                   = 0U;
@@ -640,7 +641,7 @@ static void Display_LoadMockValues(void)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_LORA_RX_COUNT, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_HEARTBEAT, 1U);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_LORA_ACK_COUNT, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_LOSS_RATE, 5U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_LOSS_RATE, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ALARM_CODE, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_1, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, 0U);
@@ -831,22 +832,40 @@ static uint16_t Display_MapStorageStateValue(App_ViewState_t state)
   return (state == APP_VIEW_STATE_ONLINE) ? 2U : 3U;
 }
 
-/*
- * 将有符号厘米每秒转为用于显示的无符号速度量。
- */
-static uint16_t Display_AbsCmsToU16(int32_t value)
+static uint32_t Display_AbsI32ToU32(int32_t value)
 {
-  uint32_t magnitude;
+  if (value < 0) { return (uint32_t)(-(value + 1)) + 1U; }
+  return (uint32_t)value;
+}
 
-  if (value < 0) {
-    magnitude = (uint32_t)(-value);
-  } else {
-    magnitude = (uint32_t)value;
+static uint32_t Display_U64Sqrt(uint64_t value)
+{
+  uint64_t bit = 1ULL << 62;
+  uint64_t root = 0ULL;
+
+  while (bit > value) { bit >>= 2U; }
+
+  while (bit != 0ULL) {
+    if (value >= (root + bit)) {
+      value -= root + bit;
+      root = (root >> 1U) + bit;
+    } else {
+      root >>= 1U;
+    }
+    bit >>= 2U;
   }
 
-  if (magnitude > 65535U) { return 65535U; }
+  return (root > 0xFFFFFFFFULL) ? 0xFFFFFFFFUL : (uint32_t)root;
+}
 
-  return (uint16_t)magnitude;
+static uint16_t Display_VectorSpeedCmsToU16(int32_t north_cms, int32_t east_cms)
+{
+  uint32_t north = Display_AbsI32ToU32(north_cms);
+  uint32_t east  = Display_AbsI32ToU32(east_cms);
+  uint64_t sum   = ((uint64_t)north * (uint64_t)north) + ((uint64_t)east * (uint64_t)east);
+  uint32_t speed = Display_U64Sqrt(sum);
+
+  return (speed > 65535U) ? 65535U : (uint16_t)speed;
 }
 
 static int16_t Display_FloatToI16Tenths(float value)
@@ -895,7 +914,6 @@ static void Display_ClearAttitudeFields(void)
 {
   (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_ROLL, 0);
   (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_PITCH, 0);
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_YAW, 0);
 }
 
 static void Display_ClearEnvironmentFields(void)
@@ -938,8 +956,7 @@ static void Display_LoadNavigationSnapshot(const App_DisplaySnapshot_t *view)
 
   if (view == 0) { return; }
 
-  ground_speed_cms = Display_AbsCmsToU16(view->velocity_north_cms);
-  if (Display_AbsCmsToU16(view->velocity_east_cms) > ground_speed_cms) { ground_speed_cms = Display_AbsCmsToU16(view->velocity_east_cms); }
+  ground_speed_cms = Display_VectorSpeedCmsToU16(view->velocity_north_cms, view->velocity_east_cms);
 
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, (uint16_t)view->gnss_fix_type);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, (uint16_t)view->satellites_used);
@@ -1257,7 +1274,7 @@ static void Display_LoadEnvironmentSnapshot(const App_DisplaySnapshot_t *view)
 }
 
 /*
- * 将 LoRa 通信统计(收发帧计数)写入 Display 缓存。
+ * 将 LoRa 通信统计(收发帧计数和接收侧估算丢包率)写入 Display 缓存。
  * 计数为累计值，始终可读，无需新鲜度判定。
  */
 static void Display_LoadLoraStats(const App_DisplaySnapshot_t *view)
@@ -1267,6 +1284,8 @@ static void Display_LoadLoraStats(const App_DisplaySnapshot_t *view)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_LORA_TX_COUNT, view->lora_tx_count);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_LORA_RX_COUNT, view->lora_rx_count);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_HEARTBEAT, Display_MapStateValue(view->lora.state));
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_LORA_ACK_COUNT, view->lora_ack_count);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_LOSS_RATE, view->lora_loss_rate_x10);
 }
 
 /*
@@ -1274,13 +1293,16 @@ static void Display_LoadLoraStats(const App_DisplaySnapshot_t *view)
  */
 Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
 {
+  uint8_t snapshot_ready;
+
   if (Display_EnsureInit() != DISPLAY_OK) { return DISPLAY_NOT_READY; }
 
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_UPTIME_MS, now_ms);
   /* 飞行时间(上电后运行)，秒粒度，避免毫秒每帧抖动导致重绘 */
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms / 1000U);
 
-  if (App_CopyDisplaySnapshot(&s_display_snapshot, now_ms) == 0U) { return DISPLAY_NOT_READY; }
+  snapshot_ready = (s_data_source == DISPLAY_DATA_SOURCE_REMOTE) ? App_CopyRemoteDisplaySnapshot(&s_display_snapshot, now_ms) : App_CopyDisplaySnapshot(&s_display_snapshot, now_ms);
+  if (snapshot_ready == 0U) { return DISPLAY_NOT_READY; }
 
   if (s_display_snapshot.navigation_valid != 0U) {
     Display_LoadNavigationSnapshot(&s_display_snapshot);
@@ -1314,7 +1336,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
     Display_ClearMotorFields();
   }
 
-  /* LoRa 收发帧计数为累计值，独立于上面三个快照，每帧都刷新 */
+  /* LoRa 收发帧计数和丢包率为累计统计，独立于上面三个快照，每帧都刷新 */
   Display_LoadLoraStats(&s_display_snapshot);
 
   /* 消息日志缓冲版本变化即触发日志区重绘 */
@@ -1446,6 +1468,32 @@ Display_Result_t Display_SetHmiPage(Display_HmiPage_t page)
 Display_HmiPage_t Display_GetCurrentHmiPage(void)
 {
   return s_current_page;
+}
+
+Display_Result_t Display_SetDataSource(Display_DataSource_t source)
+{
+  uint16_t i;
+
+  if ((source != DISPLAY_DATA_SOURCE_LOCAL) && (source != DISPLAY_DATA_SOURCE_REMOTE)) { return DISPLAY_ERROR; }
+  if (s_data_source == source) { return DISPLAY_OK; }
+
+  s_data_source = source;
+  for (i = 0U; i < DISPLAY_HMI_VAR_COUNT; i++) {
+    s_hmi_values[i].dirty       = 1U;
+    s_hmi_values[i].drawn_valid = 0U;
+  }
+  s_refresh_cursor = 0U;
+  return DISPLAY_OK;
+}
+
+Display_DataSource_t Display_GetDataSource(void)
+{
+  return s_data_source;
+}
+
+Display_Result_t Display_ToggleDataSource(void)
+{
+  return Display_SetDataSource((s_data_source == DISPLAY_DATA_SOURCE_LOCAL) ? DISPLAY_DATA_SOURCE_REMOTE : DISPLAY_DATA_SOURCE_LOCAL);
 }
 
 void Display_ShowBootCode(uint8_t code)

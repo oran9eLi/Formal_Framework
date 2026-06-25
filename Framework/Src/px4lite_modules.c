@@ -17,6 +17,7 @@
 #include "px4lite_recovery.h"
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
+#include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -237,9 +238,13 @@ static void Px4Lite_PublishInitState(Px4Lite_ModuleId_t id, Px4Lite_Result_t ini
 Px4Lite_Result_t Px4Lite_GnssModuleInit(void)
 {
 #if PX4LITE_ENABLE_GNSS
-  Px4Lite_PublishInitState(PX4LITE_MODULE_GNSS, Px4Lite_GnssInit(), Px4Lite_PlatformGetMs());
-#endif
+  Px4Lite_Result_t result = Px4Lite_GnssInit();
+
+  Px4Lite_PublishInitState(PX4LITE_MODULE_GNSS, result, Px4Lite_PlatformGetMs());
+  return result;
+#else
   return PX4LITE_OK;
+#endif
 }
 
 /**
@@ -248,9 +253,13 @@ Px4Lite_Result_t Px4Lite_GnssModuleInit(void)
 Px4Lite_Result_t Px4Lite_ImuModuleInit(void)
 {
 #if PX4LITE_ENABLE_IMU
-  Px4Lite_PublishInitState(PX4LITE_MODULE_IMU, Px4Lite_ImuInit(), Px4Lite_PlatformGetMs());
-#endif
+  Px4Lite_Result_t result = Px4Lite_ImuInit();
+
+  Px4Lite_PublishInitState(PX4LITE_MODULE_IMU, result, Px4Lite_PlatformGetMs());
+  return result;
+#else
   return PX4LITE_OK;
+#endif
 }
 
 /**
@@ -259,9 +268,13 @@ Px4Lite_Result_t Px4Lite_ImuModuleInit(void)
 Px4Lite_Result_t Px4Lite_BaroModuleInit(void)
 {
 #if PX4LITE_ENABLE_BARO
-  Px4Lite_PublishInitState(PX4LITE_MODULE_BARO, Px4Lite_BaroInit(), Px4Lite_PlatformGetMs());
-#endif
+  Px4Lite_Result_t result = Px4Lite_BaroInit();
+
+  Px4Lite_PublishInitState(PX4LITE_MODULE_BARO, result, Px4Lite_PlatformGetMs());
+  return result;
+#else
   return PX4LITE_OK;
+#endif
 }
 
 /**
@@ -270,9 +283,13 @@ Px4Lite_Result_t Px4Lite_BaroModuleInit(void)
 Px4Lite_Result_t Px4Lite_BatteryModuleInit(void)
 {
 #if PX4LITE_ENABLE_BATTERY
-  Px4Lite_PublishInitState(PX4LITE_MODULE_BATTERY, Px4Lite_BatteryInit(), Px4Lite_PlatformGetMs());
-#endif
+  Px4Lite_Result_t result = Px4Lite_BatteryInit();
+
+  Px4Lite_PublishInitState(PX4LITE_MODULE_BATTERY, result, Px4Lite_PlatformGetMs());
+  return result;
+#else
   return PX4LITE_OK;
+#endif
 }
 
 Px4Lite_Result_t Px4Lite_AlarmModuleInit(void)
@@ -794,10 +811,13 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   Px4Lite_CommDebugInfo_t info;
   Px4Lite_State_t state;
   Px4Lite_Result_t result;
+  Px4Lite_Result_t rx_result;
   Px4Lite_Result_t tx_result;
 
   result = Px4Lite_LoRaService(now_ms);
   if (result == PX4LITE_OK) {
+    rx_result = Px4Lite_MavlinkRxRun(now_ms);
+    if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY)) { result = rx_result; }
     tx_result = Px4Lite_MavlinkTxRun(now_ms);
     if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
   }
@@ -810,7 +830,7 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   s_status[PX4LITE_MODULE_LORA].last_rx_ms    = info.last_rx_ms;
   s_status[PX4LITE_MODULE_LORA].last_valid_ms = info.last_rx_ms;
   s_status[PX4LITE_MODULE_LORA].error_count   = info.parse_error_count + info.send_error_count;
-  s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count;
+  s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count + info.rx_sequence_lost_count;
   taskEXIT_CRITICAL();
 
   /*

@@ -417,7 +417,7 @@ static Px4Lite_Result_t MavTx_SendScaledPressure(uint32_t now_ms)
   packet.press_abs              = baro.pressure_pa / 100.0f;
   packet.press_diff             = 0.0f;
   packet.temperature            = MavTx_SaturateCdegFromFloat(baro.temperature_c);
-  packet.temperature_press_diff = 1;
+  packet.temperature_press_diff = 0;
 
   (void)mavlink_msg_scaled_pressure_encode_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
 
@@ -620,9 +620,6 @@ static Px4Lite_Result_t MavTx_SendSystemStatus(uint32_t now_ms)
   return MavTx_SendPrepared();
 }
 
-/**
- * @brief 记录一个发送槽位结果并计算下一次发送截止时间。
- */
 /**
  * @brief 使用标准 NAMED_VALUE_INT 发送 Framework 模块状态分片。
  * @details

@@ -63,9 +63,13 @@ typedef struct {
   uint32_t rx_byte_count;     /**< 接收字节累计数。 */
   uint32_t rx_overflow_count; /**< 接收缓冲溢出次数。 */
   uint32_t rx_drop_count;     /**< 接收丢弃次数。 */
+  uint32_t rx_sequence_expected_count; /**< MAVLink 序号估算的应收帧总数，含已收和跳号丢帧。 */
+  uint32_t rx_sequence_lost_count;     /**< MAVLink 序号跳号估算的丢帧数量。 */
   uint32_t last_rx_ms;        /**< 最近收到对端合法 MAVLink 帧时间，单位：ms。 */
   uint32_t last_tx_ms;        /**< 最近本机发送流程完成时间，单位：ms，不证明对端在线。 */
   uint32_t last_msg_id;       /**< 最近接收的 MAVLink message id。 */
+  uint16_t rx_loss_rate_x10;  /**< 接收侧估算丢包率，单位：0.1%，1000 表示 100.0%。 */
+  uint16_t reserved;          /**< 保留字段，保持结构体对齐。 */
 } Lora_DebugInfo_t;
 
 /**

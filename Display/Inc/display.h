@@ -32,6 +32,11 @@ typedef enum {
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 
+typedef enum {
+  DISPLAY_DATA_SOURCE_LOCAL = 0, /* 当前页面显示本机 App 数据视图 */
+  DISPLAY_DATA_SOURCE_REMOTE     /* 当前页面显示对端 App 数据视图 */
+} Display_DataSource_t;
+
 #define DISPLAY_MOTOR_TRACK_W       30U
 #define DISPLAY_MOTOR_TRACK_H       166U
 #define DISPLAY_MOTOR_TRACK_TOP_Y   144U
@@ -221,6 +226,27 @@ Display_Result_t Display_Refresh(uint32_t now_ms);
  * @retval      Display_Result_t: 准备结果
  */
 Display_Result_t Display_PrepareSnapshot(uint32_t now_ms);
+
+/**
+ * @brief       设置当前显示数据源
+ * @param       source: 数据源
+ * @retval      Display_Result_t: 设置结果
+ */
+Display_Result_t Display_SetDataSource(Display_DataSource_t source);
+
+/**
+ * @brief       获取当前显示数据源
+ * @param       无
+ * @retval      Display_DataSource_t: 当前数据源
+ */
+Display_DataSource_t Display_GetDataSource(void);
+
+/**
+ * @brief       在本机和对端数据源之间切换
+ * @param       无
+ * @retval      Display_Result_t: 切换结果
+ */
+Display_Result_t Display_ToggleDataSource(void);
 
 /**
  * @brief       执行一次有预算约束的显示刷新步骤

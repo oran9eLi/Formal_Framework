@@ -26,6 +26,8 @@
 #define APP_ENVIRONMENT_MAX_AGE_MS 2500U /**< Environment 快照最大可接受年龄，单位：ms。 */
 #define APP_ALARM_MAX_AGE_MS       500U  /**< Alarm 快照最大可接受年龄，单位：ms。 */
 #define APP_MOTOR_MAX_AGE_MS       500U  /**< Motor 命令快照最大可接受年龄，单位：ms。 */
+#define APP_DATETIME_MAX_AGE_MS    2500U /**< DateTime 快照最大可接受年龄，单位：ms。 */
+#define APP_REMOTE_MAX_AGE_MS      3000U /**< 远端显示快照最大可接受年龄，单位：ms。 */
 #define APP_STATUS_COPY_RETRY_MAX  3U    /**< 状态版本一致性复制的最大重试次数。 */
 #define APP_DISPLAY_MOTOR_COUNT    4U    /**< Display 视图固定显示的电机数量。 */
 #define APP_DISPLAY_ALARM_MAX      16U   /**< Display 视图固定导出的告警记录容量。 */
@@ -242,6 +244,10 @@ typedef struct {
   uint8_t motor_duty_percent[APP_DISPLAY_MOTOR_COUNT];   /**< 每路电机目标油门百分比。 */
   uint32_t lora_tx_count;                                /**< LoRa 本机发送完成帧计数。 */
   uint32_t lora_rx_count;                                /**< LoRa 接收合法帧计数。 */
+  uint32_t lora_lost_count;                              /**< LoRa 接收侧按 MAVLink 序号估算的丢帧数量。 */
+  uint32_t lora_ack_count;                               /**< LoRa ACK 计数；当前未定义 ACK 协议，固定为 0。 */
+  uint16_t lora_loss_rate_x10;                           /**< LoRa 接收侧估算丢包率，单位：0.1%。 */
+  uint16_t reserved2;                                    /**< 保留字段，保持结构体对齐。 */
   uint16_t alarm_active_count;                           /**< 活动告警数量。 */
   uint16_t alarm_highest_fault_code;                     /**< 告警表最高故障码。 */
   App_AlarmRecord_t alarms[APP_DISPLAY_ALARM_MAX];       /**< Display 使用的活动告警记录表。 */
@@ -366,6 +372,16 @@ Px4Lite_Result_t App_CopyDateTime(App_DateTimeSnapshot_t *out, uint32_t now_ms);
  * @return 1 表示至少一个主要显示快照可用，0 表示无可用显示数据。
  */
 uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
+
+/**
+ * @brief 复制远端节点 Display 专用聚合视图。
+ *
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间，用于远端快照新鲜度判断。
+ *
+ * @return 1 表示至少一个远端主要显示快照可用，0 表示无可用远端显示数据。
+ */
+uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
 
 /**
  * @brief 复制单个 Framework 模块的最新状态。

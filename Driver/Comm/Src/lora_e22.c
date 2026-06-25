@@ -24,6 +24,8 @@
 #endif
 #include <string.h>
 
+#define LORA_E22_MAVLINK_SYSID_MAX 256U
+
 static Lora_RxFrame_t s_rx_frame;
 static volatile uint8_t s_rx_ready;
 
@@ -39,10 +41,13 @@ static uint32_t s_send_error_count;
 static uint32_t s_parse_error_count;
 static uint32_t s_rx_byte_count;
 static uint32_t s_rx_drop_count;
+static uint32_t s_rx_sequence_lost_count;
 static uint32_t s_last_tx_ms;
 static uint32_t s_last_msg_id;
 static uint8_t s_initialized;
 static volatile uint8_t s_reinit_request;
+static uint8_t s_rx_sequence_seen[LORA_E22_MAVLINK_SYSID_MAX];
+static uint8_t s_rx_sequence_last[LORA_E22_MAVLINK_SYSID_MAX];
 
 /* Non-blocking transmit state machine, advanced from Lora_E22_Service().
    The comm task never blocks on the air interface: a frame is staged here,
@@ -67,7 +72,48 @@ static uint8_t s_tx_pending[LORA_E22_TX_BUF_SIZE];
 static uint16_t s_tx_pending_len;
 static uint32_t s_tx_state_ms;
 
+static uint32_t Lora_E22_SaturatedAddU32(uint32_t a, uint32_t b);
+static uint16_t Lora_E22_CalcLossRateX10(uint32_t lost_count, uint32_t expected_count);
+static void Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence);
 static void Lora_E22_TxStep(uint32_t now_ms);
+
+static uint32_t Lora_E22_SaturatedAddU32(uint32_t a, uint32_t b)
+{
+  if (a > (0xFFFFFFFFUL - b)) { return 0xFFFFFFFFUL; }
+  return a + b;
+}
+
+static uint16_t Lora_E22_CalcLossRateX10(uint32_t lost_count, uint32_t expected_count)
+{
+  uint64_t scaled;
+
+  if (expected_count == 0U) { return 0U; }
+
+  scaled = (((uint64_t)lost_count * 1000ULL) + ((uint64_t)expected_count / 2ULL)) / (uint64_t)expected_count;
+  if (scaled > 1000ULL) { return 1000U; }
+  return (uint16_t)scaled;
+}
+
+static void Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence)
+{
+  uint8_t delta;
+
+  if (s_rx_sequence_seen[system_id] == 0U) {
+    s_rx_sequence_seen[system_id] = 1U;
+    s_rx_sequence_last[system_id] = sequence;
+    return;
+  }
+
+  delta = (uint8_t)(sequence - s_rx_sequence_last[system_id]);
+  if (delta == 0U) { return; }
+
+  if (delta < 128U) {
+    s_rx_sequence_lost_count += (uint32_t)(delta - 1U);
+    s_rx_sequence_last[system_id] = sequence;
+  } else {
+    s_rx_sequence_last[system_id] = sequence;
+  }
+}
 
 Lora_Result_t Lora_E22_Init(void)
 {
@@ -94,8 +140,11 @@ Lora_Result_t Lora_E22_Init(void)
   s_parse_error_count = 0U;
   s_rx_byte_count     = 0U;
   s_rx_drop_count     = 0U;
+  s_rx_sequence_lost_count = 0U;
   s_last_tx_ms        = 0U;
   s_last_msg_id       = 0U;
+  memset(s_rx_sequence_seen, 0, sizeof(s_rx_sequence_seen));
+  memset(s_rx_sequence_last, 0, sizeof(s_rx_sequence_last));
   s_tx_state          = LORA_TX_IDLE;
   s_tx_pending_len    = 0U;
   s_tx_state_ms       = 0U;
@@ -152,6 +201,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
         s_rx_frame.msg_id       = s_parse_msg.msgid;
         memcpy(s_rx_frame.data, _MAV_PAYLOAD(&s_parse_msg), s_parse_msg.len);
         s_rx_ready = 1U;
+        Lora_E22_UpdateSequenceStats(s_parse_msg.sysid, s_parse_msg.seq);
         s_rx_frame_count++;
         s_last_rx_ms  = now_ms;
         s_last_msg_id = s_parse_msg.msgid;
@@ -290,10 +340,13 @@ void Lora_E22_GetDebugInfo(Lora_DebugInfo_t *info)
   info->parse_error_count = s_parse_error_count;
   info->rx_byte_count     = s_rx_byte_count;
   info->rx_drop_count     = s_rx_drop_count;
+  info->rx_sequence_lost_count = s_rx_sequence_lost_count;
+  info->rx_sequence_expected_count = Lora_E22_SaturatedAddU32(s_rx_frame_count, s_rx_sequence_lost_count);
   info->last_rx_ms        = s_last_rx_ms;
   info->last_tx_ms        = s_last_tx_ms;
   info->last_msg_id       = s_last_msg_id;
   BSP_Critical_Exit(primask);
 
+  info->rx_loss_rate_x10  = Lora_E22_CalcLossRateX10(info->rx_sequence_lost_count, info->rx_sequence_expected_count);
   info->rx_overflow_count = BSP_LoRa_GetRxOverflowCount();
 }

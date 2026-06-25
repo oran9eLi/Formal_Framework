@@ -479,9 +479,12 @@ void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out)
   out->rx_byte_count     = info.rx_byte_count;
   out->rx_overflow_count = info.rx_overflow_count;
   out->rx_drop_count     = info.rx_drop_count;
+  out->rx_sequence_expected_count = info.rx_sequence_expected_count;
+  out->rx_sequence_lost_count     = info.rx_sequence_lost_count;
   out->last_rx_ms        = info.last_rx_ms;
   out->last_tx_ms        = info.last_tx_ms;
   out->last_msg_id       = info.last_msg_id;
+  out->rx_loss_rate_x10  = info.rx_loss_rate_x10;
 }
 
 Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_CommRxFrame_t *out)

@@ -61,6 +61,7 @@ static void DebugService_ReportImu(uint32_t now_ms)
 
   (void)now_ms;
 
+  /* Debug 特例：Framework 状态用于诊断模块健康，App 快照用于查看业务可见姿态。 */
   status_rc = Px4Lite_GetModuleStatus(PX4LITE_MODULE_IMU, &status);
   report_ms = Px4Lite_PlatformGetMs();
   nav_rc    = App_CopyNavigation(&nav, report_ms);

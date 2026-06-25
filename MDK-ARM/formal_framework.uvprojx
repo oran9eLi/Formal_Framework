@@ -439,6 +439,11 @@
               <FilePath>..\Framework\Src\px4lite_mavlink_tx.c</FilePath>
             </File>
             <File>
+              <FileName>px4lite_mavlink_rx.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_mavlink_rx.c</FilePath>
+            </File>
+            <File>
               <FileName>px4lite_attitude.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_attitude.c</FilePath>

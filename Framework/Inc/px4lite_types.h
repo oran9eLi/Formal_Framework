@@ -348,9 +348,13 @@ typedef struct {
   uint32_t rx_byte_count;             /**< 接收字节累计数。 */
   uint32_t rx_overflow_count;         /**< 接收缓冲溢出次数。 */
   uint32_t rx_drop_count;             /**< 接收丢弃次数。 */
+  uint32_t rx_sequence_expected_count; /**< MAVLink 序号估算的应收帧总数，含已收和跳号丢帧。 */
+  uint32_t rx_sequence_lost_count;     /**< MAVLink 序号跳号估算的丢帧数量。 */
   uint32_t last_rx_ms;                /**< 最近收到对端合法 MAVLink 帧时间，单位：ms。 */
   uint32_t last_tx_ms;                /**< 最近本机发送流程完成时间，单位：ms，不证明对端在线。 */
   uint32_t last_msg_id;               /**< 最近接收的 MAVLink message id。 */
+  uint16_t rx_loss_rate_x10;          /**< 接收侧估算丢包率，单位：0.1%，1000 表示 100.0%。 */
+  uint16_t reserved;                  /**< 保留字段，保持结构体对齐。 */
 } Px4Lite_CommDebugInfo_t;
 
 /**
@@ -369,6 +373,64 @@ typedef struct {
   uint8_t payload_len;                         /**< payload 长度，单位：byte。 */
   uint8_t payload[PX4LITE_COMM_RX_PAYLOAD_MAX]; /**< MAVLink payload 副本。 */
 } Px4Lite_CommRxFrame_t;
+
+#define PX4LITE_REMOTE_VALID_HEARTBEAT   (1UL << 0) /**< 已收到远端 HEARTBEAT。 */
+#define PX4LITE_REMOTE_VALID_MODULES     (1UL << 1) /**< 已收到远端模块状态。 */
+#define PX4LITE_REMOTE_VALID_NAVIGATION  (1UL << 2) /**< 已收到远端导航数据。 */
+#define PX4LITE_REMOTE_VALID_ATTITUDE    (1UL << 3) /**< 已收到远端姿态数据。 */
+#define PX4LITE_REMOTE_VALID_ENVIRONMENT (1UL << 4) /**< 已收到远端环境数据。 */
+#define PX4LITE_REMOTE_VALID_BATTERY     (1UL << 5) /**< 已收到远端电源数据。 */
+#define PX4LITE_REMOTE_VALID_ALARM       (1UL << 6) /**< 已收到远端告警数据。 */
+
+/**
+ * @brief 远端节点解码后的显示遥测快照。
+ * @details
+ * Comm task 从 LoRa 收到的 MAVLink 帧中逐字段解码本结构，Business/Display 只消费该快照。
+ * LoRa 驱动仍只负责帧事实，不承载业务解释。
+ */
+typedef struct {
+  Px4Lite_TopicHeader_t header;                       /**< topic 公共头。 */
+  uint32_t valid_mask;                                /**< 远端数据有效位，使用 `PX4LITE_REMOTE_VALID_*`。 */
+  uint32_t last_rx_ms;                                /**< 最近收到远端合法 MAVLink 帧时间，单位：ms。 */
+  uint32_t last_msg_id;                               /**< 最近解码的 MAVLink message id。 */
+  uint32_t rx_frame_count;                            /**< 已接收合法 MAVLink 帧计数。 */
+  uint32_t decoded_frame_count;                       /**< 已成功映射到远端快照的帧计数。 */
+  uint32_t rx_sequence_expected_count;                /**< 当前远端节点按 MAVLink 序号估算的应收帧总数。 */
+  uint32_t rx_sequence_lost_count;                    /**< 当前远端节点按 MAVLink 序号跳号估算的丢帧数量。 */
+  uint16_t rx_loss_rate_x10;                          /**< 当前远端节点接收侧估算丢包率，单位：0.1%。 */
+  uint8_t last_packet_sequence;                       /**< 当前远端节点最近 MAVLink packet sequence。 */
+  uint8_t sequence_seen;                              /**< 当前远端节点是否已有序号基准。 */
+  uint32_t module_state_valid_mask;                   /**< 远端模块状态有效位，bit 对应 `Px4Lite_ModuleId_t`。 */
+  Px4Lite_State_t module_state[PX4LITE_MODULE_COUNT]; /**< 远端模块公开状态。 */
+  uint32_t gnss_utc_sec;                              /**< GNSS UTC 当日秒数，单位：s；未提供时为 0。 */
+  uint32_t gnss_utc_date;                             /**< GNSS 日期，压缩格式 yymmdd；未提供时为 0。 */
+  int32_t latitude_e7;                                /**< 纬度，单位：degree * 1e7。 */
+  int32_t longitude_e7;                               /**< 经度，单位：degree * 1e7。 */
+  int32_t altitude_mm;                                /**< 高度，单位：mm。 */
+  int32_t velocity_north_cms;                         /**< 北向速度，单位：cm/s。 */
+  int32_t velocity_east_cms;                          /**< 东向速度，单位：cm/s。 */
+  int32_t velocity_down_cms;                          /**< 地向速度，单位：cm/s。 */
+  int32_t roll_deg100;                                /**< 横滚角，单位：degree * 100。 */
+  int32_t pitch_deg100;                               /**< 俯仰角，单位：degree * 100。 */
+  int32_t yaw_deg100;                                 /**< 航向角，单位：degree * 100。 */
+  int32_t roll_rate_dps100;                           /**< 横滚角速度，单位：(degree/s) * 100。 */
+  int32_t pitch_rate_dps100;                          /**< 俯仰角速度，单位：(degree/s) * 100。 */
+  int32_t yaw_rate_dps100;                            /**< 航向角速度，单位：(degree/s) * 100。 */
+  uint16_t hdop_x100;                                 /**< HDOP * 100。 */
+  uint8_t satellites_used;                            /**< 远端定位卫星数量。 */
+  uint8_t gnss_fix_type;                              /**< 远端 GNSS 定位类型。 */
+  uint16_t reserved0;                                 /**< 保留字段，保持对齐。 */
+  float pressure_pa;                                  /**< 气压，单位：Pa。 */
+  float temperature_c;                                /**< 温度，单位：摄氏度。 */
+  float relative_humidity_pct;                        /**< 相对湿度，单位：%。 */
+  uint32_t voltage_mv;                                /**< 电压，单位：mV。 */
+  uint16_t highest_fault_code;                        /**< 远端最高告警码。 */
+  uint16_t highest_source_id;                         /**< 远端最高告警来源。 */
+  uint8_t highest_severity;                           /**< 远端最高告警严重度。 */
+  uint8_t battery_percent;                            /**< 电量百分比，范围 0 到 100。 */
+  uint8_t system_id;                                  /**< 远端 MAVLink system id。 */
+  uint8_t component_id;                               /**< 远端 MAVLink component id。 */
+} Px4Lite_RemoteTelemetry_t;
 
 /**
  * @brief 计算毫秒时间差，对轻微跨任务未来时间样本饱和为 0。

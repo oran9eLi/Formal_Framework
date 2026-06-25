@@ -13,11 +13,14 @@
 #include <string.h>
 
 #define GNSS_FIX_MIN_SATS 4U
+#define GNSS_RECOVER_RETRY_MS 100U
 
 static Nmea_GeoData_t s_geo;
 static Gnss_Snapshot_t s_snapshot;
 
 static uint8_t s_geo_seen;
+static uint8_t s_recover_rx_pending;
+static uint32_t s_recover_rx_last_ms;
 static volatile uint8_t s_reinit_request;
 
 static void Gnss_FeedAndParse(uint32_t now);
@@ -177,6 +180,8 @@ Gnss_Result_t Sensor_GNSS_Init(void)
 
   s_geo_seen            = 0U;
   s_snapshot.data_state = GNSS_DATA_NONE;
+  s_recover_rx_pending  = 0U;
+  s_recover_rx_last_ms  = 0U;
   return GNSS_RESULT_OK;
 }
 
@@ -194,8 +199,11 @@ Gnss_Result_t Sensor_GNSS_Service(uint32_t now_ms)
     s_reinit_request = 0U;
     (void)Sensor_GNSS_Init();
   }
-  if (BSP_GNSS_ConsumeRecoverRxRequest() != 0U) {
+  if (BSP_GNSS_ConsumeRecoverRxRequest() != 0U) { s_recover_rx_pending = 1U; }
+  if ((s_recover_rx_pending != 0U) && ((s_recover_rx_last_ms == 0U) || ((uint32_t)(now_ms - s_recover_rx_last_ms) >= GNSS_RECOVER_RETRY_MS))) {
+    s_recover_rx_last_ms = now_ms;
     if (BSP_GNSS_RecoverRx() != BSP_STATUS_OK) { return GNSS_RESULT_IO_ERROR; }
+    s_recover_rx_pending = 0U;
   }
   BSP_GNSS_RxIdleCallback(0U);
   Gnss_FeedAndParse(now_ms);

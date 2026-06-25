@@ -2,7 +2,10 @@
  * @file business_task_registry.c
  * @brief Business 层任务创建和服务初始化实现。
  *
- * @details`r`n * 本文件负责初始化 Business 拥有的服务并创建固定 Business 任务集合。Display`r`n * 模块描述符注册由 `business_platform_adapter.c` 统一收口。任务参数来自`r`n * `business_template_config.h`。
+ * @details
+ * 本文件负责初始化 Business 拥有的服务并创建固定 Business 任务集合。Display
+ * 模块描述符注册由 `business_platform_adapter.c` 统一收口。任务参数来自
+ * `business_template_config.h`。
  */
 
 #include "business_task_registry.h"

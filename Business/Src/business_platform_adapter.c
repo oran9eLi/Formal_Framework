@@ -9,6 +9,7 @@
 
 #include "business_task_template.h"
 
+#include <stddef.h>
 #include <string.h>
 #include "business_template_config.h"
 #include "display.h"
@@ -57,7 +58,7 @@ static Px4Lite_Result_t Business_DisplayModuleRecover(void)
   return PX4LITE_OK;
 }
 
-static const Px4Lite_ModuleDescriptor_t s_display_descriptor = {PX4LITE_MODULE_DISPLAY, "display", PX4LITE_ENABLE_DISPLAY, 0U, Business_DisplayModuleInit, Business_DisplayModuleSelfCheck, 0, 0, Business_DisplayModuleRecover};
+static const Px4Lite_ModuleDescriptor_t s_display_descriptor = {PX4LITE_MODULE_DISPLAY, "display", PX4LITE_ENABLE_DISPLAY, 0U, Business_DisplayModuleInit, Business_DisplayModuleSelfCheck, NULL, NULL, Business_DisplayModuleRecover};
 #endif
 
 /**
@@ -83,6 +84,16 @@ void Business_DisplayStatusStart(uint32_t now_ms)
   (void)now_ms;
 #endif
 }
+
+uint8_t Business_DisplaySourceKeyPressed(void)
+{
+#if BUSINESS_ENABLE_DISPLAY
+  return Px4Lite_ButtonPressed(PX4LITE_BUTTON_KEY0);
+#else
+  return 0U;
+#endif
+}
+
 /**
  * @brief 向 Business 代码返回平台单调毫秒时间。
  */
