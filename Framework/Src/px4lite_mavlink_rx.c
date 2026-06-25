@@ -30,6 +30,61 @@
 
 static Px4Lite_MavlinkRxStats_t s_stats;
 
+/* 接收端单向链路丢包率：发送端无回传，只能统计本机发送失败，无法得知空中丢包；
+   接收端用每帧自带的递增 MAVLink seq 作为发送端隐式计数，相邻帧 seq 之差即推断的
+   丢失帧数。只对当前目标源(已通过 sysid 过滤)统计；换源或长断链(超过 RESET_MS)重置
+   基线，避免 8 位 seq 回绕把一次长断链算成巨大假丢包。按滑动窗口给出千分比(0~1000)。 */
+#ifndef PX4LITE_MAVLINK_RX_LOSS_WINDOW
+#define PX4LITE_MAVLINK_RX_LOSS_WINDOW   64U   /**< 丢包率评估窗口，单位：期望帧数。 */
+#endif
+#ifndef PX4LITE_MAVLINK_RX_LOSS_RESET_MS
+#define PX4LITE_MAVLINK_RX_LOSS_RESET_MS 2000U /**< 接收间隔超过此值视为断链重连，重置基线。 */
+#endif
+
+static uint8_t  s_loss_seq_valid;  /**< 基线 seq 是否有效。 */
+static uint8_t  s_loss_last_seq;   /**< 最近一帧的 MAVLink seq。 */
+static uint8_t  s_loss_src_sysid;  /**< 当前丢包统计绑定的来源 sysid。 */
+static uint16_t s_loss_win_recv;   /**< 当前窗口已收到帧数。 */
+static uint16_t s_loss_win_lost;   /**< 当前窗口按 seq 跳变推断的丢失帧数。 */
+static uint32_t s_loss_last_ms;    /**< 最近一帧接收时间，单位：ms。 */
+
+/**
+ * @brief 用目标源帧的 MAVLink seq 跳变更新接收端丢包率。
+ *
+ * @param[in] sysid 来源 system id，已通过目标过滤。
+ * @param[in] seq 本帧 MAVLink 帧头序号。
+ * @param[in] now_ms 当前系统时间，单位：ms。
+ */
+static void MavlinkRx_UpdateLoss(uint8_t sysid, uint8_t seq, uint32_t now_ms)
+{
+  uint8_t gap;
+
+  /* 换源、首帧或长断链重连：重置基线，本帧只作为新起点，不计入丢失。 */
+  if ((s_loss_seq_valid == 0U) || (sysid != s_loss_src_sysid) ||
+      ((uint32_t)(now_ms - s_loss_last_ms) > PX4LITE_MAVLINK_RX_LOSS_RESET_MS)) {
+    s_loss_seq_valid = 1U;
+    s_loss_src_sysid = sysid;
+    s_loss_last_seq  = seq;
+    s_loss_last_ms   = now_ms;
+    s_loss_win_recv  = 0U;
+    s_loss_win_lost  = 0U;
+    return;
+  }
+
+  gap = (uint8_t)(seq - s_loss_last_seq - 1U); /* 8 位回绕自然覆盖 < 256 的间隔 */
+  s_loss_last_seq = seq;
+  s_loss_last_ms  = now_ms;
+  s_loss_win_recv = (uint16_t)(s_loss_win_recv + 1U);
+  s_loss_win_lost = (uint16_t)(s_loss_win_lost + gap);
+
+  if ((uint16_t)(s_loss_win_recv + s_loss_win_lost) >= PX4LITE_MAVLINK_RX_LOSS_WINDOW) {
+    uint32_t total = (uint32_t)s_loss_win_recv + (uint32_t)s_loss_win_lost;
+    s_stats.rx_loss_permille = (uint16_t)(((uint32_t)s_loss_win_lost * 1000U) / total);
+    s_loss_win_recv = 0U;
+    s_loss_win_lost = 0U;
+  }
+}
+
 static uint8_t MavlinkRx_NameEquals(const char name[10], const char *expected, uint8_t length)
 {
   return (memcmp(name, expected, length) == 0) ? 1U : 0U;
@@ -262,8 +317,13 @@ static Px4Lite_Result_t MavlinkRx_HandleStatustext(const mavlink_message_t *msg,
 
 void Px4Lite_MavlinkRxInit(uint32_t now_ms)
 {
-  (void)now_ms;
   memset(&s_stats, 0, sizeof(s_stats));
+  s_loss_seq_valid = 0U;
+  s_loss_last_seq  = 0U;
+  s_loss_src_sysid = 0U;
+  s_loss_win_recv  = 0U;
+  s_loss_win_lost  = 0U;
+  s_loss_last_ms   = now_ms;
 }
 
 Px4Lite_Result_t Px4Lite_MavlinkRxHandleFrame(const Px4Lite_LoRaRxFrame_t *frame, uint32_t now_ms)
@@ -296,6 +356,9 @@ Px4Lite_Result_t Px4Lite_MavlinkRxHandleFrame(const Px4Lite_LoRaRxFrame_t *frame
     Px4Lite_RemoteTelemetryRecordFiltered(frame->system_id);
     return (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) ? PX4LITE_OK : PX4LITE_IDLE;
   }
+
+  /* 帧已通过目标 sysid 过滤，按 seq 跳变累计该来源的链路丢包率。 */
+  MavlinkRx_UpdateLoss(frame->system_id, frame->sequence, now_ms);
 
   switch (frame->msg_id) {
     case MAVLINK_MSG_ID_HEARTBEAT:

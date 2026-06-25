@@ -18,7 +18,7 @@ REMOTE 模式下以下字段仍使用显示端本机数据：
 | `DISPLAY_HMI_VAR_LORA_STATUS` | 表示显示端自身 LoRa 链路状态。 |
 | `DISPLAY_HMI_VAR_LORA_TX_COUNT` | 表示显示端本机发送完成计数。 |
 | `DISPLAY_HMI_VAR_LORA_RX_COUNT` | 表示显示端本机接收帧计数。 |
-| 后续链路诊断字段 | 解析错误、过滤丢弃、丢包率等如果用于监控显示端链路，应保持本机来源。 |
+| `DISPLAY_HMI_VAR_LORA_LOSS_RATE` 及链路诊断 | 丢包率由显示端(接收端)按 MAVLink 帧头 `seq` 跳变本机估算——单向链路发送端无回传、自身算不了丢包；连同解析错误、过滤丢弃一律保持本机来源，不取远端值。实现见 `px4lite_mavlink_rx.c` 的 `MavlinkRx_UpdateLoss()`，单位 ‰(0~1000)。 |
 
 时间字段不作为第三阶段同步目标。两端 RTC 均应保持准确，显示端可继续显示本机时间；远端时间载荷保留兼容，不作为“显示同构”验收重点。
 

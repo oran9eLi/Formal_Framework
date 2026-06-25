@@ -874,4 +874,11 @@ void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out)
   out->mav_stale_count           = stats.stale_count;
   out->mav_error_count           = stats.error_count;
   out->mav_last_tx_msg_id        = stats.last_message_id;
+
+  {
+    Px4Lite_MavlinkRxStats_t rx_stats;
+    memset(&rx_stats, 0, sizeof(rx_stats));
+    Px4Lite_MavlinkRxGetStats(&rx_stats);
+    out->rx_loss_permille = rx_stats.rx_loss_permille;
+  }
 }

@@ -186,6 +186,73 @@ static int TestModeButtonDebounceTogglesOncePerStablePress(void)
   failures += ExpectU32("button second stable press", Px4Lite_RemoteTelemetryUpdateModeButton(1U, 3080U), PX4LITE_REMOTE_MODE_LOCAL);
   return failures;
 }
+/*
+ * 接收端按 MAVLink 帧头 seq 跳变估算单向链路丢包率。
+ * 用同一 HEARTBEAT 帧逐帧覆盖 sequence，模拟发送端的序号流。
+ */
+static int TestLinkLossRateFromSeqGaps(void)
+{
+  Px4Lite_LoRaRxFrame_t frame;
+  mavlink_message_t msg;
+  Px4Lite_MavlinkRxStats_t stats;
+  uint32_t now;
+  uint16_t i;
+  int failures = 0;
+
+  mavlink_msg_heartbeat_pack(42U, 191U, &msg, MAV_TYPE_GENERIC, MAV_AUTOPILOT_INVALID, 0U, 0U, MAV_STATE_ACTIVE);
+
+  /* 场景一：序号连续无间隔，丢包率为 0。 */
+  Px4Lite_RemoteTelemetryInit(5000U);
+  Px4Lite_MavlinkRxInit(5000U);
+  (void)Px4Lite_RemoteTelemetrySetMode(PX4LITE_REMOTE_MODE_REMOTE, 5000U);
+  (void)Px4Lite_RemoteTelemetrySetTargetSysId(42U);
+  FillFrameFromMessage(&msg, &frame);
+  now = 5000U;
+  for (i = 0U; i < 100U; ++i) {
+    frame.sequence = (uint8_t)i;
+    now += 100U;
+    (void)Px4Lite_MavlinkRxHandleFrame(&frame, now);
+  }
+  Px4Lite_MavlinkRxGetStats(&stats);
+  failures += ExpectU32("loss zero when seq contiguous", stats.rx_loss_permille, 0U);
+
+  /* 场景二：每隔一帧丢一帧(收到 0,2,4,...)，每帧 gap=1，丢包率应为 500‰。 */
+  Px4Lite_RemoteTelemetryInit(6000U);
+  Px4Lite_MavlinkRxInit(6000U);
+  (void)Px4Lite_RemoteTelemetrySetMode(PX4LITE_REMOTE_MODE_REMOTE, 6000U);
+  (void)Px4Lite_RemoteTelemetrySetTargetSysId(42U);
+  FillFrameFromMessage(&msg, &frame);
+  now = 6000U;
+  for (i = 0U; i <= 200U; i += 2U) {
+    frame.sequence = (uint8_t)i;
+    now += 100U;
+    (void)Px4Lite_MavlinkRxHandleFrame(&frame, now);
+  }
+  Px4Lite_MavlinkRxGetStats(&stats);
+  failures += ExpectU32("loss 500 permille on every-other drop", stats.rx_loss_permille, 500U);
+
+  /* 场景三：超过重置阈值(2s)的断链重连，巨大 seq 跳变重置基线、不计入丢包。 */
+  Px4Lite_RemoteTelemetryInit(7000U);
+  Px4Lite_MavlinkRxInit(7000U);
+  (void)Px4Lite_RemoteTelemetrySetMode(PX4LITE_REMOTE_MODE_REMOTE, 7000U);
+  (void)Px4Lite_RemoteTelemetrySetTargetSysId(42U);
+  FillFrameFromMessage(&msg, &frame);
+  frame.sequence = 10U;
+  (void)Px4Lite_MavlinkRxHandleFrame(&frame, 7100U);          /* 建立基线 */
+  frame.sequence = 200U;
+  (void)Px4Lite_MavlinkRxHandleFrame(&frame, 7100U + 5000U);  /* 断链 5s 后重连，重置基线 */
+  now = 7100U + 5000U;
+  for (i = 0U; i < 70U; ++i) {
+    frame.sequence = (uint8_t)(201U + i);                     /* 连续(含 8 位回绕) */
+    now += 100U;
+    (void)Px4Lite_MavlinkRxHandleFrame(&frame, now);
+  }
+  Px4Lite_MavlinkRxGetStats(&stats);
+  failures += ExpectU32("reconnect jump not counted as loss", stats.rx_loss_permille, 0U);
+
+  return failures;
+}
+
 int main(void)
 {
   int failures = 0;
@@ -193,6 +260,7 @@ int main(void)
   failures += TestRemoteModeFiltersBySysidAndDecodesTelemetry();
   failures += TestLocalModeDoesNotConsumeRemoteFrames();
   failures += TestModeButtonDebounceTogglesOncePerStablePress();
+  failures += TestLinkLossRateFromSeqGaps();
 
   if (failures != 0) {
     printf("mavlink rx remote telemetry tests failed: %d\n", failures);

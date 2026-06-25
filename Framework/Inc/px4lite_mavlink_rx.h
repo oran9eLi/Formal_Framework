@@ -25,7 +25,7 @@ typedef struct {
   uint32_t last_msg_id;       /**< 最近处理的 MAVLink message id。 */
   uint8_t last_sysid;         /**< 最近处理的 MAVLink system id。 */
   uint8_t last_compid;        /**< 最近处理的 MAVLink component id。 */
-  uint16_t reserved;          /**< 保留字段，保持结构体对齐。 */
+  uint16_t rx_loss_permille;  /**< 接收链路丢包率，靠 MAVLink seq 跳变推断，单位：‰(0~1000)。 */
 } Px4Lite_MavlinkRxStats_t;
 
 /**

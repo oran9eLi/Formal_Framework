@@ -669,7 +669,7 @@ static void Display_LoadMockValues(void)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_LORA_RX_COUNT, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_HEARTBEAT, 2U);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_LORA_ACK_COUNT, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_LOSS_RATE, 5U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_LOSS_RATE, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ALARM_CODE, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_1, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, 0U);
@@ -1508,6 +1508,8 @@ static void Display_LoadLoraStats(void)
 
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_LORA_TX_COUNT, comm.tx_frame_count);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_LORA_RX_COUNT, comm.rx_frame_count);
+  /* 丢包率由接收端按 MAVLink seq 跳变估算，单位 ‰(0~1000)，渲染时除以 10 显示为 x.x%。 */
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_LOSS_RATE, (uint16_t)comm.rx_loss_permille);
 }
 
 /*

@@ -344,7 +344,8 @@ typedef struct {
   uint32_t parse_error_count;         /**< 接收解析错误次数。 */
   uint32_t rx_byte_count;             /**< 接收字节累计数。 */
   uint32_t rx_overflow_count;         /**< 接收缓冲溢出次数。 */
-  uint32_t rx_drop_count;             /**< 接收丢弃次数。 */
+  uint32_t rx_drop_count;             /**< 接收丢弃次数(接收队列满)。 */
+  uint32_t rx_loss_permille;          /**< 接收链路丢包率，靠 MAVLink seq 跳变推断，单位：‰(0~1000)。 */
   uint32_t last_rx_ms;                /**< 最近接收帧时间，单位：ms。 */
   uint32_t last_tx_ms;                /**< 最近发送完成时间，单位：ms。 */
   uint32_t last_ready_ms;             /**< 最近检测到本机 LoRa AUX ready 的时间，单位：ms。 */
