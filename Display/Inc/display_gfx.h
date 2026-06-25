@@ -31,6 +31,23 @@ extern "C" {
 #define DISPLAY_GFX_COLOR_GRAY    0x8410U
 #define DISPLAY_GFX_COLOR_DARK    0x4208U
 
+/* 产品化卡片配色：浅灰边框 + 更浅分隔线（浅色主题遗留，深色主题下重定义为深色调）。 */
+#define DISPLAY_GFX_COLOR_CARD_BORDER  DISPLAY_THEME_BORDER  /* 圆角卡片边框 */
+#define DISPLAY_GFX_COLOR_CARD_DIVIDER DISPLAY_THEME_DIVIDER /* 卡片标题下的分隔线 */
+
+/* ============================ 深色航电主题色板（RGB565） ============================ */
+#define DISPLAY_THEME_BG       0x0882U /* 屏幕背景：近黑深蓝 #0D1117 */
+#define DISPLAY_THEME_PANEL    0x10A6U /* 卡片/面板背景：#142433 */
+#define DISPLAY_THEME_PANEL_HI 0x2208U /* 面板内浅色块/轨道底：#21303F */
+#define DISPLAY_THEME_BORDER   0x2188U /* 卡片边框：#243140 */
+#define DISPLAY_THEME_DIVIDER  0x2188U /* 卡片内分隔线，与边框同色保证在面板上可见 */
+#define DISPLAY_THEME_TEXT     0xE77EU /* 主文本：近白 #E6EDF3 */
+#define DISPLAY_THEME_TEXT_MUTED 0x8CD4U /* 次要文本/单位：#8B98A5 */
+#define DISPLAY_THEME_ACCENT   0x2EB7U /* 强调青：#2DD4BF */
+#define DISPLAY_THEME_GOOD     0x3693U /* 语义绿：#34D399 */
+#define DISPLAY_THEME_WARN     0xFDE4U /* 语义琥珀：#FBBF24 */
+#define DISPLAY_THEME_BAD      0xFB8EU /* 语义红：#F87171 */
+
 typedef enum {
   DISPLAY_GFX_OK = 0,     /* 绘图成功 */
   DISPLAY_GFX_NOT_READY,  /* 底层画点或填充端口尚未注册*/
@@ -177,6 +194,30 @@ Display_GfxResult_t Display_GfxDrawRect(uint16_t x, uint16_t y, uint16_t width, 
  * @retval      Display_GfxResult_t: 绘图结果
  */
 Display_GfxResult_t Display_GfxDrawFrame(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t border_color, uint16_t fill_color);
+
+/**
+ * @brief       画圆角矩形边框
+ * @param       x: 矩形左上角 X 坐标
+ * @param       y: 矩形左上角 Y 坐标
+ * @param       width: 矩形宽度
+ * @param       height: 矩形高度
+ * @param       radius: 圆角半径，过大时按宽高自动钳位，为 0 时退化为直角矩形
+ * @param       color: 边框颜色，格式为 RGB565
+ * @retval      Display_GfxResult_t: 绘图结果
+ */
+Display_GfxResult_t Display_GfxDrawRoundRect(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t radius, uint16_t color);
+
+/**
+ * @brief       绘制带填充色的圆角矩形（实心）
+ * @param       x: 矩形左上角 X 坐标
+ * @param       y: 矩形左上角 Y 坐标
+ * @param       width: 矩形宽度
+ * @param       height: 矩形高度
+ * @param       radius: 圆角半径，过大时按宽高自动钳位，为 0 时退化为实心矩形
+ * @param       color: 填充颜色，格式为 RGB565
+ * @retval      Display_GfxResult_t: 绘图结果
+ */
+Display_GfxResult_t Display_GfxFillRoundRect(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t radius, uint16_t color);
 
 /**
  * @brief       画圆形边框

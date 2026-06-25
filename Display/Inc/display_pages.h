@@ -89,6 +89,13 @@ void Display_PagesSetSelfCheckFaults(const uint32_t *faults, uint16_t count);
  */
 void Display_PagesPushLogMessage(Display_LogMsg_t msg, uint32_t time_hhmmss);
 
+typedef struct {
+  Display_LogMsg_t msg;
+  uint32_t time_hhmmss;
+} Display_MessageLogEntry_t;
+
+uint16_t Display_PagesCopyLogMessages(Display_MessageLogEntry_t *entries, uint16_t max_count, Display_MessageLogEntry_t *alarm_entry, uint8_t *alarm_valid);
+
 /**
  * @brief       获取消息日志缓冲版本号（每追加一条 +1，用于驱动重绘）
  * @retval      uint32_t: 当前版本号

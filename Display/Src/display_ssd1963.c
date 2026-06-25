@@ -109,10 +109,10 @@ static void Display_Ssd1963_InitController(void)
   Display_Ssd1963_WriteCommand(0xD0U);
   Display_Ssd1963_WriteData(0x00U);
 
-  Display_Ssd1963_WriteCommand(0xBEU);
-  Display_Ssd1963_WriteData(0x05U);
-  Display_Ssd1963_WriteData(0xFEU);
-  Display_Ssd1963_WriteData(0x01U);
+  Display_Ssd1963_WriteCommand(0xBEU); /* SET_PWM_CONF：背光 PWM */
+  Display_Ssd1963_WriteData(0x05U);    /* PWM 频率 */
+  Display_Ssd1963_WriteData(0xFFU);    /* PWM 占空比=255，背光最高亮度 */
+  Display_Ssd1963_WriteData(0x01U);    /* PWM 使能、由主机控制 */
   Display_Ssd1963_WriteData(0x00U);
   Display_Ssd1963_WriteData(0x00U);
   Display_Ssd1963_WriteData(0x00U);
@@ -203,6 +203,37 @@ void Display_Ssd1963_FillRect(uint16_t x, uint16_t y, uint16_t width, uint16_t h
   while (pixel_count > 0U) {
     Display_Ssd1963_WriteData(color);
     pixel_count--;
+  }
+}
+
+/**
+ * @brief Write one clipped RGB565 pixel block to GRAM.
+ */
+void Display_Ssd1963_FlushPixels(uint16_t x, uint16_t y, uint16_t width, uint16_t height, const uint16_t *pixels)
+{
+  uint16_t clipped_width;
+  uint16_t clipped_height;
+  uint16_t row;
+  uint16_t col;
+  uint16_t skip;
+  const uint16_t *row_pixels;
+
+  if ((s_ssd1963_ready == 0U) || (pixels == 0) || (width == 0U) || (height == 0U) || (x >= DISPLAY_SSD1963_WIDTH) || (y >= DISPLAY_SSD1963_HEIGHT)) { return; }
+
+  clipped_width  = width;
+  clipped_height = height;
+  if (((uint32_t)x + clipped_width) > DISPLAY_SSD1963_WIDTH) { clipped_width = (uint16_t)(DISPLAY_SSD1963_WIDTH - x); }
+  if (((uint32_t)y + clipped_height) > DISPLAY_SSD1963_HEIGHT) { clipped_height = (uint16_t)(DISPLAY_SSD1963_HEIGHT - y); }
+
+  Display_Ssd1963_SetWindow(x, y, (uint16_t)(x + clipped_width - 1U), (uint16_t)(y + clipped_height - 1U));
+  skip = (uint16_t)(width - clipped_width);
+  row_pixels = pixels;
+  for (row = 0U; row < clipped_height; row++) {
+    for (col = 0U; col < clipped_width; col++) {
+      Display_Ssd1963_WriteData(*row_pixels);
+      row_pixels++;
+    }
+    row_pixels += skip;
   }
 }
 

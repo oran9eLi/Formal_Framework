@@ -386,6 +386,129 @@ Display_GfxResult_t Display_GfxDrawFrame(uint16_t x, uint16_t y, uint16_t width,
 }
 
 /*
+ * 绘制圆角矩形某个角的 1/4 圆弧。corner 位掩码：1=左上 2=右上 4=右下 8=左下。
+ */
+static void Display_GfxDrawCorner(uint16_t x0, uint16_t y0, uint16_t radius, uint8_t corner, uint16_t color)
+{
+  int32_t x     = 0;
+  int32_t y     = (int32_t)radius;
+  int32_t f     = 1 - (int32_t)radius;
+  int32_t ddF_x = 1;
+  int32_t ddF_y = -2 * (int32_t)radius;
+
+  while (x < y) {
+    if (f >= 0) {
+      y--;
+      ddF_y += 2;
+      f += ddF_y;
+    }
+    x++;
+    ddF_x += 2;
+    f += ddF_x;
+
+    if ((corner & 0x04U) != 0U) {
+      (void)Display_GfxDrawPixel((uint16_t)(x0 + x), (uint16_t)(y0 + y), color);
+      (void)Display_GfxDrawPixel((uint16_t)(x0 + y), (uint16_t)(y0 + x), color);
+    }
+    if ((corner & 0x02U) != 0U) {
+      (void)Display_GfxDrawPixel((uint16_t)(x0 + x), (uint16_t)(y0 - y), color);
+      (void)Display_GfxDrawPixel((uint16_t)(x0 + y), (uint16_t)(y0 - x), color);
+    }
+    if ((corner & 0x08U) != 0U) {
+      (void)Display_GfxDrawPixel((uint16_t)(x0 - y), (uint16_t)(y0 + x), color);
+      (void)Display_GfxDrawPixel((uint16_t)(x0 - x), (uint16_t)(y0 + y), color);
+    }
+    if ((corner & 0x01U) != 0U) {
+      (void)Display_GfxDrawPixel((uint16_t)(x0 - y), (uint16_t)(y0 - x), color);
+      (void)Display_GfxDrawPixel((uint16_t)(x0 - x), (uint16_t)(y0 - y), color);
+    }
+  }
+}
+
+/*
+ * 绘制圆角矩形边框：四条边 + 四个 1/4 圆角。
+ */
+Display_GfxResult_t Display_GfxDrawRoundRect(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t radius, uint16_t color)
+{
+  if (s_gfx_ready == 0U) { return DISPLAY_GFX_NOT_READY; }
+
+  if ((width < 2U) || (height < 2U) || (x >= DISPLAY_GFX_WIDTH) || (y >= DISPLAY_GFX_HEIGHT) || (((uint32_t)x + width) > DISPLAY_GFX_WIDTH) || (((uint32_t)y + height) > DISPLAY_GFX_HEIGHT)) { return DISPLAY_GFX_PARAM_ERROR; }
+
+  if (radius > (uint16_t)(width / 2U)) { radius = (uint16_t)(width / 2U); }
+  if (radius > (uint16_t)(height / 2U)) { radius = (uint16_t)(height / 2U); }
+  if (radius == 0U) { return Display_GfxDrawRect(x, y, width, height, color); }
+
+  (void)Display_GfxDrawHLine((uint16_t)(x + radius), y, (uint16_t)(width - (2U * radius)), color);
+  (void)Display_GfxDrawHLine((uint16_t)(x + radius), (uint16_t)(y + height - 1U), (uint16_t)(width - (2U * radius)), color);
+  (void)Display_GfxDrawVLine(x, (uint16_t)(y + radius), (uint16_t)(height - (2U * radius)), color);
+  (void)Display_GfxDrawVLine((uint16_t)(x + width - 1U), (uint16_t)(y + radius), (uint16_t)(height - (2U * radius)), color);
+
+  Display_GfxDrawCorner((uint16_t)(x + radius), (uint16_t)(y + radius), radius, 0x01U, color);
+  Display_GfxDrawCorner((uint16_t)(x + width - radius - 1U), (uint16_t)(y + radius), radius, 0x02U, color);
+  Display_GfxDrawCorner((uint16_t)(x + width - radius - 1U), (uint16_t)(y + height - radius - 1U), radius, 0x04U, color);
+  Display_GfxDrawCorner((uint16_t)(x + radius), (uint16_t)(y + height - radius - 1U), radius, 0x08U, color);
+
+  return DISPLAY_GFX_OK;
+}
+
+/*
+ * 填充圆角矩形的左右两侧圆角（竖线扫描）。corners 位掩码：1=右侧 2=左侧。
+ */
+static void Display_GfxFillCorner(uint16_t x0, uint16_t y0, uint16_t radius, uint8_t corners, uint16_t delta, uint16_t color)
+{
+  int32_t f     = 1 - (int32_t)radius;
+  int32_t ddF_x = 1;
+  int32_t ddF_y = -2 * (int32_t)radius;
+  int32_t x     = 0;
+  int32_t y     = (int32_t)radius;
+  int32_t px    = 0;
+  int32_t py    = (int32_t)radius;
+  int32_t d     = (int32_t)delta + 1;
+
+  while (x < y) {
+    if (f >= 0) {
+      y--;
+      ddF_y += 2;
+      f += ddF_y;
+    }
+    x++;
+    ddF_x += 2;
+    f += ddF_x;
+
+    if (x < (y + 1)) {
+      if ((corners & 0x01U) != 0U) { (void)Display_GfxDrawVLine((uint16_t)(x0 + x), (uint16_t)(y0 - y), (uint16_t)((2 * y) + d), color); }
+      if ((corners & 0x02U) != 0U) { (void)Display_GfxDrawVLine((uint16_t)(x0 - x), (uint16_t)(y0 - y), (uint16_t)((2 * y) + d), color); }
+    }
+    if (y != py) {
+      if ((corners & 0x01U) != 0U) { (void)Display_GfxDrawVLine((uint16_t)(x0 + py), (uint16_t)(y0 - px), (uint16_t)((2 * px) + d), color); }
+      if ((corners & 0x02U) != 0U) { (void)Display_GfxDrawVLine((uint16_t)(x0 - py), (uint16_t)(y0 - px), (uint16_t)((2 * px) + d), color); }
+      py = y;
+    }
+    px = x;
+  }
+}
+
+/*
+ * 绘制实心圆角矩形：中间整条竖带 + 左右两侧圆角。
+ */
+Display_GfxResult_t Display_GfxFillRoundRect(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t radius, uint16_t color)
+{
+  if (s_gfx_ready == 0U) { return DISPLAY_GFX_NOT_READY; }
+
+  if ((width < 2U) || (height < 2U) || (x >= DISPLAY_GFX_WIDTH) || (y >= DISPLAY_GFX_HEIGHT) || (((uint32_t)x + width) > DISPLAY_GFX_WIDTH) || (((uint32_t)y + height) > DISPLAY_GFX_HEIGHT)) { return DISPLAY_GFX_PARAM_ERROR; }
+
+  if (radius > (uint16_t)(width / 2U)) { radius = (uint16_t)(width / 2U); }
+  if (radius > (uint16_t)(height / 2U)) { radius = (uint16_t)(height / 2U); }
+  if (radius == 0U) { return Display_GfxFillRect(x, y, width, height, color); }
+
+  (void)Display_GfxFillRect((uint16_t)(x + radius), y, (uint16_t)(width - (2U * radius)), height, color);
+  Display_GfxFillCorner((uint16_t)(x + width - radius - 1U), (uint16_t)(y + radius), radius, 0x01U, (uint16_t)(height - (2U * radius) - 1U), color);
+  Display_GfxFillCorner((uint16_t)(x + radius), (uint16_t)(y + radius), radius, 0x02U, (uint16_t)(height - (2U * radius) - 1U), color);
+
+  return DISPLAY_GFX_OK;
+}
+
+/*
  * 绘制空心圆。
  */
 Display_GfxResult_t Display_GfxDrawCircle(uint16_t x0, uint16_t y0, uint16_t radius, uint16_t color)

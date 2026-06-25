@@ -287,6 +287,10 @@ void Display_ShowBootCode(uint8_t code);
  */
 Display_Result_t Display_HandleTouch(uint16_t x, uint16_t y, Display_HmiVariableId_t *id, uint32_t *value);
 
+Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16_t throttle_percent);
+
+Display_Result_t Display_RequestMotorEmergencyStop(void);
+
 /**
  * @brief       获取页面配置表数量
  * @param       无

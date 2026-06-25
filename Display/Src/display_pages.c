@@ -60,9 +60,9 @@
 #define DISPLAY_ALARM_BODY_Y           (DISPLAY_ALARM_TABLE_Y + DISPLAY_ALARM_HEADER_H)
 #define DISPLAY_ALARM_TITLE_X          52U
 #define DISPLAY_ALARM_TITLE_Y          72U
-#define DISPLAY_ALARM_COLOR_HEADER     DISPLAY_GFX_COLOR_DARK
-#define DISPLAY_ALARM_COLOR_GRID       DISPLAY_GFX_COLOR_GRAY
-#define DISPLAY_ALARM_COLOR_ROW_ALT    0xF7BEU
+#define DISPLAY_ALARM_COLOR_HEADER     DISPLAY_THEME_PANEL_HI
+#define DISPLAY_ALARM_COLOR_GRID       DISPLAY_GFX_COLOR_CARD_BORDER
+#define DISPLAY_ALARM_COLOR_ROW_ALT    DISPLAY_THEME_PANEL_HI
 #define DISPLAY_MOTOR_STATUS_X         8U
 #define DISPLAY_MOTOR_STATUS_W         204U
 #define DISPLAY_MOTOR_PANEL_X          220U
@@ -75,6 +75,7 @@
 #define DISPLAY_MOTOR_MSGLOG_ALARM_X   734U
 #define DISPLAY_MOTOR_MSGLOG_ALARM_W   54U
 #define DISPLAY_MOTOR_SLIDER_MAX_VALUE 100U
+#define DISPLAY_PAGES_CARD_RADIUS      8U
 
 /*
  * 通过回调读取变量值，回调为空时使用默认值。
@@ -100,21 +101,35 @@ static uint16_t Display_PagesGetStatusColor(uint32_t value)
   return DISPLAY_GFX_COLOR_RED;
 }
 
+/* 深色卡片外框：深色面板底 + 边框圆角。字段刷新各自清成面板底色，逻辑不变。 */
+static void Display_PagesDrawCardFrame(uint16_t x, uint16_t y, uint16_t width, uint16_t height)
+{
+  (void)Display_GfxFillRect(x, y, width, height, DISPLAY_THEME_PANEL);
+  (void)Display_GfxDrawRoundRect(x, y, width, height, DISPLAY_PAGES_CARD_RADIUS, DISPLAY_THEME_BORDER);
+}
+
+/* 卡片标题行：左侧青色强调竖条 + 加粗浅色标题 + 分隔线，分隔线内缩避开圆角。 */
+static void Display_PagesDrawCardTitle(uint16_t x, uint16_t y, uint16_t width, Display_TextLabel_t title_label)
+{
+  (void)Display_GfxFillRect((uint16_t)(x + 12U), (uint16_t)(y + 8U), 4U, 14U, DISPLAY_THEME_ACCENT);
+  (void)Display_TextDrawLabelBold((uint16_t)(x + 22U), (uint16_t)(y + 5U), title_label, DISPLAY_THEME_TEXT);
+  (void)Display_GfxDrawHLine((uint16_t)(x + 10U), (uint16_t)(y + 28U), (uint16_t)(width - 20U), DISPLAY_THEME_DIVIDER);
+}
+
 static void Display_PagesDrawPanelLabel(uint16_t x, uint16_t y, uint16_t width, uint16_t height, Display_TextLabel_t title_label)
 {
-  (void)Display_GfxDrawFrame(x, y, width, height, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_TextDrawLabel((uint16_t)(x + 10U), (uint16_t)(y + 4U), title_label, DISPLAY_GFX_COLOR_BLUE);
-  (void)Display_GfxDrawHLine(x, (uint16_t)(y + 28U), width, DISPLAY_GFX_COLOR_GRAY);
+  Display_PagesDrawCardFrame(x, y, width, height);
+  Display_PagesDrawCardTitle(x, y, width, title_label);
 }
 
 static void Display_PagesDrawMotorLabel(uint16_t x, uint16_t y, char index)
 {
   uint16_t motor_w;
 
-  (void)Display_GfxDrawString(x, y, "-", DISPLAY_GFX_COLOR_DARK, 1U);
-  (void)Display_TextDrawLabel((uint16_t)(x + 12U), y, DISPLAY_TXT_MOTOR, DISPLAY_GFX_COLOR_DARK);
+  (void)Display_GfxDrawString(x, y, "-", DISPLAY_THEME_TEXT, 1U);
+  (void)Display_TextDrawLabel((uint16_t)(x + 12U), y, DISPLAY_TXT_MOTOR, DISPLAY_THEME_TEXT);
   motor_w = Display_TextGetLabelWidth(DISPLAY_TXT_MOTOR);
-  (void)Display_GfxDrawChar((uint16_t)(x + 16U + motor_w), y, index, DISPLAY_GFX_COLOR_DARK, 1U);
+  (void)Display_GfxDrawChar((uint16_t)(x + 16U + motor_w), y, index, DISPLAY_THEME_TEXT, 1U);
 }
 
 static void Display_PagesDrawSelfMotorLabel(uint16_t x, uint16_t y, uint16_t width, char index)
@@ -123,8 +138,8 @@ static void Display_PagesDrawSelfMotorLabel(uint16_t x, uint16_t y, uint16_t wid
   uint16_t text_w  = (uint16_t)(motor_w + 8U);
   uint16_t text_x  = (text_w < width) ? (uint16_t)(x + ((width - text_w) / 2U)) : x;
 
-  (void)Display_TextDrawLabel(text_x, y, DISPLAY_TXT_MOTOR, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawChar((uint16_t)(text_x + motor_w + 2U), y, index, DISPLAY_GFX_COLOR_DARK, 1U);
+  (void)Display_TextDrawLabel(text_x, y, DISPLAY_TXT_MOTOR, DISPLAY_THEME_TEXT);
+  (void)Display_GfxDrawChar((uint16_t)(text_x + motor_w + 2U), y, index, DISPLAY_THEME_TEXT, 1U);
 }
 
 /*
@@ -132,29 +147,29 @@ static void Display_PagesDrawSelfMotorLabel(uint16_t x, uint16_t y, uint16_t wid
 /*
  * 绘制页面底部翻页按钮和页码状态点。
  */
-#define DISPLAY_PAGES_DOT_SPACING 28U
+/* 底部标签栏：六个可导航页面直达，当前页高亮青色 + 顶部强调条。 */
+#define DISPLAY_PAGES_TAB_COUNT (uint16_t)(DISPLAY_HMI_PAGE_HIDDEN - DISPLAY_HMI_PAGE_SELF_CHECK)
 
 static void Display_PagesDrawFooter(Display_HmiPage_t page)
 {
+  static const Display_TextLabel_t tab_labels[DISPLAY_PAGES_TAB_COUNT] = {DISPLAY_TEXT_SELF_CHECK, DISPLAY_TITLE_FLIGHT, DISPLAY_TITLE_AIRCRAFT, DISPLAY_TITLE_GNSS, DISPLAY_TEXT_MOTOR_PWM, DISPLAY_TEXT_ALARM_PAGE};
+  uint16_t tab_w = (uint16_t)(DISPLAY_GFX_WIDTH / DISPLAY_PAGES_TAB_COUNT);
   uint16_t i;
-  uint16_t dot_x;
-  uint16_t dot_count;
-  uint16_t start_x;
 
-  (void)Display_GfxFillRect(0U, DISPLAY_PAGES_FOOTER_Y, DISPLAY_GFX_WIDTH, DISPLAY_PAGES_FOOTER_HEIGHT, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_GfxDrawHLine(0U, DISPLAY_PAGES_FOOTER_Y, DISPLAY_GFX_WIDTH, DISPLAY_GFX_COLOR_GRAY);
-  (void)Display_GfxDrawFrame(8U, 426U, 250U, 48U, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_TextDrawLabel(96U, 442U, DISPLAY_TEXT_PREV, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawFrame(542U, 426U, 250U, 48U, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_TextDrawLabel(630U, 442U, DISPLAY_TEXT_NEXT, DISPLAY_GFX_COLOR_DARK);
+  (void)Display_GfxFillRect(0U, DISPLAY_PAGES_FOOTER_Y, DISPLAY_GFX_WIDTH, DISPLAY_PAGES_FOOTER_HEIGHT, DISPLAY_THEME_PANEL);
+  (void)Display_GfxDrawHLine(0U, DISPLAY_PAGES_FOOTER_Y, DISPLAY_GFX_WIDTH, DISPLAY_THEME_BORDER);
 
-  /* 页码圆点以屏幕中线为中心，随页面数量自动居中；隐藏页不计入 */
-  dot_count = (uint16_t)(DISPLAY_HMI_PAGE_HIDDEN - DISPLAY_HMI_PAGE_SELF_CHECK);
-  start_x   = (uint16_t)((DISPLAY_GFX_WIDTH / 2U) - (((dot_count - 1U) * DISPLAY_PAGES_DOT_SPACING) / 2U));
+  for (i = 0U; i < DISPLAY_PAGES_TAB_COUNT; i++) {
+    uint16_t tx      = (uint16_t)(i * tab_w);
+    uint16_t page_i  = (uint16_t)((uint16_t)DISPLAY_HMI_PAGE_SELF_CHECK + i);
+    uint8_t active   = (uint8_t)(page_i == (uint16_t)page);
+    uint16_t label_w = Display_TextGetLabelWidth(tab_labels[i]);
+    uint16_t lx      = (label_w < tab_w) ? (uint16_t)(tx + ((tab_w - label_w) / 2U)) : tx;
+    uint16_t color   = active ? DISPLAY_THEME_ACCENT : DISPLAY_THEME_TEXT_MUTED;
 
-  for (i = (uint16_t)DISPLAY_HMI_PAGE_SELF_CHECK; i < DISPLAY_HMI_PAGE_HIDDEN; i++) {
-    dot_x = (uint16_t)(start_x + ((i - (uint16_t)DISPLAY_HMI_PAGE_SELF_CHECK) * DISPLAY_PAGES_DOT_SPACING));
-    (void)Display_GfxDrawStatusDot(dot_x, 450U, 6U, (i == (uint16_t)page) ? DISPLAY_GFX_COLOR_BLUE : DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_BLACK);
+    if (i != 0U) { (void)Display_GfxDrawVLine(tx, (uint16_t)(DISPLAY_PAGES_FOOTER_Y + 8U), (uint16_t)(DISPLAY_PAGES_FOOTER_HEIGHT - 16U), DISPLAY_THEME_DIVIDER); }
+    if (active != 0U) { (void)Display_GfxFillRect(tx, DISPLAY_PAGES_FOOTER_Y, tab_w, 3U, DISPLAY_THEME_ACCENT); }
+    (void)Display_TextDrawLabel(lx, (uint16_t)(DISPLAY_PAGES_FOOTER_Y + 22U), tab_labels[i], color);
   }
 }
 
@@ -165,28 +180,28 @@ static void Display_PagesDrawDataStatusRow(uint16_t x, uint16_t y, Display_TextL
   if (motor_index != 0) {
     Display_PagesDrawMotorLabel((uint16_t)(x + 20U), y, motor_index);
   } else {
-    (void)Display_TextDrawLabel((uint16_t)(x + 20U), y, label, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_TextDrawLabel((uint16_t)(x + 20U), y, label, DISPLAY_THEME_TEXT);
   }
 }
 
 static void Display_PagesDrawDataGpsRow(uint16_t label_x, uint16_t y, Display_TextLabel_t label)
 {
-  (void)Display_TextDrawLabel(label_x, y, label, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawHLine((uint16_t)(label_x - 8U), (uint16_t)(y + 24U), 236U, DISPLAY_GFX_COLOR_GRAY);
+  (void)Display_TextDrawLabel(label_x, y, label, DISPLAY_THEME_TEXT);
+  (void)Display_GfxDrawHLine((uint16_t)(label_x - 8U), (uint16_t)(y + 24U), 236U, DISPLAY_THEME_DIVIDER);
 }
 
 static void Display_PagesDrawDataGpsLabelRow(uint16_t label_x, uint16_t y, Display_TextLabel_t label, const char *placeholder)
 {
-  (void)Display_TextDrawLabel(label_x, y, label, DISPLAY_GFX_COLOR_DARK);
+  (void)Display_TextDrawLabel(label_x, y, label, DISPLAY_THEME_TEXT);
   if (placeholder != 0) { (void)Display_GfxDrawString(390U, (uint16_t)(y - 2U), placeholder, DISPLAY_GFX_COLOR_GRAY, 2U); }
-  (void)Display_GfxDrawHLine((uint16_t)(label_x - 8U), (uint16_t)(y + 24U), 236U, DISPLAY_GFX_COLOR_GRAY);
+  (void)Display_GfxDrawHLine((uint16_t)(label_x - 8U), (uint16_t)(y + 24U), 236U, DISPLAY_THEME_DIVIDER);
 }
 
 /* 飞行数据页双电池行：主控/电机 + 电压/电池标签 + 下划线。 */
 static void Display_PagesDrawBatteryRow(uint16_t label_x, uint16_t y, uint8_t is_motor, uint8_t is_battery)
 {
-  (void)Display_TextDrawBatteryLabel(label_x, y, is_motor, is_battery, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawHLine((uint16_t)(label_x - 8U), (uint16_t)(y + 24U), 236U, DISPLAY_GFX_COLOR_GRAY);
+  (void)Display_TextDrawBatteryLabel(label_x, y, is_motor, is_battery, DISPLAY_THEME_TEXT);
+  (void)Display_GfxDrawHLine((uint16_t)(label_x - 8U), (uint16_t)(y + 24U), 236U, DISPLAY_THEME_DIVIDER);
 }
 
 /*
@@ -266,6 +281,36 @@ uint32_t Display_PagesGetLogVersion(void)
   return s_msglog_version;
 }
 
+uint16_t Display_PagesCopyLogMessages(Display_MessageLogEntry_t *entries, uint16_t max_count, Display_MessageLogEntry_t *alarm_entry, uint8_t *alarm_valid)
+{
+  uint16_t copy_count;
+  uint16_t first;
+  uint16_t i;
+
+  if (alarm_valid != 0) {
+    *alarm_valid = s_msglog_alarm_valid;
+  }
+  if ((alarm_entry != 0) && (s_msglog_alarm_valid != 0U)) {
+    alarm_entry->msg         = s_msglog_alarm.msg;
+    alarm_entry->time_hhmmss = s_msglog_alarm.time_hhmmss;
+  }
+
+  if ((entries == 0) || (max_count == 0U)) {
+    return 0U;
+  }
+
+  copy_count = (s_msglog_count < max_count) ? s_msglog_count : max_count;
+  first      = (uint16_t)(s_msglog_count - copy_count);
+
+  for (i = 0U; i < copy_count; i++) {
+    uint16_t idx = (uint16_t)((s_msglog_head + DISPLAY_MSGLOG_CAP - s_msglog_count + first + i) % DISPLAY_MSGLOG_CAP);
+    entries[i].msg         = s_msglog[idx].msg;
+    entries[i].time_hhmmss = s_msglog[idx].time_hhmmss;
+  }
+
+  return copy_count;
+}
+
 /* 把 HHMMSS 编码格式化为 "HH:MM:SS"。 */
 static void Display_PagesFmtClock(char *buf, uint32_t hhmmss)
 {
@@ -288,11 +333,11 @@ static void Display_PagesDrawMessageLogAlarmStatusAt(uint16_t alarm_x, uint16_t 
 {
   uint16_t color;
 
-  (void)Display_GfxFillRect(alarm_x, alarm_y, alarm_w, alarm_h, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect(alarm_x, alarm_y, alarm_w, alarm_h, DISPLAY_THEME_PANEL);
 
   if (s_msglog_alarm_valid == 0U) { return; }
 
-  color = (s_msglog_alarm.msg == DISPLAY_LOGMSG_ALARM_ACTIVE) ? DISPLAY_GFX_COLOR_RED : DISPLAY_GFX_COLOR_DARK;
+  color = (s_msglog_alarm.msg == DISPLAY_LOGMSG_ALARM_ACTIVE) ? DISPLAY_GFX_COLOR_RED : DISPLAY_THEME_TEXT;
   (void)Display_TextDrawLogMessage(alarm_x, alarm_y, s_msglog_alarm.msg, color);
 }
 
@@ -309,7 +354,7 @@ static void Display_PagesDrawMessageLogBodyAt(uint16_t log_x, uint16_t log_w, ui
 
   Display_PagesDrawMessageLogAlarmStatusAt(alarm_x, DISPLAY_MSGLOG_ALARM_Y, alarm_w, DISPLAY_MSGLOG_ALARM_H);
 
-  (void)Display_GfxFillRect((uint16_t)(log_x + 1U), DISPLAY_MSGLOG_BODY_Y, (uint16_t)(log_w - 2U), DISPLAY_MSGLOG_BODY_H, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect((uint16_t)(log_x + 1U), DISPLAY_MSGLOG_BODY_Y, (uint16_t)(log_w - 2U), DISPLAY_MSGLOG_BODY_H, DISPLAY_THEME_PANEL);
 
   for (i = 0U; i < s_msglog_count; i++) {
     uint16_t idx   = (uint16_t)((s_msglog_head + DISPLAY_MSGLOG_CAP - s_msglog_count + i) % DISPLAY_MSGLOG_CAP);
@@ -317,7 +362,7 @@ static void Display_PagesDrawMessageLogBodyAt(uint16_t log_x, uint16_t log_w, ui
 
     Display_PagesFmtClock(tbuf, s_msglog[idx].time_hhmmss);
     (void)Display_GfxDrawString(time_x, (uint16_t)(row_y + 4U), tbuf, DISPLAY_GFX_COLOR_GRAY, 1U);
-    (void)Display_TextDrawLogMessage(text_x, row_y, s_msglog[idx].msg, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_TextDrawLogMessage(text_x, row_y, s_msglog[idx].msg, DISPLAY_THEME_TEXT);
   }
 }
 
@@ -337,9 +382,8 @@ static void Display_PagesDrawMotorMessageLogBody(void)
  */
 static void Display_PagesDrawMessageLogAt(uint16_t log_x, uint16_t log_w, uint16_t time_x, uint16_t text_x, uint16_t alarm_x, uint16_t alarm_w)
 {
-  (void)Display_GfxDrawFrame(log_x, DISPLAY_DASH_Y, log_w, DISPLAY_DASH_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_TextDrawLabel((uint16_t)(log_x + 10U), (uint16_t)(DISPLAY_DASH_Y + 4U), DISPLAY_TEXT_MESSAGE_LOG, DISPLAY_GFX_COLOR_BLUE);
-  (void)Display_GfxDrawHLine(log_x, (uint16_t)(DISPLAY_DASH_Y + 28U), log_w, DISPLAY_GFX_COLOR_GRAY);
+  Display_PagesDrawCardFrame(log_x, DISPLAY_DASH_Y, log_w, DISPLAY_DASH_H);
+  Display_PagesDrawCardTitle(log_x, DISPLAY_DASH_Y, log_w, DISPLAY_TEXT_MESSAGE_LOG);
   Display_PagesDrawMessageLogAlarmStatusAt(alarm_x, DISPLAY_MSGLOG_ALARM_Y, alarm_w, DISPLAY_MSGLOG_ALARM_H);
 
   Display_PagesDrawMessageLogBodyAt(log_x, log_w, time_x, text_x, alarm_x, alarm_w);
@@ -403,8 +447,8 @@ static void Display_PagesDrawFlightLayout(void)
  */
 static void Display_PagesDrawAircraftLabelRow(uint16_t y, Display_TextLabel_t label)
 {
-  (void)Display_TextDrawLabel(280U, y, label, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawHLine(272U, (uint16_t)(y + 26U), 244U, DISPLAY_GFX_COLOR_GRAY);
+  (void)Display_TextDrawLabel(280U, y, label, DISPLAY_THEME_TEXT);
+  (void)Display_GfxDrawHLine(272U, (uint16_t)(y + 26U), 244U, DISPLAY_THEME_DIVIDER);
 }
 
 /*
@@ -435,10 +479,10 @@ static void Display_PagesDrawMotorSliderStatic(uint16_t track_x, char index)
   uint16_t total   = (uint16_t)(motor_w + 14U);
   uint16_t label_x = (cx > (total / 2U)) ? (uint16_t)(cx - (total / 2U)) : track_x;
 
-  (void)Display_TextDrawLabel(label_x, DISPLAY_MOTOR_LABEL_Y, DISPLAY_TXT_MOTOR, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawChar((uint16_t)(label_x + motor_w + 2U), DISPLAY_MOTOR_LABEL_Y, index, DISPLAY_GFX_COLOR_DARK, 2U);
-  (void)Display_GfxFillRect(track_x, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_GfxDrawRect((uint16_t)(track_x - 1U), (uint16_t)(DISPLAY_MOTOR_TRACK_TOP_Y - 1U), (uint16_t)(DISPLAY_MOTOR_TRACK_W + 2U), (uint16_t)(DISPLAY_MOTOR_TRACK_H + 2U), DISPLAY_GFX_COLOR_GRAY);
+  (void)Display_TextDrawLabel(label_x, DISPLAY_MOTOR_LABEL_Y, DISPLAY_TXT_MOTOR, DISPLAY_THEME_TEXT);
+  (void)Display_GfxDrawChar((uint16_t)(label_x + motor_w + 2U), DISPLAY_MOTOR_LABEL_Y, index, DISPLAY_THEME_TEXT, 2U);
+  (void)Display_GfxFillRect(track_x, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, DISPLAY_THEME_PANEL_HI);
+  (void)Display_GfxDrawRect((uint16_t)(track_x - 1U), (uint16_t)(DISPLAY_MOTOR_TRACK_TOP_Y - 1U), (uint16_t)(DISPLAY_MOTOR_TRACK_W + 2U), (uint16_t)(DISPLAY_MOTOR_TRACK_H + 2U), DISPLAY_THEME_BORDER);
 }
 
 static void Display_PagesDrawMotorLayout(void)
@@ -448,16 +492,15 @@ static void Display_PagesDrawMotorLayout(void)
 
   Display_PagesDrawSystemColumnAt(DISPLAY_MOTOR_STATUS_X, DISPLAY_MOTOR_STATUS_W);
 
-  (void)Display_GfxDrawFrame(DISPLAY_MOTOR_PANEL_X, DISPLAY_DASH_Y, DISPLAY_MOTOR_PANEL_W, DISPLAY_DASH_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_TextDrawLabel((uint16_t)(DISPLAY_MOTOR_PANEL_X + 10U), (uint16_t)(DISPLAY_DASH_Y + 4U), DISPLAY_TEXT_MOTOR_PWM, DISPLAY_GFX_COLOR_BLUE);
-  (void)Display_GfxDrawHLine(DISPLAY_MOTOR_PANEL_X, (uint16_t)(DISPLAY_DASH_Y + 28U), DISPLAY_MOTOR_PANEL_W, DISPLAY_GFX_COLOR_GRAY);
+  Display_PagesDrawCardFrame(DISPLAY_MOTOR_PANEL_X, DISPLAY_DASH_Y, DISPLAY_MOTOR_PANEL_W, DISPLAY_DASH_H);
+  Display_PagesDrawCardTitle(DISPLAY_MOTOR_PANEL_X, DISPLAY_DASH_Y, DISPLAY_MOTOR_PANEL_W, DISPLAY_TEXT_MOTOR_PWM);
 
   Display_PagesDrawMotorSliderStatic(DISPLAY_MOTOR_TRACK1_X, '1');
   Display_PagesDrawMotorSliderStatic(DISPLAY_MOTOR_TRACK2_X, '2');
   Display_PagesDrawMotorSliderStatic(DISPLAY_MOTOR_TRACK3_X, '3');
   Display_PagesDrawMotorSliderStatic(DISPLAY_MOTOR_TRACK4_X, '4');
 
-  (void)Display_GfxDrawFrame(DISPLAY_MOTOR_ESTOP_X, DISPLAY_MOTOR_ESTOP_Y, DISPLAY_MOTOR_ESTOP_W, DISPLAY_MOTOR_ESTOP_H, DISPLAY_GFX_COLOR_RED, DISPLAY_GFX_COLOR_RED);
+  (void)Display_GfxFillRoundRect(DISPLAY_MOTOR_ESTOP_X, DISPLAY_MOTOR_ESTOP_Y, DISPLAY_MOTOR_ESTOP_W, DISPLAY_MOTOR_ESTOP_H, 12U, DISPLAY_GFX_COLOR_RED);
   (void)Display_TextDrawEstop(estop_text_x, estop_text_y, DISPLAY_GFX_COLOR_WHITE);
 
   Display_PagesDrawMotorMessageLog();
@@ -484,24 +527,25 @@ static void Display_PagesDrawSelfCheckLayout(void)
       uint16_t label_x;
 
       i = r * 3U + c;
-      (void)Display_GfxDrawFrame(col_x[c], row_y[r], cell_w, cell_h, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
+      Display_PagesDrawCardFrame(col_x[c], row_y[r], cell_w, cell_h);
       if (motor_index[i] != 0) {
         Display_PagesDrawSelfMotorLabel(col_x[c], (uint16_t)(row_y[r] + 28U), cell_w, motor_index[i]);
       } else {
         label_w = Display_TextGetLabelWidth(labels[i]);
         label_x = (label_w < cell_w) ? (uint16_t)(col_x[c] + ((cell_w - label_w) / 2U)) : col_x[c];
-        (void)Display_TextDrawLabel(label_x, (uint16_t)(row_y[r] + 28U), labels[i], DISPLAY_GFX_COLOR_DARK);
+        (void)Display_TextDrawLabel(label_x, (uint16_t)(row_y[r] + 28U), labels[i], DISPLAY_THEME_TEXT);
       }
     }
   }
 
-  (void)Display_GfxDrawFrame(480U, 82U, 312U, 310U, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_TextDrawLabel(496U, 94U, DISPLAY_TEXT_ERROR_CODE, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawHLine(480U, 118U, 312U, DISPLAY_GFX_COLOR_GRAY);
-  (void)Display_TextDrawLabel(492U, 136U, DISPLAY_TEXT_CODE, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_TextDrawLabel(578U, 136U, DISPLAY_TEXT_MODULE, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_TextDrawLabel(684U, 136U, DISPLAY_TEXT_REASON, DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawHLine(480U, 152U, 312U, DISPLAY_GFX_COLOR_GRAY);
+  Display_PagesDrawCardFrame(480U, 82U, 312U, 310U);
+  (void)Display_GfxFillRect(492U, 90U, 4U, 14U, DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_TextDrawLabelBold(502U, 94U, DISPLAY_TEXT_ERROR_CODE, DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_GfxDrawHLine(480U, 118U, 312U, DISPLAY_GFX_COLOR_CARD_DIVIDER);
+  (void)Display_TextDrawLabel(492U, 136U, DISPLAY_TEXT_CODE, DISPLAY_THEME_TEXT);
+  (void)Display_TextDrawLabel(578U, 136U, DISPLAY_TEXT_MODULE, DISPLAY_THEME_TEXT);
+  (void)Display_TextDrawLabel(684U, 136U, DISPLAY_TEXT_REASON, DISPLAY_THEME_TEXT);
+  (void)Display_GfxDrawHLine(480U, 152U, 312U, DISPLAY_GFX_COLOR_CARD_DIVIDER);
   (void)Display_TextDrawLabel(604U, 170U, DISPLAY_TEXT_FAILED_MODULES, DISPLAY_GFX_COLOR_GRAY);
 }
 
@@ -511,7 +555,7 @@ static void Display_PagesDrawSelfCheckLayout(void)
 /* Alarm page fixed layout. */
 static void Display_PagesDrawAlarmTitle(uint16_t x, uint16_t y)
 {
-  (void)Display_TextDrawLabel(x, y, DISPLAY_TEXT_ALARM_SUMMARY, DISPLAY_GFX_COLOR_RED);
+  (void)Display_TextDrawLabelBold(x, y, DISPLAY_TEXT_ALARM_SUMMARY, DISPLAY_GFX_COLOR_RED);
 }
 
 static void Display_PagesDrawAlarmHeaderLabel(uint16_t x, uint16_t y, uint16_t width, uint16_t height, Display_TextLabel_t label)
@@ -525,7 +569,7 @@ static void Display_PagesDrawAlarmHeaderLabel(uint16_t x, uint16_t y, uint16_t w
 
 static uint16_t Display_PagesGetAlarmRowFill(uint16_t row)
 {
-  return ((row & 0x01U) == 0U) ? DISPLAY_GFX_COLOR_WHITE : DISPLAY_ALARM_COLOR_ROW_ALT;
+  return ((row & 0x01U) == 0U) ? DISPLAY_THEME_PANEL : DISPLAY_ALARM_COLOR_ROW_ALT;
 }
 
 static void Display_PagesDrawAlarmGridLines(void)
@@ -544,7 +588,7 @@ static void Display_PagesDrawAlarmTable(void)
 {
   uint16_t row;
 
-  (void)Display_GfxFillRect(DISPLAY_ALARM_TABLE_X, DISPLAY_ALARM_TABLE_Y, DISPLAY_ALARM_TABLE_W, DISPLAY_ALARM_TABLE_H, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect(DISPLAY_ALARM_TABLE_X, DISPLAY_ALARM_TABLE_Y, DISPLAY_ALARM_TABLE_W, DISPLAY_ALARM_TABLE_H, DISPLAY_THEME_PANEL);
   (void)Display_GfxFillRect(DISPLAY_ALARM_TABLE_X, DISPLAY_ALARM_TABLE_Y, DISPLAY_ALARM_TABLE_W, DISPLAY_ALARM_HEADER_H, DISPLAY_ALARM_COLOR_HEADER);
 
   for (row = 0U; row < DISPLAY_ALARM_ROW_COUNT; row++) { (void)Display_GfxFillRect(DISPLAY_ALARM_TABLE_X, (uint16_t)(DISPLAY_ALARM_BODY_Y + (row * DISPLAY_ALARM_ROW_H)), DISPLAY_ALARM_TABLE_W, DISPLAY_ALARM_ROW_H, Display_PagesGetAlarmRowFill(row)); }
@@ -1665,8 +1709,8 @@ static Display_LogMsg_t Display_PagesAlarmReasonLogMsg(uint16_t code)
 #define DISPLAY_LORA_CBTN_Y     388U
 #define DISPLAY_LORA_CBTN_W     196U
 #define DISPLAY_LORA_CBTN_H     64U
-#define DISPLAY_LORA_SEL_FILL   0xCEFBU /* 浅蓝选中底色 */
-#define DISPLAY_LORA_TRACK_BG   0xE71CU /* 滚动条轨道底色 */
+#define DISPLAY_LORA_SEL_FILL   0x0B6AU             /* 深青选中底色 */
+#define DISPLAY_LORA_TRACK_BG   DISPLAY_THEME_PANEL_HI /* 滚动条轨道底色 */
 #define DISPLAY_LORA_NO_SEL     0xFFFFU
 
 static Display_LoraNode_t s_lora_nodes[DISPLAY_LORA_MAX_NODES];
@@ -1775,7 +1819,7 @@ static void Display_LoraDrawArrow(uint16_t cx, uint16_t cy, uint8_t up)
   for (i = 0U; i < 7U; i++) {
     uint16_t w  = (uint16_t)(2U + (i * 2U));
     uint16_t yy = (up != 0U) ? (uint16_t)(cy - 6U + i) : (uint16_t)(cy + 6U - i);
-    (void)Display_GfxFillRect((uint16_t)(cx - (w / 2U)), yy, w, 1U, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_GfxFillRect((uint16_t)(cx - (w / 2U)), yy, w, 1U, DISPLAY_THEME_TEXT);
   }
 }
 
@@ -1786,15 +1830,15 @@ static void Display_LoraDrawRow(uint16_t row, uint16_t idx)
   uint8_t sel  = (s_lora_nodes[idx].node_id == s_lora_sel_id) ? 1U : 0U;
   char buf[8];
 
-  (void)Display_GfxFillRect(9U, top, (uint16_t)(DISPLAY_LORA_ROW_RIGHT - 9U), DISPLAY_LORA_ROW_H, sel ? DISPLAY_LORA_SEL_FILL : DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect(9U, top, (uint16_t)(DISPLAY_LORA_ROW_RIGHT - 9U), DISPLAY_LORA_ROW_H, sel ? DISPLAY_LORA_SEL_FILL : DISPLAY_THEME_PANEL);
   if (sel != 0U) { (void)Display_GfxFillRect(9U, top, 4U, DISPLAY_LORA_ROW_H, DISPLAY_GFX_COLOR_BLUE); }
 
   (void)Display_GfxDrawStatusDot(DISPLAY_LORA_DOT_CX, (uint16_t)(top + (DISPLAY_LORA_ROW_H / 2U)), 6U, DISPLAY_GFX_COLOR_GREEN, DISPLAY_GFX_COLOR_BLACK);
-  (void)Display_TextDrawNodeLabel(DISPLAY_LORA_NAME_X, ty, DISPLAY_GFX_COLOR_DARK);
+  (void)Display_TextDrawNodeLabel(DISPLAY_LORA_NAME_X, ty, DISPLAY_THEME_TEXT);
   Display_LoraFmt2(buf, s_lora_nodes[idx].label);
-  (void)Display_GfxDrawString((uint16_t)(DISPLAY_LORA_NAME_X + 38U), (uint16_t)(ty + 1U), buf, DISPLAY_GFX_COLOR_DARK, 2U);
+  (void)Display_GfxDrawString((uint16_t)(DISPLAY_LORA_NAME_X + 38U), (uint16_t)(ty + 1U), buf, DISPLAY_THEME_TEXT, 2U);
   Display_LoraFmtId(buf, s_lora_nodes[idx].node_id);
-  (void)Display_GfxDrawString(DISPLAY_LORA_ID_X, (uint16_t)(ty + 1U), buf, DISPLAY_GFX_COLOR_DARK, 2U);
+  (void)Display_GfxDrawString(DISPLAY_LORA_ID_X, (uint16_t)(ty + 1U), buf, DISPLAY_THEME_TEXT, 2U);
   (void)Display_TextDrawLabel(DISPLAY_LORA_ONLINE_X, ty, DISPLAY_TXT_ONLINE, DISPLAY_GFX_COLOR_GREEN);
 
   (void)Display_GfxDrawHLine(DISPLAY_LORA_LIST_X, (uint16_t)(top + DISPLAY_LORA_ROW_H), (uint16_t)(DISPLAY_LORA_ROW_RIGHT - DISPLAY_LORA_LIST_X), DISPLAY_GFX_COLOR_GRAY);
@@ -1807,18 +1851,18 @@ static void Display_LoraDrawInfo(void)
   uint16_t x = (uint16_t)(DISPLAY_LORA_INFO_X + 14U);
   uint16_t status_w;
 
-  (void)Display_GfxFillRect((uint16_t)(DISPLAY_LORA_INFO_X + 1U), 106U, (uint16_t)(DISPLAY_LORA_INFO_W - 2U), (uint16_t)((DISPLAY_LORA_INFO_Y + DISPLAY_LORA_INFO_H) - 107U), DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect((uint16_t)(DISPLAY_LORA_INFO_X + 1U), 106U, (uint16_t)(DISPLAY_LORA_INFO_W - 2U), (uint16_t)((DISPLAY_LORA_INFO_Y + DISPLAY_LORA_INFO_H) - 107U), DISPLAY_THEME_PANEL);
   if (sel < 0) { return; }
 
-  (void)Display_TextDrawNodeLabel(x, 120U, DISPLAY_GFX_COLOR_DARK);
+  (void)Display_TextDrawNodeLabel(x, 120U, DISPLAY_THEME_TEXT);
   Display_LoraFmt2(buf, s_lora_nodes[sel].label);
-  (void)Display_GfxDrawString((uint16_t)(x + 38U), 121U, buf, DISPLAY_GFX_COLOR_DARK, 2U);
+  (void)Display_GfxDrawString((uint16_t)(x + 38U), 121U, buf, DISPLAY_THEME_TEXT, 2U);
 
   (void)Display_GfxDrawString(x, 162U, "ID", DISPLAY_GFX_COLOR_GRAY, 2U);
   Display_LoraFmtId(buf, s_lora_nodes[sel].node_id);
-  (void)Display_GfxDrawString((uint16_t)(x + 42U), 162U, buf, DISPLAY_GFX_COLOR_DARK, 2U);
+  (void)Display_GfxDrawString((uint16_t)(x + 42U), 162U, buf, DISPLAY_THEME_TEXT, 2U);
 
-  (void)Display_TextDrawLabel(x, 202U, DISPLAY_TXT_STATUS, DISPLAY_GFX_COLOR_DARK);
+  (void)Display_TextDrawLabel(x, 202U, DISPLAY_TXT_STATUS, DISPLAY_THEME_TEXT);
   status_w = (uint16_t)(Display_TextGetLabelWidth(DISPLAY_TXT_STATUS) + 8U);
   if (Display_LoraIsConnectedTo(s_lora_nodes[sel].node_id) != 0U) {
     (void)Display_TextDrawConnectedLabel((uint16_t)(x + status_w), 202U, DISPLAY_GFX_COLOR_GREEN);
@@ -1828,7 +1872,7 @@ static void Display_LoraDrawInfo(void)
 
   (void)Display_TextDrawLastCommLabel(x, 246U, DISPLAY_GFX_COLOR_GRAY);
   Display_PagesFmtClock(buf, s_lora_nodes[sel].last_comm_hhmmss);
-  (void)Display_GfxDrawString(x, 274U, buf, DISPLAY_GFX_COLOR_DARK, 2U);
+  (void)Display_GfxDrawString(x, 274U, buf, DISPLAY_THEME_TEXT, 2U);
 }
 
 static void Display_LoraDrawButton(void)
@@ -1865,11 +1909,11 @@ void Display_PagesDrawLoraContent(void)
   page_top = (uint16_t)(s_lora_page * DISPLAY_LORA_ROWS_PER_PAGE);
 
   /* 标题行右侧：在线数 + 页码 */
-  (void)Display_GfxFillRect(300U, (uint16_t)(DISPLAY_LORA_LIST_Y + 6U), 244U, 22U, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect(300U, (uint16_t)(DISPLAY_LORA_LIST_Y + 6U), 244U, 22U, DISPLAY_THEME_PANEL);
   (void)Display_TextDrawLabel(300U, (uint16_t)(DISPLAY_LORA_LIST_Y + 8U), DISPLAY_TXT_ONLINE, DISPLAY_GFX_COLOR_GREEN);
   online_w = (uint16_t)(Display_TextGetLabelWidth(DISPLAY_TXT_ONLINE) + 6U);
   Display_LoraFmt2(buf, s_lora_count);
-  (void)Display_GfxDrawString((uint16_t)(300U + online_w), (uint16_t)(DISPLAY_LORA_LIST_Y + 9U), buf, DISPLAY_GFX_COLOR_DARK, 2U);
+  (void)Display_GfxDrawString((uint16_t)(300U + online_w), (uint16_t)(DISPLAY_LORA_LIST_Y + 9U), buf, DISPLAY_THEME_TEXT, 2U);
   pbuf[0] = 'P';
   pbuf[1] = ' ';
   pbuf[2] = (char)('0' + ((s_lora_page + 1U) % 10U));
@@ -1879,7 +1923,7 @@ void Display_PagesDrawLoraContent(void)
   (void)Display_GfxDrawString(456U, (uint16_t)(DISPLAY_LORA_LIST_Y + 9U), pbuf, DISPLAY_GFX_COLOR_GRAY, 2U);
 
   /* 列表正文 */
-  (void)Display_GfxFillRect(9U, DISPLAY_LORA_ROW_Y0, (uint16_t)(DISPLAY_LORA_ROW_RIGHT - 9U), (uint16_t)((DISPLAY_LORA_LIST_Y + DISPLAY_LORA_LIST_H) - DISPLAY_LORA_ROW_Y0 - 1U), DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect(9U, DISPLAY_LORA_ROW_Y0, (uint16_t)(DISPLAY_LORA_ROW_RIGHT - 9U), (uint16_t)((DISPLAY_LORA_LIST_Y + DISPLAY_LORA_LIST_H) - DISPLAY_LORA_ROW_Y0 - 1U), DISPLAY_THEME_PANEL);
   /* 列表为空时正文留白；标题行已显示“在线 00”表明无在线节点 */
   for (row = 0U; row < DISPLAY_LORA_ROWS_PER_PAGE; row++) {
     uint16_t idx = (uint16_t)(page_top + row);
@@ -1903,10 +1947,11 @@ void Display_PagesDrawLoraContent(void)
 static void Display_PagesDrawLoraLayout(void)
 {
   /* 列表外框 + 标题 "LoRa 连接" */
-  (void)Display_GfxDrawFrame(DISPLAY_LORA_LIST_X, DISPLAY_LORA_LIST_Y, DISPLAY_LORA_LIST_W, DISPLAY_LORA_LIST_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_GfxDrawString((uint16_t)(DISPLAY_LORA_LIST_X + 14U), (uint16_t)(DISPLAY_LORA_LIST_Y + 9U), "LoRa", DISPLAY_GFX_COLOR_BLUE, 2U);
-  (void)Display_TextDrawConnectLabel((uint16_t)(DISPLAY_LORA_LIST_X + 72U), (uint16_t)(DISPLAY_LORA_LIST_Y + 8U), DISPLAY_GFX_COLOR_BLUE);
-  (void)Display_GfxDrawHLine(DISPLAY_LORA_LIST_X, DISPLAY_LORA_HEAD_Y, DISPLAY_LORA_LIST_W, DISPLAY_GFX_COLOR_GRAY);
+  Display_PagesDrawCardFrame(DISPLAY_LORA_LIST_X, DISPLAY_LORA_LIST_Y, DISPLAY_LORA_LIST_W, DISPLAY_LORA_LIST_H);
+  (void)Display_GfxFillRect((uint16_t)(DISPLAY_LORA_LIST_X + 12U), (uint16_t)(DISPLAY_LORA_LIST_Y + 11U), 4U, 14U, DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_GfxDrawString((uint16_t)(DISPLAY_LORA_LIST_X + 22U), (uint16_t)(DISPLAY_LORA_LIST_Y + 9U), "LoRa", DISPLAY_GFX_COLOR_BLUE, 2U);
+  (void)Display_TextDrawConnectLabel((uint16_t)(DISPLAY_LORA_LIST_X + 80U), (uint16_t)(DISPLAY_LORA_LIST_Y + 8U), DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_GfxDrawHLine(DISPLAY_LORA_LIST_X, DISPLAY_LORA_HEAD_Y, DISPLAY_LORA_LIST_W, DISPLAY_GFX_COLOR_CARD_DIVIDER);
 
   /* 滚动列分隔线 + 上下翻页按钮 + 轨道 */
   (void)Display_GfxDrawVLine((uint16_t)(DISPLAY_LORA_SCROLL_X - 4U), DISPLAY_LORA_HEAD_Y, (uint16_t)((DISPLAY_LORA_LIST_Y + DISPLAY_LORA_LIST_H) - DISPLAY_LORA_HEAD_Y), DISPLAY_GFX_COLOR_GRAY);
@@ -1916,9 +1961,10 @@ static void Display_PagesDrawLoraLayout(void)
   Display_LoraDrawArrow((uint16_t)(DISPLAY_LORA_SCROLL_X + (DISPLAY_LORA_SCROLL_W / 2U)), (uint16_t)(DISPLAY_LORA_DOWN_Y + (DISPLAY_LORA_SBTN_H / 2U)), 0U);
 
   /* 右侧详情框 + 标题 "当前选择" */
-  (void)Display_GfxDrawFrame(DISPLAY_LORA_INFO_X, DISPLAY_LORA_INFO_Y, DISPLAY_LORA_INFO_W, DISPLAY_LORA_INFO_H, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_TextDrawSelectTitle((uint16_t)(DISPLAY_LORA_INFO_X + 14U), (uint16_t)(DISPLAY_LORA_INFO_Y + 9U), DISPLAY_GFX_COLOR_BLUE);
-  (void)Display_GfxDrawHLine(DISPLAY_LORA_INFO_X, (uint16_t)(DISPLAY_LORA_INFO_Y + 32U), DISPLAY_LORA_INFO_W, DISPLAY_GFX_COLOR_GRAY);
+  Display_PagesDrawCardFrame(DISPLAY_LORA_INFO_X, DISPLAY_LORA_INFO_Y, DISPLAY_LORA_INFO_W, DISPLAY_LORA_INFO_H);
+  (void)Display_GfxFillRect((uint16_t)(DISPLAY_LORA_INFO_X + 12U), (uint16_t)(DISPLAY_LORA_INFO_Y + 11U), 4U, 14U, DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_TextDrawSelectTitle((uint16_t)(DISPLAY_LORA_INFO_X + 22U), (uint16_t)(DISPLAY_LORA_INFO_Y + 9U), DISPLAY_GFX_COLOR_BLUE);
+  (void)Display_GfxDrawHLine(DISPLAY_LORA_INFO_X, (uint16_t)(DISPLAY_LORA_INFO_Y + 32U), DISPLAY_LORA_INFO_W, DISPLAY_GFX_COLOR_CARD_DIVIDER);
 
   Display_PagesDrawLoraContent();
 }
@@ -2043,7 +2089,7 @@ Display_Result_t Display_PagesDrawHeader(Display_HmiPage_t page, Display_PagesVa
 
   if (Display_GfxIsReady() == 0U) { return DISPLAY_NOT_READY; }
 
-  (void)Display_GfxFillRect(0U, 0U, DISPLAY_GFX_WIDTH, DISPLAY_HEADER_HEIGHT, DISPLAY_GFX_COLOR_DARK);
+  (void)Display_GfxFillRect(0U, 0U, DISPLAY_GFX_WIDTH, DISPLAY_HEADER_HEIGHT, DISPLAY_THEME_PANEL);
   (void)Display_PagesDrawHeaderLogo(0U, 0U);
   title_width = Display_TextGetCompanyTitleWidth();
   title_x     = (DISPLAY_GFX_WIDTH > title_width) ? (uint16_t)((DISPLAY_GFX_WIDTH - title_width) / 2U) : 0U;
@@ -2061,7 +2107,7 @@ Display_Result_t Display_PagesDrawStatic(Display_HmiPage_t page, Display_PagesVa
 {
   if (Display_GfxIsReady() == 0U) { return DISPLAY_NOT_READY; }
 
-  (void)Display_GfxClear(DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxClear(DISPLAY_THEME_BG);
 
   if (page == DISPLAY_HMI_PAGE_SELF_CHECK) {
     Display_PagesDrawSelfCheckLayout();
@@ -2175,8 +2221,8 @@ static void Display_PagesDrawSelfCheckErrorField(uint32_t value)
 
   (void)value;
 
-  (void)Display_GfxFillRect(481U, DISPLAY_SELFCHECK_ERR_BODY_Y, 310U, DISPLAY_SELFCHECK_ERR_BODY_H, DISPLAY_GFX_COLOR_WHITE);
-  (void)Display_GfxDrawHLine(480U, 152U, 312U, DISPLAY_GFX_COLOR_GRAY);
+  (void)Display_GfxFillRect(481U, DISPLAY_SELFCHECK_ERR_BODY_Y, 310U, DISPLAY_SELFCHECK_ERR_BODY_H, DISPLAY_THEME_PANEL);
+  (void)Display_GfxDrawHLine(480U, 152U, 312U, DISPLAY_GFX_COLOR_CARD_DIVIDER);
 
   if (s_selfcheck_fault_count == 0U) {
     (void)Display_TextDrawLabel(604U, DISPLAY_SELFCHECK_ERR_ROW_Y0, DISPLAY_TEXT_FAILED_MODULES, DISPLAY_GFX_COLOR_GRAY);
@@ -2190,8 +2236,8 @@ static void Display_PagesDrawSelfCheckErrorField(uint32_t value)
 
     Display_PagesFormatFaultCode(code_buf, fault_code);
     (void)Display_GfxDrawString(DISPLAY_SELFCHECK_ERR_CODE_X, row_y, code_buf, DISPLAY_GFX_COLOR_RED, 1U);
-    (void)Display_GfxDrawString(DISPLAY_SELFCHECK_ERR_MODULE_X, row_y, Display_PagesGetAlarmModule(source_id, fault_code), DISPLAY_GFX_COLOR_DARK, 1U);
-    (void)Display_GfxDrawString(DISPLAY_SELFCHECK_ERR_REASON_X, row_y, Display_PagesGetAlarmReason(fault_code), DISPLAY_GFX_COLOR_DARK, 1U);
+    (void)Display_GfxDrawString(DISPLAY_SELFCHECK_ERR_MODULE_X, row_y, Display_PagesGetAlarmModule(source_id, fault_code), DISPLAY_THEME_TEXT, 1U);
+    (void)Display_GfxDrawString(DISPLAY_SELFCHECK_ERR_REASON_X, row_y, Display_PagesGetAlarmReason(fault_code), DISPLAY_THEME_TEXT, 1U);
   }
 }
 
@@ -2199,7 +2245,7 @@ static void Display_PagesDrawAlarmSummaryField(const Display_HmiVariableConfig_t
 {
   (void)value;
 
-  (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
   Display_PagesDrawAlarmTitle(variable->x, variable->y);
 }
 
@@ -2235,23 +2281,26 @@ static void Display_PagesDrawAlarmRow(const Display_HmiVariableConfig_t *variabl
     const Display_AlarmCn_t *module_cn = Display_PagesGetAlarmModuleCn(source_id, fault_code);
     const Display_AlarmCn_t *reason_cn = Display_PagesGetAlarmReasonCn(fault_code);
 
+    /* 激活行左侧红色严重度色条，与列表卡片观感一致。 */
+    (void)Display_GfxFillRect((uint16_t)(DISPLAY_ALARM_TABLE_X + 1U), (uint16_t)(row_y + 1U), 5U, (uint16_t)(DISPLAY_ALARM_ROW_H - 1U), DISPLAY_GFX_COLOR_RED);
+
     Display_PagesFormatFaultCode(code_buf, fault_code);
     (void)Display_GfxDrawString((uint16_t)(DISPLAY_ALARM_TABLE_X + 30U), (uint16_t)(row_y + 16U), code_buf, DISPLAY_GFX_COLOR_RED, 2U);
 
     if (module_cn != 0) {
-      (void)Display_TextDrawRawBitmap((uint16_t)(DISPLAY_ALARM_CODE_X + 20U), (uint16_t)(row_y + 15U), module_cn->width, 16U, module_cn->bpr, module_cn->data, DISPLAY_GFX_COLOR_DARK);
+      (void)Display_TextDrawRawBitmap((uint16_t)(DISPLAY_ALARM_CODE_X + 20U), (uint16_t)(row_y + 15U), module_cn->width, 16U, module_cn->bpr, module_cn->data, DISPLAY_THEME_TEXT);
     } else {
-      (void)Display_GfxDrawString((uint16_t)(DISPLAY_ALARM_CODE_X + 20U), (uint16_t)(row_y + 16U), Display_PagesGetAlarmModule(source_id, fault_code), DISPLAY_GFX_COLOR_DARK, 2U);
+      (void)Display_GfxDrawString((uint16_t)(DISPLAY_ALARM_CODE_X + 20U), (uint16_t)(row_y + 16U), Display_PagesGetAlarmModule(source_id, fault_code), DISPLAY_THEME_TEXT, 2U);
     }
 
     {
       Display_LogMsg_t reason_msg = Display_PagesAlarmReasonLogMsg(fault_code);
       if (reason_msg != DISPLAY_LOGMSG_COUNT) {
-        (void)Display_TextDrawLogMessage((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 15U), reason_msg, DISPLAY_GFX_COLOR_DARK);
+        (void)Display_TextDrawLogMessage((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 15U), reason_msg, DISPLAY_THEME_TEXT);
       } else if (reason_cn != 0) {
-        (void)Display_TextDrawRawBitmap((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 15U), reason_cn->width, 16U, reason_cn->bpr, reason_cn->data, DISPLAY_GFX_COLOR_DARK);
+        (void)Display_TextDrawRawBitmap((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 15U), reason_cn->width, 16U, reason_cn->bpr, reason_cn->data, DISPLAY_THEME_TEXT);
       } else {
-        (void)Display_GfxDrawString((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 16U), Display_PagesGetAlarmReason(fault_code), DISPLAY_GFX_COLOR_DARK, 2U);
+        (void)Display_GfxDrawString((uint16_t)(DISPLAY_ALARM_MODULE_X + 20U), (uint16_t)(row_y + 16U), Display_PagesGetAlarmReason(fault_code), DISPLAY_THEME_TEXT, 2U);
       }
     }
   }
@@ -2329,22 +2378,22 @@ Display_Result_t Display_PagesDrawHeaderDynamic(Display_PagesValueReader_t read_
 
   if ((force != 0U) || (date_v != s_last_date)) {
     Display_PagesFmtDate(buf, date_v);
-    (void)Display_GfxFillRect(DISPLAY_HEADER_DT_X, DISPLAY_HEADER_DATE_Y, 64U, 8U, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_GfxFillRect(DISPLAY_HEADER_DT_X, DISPLAY_HEADER_DATE_Y, 64U, 8U, DISPLAY_THEME_PANEL);
     (void)Display_GfxDrawString(DISPLAY_HEADER_DT_X, DISPLAY_HEADER_DATE_Y, buf, DISPLAY_GFX_COLOR_WHITE, 1U);
     s_last_date = date_v;
   }
 
   if ((force != 0U) || (time_v != s_last_time)) {
     Display_PagesFmtClock(buf, time_v);
-    (void)Display_GfxFillRect(DISPLAY_HEADER_DT_X, DISPLAY_HEADER_TIME_Y, 100U, 16U, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_GfxFillRect(DISPLAY_HEADER_DT_X, DISPLAY_HEADER_TIME_Y, 100U, 16U, DISPLAY_THEME_PANEL);
     (void)Display_GfxDrawString(DISPLAY_HEADER_DT_X, DISPLAY_HEADER_TIME_Y, buf, DISPLAY_GFX_COLOR_WHITE, 2U);
     s_last_time = time_v;
   }
 
-  if (force != 0U) { (void)Display_GfxFillRect(DISPLAY_HEADER_POWER_CLEAR_X, DISPLAY_HEADER_POWER_CLEAR_Y, DISPLAY_HEADER_POWER_CLEAR_W, DISPLAY_HEADER_POWER_CLEAR_H, DISPLAY_GFX_COLOR_DARK); }
+  if (force != 0U) { (void)Display_GfxFillRect(DISPLAY_HEADER_POWER_CLEAR_X, DISPLAY_HEADER_POWER_CLEAR_Y, DISPLAY_HEADER_POWER_CLEAR_W, DISPLAY_HEADER_POWER_CLEAR_H, DISPLAY_THEME_PANEL); }
 
   if ((force != 0U) || (loss_v != s_last_loss)) {
-    (void)Display_GfxFillRect(DISPLAY_HEADER_LOSS_X, DISPLAY_HEADER_LOSS_Y, 60U, 8U, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_GfxFillRect(DISPLAY_HEADER_LOSS_X, DISPLAY_HEADER_LOSS_Y, 60U, 8U, DISPLAY_THEME_PANEL);
     Display_PagesDrawHeaderLossRate(DISPLAY_HEADER_LOSS_X, DISPLAY_HEADER_LOSS_Y, loss_v);
     s_last_loss = loss_v;
   }
@@ -2411,7 +2460,7 @@ static void Display_PagesDrawMotorTrackBand(const Display_HmiVariableConfig_t *v
   fill_y   = (uint16_t)(variable->y + variable->height - fill_h);
   fill_end = (uint16_t)(variable->y + variable->height);
 
-  (void)Display_GfxFillRect(clear_x, y, clear_w, height, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect(clear_x, y, clear_w, height, DISPLAY_THEME_PANEL);
   if ((fill_h != 0U) && (y_end > fill_y) && (y < fill_end)) {
     uint16_t blue_y = (y > fill_y) ? y : fill_y;
     uint16_t blue_h = (uint16_t)(((y_end < fill_end) ? y_end : fill_end) - blue_y);
@@ -2421,8 +2470,8 @@ static void Display_PagesDrawMotorTrackBand(const Display_HmiVariableConfig_t *v
 
 static void Display_PagesDrawMotorPercent(const Display_HmiVariableConfig_t *variable, uint16_t percent)
 {
-  (void)Display_GfxFillRect((uint16_t)(variable->x - 16U), (uint16_t)(variable->y + variable->height + 14U), 64U, 18U, DISPLAY_GFX_COLOR_WHITE);
-  Display_PagesDrawWholePercent((uint16_t)(variable->x - 10U), (uint16_t)(variable->y + variable->height + 16U), percent, DISPLAY_GFX_COLOR_DARK);
+  (void)Display_GfxFillRect((uint16_t)(variable->x - 16U), (uint16_t)(variable->y + variable->height + 14U), 64U, 18U, DISPLAY_THEME_PANEL);
+  Display_PagesDrawWholePercent((uint16_t)(variable->x - 10U), (uint16_t)(variable->y + variable->height + 16U), percent, DISPLAY_THEME_TEXT);
 }
 
 Display_Result_t Display_PagesDrawMotorSliderField(const Display_HmiVariableConfig_t *variable, uint32_t old_value, uint32_t value, uint8_t full_redraw, uint8_t draw_percent)
@@ -2447,7 +2496,7 @@ Display_Result_t Display_PagesDrawMotorSliderField(const Display_HmiVariableConf
 
   if (full_redraw != 0U) {
     Display_PagesDrawMotorTrackBand(variable, variable->y, variable->height, percent);
-    (void)Display_GfxDrawRect((uint16_t)(variable->x - 1U), (uint16_t)(variable->y - 1U), (uint16_t)(variable->width + 2U), (uint16_t)(variable->height + 2U), DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxDrawRect((uint16_t)(variable->x - 1U), (uint16_t)(variable->y - 1U), (uint16_t)(variable->width + 2U), (uint16_t)(variable->height + 2U), DISPLAY_THEME_PANEL);
   } else if (old_handle_cy != handle_cy) {
     uint16_t dirty_y   = Display_PagesMinU16(old_fill_y, fill_y);
     uint16_t dirty_end = Display_PagesMaxU16(old_fill_y, fill_y);
@@ -2461,12 +2510,12 @@ Display_Result_t Display_PagesDrawMotorSliderField(const Display_HmiVariableConf
     if (dirty_y < variable->y) { dirty_y = variable->y; }
     if (dirty_end > (uint16_t)(variable->y + variable->height)) { dirty_end = (uint16_t)(variable->y + variable->height); }
     if (dirty_end > dirty_y) { Display_PagesDrawMotorTrackBand(variable, dirty_y, (uint16_t)(dirty_end - dirty_y), percent); }
-    (void)Display_GfxDrawRect((uint16_t)(variable->x - 1U), (uint16_t)(variable->y - 1U), (uint16_t)(variable->width + 2U), (uint16_t)(variable->height + 2U), DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxDrawRect((uint16_t)(variable->x - 1U), (uint16_t)(variable->y - 1U), (uint16_t)(variable->width + 2U), (uint16_t)(variable->height + 2U), DISPLAY_THEME_PANEL);
   }
 
   (void)Display_GfxFillRect((uint16_t)(cx - DISPLAY_MOTOR_HANDLE_HALF_W), (uint16_t)(handle_cy - DISPLAY_MOTOR_HANDLE_HALF_H), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_W * 2U), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_H * 2U), DISPLAY_GFX_COLOR_CYAN);
-  (void)Display_GfxDrawRect((uint16_t)(cx - DISPLAY_MOTOR_HANDLE_HALF_W), (uint16_t)(handle_cy - DISPLAY_MOTOR_HANDLE_HALF_H), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_W * 2U), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_H * 2U), DISPLAY_GFX_COLOR_DARK);
-  (void)Display_GfxDrawHLine((uint16_t)(cx - DISPLAY_MOTOR_HANDLE_HALF_W + 3U), handle_cy, (uint16_t)((DISPLAY_MOTOR_HANDLE_HALF_W * 2U) - 6U), DISPLAY_GFX_COLOR_DARK);
+  (void)Display_GfxDrawRect((uint16_t)(cx - DISPLAY_MOTOR_HANDLE_HALF_W), (uint16_t)(handle_cy - DISPLAY_MOTOR_HANDLE_HALF_H), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_W * 2U), (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_H * 2U), DISPLAY_THEME_TEXT);
+  (void)Display_GfxDrawHLine((uint16_t)(cx - DISPLAY_MOTOR_HANDLE_HALF_W + 3U), handle_cy, (uint16_t)((DISPLAY_MOTOR_HANDLE_HALF_W * 2U) - 6U), DISPLAY_THEME_TEXT);
   if (draw_percent != 0U) { Display_PagesDrawMotorPercent(variable, percent); }
   return DISPLAY_OK;
 }
@@ -2570,7 +2619,7 @@ static void Display_PagesDrawGnssFixText(const Display_HmiVariableConfig_t *vari
     color     = DISPLAY_GFX_COLOR_GREEN;
   }
 
-  (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
+  (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
   (void)Display_TextDrawRawBitmap((uint16_t)(variable->x + 2U), (uint16_t)(variable->y + 2U), 64U, 16U, 8U, text_data, color);
 }
 
@@ -2671,10 +2720,10 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
 
   if ((variable->id == DISPLAY_HMI_VAR_BATTERY_PERCENT) || (variable->id == DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT)) {
     limited_value = (value > 100U) ? 100U : (uint16_t)value;
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    drawn_w = Display_PagesDrawU32Scaled((uint16_t)(variable->x + 2U), (uint16_t)(variable->y + 2U), limited_value, DISPLAY_GFX_COLOR_DARK, 2U);
-    (void)Display_GfxDrawChar((uint16_t)(variable->x + 2U + drawn_w), (uint16_t)(variable->y + 2U), '%', DISPLAY_GFX_COLOR_DARK, 2U);
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    drawn_w = Display_PagesDrawU32Scaled((uint16_t)(variable->x + 2U), (uint16_t)(variable->y + 2U), limited_value, DISPLAY_THEME_TEXT, 2U);
+    (void)Display_GfxDrawChar((uint16_t)(variable->x + 2U + drawn_w), (uint16_t)(variable->y + 2U), '%', DISPLAY_THEME_TEXT, 2U);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
@@ -2683,15 +2732,15 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
   if ((variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_1) || (variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_2) || (variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_3) || (variable->id == DISPLAY_HMI_VAR_MOTOR_PWM_4)) {
     limited_value = (value > 100U) ? 100U : (uint16_t)value;
     (void)Display_GfxDrawProgressBar(variable->x, variable->y, variable->width, variable->height, limited_value, 100U, DISPLAY_GFX_COLOR_BLUE, DISPLAY_GFX_COLOR_GRAY, DISPLAY_GFX_COLOR_BLACK);
-    (void)Display_GfxFillRect((uint16_t)(variable->x + variable->width + 6U), variable->y, 34U, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    Display_PagesDrawWholePercent((uint16_t)(variable->x + variable->width + 8U), (uint16_t)(variable->y + 5U), limited_value, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_GfxFillRect((uint16_t)(variable->x + variable->width + 6U), variable->y, 34U, variable->height, DISPLAY_THEME_PANEL);
+    Display_PagesDrawWholePercent((uint16_t)(variable->x + variable->width + 8U), (uint16_t)(variable->y + 5U), limited_value, DISPLAY_THEME_TEXT);
     return DISPLAY_OK;
   }
 
   if (variable->id == DISPLAY_HMI_VAR_LORA_LOSS_RATE) {
     limited_value = (value > 1000U) ? 1000U : (uint16_t)value;
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    Display_PagesDrawTenthsPercent((uint16_t)(variable->x + 2U), (uint16_t)(variable->y + 5U), limited_value, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    Display_PagesDrawTenthsPercent((uint16_t)(variable->x + 2U), (uint16_t)(variable->y + 5U), limited_value, DISPLAY_THEME_TEXT);
     return DISPLAY_OK;
   }
 
@@ -2704,9 +2753,9 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
     whole = value / 100U;
     frac  = value % 100U;
     Display_PagesFmtUnsigned(fmt_buf, whole, frac, 2U, 100U);
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString((uint16_t)(variable->x + 2U), (uint16_t)(variable->y + 2U), fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString((uint16_t)(variable->x + 2U), (uint16_t)(variable->y + 2U), fmt_buf, DISPLAY_THEME_TEXT, 2U);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
@@ -2714,7 +2763,7 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
       (variable->id == DISPLAY_HMI_VAR_ALARM_CODE)) {
     dot_x = (uint16_t)(variable->x + 12U);
     dot_y = (uint16_t)(variable->y + (variable->height / 2U));
-    (void)Display_GfxFillRect((uint16_t)(dot_x - 10U), (uint16_t)(dot_y - 10U), 20U, 20U, DISPLAY_GFX_COLOR_WHITE);
+    (void)Display_GfxFillRect((uint16_t)(dot_x - 10U), (uint16_t)(dot_y - 10U), 20U, 20U, DISPLAY_THEME_PANEL);
     (void)Display_GfxDrawStatusDot(dot_x, dot_y, 8U, Display_PagesGetStatusColor(value), DISPLAY_GFX_COLOR_BLACK);
     return DISPLAY_OK;
   }
@@ -2725,18 +2774,18 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
   /* 飞行时间(上电后运行)：秒 -> HH:MM:SS */
   if (variable->id == DISPLAY_HMI_VAR_FLIGHT_TIME_S) {
     Display_PagesFmtHms(fmt_buf, value / 3600U, (value / 60U) % 60U, value % 60U);
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_THEME_TEXT, 2U);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
   /* 本地显示时间：HHMMSS -> HH:MM:SS */
   if (variable->id == DISPLAY_HMI_VAR_CLOCK_TIME) {
     Display_PagesFmtHms(fmt_buf, (value / 10000U) % 100U, (value / 100U) % 100U, value % 100U);
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_THEME_TEXT, 2U);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
@@ -2762,9 +2811,9 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
       fmt_buf[p++] = (char)('0' + (dd % 10U));
     }
     fmt_buf[p] = '\0';
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_THEME_TEXT, 2U);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
@@ -2773,11 +2822,11 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
     whole = value / 100U;
     frac  = value % 100U;
     Display_PagesFmtUnsigned(fmt_buf, whole, frac, 1U, 100U); /* 电压只显示一位小数 */
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_THEME_TEXT, 2U);
     drawn_w = (uint16_t)(Display_PagesStrLen(fmt_buf) * 12U);
     Display_PagesDrawUnitAfter(vx, vy, drawn_w, "V");
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
@@ -2812,11 +2861,11 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
       }
       fmt_buf[pos] = '\0';
     }
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_THEME_TEXT, 2U);
     drawn_w = (uint16_t)(Display_PagesStrLen(fmt_buf) * 12U);
     Display_PagesDrawUnitAfter(vx, vy, drawn_w, DISPLAY_PAGES_DEG_STR);
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
@@ -2848,11 +2897,11 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
       }
       fmt_buf[pos] = '\0';
     }
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_THEME_TEXT, 2U);
     drawn_w = (uint16_t)(Display_PagesStrLen(fmt_buf) * 12U);
     Display_PagesDrawUnitAfter(vx, vy, drawn_w, "m");
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
@@ -2890,11 +2939,11 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
       fmt_buf[pos++] = (char)('0' + (abs_frac % 10U));
       fmt_buf[pos]   = '\0';
     }
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_THEME_TEXT, 2U);
     drawn_w = (uint16_t)(Display_PagesStrLen(fmt_buf) * 12U);
     Display_PagesDrawUnitAfter(vx, vy, drawn_w, DISPLAY_PAGES_DEG_STR);
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
@@ -2932,11 +2981,11 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
       fmt_buf[pos++] = (char)('0' + (abs_frac % 10U));
       fmt_buf[pos]   = '\0';
     }
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_THEME_TEXT, 2U);
     drawn_w = (uint16_t)(Display_PagesStrLen(fmt_buf) * 12U);
     Display_PagesDrawUnitAfter(vx, vy, drawn_w, DISPLAY_PAGES_DEGC_STR);
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
@@ -2944,30 +2993,30 @@ Display_Result_t Display_PagesDrawField(const Display_HmiVariableConfig_t *varia
     whole = value / 10U;
     frac  = value % 10U;
     Display_PagesFmtUnsigned(fmt_buf, whole, frac, 1U, 10U);
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_GFX_COLOR_DARK, 2U);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    (void)Display_GfxDrawString(vx, vy, fmt_buf, DISPLAY_THEME_TEXT, 2U);
     drawn_w = (uint16_t)(Display_PagesStrLen(fmt_buf) * 12U);
     Display_PagesDrawUnitAfter(vx, vy, drawn_w, "%");
-    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+    (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
     return DISPLAY_OK;
   }
 
   /* Generic signed integer with optional unit */
   if ((variable->data_type == DISPLAY_HMI_TYPE_I32) || (variable->data_type == DISPLAY_HMI_TYPE_I16)) {
     sval = (variable->data_type == DISPLAY_HMI_TYPE_I32) ? (int32_t)value : (int16_t)(value & 0xFFFFU);
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    drawn_w = Display_PagesDrawI32(vx, vy, sval, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    drawn_w = Display_PagesDrawI32(vx, vy, sval, DISPLAY_THEME_TEXT);
     total_w = drawn_w;
     if (variable->unit[0] != '-' && variable->unit[0] != '\0') { total_w = Display_PagesDrawUnitAfter(vx, vy, drawn_w, variable->unit); }
-    if ((total_w + 4U) < variable->width) { (void)Display_GfxFillRect((uint16_t)(variable->x + 2U + total_w), (uint16_t)(variable->y + 2U), (uint16_t)(variable->width - 4U - total_w), (uint16_t)(variable->height - 4U), DISPLAY_GFX_COLOR_WHITE); }
+    if ((total_w + 4U) < variable->width) { (void)Display_GfxFillRect((uint16_t)(variable->x + 2U + total_w), (uint16_t)(variable->y + 2U), (uint16_t)(variable->width - 4U - total_w), (uint16_t)(variable->height - 4U), DISPLAY_THEME_PANEL); }
   } else if ((variable->data_type == DISPLAY_HMI_TYPE_U32) || (variable->data_type == DISPLAY_HMI_TYPE_U16)) {
-    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_WHITE);
-    drawn_w = Display_PagesDrawU32(vx, vy, value, DISPLAY_GFX_COLOR_DARK);
+    (void)Display_GfxFillRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
+    drawn_w = Display_PagesDrawU32(vx, vy, value, DISPLAY_THEME_TEXT);
     total_w = drawn_w;
     if (variable->unit[0] != '-' && variable->unit[0] != '\0') { total_w = Display_PagesDrawUnitAfter(vx, vy, drawn_w, variable->unit); }
-    if ((total_w + 4U) < variable->width) { (void)Display_GfxFillRect((uint16_t)(variable->x + 2U + total_w), (uint16_t)(variable->y + 2U), (uint16_t)(variable->width - 4U - total_w), (uint16_t)(variable->height - 4U), DISPLAY_GFX_COLOR_WHITE); }
+    if ((total_w + 4U) < variable->width) { (void)Display_GfxFillRect((uint16_t)(variable->x + 2U + total_w), (uint16_t)(variable->y + 2U), (uint16_t)(variable->width - 4U - total_w), (uint16_t)(variable->height - 4U), DISPLAY_THEME_PANEL); }
   }
 
-  (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_GFX_COLOR_GRAY);
+  (void)Display_GfxDrawRect(variable->x, variable->y, variable->width, variable->height, DISPLAY_THEME_PANEL);
   return DISPLAY_OK;
 }
