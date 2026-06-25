@@ -194,7 +194,6 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
 
     for (i = 0U; i < received; i++) {
       uint8_t parse_error_before = s_parse_status.parse_error;
-      uint16_t drop_before       = s_parse_status.packet_rx_drop_count;
 
       if (mavlink_parse_char(MAVLINK_COMM_0, temp[i], &s_parse_msg, &s_parse_status) != 0) {
         /* --- complete MAVLink frame received: 入队，不覆盖 --- */
@@ -234,7 +233,9 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
         s_parse_error_count += delta;
         s_crc_error_count += delta;
       }
-      if (s_parse_status.packet_rx_drop_count != drop_before) { s_rx_drop_count += (uint16_t)(s_parse_status.packet_rx_drop_count - drop_before); }
+      /* packet_rx_drop_count 在本 MAVLink 版本等同 parse_error(已计入上面的 CRC/解析错误)，
+         不再重复累加到 s_rx_drop_count；s_rx_drop_count 只统计接收队列满丢弃。真正的空中整
+         帧丢失靠接收端 seq 跳变在 px4lite_mavlink_rx.c 估算，不在驱动层处理。 */
     }
   }
 
