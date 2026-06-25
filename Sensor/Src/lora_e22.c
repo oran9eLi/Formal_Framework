@@ -167,6 +167,11 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
   uint16_t rx_budget = LORA_E22_RX_SERVICE_BYTE_BUDGET;
   uint16_t i;
 
+  if (s_initialized == 0U) {
+    if (Lora_E22_RecordAuxReady(now_ms) == 0U) { return LORA_RESULT_IO_ERROR; }
+    Lora_E22_ResetRuntimeState(now_ms);
+  }
+
   if (s_reinit_request != 0U) {
     BSP_LoRa_SetMode(0U);
     if (BSP_LoRa_IsReady() != 0U) {
@@ -368,6 +373,7 @@ static void Lora_E22_TxStep(uint32_t now_ms)
 Lora_Result_t Lora_E22_Send(const uint8_t *data, uint16_t len)
 {
   if (data == 0 || len == 0U || len > LORA_E22_TX_BUF_SIZE) { return LORA_RESULT_INVALID_PARAM; }
+  if (s_initialized == 0U) { return LORA_RESULT_IO_ERROR; }
 
   /* One frame in flight at a time. While a frame is staged or sending,
      report BUSY so the MAVLink scheduler retries after its short backoff

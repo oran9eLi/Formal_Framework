@@ -787,11 +787,9 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
   uint32_t now_ms         = Px4Lite_PlatformGetMs();
   Px4Lite_Result_t result = Px4Lite_LoRaInit();
 
-  if (result == PX4LITE_OK) {
-    Px4Lite_RemoteTelemetryInit(now_ms);
-    Px4Lite_MavlinkRxInit(now_ms);
-    result = Px4Lite_MavlinkTxInit(now_ms);
-  }
+  Px4Lite_RemoteTelemetryInit(now_ms);
+  Px4Lite_MavlinkRxInit(now_ms);
+  if (Px4Lite_MavlinkTxInit(now_ms) != PX4LITE_OK) { result = PX4LITE_IO_ERROR; }
 
   Px4Lite_SetStatus(PX4LITE_MODULE_LORA, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   return result;

@@ -1625,9 +1625,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   /* 消息日志缓冲版本变化即触发日志区重绘 */
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, Display_PagesGetLogVersion());
 
-  if (remote_mode == PX4LITE_REMOTE_MODE_REMOTE) {
-    if ((remote_result != PX4LITE_OK) && (system_result != PX4LITE_OK) && (status_fallback_loaded == 0U)) { return DISPLAY_NOT_READY; }
-  } else {
+  if (remote_mode == PX4LITE_REMOTE_MODE_LOCAL) {
     if ((navigation_result != PX4LITE_OK) && (system_result != PX4LITE_OK) && (environment_result != PX4LITE_OK) && (status_fallback_loaded == 0U)) { return DISPLAY_NOT_READY; }
   }
 

@@ -217,6 +217,27 @@ static int TestRuntimeReinitDoesNotWaitForMissingAux(void)
   return failures;
 }
 
+static int TestSendBeforeSuccessfulInitDoesNotStartTx(void)
+{
+  uint8_t frame[8];
+  int failures = 0;
+
+  memset(frame, 0x33, sizeof(frame));
+  s_rx_read_pos = 0U;
+  s_rx_available_len = 0U;
+  s_total_read = 0U;
+  s_now_ms = 4500U;
+  s_lora_ready = 0U;
+  s_uart_tx_busy = 0U;
+  s_start_send_count = 0U;
+  s_abort_count = 0U;
+
+  failures += ExpectResult("init without aux busy", Lora_E22_Init(), LORA_RESULT_BUSY);
+  failures += ExpectResult("send before init fails", Lora_E22_Send(frame, sizeof(frame)), LORA_RESULT_IO_ERROR);
+  failures += ExpectU32("send before init no uart send", s_start_send_count, 0U);
+  return failures;
+}
+
 static int TestHardwareStateDoesNotDependOnTraffic(void)
 {
   int failures = 0;
@@ -276,6 +297,7 @@ int main(void)
   failures += TestAirRateBudgetKeepsAuxWaitDuringSlowAirTransfer();
   failures += TestUartDmaTimeoutUsesConfiguredBaudrate();
   failures += TestRuntimeReinitDoesNotWaitForMissingAux();
+  failures += TestSendBeforeSuccessfulInitDoesNotStartTx();
   failures += TestHardwareStateDoesNotDependOnTraffic();
   failures += TestAuxLowTimeoutMarksHardwareOfflineAndRecovers();
 
