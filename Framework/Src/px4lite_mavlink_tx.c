@@ -636,14 +636,14 @@ static Px4Lite_Result_t MavTx_SendAttitude(uint32_t now_ms)
   if ((navigation.valid_mask & PX4LITE_NAV_VALID_ATTITUDE) == 0U) { return PX4LITE_NOT_READY; }
   if (navigation.header.sequence == s_stats.last_attitude_sequence) { return PX4LITE_IDLE; }
 
+  /* 远程显示只用 roll/pitch/yaw 三个角，不渲染角速度。rollspeed/pitchspeed/yawspeed
+     是 ATTITUDE 的尾部字段，保持为 0(memset)后 MAVLink v2 尾部零截断会自动省掉这 12
+     字节，每帧由 40B 降到 28B；仍是标准 ATTITUDE 报文，地面站可正常解析。 */
   memset(&packet, 0, sizeof(packet));
   packet.time_boot_ms = now_ms;
   packet.roll         = MavTx_Deg100ToRad(navigation.roll_deg100);
   packet.pitch        = MavTx_Deg100ToRad(navigation.pitch_deg100);
   packet.yaw          = MavTx_Deg100ToRad(navigation.yaw_deg100);
-  packet.rollspeed    = MavTx_Deg100ToRad(navigation.roll_rate_dps100);
-  packet.pitchspeed   = MavTx_Deg100ToRad(navigation.pitch_rate_dps100);
-  packet.yawspeed     = MavTx_Deg100ToRad(navigation.yaw_rate_dps100);
 
   (void)mavlink_msg_attitude_encode_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
 

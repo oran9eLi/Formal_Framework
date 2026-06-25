@@ -133,9 +133,10 @@
 #define PX4LITE_MAVLINK_HEARTBEAT_PERIOD_MS    1000U
 #define PX4LITE_MAVLINK_GPS_RAW_PERIOD_MS      1000U
 #define PX4LITE_MAVLINK_GNSS_DETAIL_PERIOD_MS  1000U
-/* 远程显示姿态 5Hz 已足够平滑；9600bps 链路下 50ms(20Hz) 会占用 ~83% 带宽，
- * 饿死电机等低频槽导致远程字段周期性过期。本机屏幕读本地 topic，不受此值影响。 */
-#define PX4LITE_MAVLINK_ATTITUDE_PERIOD_MS     200U
+/* 远程显示姿态 2Hz(500ms) 对人眼读数已足够；远程模式不追求高实时性，降频是
+ * 回收 LoRa 带宽最直接的手段(5Hz→2Hz 约省 120B/s，详见 MavTx_SendAttitude 注释)。
+ * 本机屏幕读本地 topic，不受此值影响。 */
+#define PX4LITE_MAVLINK_ATTITUDE_PERIOD_MS     500U
 #define PX4LITE_MAVLINK_POSITION_PERIOD_MS     500U
 #define PX4LITE_MAVLINK_SYS_STATUS_PERIOD_MS   1000U
 #define PX4LITE_MAVLINK_BATTERY_PERIOD_MS      1000U
