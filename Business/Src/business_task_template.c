@@ -126,6 +126,8 @@ void Business_DisplayServiceTask(void *argument)
       next_refresh_ms = now_ms + BUSINESS_DISPLAY_REFRESH_PERIOD_MS;
     }
 
+    if (Business_DisplayNeedsImmediateRefresh() != 0U) { refresh_pending = 1U; }
+
     if (refresh_pending != 0U) {
       result = Business_DisplayRefreshStep(now_ms, BUSINESS_DISPLAY_REFRESH_BUDGET_US);
       if (result == BUSINESS_SERVICE_OK) {

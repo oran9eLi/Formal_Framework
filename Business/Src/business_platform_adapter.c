@@ -85,15 +85,6 @@ void Business_DisplayStatusStart(uint32_t now_ms)
 #endif
 }
 
-uint8_t Business_DisplaySourceKeyPressed(void)
-{
-#if BUSINESS_ENABLE_DISPLAY
-  return Px4Lite_ButtonPressed(PX4LITE_BUTTON_KEY0);
-#else
-  return 0U;
-#endif
-}
-
 /**
  * @brief 向 Business 代码返回平台单调毫秒时间。
  */

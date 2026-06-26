@@ -11,9 +11,11 @@
 
 #include <string.h>
 #include "px4lite_alarm.h"
+#include "px4lite_config.h"
 #include "px4lite_control.h"
 #include "px4lite_faults.h"
 #include "px4lite_mavlink_rx.h"
+#include "px4lite_mavlink_tx.h"
 #include "px4lite_modules.h"
 #include "px4lite_topics.h"
 
@@ -28,6 +30,7 @@ static App_DateTimeSnapshot_t s_display_date_time_scratch;
 static App_MotorSnapshot_t s_display_motor_scratch;
 static Px4Lite_AlarmSnapshot_t s_display_alarm_scratch;
 static Px4Lite_RemoteTelemetry_t s_display_remote_scratch;
+static Px4Lite_RemoteNodeStatus_t s_remote_node_status_scratch[PX4LITE_REMOTE_NODE_MAX];
 
 /**
  * @brief 从已复制的系统快照中汇总活动模块故障。
@@ -470,6 +473,8 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
   if (out == 0) { return 0U; }
 
   memset(out, 0, sizeof(*out));
+  out->view_node_id = (uint8_t)PX4LITE_NODE_ID;
+  out->view_system_id = (uint8_t)PX4LITE_MAVLINK_SYSTEM_ID;
 
   if (App_CopyNavigation(&s_display_navigation_scratch, now_ms) == PX4LITE_OK) {
     out->navigation_valid   = 1U;
@@ -530,7 +535,7 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
   out->lora_tx_count = comm.tx_frame_count;
   out->lora_rx_count = comm.rx_frame_count;
   out->lora_lost_count = comm.rx_sequence_lost_count;
-  out->lora_ack_count = 0U;
+  out->lora_ack_count = comm.mav_command_ack_rx_count + comm.mav_command_ack_tx_count;
   out->lora_loss_rate_x10 = comm.rx_loss_rate_x10;
 
   /* 姿态显示需要同时满足数据位有效和 IMU 模块状态可用。 */
@@ -553,6 +558,9 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
   if (Px4Lite_IsFresh(&s_display_remote_scratch.header, now_ms, APP_REMOTE_MAX_AGE_MS) == 0U) { return 0U; }
 
+  out->view_system_id = s_display_remote_scratch.system_id;
+  out->view_node_id = (s_display_remote_scratch.system_id != 0U) ? (uint8_t)(s_display_remote_scratch.system_id - 1U) : 0U;
+
   module_loaded = App_FillRemoteModuleViews(out, &s_display_remote_scratch);
   if (module_loaded != 0U) {
     out->system_valid = 1U;
@@ -560,7 +568,18 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
     out->system_ready = 1U;
   }
 
-  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_NAVIGATION) != 0U) {
+  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U) {
+    out->system_valid = 1U;
+    out->status_version = s_display_remote_scratch.header.sequence;
+    out->system_ready = ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) == 0U) ? 1U : 0U;
+    if ((s_display_remote_scratch.module_state_valid_mask & (1UL << (uint32_t)PX4LITE_MODULE_LORA)) == 0U) {
+      out->lora.state = (((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) == 0U) ? APP_VIEW_STATE_ONLINE : APP_VIEW_STATE_OFFLINE);
+      out->lora.fault_code = 0U;
+      out->lora.severity = 0U;
+    }
+  }
+
+  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_NAVIGATION) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_NAVIGATION) == 0U)) {
     out->navigation_valid   = 1U;
     out->gnss_utc_sec       = s_display_remote_scratch.gnss_utc_sec;
     out->gnss_utc_date      = s_display_remote_scratch.gnss_utc_date;
@@ -575,27 +594,27 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
     out->gnss_fix_type      = s_display_remote_scratch.gnss_fix_type;
   }
 
-  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) != 0U) {
+  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ATTITUDE) == 0U)) {
     out->attitude_valid    = 1U;
     out->roll_deg100      = s_display_remote_scratch.roll_deg100;
     out->pitch_deg100     = s_display_remote_scratch.pitch_deg100;
     out->yaw_deg100       = s_display_remote_scratch.yaw_deg100;
   }
 
-  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ENVIRONMENT) != 0U) {
+  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ENVIRONMENT) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ENVIRONMENT) == 0U)) {
     out->environment_valid     = 1U;
     out->pressure_pa           = s_display_remote_scratch.pressure_pa;
     out->temperature_c         = s_display_remote_scratch.temperature_c;
     out->relative_humidity_pct = s_display_remote_scratch.relative_humidity_pct;
   }
 
-  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_BATTERY) != 0U) {
+  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_BATTERY) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_BATTERY) == 0U)) {
     out->environment_valid = 1U;
     out->voltage_mv        = s_display_remote_scratch.voltage_mv;
     out->battery_percent   = s_display_remote_scratch.battery_percent;
   }
 
-  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) {
+  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ALARM) == 0U)) {
     out->alarm_valid               = 1U;
     out->highest_fault_code        = s_display_remote_scratch.highest_fault_code;
     out->highest_source_id         = s_display_remote_scratch.highest_source_id;
@@ -612,15 +631,95 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   out->lora_tx_count = comm.tx_frame_count;
   out->lora_rx_count = s_display_remote_scratch.rx_frame_count;
   out->lora_lost_count = s_display_remote_scratch.rx_sequence_lost_count;
-  out->lora_ack_count = 0U;
+  out->lora_ack_count = comm.mav_command_ack_rx_count + comm.mav_command_ack_tx_count;
   out->lora_loss_rate_x10 = s_display_remote_scratch.rx_loss_rate_x10;
 
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->imu.state) == 0U)) { out->attitude_valid = 0U; }
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->baro.state) == 0U)) { out->environment_valid = 0U; }
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->battery.state) == 0U)) { out->battery_percent = 0U; out->voltage_mv = 0U; }
 
-  out->any_valid = ((out->navigation_valid != 0U) || (out->attitude_valid != 0U) || (out->system_valid != 0U) || (out->environment_valid != 0U) || (out->alarm_valid != 0U)) ? 1U : 0U;
+  out->any_valid = ((out->navigation_valid != 0U) || (out->attitude_valid != 0U) || (out->system_valid != 0U) || (out->environment_valid != 0U) || (out->alarm_valid != 0U) || ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U)) ? 1U : 0U;
   return out->any_valid;
+}
+
+uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms)
+{
+  uint8_t node_id;
+
+  if (Px4Lite_GetSelectedRemoteNode(&node_id) != PX4LITE_OK) { return 0U; }
+  return (Px4Lite_MavlinkSetRemoteView(enabled, node_id, now_ms) == PX4LITE_OK) ? 1U : 0U;
+}
+
+uint8_t App_SelectRemoteNode(uint8_t node_id, uint32_t now_ms)
+{
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+  if (node_id == 0U) { return 0U; }
+#else
+  if (node_id != 0U) { return 0U; }
+#endif
+  if (Px4Lite_SelectRemoteNode(node_id) != PX4LITE_OK) { return 0U; }
+  return App_SetRemoteViewEnabled(1U, now_ms);
+}
+
+uint8_t App_RemoteViewExpired(uint32_t now_ms)
+{
+  return Px4Lite_MavlinkRemoteViewExpired(now_ms);
+}
+
+uint8_t App_GetSelectedRemoteNode(uint8_t *node_id)
+{
+  return (Px4Lite_GetSelectedRemoteNode(node_id) == PX4LITE_OK) ? 1U : 0U;
+}
+
+static App_RemoteNodeState_t App_MapRemoteNodeState(Px4Lite_RemoteNodeState_t state)
+{
+  switch (state) {
+    case PX4LITE_REMOTE_NODE_DISCOVERED:
+      return APP_REMOTE_NODE_DISCOVERED;
+    case PX4LITE_REMOTE_NODE_ACTIVE:
+      return APP_REMOTE_NODE_ACTIVE;
+    case PX4LITE_REMOTE_NODE_STALE:
+      return APP_REMOTE_NODE_STALE;
+    case PX4LITE_REMOTE_NODE_EMPTY:
+    default:
+      break;
+  }
+  return APP_REMOTE_NODE_EMPTY;
+}
+
+Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t capacity, uint8_t *count, uint32_t now_ms)
+{
+  uint8_t raw_count = 0U;
+  uint8_t i;
+  uint8_t written = 0U;
+  Px4Lite_Result_t result;
+
+  if ((out == 0) || (count == 0)) { return PX4LITE_INVALID_PARAM; }
+  *count = 0U;
+
+  result = Px4Lite_CopyRemoteNodeStatuses(s_remote_node_status_scratch, PX4LITE_REMOTE_NODE_MAX, &raw_count, now_ms);
+  if ((result != PX4LITE_OK) && (result != PX4LITE_NOT_READY)) { return result; }
+
+  for (i = 0U; (i < raw_count) && (written < capacity); i++) {
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+    if (s_remote_node_status_scratch[i].node_id == 0U) { continue; }
+#else
+    if (s_remote_node_status_scratch[i].node_id != 0U) { continue; }
+#endif
+    out[written].node_id = s_remote_node_status_scratch[i].node_id;
+    out[written].system_id = s_remote_node_status_scratch[i].system_id;
+    out[written].state = App_MapRemoteNodeState(s_remote_node_status_scratch[i].state);
+    out[written].last_heartbeat_ms = s_remote_node_status_scratch[i].last_heartbeat_ms;
+    out[written].last_data_ms = s_remote_node_status_scratch[i].last_data_ms;
+    out[written].rx_frame_count = s_remote_node_status_scratch[i].rx_frame_count;
+    out[written].rx_sequence_lost_count = s_remote_node_status_scratch[i].rx_sequence_lost_count;
+    out[written].rx_loss_rate_x10 = s_remote_node_status_scratch[i].rx_loss_rate_x10;
+    out[written].reserved = 0U;
+    written++;
+  }
+
+  *count = written;
+  return (written != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
 }
 
 /**
@@ -686,6 +785,15 @@ const char *App_GetModuleDisplayName(uint16_t source_id, uint16_t fault_code)
   }
 
   switch (fault_code) {
+    case PX4LITE_FAULT_MOTOR_DISCONNECT:
+    case PX4LITE_FAULT_MOTOR_POWER_LOW:
+    case PX4LITE_FAULT_MOTOR_DEAD:
+    case PX4LITE_FAULT_MOTOR_CHARGE:
+      return "MOTOR";
+
+    case PX4LITE_FAULT_POWER_CHARGE:
+      return "POWER";
+
     case PX4LITE_FAULT_SYSTEM_SELF_CHECK:
     case PX4LITE_FAULT_SYSTEM_HEAP:
     case PX4LITE_FAULT_SYSTEM_STACK:
@@ -781,6 +889,16 @@ const char *App_GetFaultReasonText(uint16_t fault_code)
       return "EST INPUT";
     case PX4LITE_FAULT_ESTIMATOR_DIVERGE:
       return "EST DIVERGE";
+    case PX4LITE_FAULT_MOTOR_DISCONNECT:
+      return "MOTOR DISCONNECT";
+    case PX4LITE_FAULT_MOTOR_POWER_LOW:
+      return "MOTOR POWER LOW";
+    case PX4LITE_FAULT_MOTOR_DEAD:
+      return "MOTOR BAT EMPTY";
+    case PX4LITE_FAULT_MOTOR_CHARGE:
+      return "MOTOR CHARGE";
+    case PX4LITE_FAULT_POWER_CHARGE:
+      return "POWER CHARGE";
     default:
       break;
   }

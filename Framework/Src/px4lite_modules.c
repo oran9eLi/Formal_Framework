@@ -343,7 +343,7 @@ Px4Lite_Result_t Px4Lite_BatteryRecover(void)
 
 Px4Lite_Result_t Px4Lite_LoraRecover(void)
 {
-#if PX4LITE_ENABLE_LORA
+#if PX4LITE_ENABLE_LORA && PX4LITE_LORA_RECOVERY_ENABLE
   Px4Lite_LoRaRequestReinit();
 #endif
   return PX4LITE_OK;
@@ -837,8 +837,10 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
    * RX freshness is the only ONLINE evidence. Local TX completion stays in
    * debug stats for later half-duplex scheduling and link-budget analysis.
    */
-  if (result != PX4LITE_OK) {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+  if (state == PX4LITE_STATE_FAILED) {
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  } else if (result != PX4LITE_OK) {
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   } else if (state == PX4LITE_STATE_ONLINE) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   } else if ((state == PX4LITE_STATE_DEGRADED) || ((state == PX4LITE_STATE_STARTING) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_LORA_STARTUP_GRACE_MS))) {
@@ -868,6 +870,9 @@ void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out)
   out->mav_battery_status_count  = stats.battery_status_count;
   out->mav_scaled_pressure_count = stats.scaled_pressure_count;
   out->mav_statustext_count      = stats.statustext_count;
+  out->mav_command_count         = stats.command_count;
+  out->mav_command_ack_tx_count  = stats.command_ack_tx_count;
+  out->mav_command_ack_rx_count  = stats.command_ack_rx_count;
   out->mav_no_data_count         = stats.no_data_count;
   out->mav_stale_count           = stats.stale_count;
   out->mav_error_count           = stats.error_count;

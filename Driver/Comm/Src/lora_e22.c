@@ -44,6 +44,7 @@ static uint32_t s_rx_drop_count;
 static uint32_t s_rx_sequence_lost_count;
 static uint32_t s_last_tx_ms;
 static uint32_t s_last_msg_id;
+static uint32_t s_last_aux_ready_ms;
 static uint8_t s_initialized;
 static volatile uint8_t s_reinit_request;
 static uint8_t s_rx_sequence_seen[LORA_E22_MAVLINK_SYSID_MAX];
@@ -75,6 +76,8 @@ static uint32_t s_tx_state_ms;
 static uint32_t Lora_E22_SaturatedAddU32(uint32_t a, uint32_t b);
 static uint16_t Lora_E22_CalcLossRateX10(uint32_t lost_count, uint32_t expected_count);
 static void Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence);
+static void Lora_E22_RecordAuxReady(uint32_t now_ms);
+static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms, uint32_t timeout_ms);
 static void Lora_E22_TxStep(uint32_t now_ms);
 
 static uint32_t Lora_E22_SaturatedAddU32(uint32_t a, uint32_t b)
@@ -115,6 +118,45 @@ static void Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence)
   }
 }
 
+/**
+ * @brief 记录 E22 AUX 最近一次处于高电平就绪的时间。
+ *
+ * @param[in] now_ms 当前 comm 周期时间，单位：ms。
+ *
+ * @note AUX 在空中发送期间会短暂拉低，因此这里只记录硬件事实，不直接判定 OFFLINE。
+ */
+static void Lora_E22_RecordAuxReady(uint32_t now_ms)
+{
+  if (BSP_LoRa_IsReady() != 0U) {
+    s_last_aux_ready_ms = now_ms;
+  }
+}
+
+/**
+ * @brief 判断本机 E22 是否长期不可用。
+ *
+ * @param[in] now_ms 当前时间，单位：ms。
+ * @param[in] timeout_ms AUX 长期不就绪超时，单位：ms。
+ *
+ * @return 1 表示本机模块疑似拔掉或硬件不可用；0 表示未形成离线事实。
+ *
+ * @note 发送状态机未超时前，AUX 低电平属于半双工正常忙状态，不作为拔掉证据。
+ */
+static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms, uint32_t timeout_ms)
+{
+  uint32_t tx_guard_ms = LORA_E22_TX_AUX_TIMEOUT_MS + LORA_E22_TX_DMA_TIMEOUT_MS + LORA_E22_TX_AIR_DONE_TIMEOUT_MS;
+
+  if (BSP_LoRa_IsReady() != 0U) { return 0U; }
+
+  if ((s_tx_state != LORA_TX_IDLE) && ((uint32_t)(now_ms - s_tx_state_ms) <= tx_guard_ms)) {
+    return 0U;
+  }
+
+  if (s_last_aux_ready_ms == 0U) { return 0U; }
+
+  return ((uint32_t)(now_ms - s_last_aux_ready_ms) > timeout_ms) ? 1U : 0U;
+}
+
 Lora_Result_t Lora_E22_Init(void)
 {
   uint32_t start_ms;
@@ -143,6 +185,7 @@ Lora_Result_t Lora_E22_Init(void)
   s_rx_sequence_lost_count = 0U;
   s_last_tx_ms        = 0U;
   s_last_msg_id       = 0U;
+  s_last_aux_ready_ms = BSP_Time_GetTickMs();
   memset(s_rx_sequence_seen, 0, sizeof(s_rx_sequence_seen));
   memset(s_rx_sequence_last, 0, sizeof(s_rx_sequence_last));
   s_tx_state          = LORA_TX_IDLE;
@@ -167,8 +210,14 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
 
   if (s_reinit_request != 0U) {
     s_reinit_request = 0U;
-    (void)Lora_E22_Init();
+    if (Lora_E22_Init() != LORA_RESULT_OK) {
+      return LORA_RESULT_IO_ERROR;
+    }
   }
+
+  if (s_initialized == 0U) { return LORA_RESULT_IO_ERROR; }
+
+  Lora_E22_RecordAuxReady(now_ms);
 
   if (BSP_LoRa_ConsumeRecoverRxRequest() != 0U) {
     BSP_LoRa_RecoverRx();
@@ -219,6 +268,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
   }
 
   Lora_E22_TxStep(now_ms);
+  Lora_E22_RecordAuxReady(now_ms);
   return LORA_RESULT_OK;
 }
 
@@ -245,6 +295,7 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out)
 Lora_State_t Lora_E22_GetState(uint32_t now_ms, uint32_t offline_timeout_ms)
 {
   if (s_initialized == 0U) { return LORA_STATE_NOT_READY; }
+  if (Lora_E22_LocalUnavailable(now_ms, offline_timeout_ms) != 0U) { return LORA_STATE_FAILED; }
   if (s_last_rx_ms == 0U) { return LORA_STATE_NOT_READY; }
   if ((uint32_t)(now_ms - s_last_rx_ms) <= offline_timeout_ms) { return LORA_STATE_ONLINE; }
   return LORA_STATE_OFFLINE;

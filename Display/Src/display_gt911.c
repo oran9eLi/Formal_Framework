@@ -18,10 +18,12 @@
 #define DISPLAY_GT911_REG_CFG     0x8047U
 #define DISPLAY_GT911_REG_TP_INFO 0x814EU
 #define DISPLAY_GT911_REG_TP1     0x8150U
+#define DISPLAY_GT911_RECOVER_RETRY_MS 1000U
 
 static uint8_t s_gt911_addr;
 static uint8_t s_gt911_last_info;
 static Display_Gt911Result_t s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+static uint32_t s_gt911_next_recover_ms;
 static uint8_t s_gt911_cfg_version;
 static uint8_t s_gt911_cfg_verified;
 static uint8_t s_gt911_init_error;
@@ -119,6 +121,34 @@ static uint8_t Display_Gt911_TryAddress(uint8_t addr)
 }
 
 /**
+ * @brief 在 LVGL 输入扫描路径中限频重新探测 GT911。
+ *
+ * @param[in] now_ms 当前时间，单位：ms。
+ *
+ * @note 本函数只在 DisplayTask 上下文执行，避免在 ISR 或其他层做 I2C 恢复。
+ */
+static void Display_Gt911_RecoverIfDue(uint32_t now_ms)
+{
+  if ((s_gt911_addr != 0U) || ((int32_t)(now_ms - s_gt911_next_recover_ms) < 0)) {
+    return;
+  }
+
+  (void)Display_Gt911_Init();
+}
+
+/**
+ * @brief 标记 GT911 不可用并安排下一次限频重探测。
+ *
+ * @param[in] now_ms 当前时间，单位：ms。
+ */
+static void Display_Gt911_MarkNotReady(uint32_t now_ms)
+{
+  s_gt911_addr            = 0U;
+  s_gt911_last_result     = DISPLAY_GT911_NOT_READY;
+  s_gt911_next_recover_ms = now_ms + DISPLAY_GT911_RECOVER_RETRY_MS;
+}
+
+/**
  * @brief Clamp mapped coordinates to the 800x480 logical display area.
  */
 static void Display_Gt911_Clamp(uint16_t *x, uint16_t *y)
@@ -150,15 +180,18 @@ Display_Gt911Result_t Display_Gt911_Init(void)
 
   if (Display_Gt911_TryAddress(DISPLAY_GT911_ADDR_14) == 0U) {
     s_gt911_last_result = DISPLAY_GT911_OK;
+    s_gt911_next_recover_ms = 0U;
     return DISPLAY_GT911_OK;
   }
 
   if (Display_Gt911_TryAddress(DISPLAY_GT911_ADDR_5D) == 0U) {
     s_gt911_last_result = DISPLAY_GT911_OK;
+    s_gt911_next_recover_ms = 0U;
     return DISPLAY_GT911_OK;
   }
 
   s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+  s_gt911_next_recover_ms = BSP_Time_GetTickMs() + DISPLAY_GT911_RECOVER_RETRY_MS;
   return DISPLAY_GT911_NOT_READY;
 }
 
@@ -172,14 +205,23 @@ Display_Gt911Result_t Display_Gt911_Scan(uint16_t *x, uint16_t *y)
   uint16_t raw_x;
   uint16_t raw_y;
   uint8_t clear = 0U;
+  uint32_t now_ms = BSP_Time_GetTickMs();
 
-  if ((x == 0) || (y == 0) || (s_gt911_addr == 0U)) {
+  if ((x == 0) || (y == 0)) {
     s_gt911_last_result = DISPLAY_GT911_NOT_READY;
     return DISPLAY_GT911_NOT_READY;
   }
 
+  if (s_gt911_addr == 0U) {
+    Display_Gt911_RecoverIfDue(now_ms);
+    if (s_gt911_addr == 0U) {
+      s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+      return DISPLAY_GT911_NOT_READY;
+    }
+  }
+
   if (Display_Gt911_ReadRegRetry(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &info, 1U) != 0U) {
-    s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+    Display_Gt911_MarkNotReady(now_ms);
     return DISPLAY_GT911_NOT_READY;
   }
 
@@ -194,7 +236,7 @@ Display_Gt911Result_t Display_Gt911_Scan(uint16_t *x, uint16_t *y)
     return DISPLAY_GT911_NO_POINT;
   }
   if (Display_Gt911_ReadRegRetry(s_gt911_addr, DISPLAY_GT911_REG_TP1, data, 6U) != 0U) {
-    s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+    Display_Gt911_MarkNotReady(now_ms);
     return DISPLAY_GT911_NOT_READY;
   }
 

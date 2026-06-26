@@ -6,6 +6,7 @@
 #include "storage_sd.h"
 
 #include <string.h>
+#include "bsp_critical.h"
 #include "diskio_sd_spi.h"
 #include "ff.h"
 #include "storage_config.h"
@@ -28,8 +29,12 @@ typedef enum {
 
 static void Storage_SD_SetState(Px4Lite_State_t state, uint32_t now_ms)
 {
+  uint32_t primask;
+
+  primask = BSP_Critical_Enter();
   s_status.state           = state;
   s_status.last_attempt_ms = now_ms;
+  BSP_Critical_Exit(primask);
 }
 
 static Px4Lite_Result_t Storage_SD_MapResult(FRESULT result)
@@ -39,20 +44,110 @@ static Px4Lite_Result_t Storage_SD_MapResult(FRESULT result)
 
 static void Storage_SD_UpdateDiskDiag(FRESULT mount_result)
 {
-  s_status.disk_error    = (uint8_t)DiskioSdSpi_LastError();
-  s_status.card_type     = DiskioSdSpi_CardType();
+  uint8_t disk_error;
+  uint8_t card_type;
+  uint8_t last_command;
+  uint8_t last_response;
+  uint32_t primask;
+
+  disk_error    = (uint8_t)DiskioSdSpi_LastError();
+  card_type     = DiskioSdSpi_CardType();
+  last_command  = DiskioSdSpi_LastCommand();
+  last_response = DiskioSdSpi_LastResponse();
+
+  primask = BSP_Critical_Enter();
+  s_status.disk_error    = disk_error;
+  s_status.card_type     = card_type;
   s_status.mount_result  = (uint8_t)mount_result;
-  s_status.last_command  = DiskioSdSpi_LastCommand();
-  s_status.last_response = DiskioSdSpi_LastResponse();
+  s_status.last_command  = last_command;
+  s_status.last_response = last_response;
+  BSP_Critical_Exit(primask);
+}
+
+/**
+ * @brief 更新文件打开阶段诊断字段。
+ */
+static void Storage_SD_SetOpenDiag(Storage_OpenPhase_t open_phase, uint8_t open_result)
+{
+  uint32_t primask;
+
+  primask = BSP_Critical_Enter();
+  s_status.open_phase  = (uint8_t)open_phase;
+  s_status.open_result = open_result;
+  BSP_Critical_Exit(primask);
+}
+
+/**
+ * @brief 更新 SD 挂载标志。
+ */
+static void Storage_SD_SetMounted(uint8_t mounted)
+{
+  uint32_t primask;
+
+  primask = BSP_Critical_Enter();
+  s_status.mounted = mounted;
+  BSP_Critical_Exit(primask);
+}
+
+/**
+ * @brief 更新文件打开标志。
+ */
+static void Storage_SD_SetFilesOpen(uint8_t files_open)
+{
+  uint32_t primask;
+
+  primask = BSP_Critical_Enter();
+  s_status.files_open = files_open;
+  BSP_Critical_Exit(primask);
+}
+
+/**
+ * @brief 更新最近一次 sync 结果。
+ */
+static void Storage_SD_SetLastSyncOk(uint8_t last_sync_ok)
+{
+  uint32_t primask;
+
+  primask = BSP_Critical_Enter();
+  s_status.last_sync_ok = last_sync_ok;
+  BSP_Critical_Exit(primask);
+}
+
+/**
+ * @brief 累加 SD 服务错误计数。
+ */
+static void Storage_SD_IncrementError(void)
+{
+  uint32_t primask;
+
+  primask = BSP_Critical_Enter();
+  s_status.error_count++;
+  BSP_Critical_Exit(primask);
+}
+
+/**
+ * @brief 记录一次成功写入。
+ */
+static void Storage_SD_NoteWriteOk(uint32_t now_ms)
+{
+  uint32_t primask;
+
+  primask = BSP_Critical_Enter();
+  s_status.written_count++;
+  s_status.last_write_ms = now_ms;
+  BSP_Critical_Exit(primask);
 }
 
 static void Storage_SD_CloseFiles(void)
 {
-  if (s_status.files_open != 0U) {
+  Storage_SdStatus_t status;
+
+  Storage_SD_CopyStatus(&status);
+  if (status.files_open != 0U) {
     (void)f_close(&s_data_file);
     (void)f_close(&s_error_file);
   }
-  s_status.files_open = 0U;
+  Storage_SD_SetFilesOpen(0U);
 }
 
 static Px4Lite_Result_t Storage_SD_WriteRaw(FIL *file, const char *line)
@@ -75,24 +170,21 @@ static Px4Lite_Result_t Storage_SD_OpenFile(FIL *file, const char *path, const c
 
   result = f_open(file, path, FA_OPEN_ALWAYS | FA_WRITE);
   if (result != FR_OK) {
-    s_status.open_phase  = (uint8_t)open_phase;
-    s_status.open_result = (uint8_t)result;
+    Storage_SD_SetOpenDiag(open_phase, (uint8_t)result);
     return Storage_SD_MapResult(result);
   }
 
   if (f_size(file) == 0U) {
     if (Storage_SD_WriteRaw(file, header) != PX4LITE_OK) {
       (void)f_close(file);
-      s_status.open_phase  = (uint8_t)header_phase;
-      s_status.open_result = (uint8_t)FR_DISK_ERR;
+      Storage_SD_SetOpenDiag(header_phase, (uint8_t)FR_DISK_ERR);
       return PX4LITE_IO_ERROR;
     }
   } else {
     result = f_lseek(file, f_size(file));
     if (result != FR_OK) {
       (void)f_close(file);
-      s_status.open_phase  = (uint8_t)seek_phase;
-      s_status.open_result = (uint8_t)result;
+      Storage_SD_SetOpenDiag(seek_phase, (uint8_t)result);
       return PX4LITE_IO_ERROR;
     }
   }
@@ -102,8 +194,7 @@ static Px4Lite_Result_t Storage_SD_OpenFile(FIL *file, const char *path, const c
 
 static Px4Lite_Result_t Storage_SD_OpenFiles(void)
 {
-  s_status.open_phase  = STORAGE_OPEN_PHASE_NONE;
-  s_status.open_result = (uint8_t)FR_OK;
+  Storage_SD_SetOpenDiag(STORAGE_OPEN_PHASE_NONE, (uint8_t)FR_OK);
 
   if (Storage_SD_OpenFile(&s_data_file, "0:/" STORAGE_SENSOR_DATA_FILE, StorageCsv_DataHeader(), STORAGE_OPEN_PHASE_DATA_OPEN, STORAGE_OPEN_PHASE_DATA_HEADER, STORAGE_OPEN_PHASE_DATA_SEEK) != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
 
@@ -112,7 +203,7 @@ static Px4Lite_Result_t Storage_SD_OpenFiles(void)
     return PX4LITE_IO_ERROR;
   }
 
-  s_status.files_open = 1U;
+  Storage_SD_SetFilesOpen(1U);
   return PX4LITE_OK;
 }
 
@@ -128,30 +219,32 @@ void Storage_SD_Init(void)
 void Storage_SD_Service(uint32_t now_ms)
 {
   FRESULT result;
+  Storage_SdStatus_t status;
 
-  if ((s_status.state == PX4LITE_STATE_ONLINE) || ((s_status.last_attempt_ms != 0U) && ((uint32_t)(now_ms - s_status.last_attempt_ms) < STORAGE_MOUNT_RETRY_MS))) { return; }
+  Storage_SD_CopyStatus(&status);
+  if ((status.state == PX4LITE_STATE_ONLINE) || ((status.last_attempt_ms != 0U) && ((uint32_t)(now_ms - status.last_attempt_ms) < STORAGE_MOUNT_RETRY_MS))) { return; }
 
   Storage_SD_SetState(PX4LITE_STATE_STARTING, now_ms);
   result = f_mount(&s_fatfs, "0:", 1U);
   Storage_SD_UpdateDiskDiag(result);
   if (result != FR_OK) {
-    s_status.mounted    = 0U;
-    s_status.files_open = 0U;
-    s_status.error_count++;
+    Storage_SD_SetMounted(0U);
+    Storage_SD_SetFilesOpen(0U);
+    Storage_SD_IncrementError();
     Storage_SD_SetState(PX4LITE_STATE_DEGRADED, now_ms);
     return;
   }
-  s_status.mounted = 1U;
+  Storage_SD_SetMounted(1U);
 
   if (Storage_SD_OpenFiles() != PX4LITE_OK) {
     Storage_SD_UpdateDiskDiag(result);
     Storage_SD_CloseFiles();
-    s_status.error_count++;
+    Storage_SD_IncrementError();
     Storage_SD_SetState(PX4LITE_STATE_DEGRADED, now_ms);
     return;
   }
 
-  s_status.last_sync_ok = 1U;
+  Storage_SD_SetLastSyncOk(1U);
   Storage_SD_UpdateDiskDiag(FR_OK);
   Storage_SD_SetState(PX4LITE_STATE_ONLINE, now_ms);
 }
@@ -164,12 +257,11 @@ static Px4Lite_Result_t Storage_SD_WriteLine(FIL *file, const char *line, uint32
 
   result = Storage_SD_WriteRaw(file, line);
   if (result == PX4LITE_OK) {
-    s_status.written_count++;
-    s_status.last_write_ms = now_ms;
+    Storage_SD_NoteWriteOk(now_ms);
     return PX4LITE_OK;
   }
 
-  s_status.error_count++;
+  Storage_SD_IncrementError();
   Storage_SD_CloseFiles();
   Storage_SD_SetState(PX4LITE_STATE_DEGRADED, now_ms);
   return result;
@@ -195,12 +287,12 @@ Px4Lite_Result_t Storage_SD_Sync(uint32_t now_ms)
   data_result  = f_sync(&s_data_file);
   error_result = f_sync(&s_error_file);
   if ((data_result == FR_OK) && (error_result == FR_OK)) {
-    s_status.last_sync_ok = 1U;
+    Storage_SD_SetLastSyncOk(1U);
     return PX4LITE_OK;
   }
 
-  s_status.last_sync_ok = 0U;
-  s_status.error_count++;
+  Storage_SD_SetLastSyncOk(0U);
+  Storage_SD_IncrementError();
   Storage_SD_CloseFiles();
   Storage_SD_SetState(PX4LITE_STATE_DEGRADED, now_ms);
   return PX4LITE_IO_ERROR;
@@ -208,10 +300,19 @@ Px4Lite_Result_t Storage_SD_Sync(uint32_t now_ms)
 
 void Storage_SD_CopyStatus(Storage_SdStatus_t *out)
 {
-  if (out != 0) { *out = s_status; }
+  uint32_t primask;
+
+  if (out == 0) { return; }
+
+  primask = BSP_Critical_Enter();
+  *out = s_status;
+  BSP_Critical_Exit(primask);
 }
 
 uint8_t Storage_SD_IsReady(void)
 {
-  return ((s_status.state == PX4LITE_STATE_ONLINE) && (s_status.mounted != 0U) && (s_status.files_open != 0U)) ? 1U : 0U;
+  Storage_SdStatus_t status;
+
+  Storage_SD_CopyStatus(&status);
+  return ((status.state == PX4LITE_STATE_ONLINE) && (status.mounted != 0U) && (status.files_open != 0U)) ? 1U : 0U;
 }

@@ -211,7 +211,9 @@ typedef struct {
   uint16_t highest_fault_code;                           /**< 当前最高严重度告警故障码。 */
   uint16_t highest_source_id;                            /**< 当前最高严重度告警来源 ID。 */
   uint8_t system_ready;                                  /**< 系统就绪标志，1 表示就绪。 */
-  uint8_t reserved0[3];                                  /**< 保留字段，保持结构体对齐。 */
+  uint8_t view_node_id;                                  /**< 当前显示对象 node_id；Remote ID 接入前作为临时身份。 */
+  uint8_t view_system_id;                                /**< 当前显示对象 MAVLink system id。 */
+  uint8_t view_remote_id_valid;                          /**< Remote ID 显示有效标志，当前预留为 0。 */
   App_ModuleView_t gnss;                                 /**< GNSS 模块显示状态。 */
   App_ModuleView_t imu;                                  /**< IMU 模块显示状态。 */
   App_ModuleView_t baro;                                 /**< Baro 模块显示状态。 */
@@ -252,6 +254,40 @@ typedef struct {
   uint16_t alarm_highest_fault_code;                     /**< 告警表最高故障码。 */
   App_AlarmRecord_t alarms[APP_DISPLAY_ALARM_MAX];       /**< Display 使用的活动告警记录表。 */
 } App_DisplaySnapshot_t;
+
+/**
+ * @brief App 层远端节点列表显示状态。
+ *
+ * @details
+ * 状态来源为 Framework MAVLink RX 远端槽位表。主机通信页用该状态决定选择框灯色；
+ * 从机只保留主机节点。Remote ID 接入前，`node_id` 作为临时身份显示。
+ */
+typedef enum {
+  APP_REMOTE_NODE_EMPTY = 0,                             /**< 未发现节点。 */
+  APP_REMOTE_NODE_DISCOVERED,                            /**< 只收到新鲜心跳，主数据尚未新鲜。 */
+  APP_REMOTE_NODE_ACTIVE,                                /**< 心跳和主数据均新鲜。 */
+  APP_REMOTE_NODE_STALE                                  /**< 已发现但心跳过期。 */
+} App_RemoteNodeState_t;
+
+/**
+ * @brief App 层远端节点选择框视图。
+ *
+ * @details
+ * 本结构体只包含通信页和 Debug 自测需要的轻量字段：身份、状态、最近心跳/主数据时间、
+ * 接收计数和按 MAVLink `seq` 估算的丢包率。界面显示的数据必须继续通过
+ * `App_CopyRemoteDisplaySnapshot()` 读取，不能在页面层直接消费 Framework 远端槽位。
+ */
+typedef struct {
+  uint8_t node_id;                                       /**< 远端节点 ID，主机为 0，从机从 1 递增。 */
+  uint8_t system_id;                                     /**< 对应 MAVLink system id。 */
+  App_RemoteNodeState_t state;                           /**< App 层远端节点显示状态。 */
+  uint32_t last_heartbeat_ms;                            /**< 最近一次心跳时间，单位 ms。 */
+  uint32_t last_data_ms;                                 /**< 最近一次主数据时间，单位 ms。 */
+  uint32_t rx_frame_count;                               /**< 当前节点合法接收帧计数。 */
+  uint32_t rx_sequence_lost_count;                       /**< 当前节点按 MAVLink seq 估算的丢帧数。 */
+  uint16_t rx_loss_rate_x10;                             /**< 当前节点接收侧丢包率，单位 0.1%。 */
+  uint16_t reserved;                                     /**< 保留字段，保持结构体对齐。 */
+} App_RemoteNodeView_t;
 
 /**
  * @brief 复制新鲜且一致的导航快照。
@@ -382,6 +418,58 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
  * @return 1 表示至少一个远端主要显示快照可用，0 表示无可用远端显示数据。
  */
 uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
+
+/**
+ * @brief 开启或关闭当前选中远端节点的主数据查看租约。
+ *
+ * @param[in] enabled 1 表示开启主数据查看，0 表示关闭。
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 1 表示命令已提交，0 表示当前没有合法远端节点或提交失败。
+ */
+uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms);
+
+/**
+ * @brief 选择一个远端节点并开启主数据查看。
+ *
+ * @param[in] node_id 远端节点 ID；主机只允许选择从机，从机只允许选择主机。
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 1 表示选择成功，0 表示角色不允许、节点非法或命令提交失败。
+ */
+uint8_t App_SelectRemoteNode(uint8_t node_id, uint32_t now_ms);
+
+/**
+ * @brief 查询远端查看租约是否已经超时。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 1 表示已超时，0 表示未超时；主机角色当前不会自动超时退回。
+ */
+uint8_t App_RemoteViewExpired(uint32_t now_ms);
+
+/**
+ * @brief 复制当前选中的远端节点 ID。
+ *
+ * @param[out] node_id 输出远端节点 ID，不能为 NULL。
+ *
+ * @return 1 表示复制成功，0 表示参数无效或 Framework 尚未就绪。
+ */
+uint8_t App_GetSelectedRemoteNode(uint8_t *node_id);
+
+/**
+ * @brief 复制 LVGL 通信页使用的远端节点列表。
+ *
+ * @param[out] out 输出数组，不能为 NULL。
+ * @param[in] capacity 输出数组容量。
+ * @param[out] count 实际写入节点数量，不能为 NULL。
+ * @param[in] now_ms 当前系统毫秒时间，用于状态新鲜度判断。
+ *
+ * @return 复制结果；无可显示节点时返回 `PX4LITE_NOT_READY`。
+ *
+ * @note 本接口按主从角色过滤节点，并把 Framework 远端槽位状态映射为 App 层视图。
+ */
+Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t capacity, uint8_t *count, uint32_t now_ms);
 
 /**
  * @brief 复制单个 Framework 模块的最新状态。

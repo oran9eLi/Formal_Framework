@@ -29,6 +29,7 @@ typedef enum {
   DISPLAY_HMI_PAGE_DATA,       /* 定位数据页：系统、GNSS 定位、消息日志*/
   DISPLAY_HMI_PAGE_MOTOR,      /* 电机控制页：四路油门滑条和急停入口 */
   DISPLAY_HMI_PAGE_ALARM,      /* 告警页：运行期告警码和原因表*/
+  DISPLAY_HMI_PAGE_HIDDEN,     /* 通信连接页：触屏进入，用于远端节点选择和查看 */
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 
@@ -72,6 +73,8 @@ typedef enum {
   DISPLAY_HMI_VAR_UPTIME_MS,             /* 系统运行时间，单位 ms */
   DISPLAY_HMI_VAR_BATTERY_VOLTAGE,       /* 电池电压，单位 0.01V */
   DISPLAY_HMI_VAR_BATTERY_PERCENT,       /* 电量百分比，单位 % */
+  DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE,     /* 电机电池电压，单位 0.01V；未接入独立采样时跟随主电池 */
+  DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT,     /* 电机电池电量，单位 %；未接入独立采样时跟随主电池 */
   DISPLAY_HMI_VAR_GNSS_FIX,              /* GNSS 定位状态*/
   DISPLAY_HMI_VAR_GNSS_SAT_COUNT,        /* GNSS 使用卫星数量 */
   DISPLAY_HMI_VAR_GNSS_HDOP,             /* GNSS HDOP，单位 0.01 */
@@ -107,6 +110,7 @@ typedef enum {
   DISPLAY_HMI_VAR_DATE,                  /* 本地显示日期，编码 YYYYMMDD，由业务层喂值*/
   DISPLAY_HMI_VAR_FLIGHT_TIME_S,         /* 飞行时间(上电后运行)，单位 s */
   DISPLAY_HMI_VAR_MESSAGE_LOG,           /* 消息日志缓冲版本号，变化即重绘日志区 */
+  DISPLAY_HMI_VAR_VIEW_NODE_ID,          /* 当前显示对象 node_id，Remote ID 接入前用于临时身份显示 */
   DISPLAY_HMI_VAR_COUNT                  /* HMI 变量数量 */
 } Display_HmiVariableId_t;
 
@@ -120,7 +124,7 @@ typedef struct {
 typedef struct {
   Display_HmiVariableId_t id;      /* Display 内部变量 ID */
   Display_HmiPage_t page;          /* 变量所属页面*/
-  uint16_t var_addr;               /* ATK-MD0700 虚拟变量地址，不是屏幕硬件地址 */
+  uint16_t var_addr;               /* 固件内部变量路由 ID，不是屏幕硬件地址 */
   Display_HmiDataType_t data_type; /* 变量数据类型 */
   Display_HmiAccess_t access;      /* 变量读写属性*/
   uint16_t refresh_ms;             /* 变量刷新周期，0 表示事件触发 */
@@ -128,7 +132,7 @@ typedef struct {
   uint16_t y;                      /* 横屏显示区域左上角 Y */
   uint16_t width;                  /* 横屏显示区域宽度 */
   uint16_t height;                 /* 横屏显示区域高度 */
-  const char *name;                /* 变量名称，需要和 ATK-MD0700 模拟字段表一致*/
+  const char *name;                /* 变量名称，供 LVGL、调试和文档生成使用 */
   const char *unit;                /* 显示单位或比例系数说明*/
   const char *source;              /* 数据来源或命令入口说明*/
 } Display_HmiVariableConfig_t;
@@ -136,7 +140,7 @@ typedef struct {
 typedef struct {
   Display_HmiPage_t page;     /* 触摸区域所属页面*/
   Display_HmiVariableId_t id; /* 命中的变量 ID */
-  uint16_t var_addr;          /* 命中的虚拟变量地址 */
+  uint16_t var_addr;          /* 命中的固件内部变量路由 ID */
   uint16_t x1;                /* 触摸区域左上角 X */
   uint16_t y1;                /* 触摸区域左上角 Y */
   uint16_t x2;                /* 触摸区域右下角 X */
@@ -195,7 +199,7 @@ Display_Result_t Display_GetHmiRawValue(Display_HmiVariableId_t id, uint32_t *va
 Display_Result_t Display_RequestHmiRead(Display_HmiVariableId_t id);
 
 /**
- * @brief       初始化 Display 层元数据和 ATK-MD0700 显示骨架
+ * @brief       初始化 Display 层元数据和 LVGL 显示入口
  * @param       无
  * @retval      Display_Result_t: 初始化结果
  */
@@ -248,6 +252,31 @@ Display_DataSource_t Display_GetDataSource(void);
  */
 Display_Result_t Display_ToggleDataSource(void);
 
+Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16_t throttle_percent);
+
+Display_Result_t Display_RequestMotorEmergencyStop(void);
+
+/**
+ * @brief Display 层 LVGL 刷新预算诊断统计。
+ *
+ * @details
+ * 本结构体由 Display facade 对 Debug 模块只读暴露，用于确认 `Display_RefreshStep()`
+ * 是否遵守单步预算。业务层不得根据这些调试计数改变页面逻辑。
+ */
+typedef struct {
+  uint32_t last_refresh_elapsed_us; /**< 最近一次 LVGL 刷新步耗时，单位 us。 */
+  uint32_t max_refresh_elapsed_us;  /**< 启动以来 LVGL 刷新步最大耗时，单位 us。 */
+  uint32_t budget_busy_count;       /**< 因超过预算返回 `DISPLAY_NOT_READY` 的次数。 */
+  uint32_t page_rebuild_count;      /**< LVGL 页面重建次数。 */
+} Display_DebugStats_t;
+
+/**
+ * @brief 复制 Display/LVGL 刷新预算诊断统计。
+ *
+ * @param[out] out 输出缓冲区，允许为 NULL；为 NULL 时函数不执行任何操作。
+ */
+void Display_GetDebugStats(Display_DebugStats_t *out);
+
 /**
  * @brief       执行一次有预算约束的显示刷新步骤
  * @param       now_ms: 当前系统时间，单位 ms
@@ -255,6 +284,13 @@ Display_Result_t Display_ToggleDataSource(void);
  * @retval      Display_Result_t: 刷新结果；仍有工作时返回 DISPLAY_NOT_READY
  */
 Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us);
+
+/**
+ * @brief       查询 LVGL 是否需要持续调度刷新
+ * @param       无
+ * @retval      uint8_t: 非 0 表示显示任务需要立即继续刷新
+ */
+uint8_t Display_HasPendingRedraw(void);
 
 /**
  * @brief       切换当前显示页面
@@ -271,7 +307,7 @@ Display_Result_t Display_SetHmiPage(Display_HmiPage_t page);
 Display_HmiPage_t Display_GetCurrentHmiPage(void);
 
 /**
- * @brief       轮询触摸输入并处理页面导航或变量写入
+ * @brief       兼容旧业务触摸轮询入口，LVGL 触摸由输入设备端口处理
  * @param       无
  * @retval      Display_Result_t: 处理结果
  */
@@ -285,7 +321,7 @@ Display_Result_t Display_PollTouch(void);
 void Display_ShowBootCode(uint8_t code);
 
 /**
- * @brief       处理 ATK-MD0700 触摸坐标
+ * @brief       兼容旧触摸坐标入口，当前交互由 LVGL widget 回调处理
  * @param       x: 触摸。X 坐标
  * @param       y: 触摸。Y 坐标
  * @param       id: 命中的显示变量 ID 输出指针，可传入空指针

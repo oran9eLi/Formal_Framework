@@ -77,13 +77,6 @@ uint8_t Business_PlatformRegisterModules(void);
 void Business_DisplayStatusStart(uint32_t now_ms);
 
 /**
- * @brief 读取显示数据源切换按键是否按下。
- *
- * @return 1 表示按下，0 表示未按下。
- */
-uint8_t Business_DisplaySourceKeyPressed(void);
-
-/**
  * @brief 更新一个 Business 组件的心跳和在线状态。
  *
  * @param[in] component_id Business 组件编号。
@@ -116,6 +109,8 @@ Business_ServiceResult_t Business_AcquisitionRunOnce(uint32_t now_ms);
  * @return 执行结果。
  */
 Business_ServiceResult_t Business_DisplayPollTouch(uint32_t now_ms);
+
+uint8_t Business_DisplayNeedsImmediateRefresh(void);
 
 /**
  * @brief 准备一份版本一致的显示快照。

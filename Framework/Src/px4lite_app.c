@@ -102,7 +102,26 @@ BaseType_t Px4Lite_AppInit(void)
   TaskHandle_t task_handle;
 
   DebugTaskMonitor_Init();
-  if ((Px4Lite_TopicsInit() != PX4LITE_OK) || (Px4Lite_ModulesInit() != PX4LITE_OK) || (Px4Lite_TimeInit() != PX4LITE_OK) || (Px4Lite_RegistryInit() != PX4LITE_OK) || (Px4Lite_RegisterCoreModules() != pdPASS)) { return pdFAIL; }
+  if (Px4Lite_TopicsInit() != PX4LITE_OK) {
+    DBG_BOOT_PRINT("framework init failed: topics");
+    return pdFAIL;
+  }
+  if (Px4Lite_ModulesInit() != PX4LITE_OK) {
+    DBG_BOOT_PRINT("framework init failed: modules");
+    return pdFAIL;
+  }
+  if (Px4Lite_TimeInit() != PX4LITE_OK) {
+    DBG_BOOT_PRINT("framework init failed: time");
+    return pdFAIL;
+  }
+  if (Px4Lite_RegistryInit() != PX4LITE_OK) {
+    DBG_BOOT_PRINT("framework init failed: registry");
+    return pdFAIL;
+  }
+  if (Px4Lite_RegisterCoreModules() != pdPASS) {
+    DBG_BOOT_PRINT("framework init failed: module register");
+    return pdFAIL;
+  }
 
   task_handle = 0;
   if (xTaskCreate(Px4Lite_SensorTask, "sensor", PX4LITE_STACK_SENSOR, 0, PX4LITE_PRIORITY_SENSOR, &task_handle) != pdPASS) { return pdFAIL; }

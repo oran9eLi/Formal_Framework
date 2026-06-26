@@ -338,6 +338,9 @@ typedef struct {
   uint32_t mav_battery_status_count;  /**< 已调度 BATTERY_STATUS 消息数量。 */
   uint32_t mav_scaled_pressure_count; /**< 已调度 SCALED_PRESSURE 消息数量。 */
   uint32_t mav_statustext_count;      /**< 已调度 STATUSTEXT 消息数量。 */
+  uint32_t mav_command_count;         /**< 已调度 COMMAND_LONG 控制消息数量。 */
+  uint32_t mav_command_ack_tx_count;  /**< 已发送 COMMAND_ACK 数量。 */
+  uint32_t mav_command_ack_rx_count;  /**< 已接收 COMMAND_ACK 数量。 */
   uint32_t mav_no_data_count;         /**< 因无数据未发送的次数。 */
   uint32_t mav_stale_count;           /**< 因数据过期未发送的次数。 */
   uint32_t mav_error_count;           /**< MAVLink 编码或发送错误次数。 */
@@ -382,6 +385,27 @@ typedef struct {
 #define PX4LITE_REMOTE_VALID_BATTERY     (1UL << 5) /**< 已收到远端电源数据。 */
 #define PX4LITE_REMOTE_VALID_ALARM       (1UL << 6) /**< 已收到远端告警数据。 */
 
+typedef enum {
+  PX4LITE_REMOTE_NODE_EMPTY = 0,
+  PX4LITE_REMOTE_NODE_DISCOVERED,
+  PX4LITE_REMOTE_NODE_ACTIVE,
+  PX4LITE_REMOTE_NODE_STALE
+} Px4Lite_RemoteNodeState_t;
+
+typedef struct {
+  uint8_t node_id;
+  uint8_t system_id;
+  uint8_t component_id;
+  uint8_t reserved0;
+  Px4Lite_RemoteNodeState_t state;
+  uint32_t last_heartbeat_ms;
+  uint32_t last_data_ms;
+  uint32_t rx_frame_count;
+  uint32_t rx_sequence_lost_count;
+  uint16_t rx_loss_rate_x10;
+  uint16_t reserved1;
+} Px4Lite_RemoteNodeStatus_t;
+
 /**
  * @brief 远端节点解码后的显示遥测快照。
  * @details
@@ -391,7 +415,15 @@ typedef struct {
 typedef struct {
   Px4Lite_TopicHeader_t header;                       /**< topic 公共头。 */
   uint32_t valid_mask;                                /**< 远端数据有效位，使用 `PX4LITE_REMOTE_VALID_*`。 */
+  uint32_t stale_mask;                                /**< 远端数据过期位，使用 `PX4LITE_REMOTE_VALID_*`。 */
   uint32_t last_rx_ms;                                /**< 最近收到远端合法 MAVLink 帧时间，单位：ms。 */
+  uint32_t heartbeat_update_ms;                       /**< 最近收到 HEARTBEAT 的时间，单位：ms。 */
+  uint32_t navigation_update_ms;                      /**< 最近收到导航数据的时间，单位：ms。 */
+  uint32_t attitude_update_ms;                        /**< 最近收到姿态数据的时间，单位：ms。 */
+  uint32_t environment_update_ms;                     /**< 最近收到环境数据的时间，单位：ms。 */
+  uint32_t battery_update_ms;                         /**< 最近收到电源数据的时间，单位：ms。 */
+  uint32_t modules_update_ms;                         /**< 最近收到模块状态数据的时间，单位：ms。 */
+  uint32_t alarm_update_ms;                           /**< 最近收到告警数据的时间，单位：ms。 */
   uint32_t last_msg_id;                               /**< 最近解码的 MAVLink message id。 */
   uint32_t rx_frame_count;                            /**< 已接收合法 MAVLink 帧计数。 */
   uint32_t decoded_frame_count;                       /**< 已成功映射到远端快照的帧计数。 */

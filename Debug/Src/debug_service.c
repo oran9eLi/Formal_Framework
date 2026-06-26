@@ -7,6 +7,7 @@
 
 #include "debug_config.h"
 #include "debug_console.h"
+#include "debug_selftest.h"
 #include "debug_task_monitor.h"
 #include "app_data_api.h"
 #include "px4lite_config.h"
@@ -221,6 +222,9 @@ static void DebugService_Task(void *argument)
 #if DEBUG_ALARM_MONITOR_ENABLE
   uint32_t last_alarm_report_ms = 0U;
 #endif
+#if DEBUG_SELFTEST_ACTIVE_ENABLE
+  uint32_t last_selftest_report_ms = 0U;
+#endif
 
   (void)argument;
   last_wake = xTaskGetTickCount();
@@ -274,6 +278,13 @@ static void DebugService_Task(void *argument)
     if ((uint32_t)(now_ms - last_alarm_report_ms) >= DEBUG_ALARM_REPORT_PERIOD_MS) {
       DebugService_ReportAlarm(now_ms);
       last_alarm_report_ms = now_ms;
+    }
+#endif
+
+#if DEBUG_SELFTEST_ACTIVE_ENABLE
+    if ((uint32_t)(now_ms - last_selftest_report_ms) >= DEBUG_SELFTEST_REPORT_PERIOD_MS) {
+      DebugSelfTest_Run(now_ms);
+      last_selftest_report_ms = now_ms;
     }
 #endif
 

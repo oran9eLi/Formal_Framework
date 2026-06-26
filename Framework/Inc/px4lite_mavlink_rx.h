@@ -49,4 +49,6 @@ Px4Lite_Result_t Px4Lite_SelectRemoteNode(uint8_t node_id);
  */
 Px4Lite_Result_t Px4Lite_GetSelectedRemoteNode(uint8_t *node_id);
 
+Px4Lite_Result_t Px4Lite_CopyRemoteNodeStatuses(Px4Lite_RemoteNodeStatus_t *out, uint8_t capacity, uint8_t *count, uint32_t now_ms);
+
 #endif

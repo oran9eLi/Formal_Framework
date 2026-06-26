@@ -27,6 +27,9 @@ typedef struct {
   uint32_t battery_status_count;   /**< BATTERY_STATUS 已调度次数。 */
   uint32_t scaled_pressure_count;  /**< SCALED_PRESSURE 已调度次数。 */
   uint32_t statustext_count;       /**< STATUSTEXT 已调度次数。 */
+  uint32_t command_count;          /**< COMMAND_LONG 已调度次数。 */
+  uint32_t command_ack_tx_count;   /**< COMMAND_ACK 已发送次数。 */
+  uint32_t command_ack_rx_count;   /**< COMMAND_ACK 已接收次数。 */
   uint32_t no_data_count;          /**< 因无可用 topic 数据跳过发送的次数。 */
   uint32_t stale_count;            /**< 因 topic 数据过期跳过发送的次数。 */
   uint32_t busy_count;             /**< 因 LoRa 发送忙跳过发送的次数。 */
@@ -74,5 +77,10 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms);
  * @note 本函数只复制内存统计，不访问 LoRa 硬件。
  */
 void Px4Lite_MavlinkTxGetStats(Px4Lite_MavlinkTxStats_t *out);
+
+Px4Lite_Result_t Px4Lite_MavlinkSetRemoteView(uint8_t enabled, uint8_t target_node_id, uint32_t now_ms);
+uint8_t Px4Lite_MavlinkRemoteViewExpired(uint32_t now_ms);
+Px4Lite_Result_t Px4Lite_MavlinkHandleCommandLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, uint32_t now_ms);
+Px4Lite_Result_t Px4Lite_MavlinkHandleCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component, uint32_t now_ms);
 
 #endif

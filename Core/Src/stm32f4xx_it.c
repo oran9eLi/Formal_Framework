@@ -38,9 +38,57 @@
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
+volatile Fault_CrashSnapshot_t g_fault_crash_snapshot;
 
 /* Private function prototypes -----------------------------------------------*/
+void Fault_CaptureAndHalt(uint32_t *stack, uint32_t exc_return, uint32_t fault_type);
+
 /* Private functions ---------------------------------------------------------*/
+
+/**
+ * @brief 保存 Cortex-M fault 现场并停机等待调试。
+ *
+ * @param[in] stack 异常自动压栈区域，来自 MSP 或 PSP。
+ * @param[in] exc_return 异常入口 LR/EXC_RETURN 值。
+ * @param[in] fault_type Fault 类型，见 `Fault_CrashType_t`。
+ *
+ * @note 本函数运行在 fault 上下文，只允许保存寄存器快照，不打印、不访问文件系统、不做恢复。
+ */
+void Fault_CaptureAndHalt(uint32_t *stack, uint32_t exc_return, uint32_t fault_type)
+{
+  __disable_irq();
+
+  g_fault_crash_snapshot.magic      = 0xFA417A11UL;
+  g_fault_crash_snapshot.fault_type = fault_type;
+  g_fault_crash_snapshot.exc_return = exc_return;
+  g_fault_crash_snapshot.msp        = __get_MSP();
+  g_fault_crash_snapshot.psp        = __get_PSP();
+  g_fault_crash_snapshot.active_sp  = (uint32_t)stack;
+
+  if (stack != 0) {
+    g_fault_crash_snapshot.stacked_r0   = stack[0];
+    g_fault_crash_snapshot.stacked_r1   = stack[1];
+    g_fault_crash_snapshot.stacked_r2   = stack[2];
+    g_fault_crash_snapshot.stacked_r3   = stack[3];
+    g_fault_crash_snapshot.stacked_r12  = stack[4];
+    g_fault_crash_snapshot.stacked_lr   = stack[5];
+    g_fault_crash_snapshot.stacked_pc   = stack[6];
+    g_fault_crash_snapshot.stacked_xpsr = stack[7];
+  }
+
+  g_fault_crash_snapshot.cfsr  = SCB->CFSR;
+  g_fault_crash_snapshot.hfsr  = SCB->HFSR;
+  g_fault_crash_snapshot.dfsr  = SCB->DFSR;
+  g_fault_crash_snapshot.afsr  = SCB->AFSR;
+  g_fault_crash_snapshot.bfar  = SCB->BFAR;
+  g_fault_crash_snapshot.mmfar = SCB->MMFAR;
+  g_fault_crash_snapshot.icsr  = SCB->ICSR;
+  g_fault_crash_snapshot.shcsr = SCB->SHCSR;
+
+  while (1) {
+    __NOP();
+  }
+}
 
 /******************************************************************************/
 /*            Cortex-M4 Processor Exceptions Handlers                         */
@@ -60,10 +108,16 @@ void NMI_Handler(void)
  * @param  None
  * @retval None
  */
-void HardFault_Handler(void)
+__asm void HardFault_Handler(void)
 {
-  /* Go to infinite loop when Hard Fault exception occurs */
-  while (1) {}
+  IMPORT Fault_CaptureAndHalt
+  TST LR, #4
+  ITE EQ
+  MRSEQ R0, MSP
+  MRSNE R0, PSP
+  MOV R1, LR
+  MOVS R2, #1
+  B Fault_CaptureAndHalt
 }
 
 /**
@@ -71,10 +125,16 @@ void HardFault_Handler(void)
  * @param  None
  * @retval None
  */
-void MemManage_Handler(void)
+__asm void MemManage_Handler(void)
 {
-  /* Go to infinite loop when Memory Manage exception occurs */
-  while (1) {}
+  IMPORT Fault_CaptureAndHalt
+  TST LR, #4
+  ITE EQ
+  MRSEQ R0, MSP
+  MRSNE R0, PSP
+  MOV R1, LR
+  MOVS R2, #2
+  B Fault_CaptureAndHalt
 }
 
 /**
@@ -82,10 +142,16 @@ void MemManage_Handler(void)
  * @param  None
  * @retval None
  */
-void BusFault_Handler(void)
+__asm void BusFault_Handler(void)
 {
-  /* Go to infinite loop when Bus Fault exception occurs */
-  while (1) {}
+  IMPORT Fault_CaptureAndHalt
+  TST LR, #4
+  ITE EQ
+  MRSEQ R0, MSP
+  MRSNE R0, PSP
+  MOV R1, LR
+  MOVS R2, #3
+  B Fault_CaptureAndHalt
 }
 
 /**
@@ -93,10 +159,16 @@ void BusFault_Handler(void)
  * @param  None
  * @retval None
  */
-void UsageFault_Handler(void)
+__asm void UsageFault_Handler(void)
 {
-  /* Go to infinite loop when Usage Fault exception occurs */
-  while (1) {}
+  IMPORT Fault_CaptureAndHalt
+  TST LR, #4
+  ITE EQ
+  MRSEQ R0, MSP
+  MRSNE R0, PSP
+  MOV R1, LR
+  MOVS R2, #4
+  B Fault_CaptureAndHalt
 }
 
 /**

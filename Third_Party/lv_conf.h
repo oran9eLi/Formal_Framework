@@ -1,0 +1,6 @@
+#ifndef PX4LITE_THIRD_PARTY_LV_CONF_H
+#define PX4LITE_THIRD_PARTY_LV_CONF_H
+
+#include "LVGL/lv_conf.h"
+
+#endif /* PX4LITE_THIRD_PARTY_LV_CONF_H */
