@@ -1,0 +1,296 @@
+version: "4.1"
+name: formal_framework
+type: ARM
+deviceName: null
+packDir: .pack/Keil/STM32F4xx_DFP.2.14.0
+srcDirs: []
+virtualFolder:
+  name: <virtual_root>
+  files: []
+  folders:
+    - name: Core
+      files:
+        - path: Core/Src/main.c
+        - path: Core/Src/stm32f4xx_hal_msp.c
+        - path: Core/Src/stm32f4xx_it.c
+        - path: Core/Src/system_stm32f4xx.c
+        - path: Core/Src/stm32f4xx_hal_timebase_tim.c
+        - path: Core/Src/freertos_hooks.c
+      folders: []
+    - name: Framework
+      files:
+        - path: Framework/Src/px4lite_app.c
+        - path: Framework/Src/px4lite_storage.c
+        - path: Framework/Src/px4lite_modules.c
+        - path: Framework/Src/px4lite_mavlink_tx.c
+        - path: Framework/Src/px4lite_attitude.c
+        - path: Framework/Src/px4lite_alarm.c
+        - path: Framework/Src/px4lite_time.c
+        - path: Framework/Src/px4lite_control.c
+        - path: Framework/Src/px4lite_topics.c
+        - path: Framework/Src/px4lite_platform_f407.c
+        - path: Framework/Src/px4lite_registry.c
+        - path: Framework/Src/px4lite_work.c
+        - path: Framework/Src/px4lite_recovery.c
+      folders: []
+    - name: Business
+      files:
+        - path: Business/Src/business_event_bus.c
+        - path: Business/Src/business_task_template.c
+        - path: Business/Src/business_task_registry.c
+        - path: Business/Src/business_platform_adapter.c
+        - path: Business/Src/business_display_placeholder.c
+        - path: Business/Src/app_data_api.c
+      folders: []
+    - name: GNSS Driver
+      files:
+        - path: Sensor/Src/sensor_gnss.c
+        - path: Sensor/Src/lora_e22.c
+        - path: Sensor/Src/sensor_nmea.c
+        - path: Sensor/Src/sensor_bme280.c
+        - path: Sensor/Src/sensor_mpu6050.c
+        - path: Sensor/Src/sensor_power.c
+        - path: Sensor/Src/sensor_power2.c
+      folders: []
+    - name: BSP
+      files:
+        - path: Bsp/Src/bsp.c
+        - path: Bsp/Src/bsp_uart.c
+        - path: Bsp/Src/bsp_gnss.c
+        - path: Bsp/Src/bsp_rtc.c
+        - path: Bsp/Src/bsp_lora.c
+        - path: Bsp/Src/bsp_lcd_fsmc.c
+        - path: Bsp/Src/bsp_touch_port.c
+        - path: Bsp/Src/bsp_i2c.c
+        - path: Bsp/Src/bsp_adc.c
+        - path: Bsp/Src/bsp_adc2.c
+        - path: Bsp/Src/bsp_time.c
+        - path: Bsp/Src/bsp_spi.c
+        - path: Bsp/Src/bsp_pwm.c
+        - path: Bsp/Src/bsp_button.c
+      folders: []
+    - name: Display
+      files:
+        - path: Display/Src/display.c
+        - path: Display/Src/display_gfx.c
+        - path: Display/Src/display_gt911.c
+        - path: Display/Src/display_logo.c
+        - path: Display/Src/display_logo_data.c
+        - path: Display/Src/display_pages.c
+        - path: Display/Src/display_ssd1963.c
+        - path: Display/Src/display_text.c
+      folders: []
+    - name: Debug
+      files:
+        - path: Debug/Src/debug_console.c
+        - path: Debug/Src/debug_task_monitor.c
+        - path: Debug/Src/debug_service.c
+      folders: []
+    - name: HAL
+      files:
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_gpio.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc_ex.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc_ex.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr_ex.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc_ex.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_sram.c
+        - path: Third_Party/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_fsmc.c
+      folders: []
+    - name: FreeRTOS
+      files:
+        - path: Third_Party/Middlewares/Source/list.c
+        - path: Third_Party/Middlewares/Source/queue.c
+        - path: Third_Party/Middlewares/Source/tasks.c
+        - path: Third_Party/Middlewares/Source/timers.c
+        - path: Third_Party/Middlewares/Source/portable/MemMang/heap_4.c
+        - path: Third_Party/Middlewares/Source/portable/RVDS/ARM_CM4F/port.c
+      folders: []
+    - name: CMSIS
+      files:
+        - path: Third_Party/Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/arm/startup_stm32f407xx.s
+      folders: []
+    - name: Storage
+      files:
+        - path: Storage/Src/storage_sd.c
+        - path: Storage/Src/storage_csv.c
+        - path: Storage/Src/storage_queue.c
+        - path: Storage/Src/storage_time.c
+        - path: Storage/Src/storage_file.c
+        - path: Storage/Src/storage_event.c
+        - path: Storage/Src/storage_module_event.c
+        - path: Storage/Src/storage_drop_event.c
+        - path: Storage/Src/diskio_sd_spi.c
+        - path: Third_Party/FatFs/ff.c
+      folders: []
+dependenceList: []
+outDir: build
+miscInfo:
+  uid: 89b91c26224b095932ea4e261c4a0999
+targets:
+  Target 1:
+    cppPreprocessAttrs:
+      defineList:
+        - STM32F407xx
+        - USE_HAL_DRIVER
+      incList:
+        - Core/Inc
+        - Debug/Inc
+        - Bsp/Inc
+        - Sensor/Inc
+        - Framework/Inc
+        - Business/Inc
+        - Display/Inc
+        - Storage/Inc
+        - Third_Party/FatFs
+        - Third_Party/Drivers/CMSIS/Device/ST/STM32F4xx/Include
+        - Third_Party/Drivers/STM32F4xx_HAL_Driver/Inc
+        - Third_Party/Drivers/STM32F4xx_HAL_Driver/Inc/Legacy
+        - Third_Party/Middlewares/Source/include
+        - Third_Party/Middlewares/Source/portable/RVDS/ARM_CM4F
+        - Third_Party/Drivers/CMSIS/Include
+        - Third_Party/mavlink
+        - .cmsis/include
+        - MDK-ARM/RTE/_Target 1
+      libList: []
+    excludeList: []
+    settings:
+      debugger: cortex-debug
+    toolchain: AC5
+    toolchainConfigMap:
+      AC5:
+        archExtensions: ""
+        cpuType: Cortex-M4
+        floatingPointHardware: single
+        options:
+          version: 4
+          afterBuildTasks: []
+          asm-compiler:
+            defines: []
+          beforeBuildTasks: []
+          c/cpp-compiler:
+            CXX_FLAGS: --diag_suppress=1 --diag_suppress=1295
+            C_FLAGS: --diag_suppress=1 --diag_suppress=1295
+            c99-mode: true
+            one-elf-section-per-function: true
+            optimization: level-0
+            warnings: all-warnings
+          global:
+            output-debug-info: enable
+            use-microLIB: true
+          linker:
+            $outputTaskExcludes:
+              - .bin
+            output-format: elf
+            ro-base: "0x08000000"
+            rw-base: "0x20000000"
+            xo-base: ""
+        scatterFilePath: ""
+        storageLayout:
+          RAM:
+            - id: 1
+              isChecked: false
+              mem:
+                size: "0x0"
+                startAddr: "0x0"
+              noInit: false
+              tag: RAM
+            - id: 2
+              isChecked: false
+              mem:
+                size: "0x0"
+                startAddr: "0x0"
+              noInit: false
+              tag: RAM
+            - id: 3
+              isChecked: false
+              mem:
+                size: "0x0"
+                startAddr: "0x0"
+              noInit: false
+              tag: RAM
+            - id: 1
+              isChecked: true
+              mem:
+                size: "0x20000"
+                startAddr: "0x20000000"
+              noInit: false
+              tag: IRAM
+            - id: 2
+              isChecked: false
+              mem:
+                size: "0x10000"
+                startAddr: "0x10000000"
+              noInit: false
+              tag: IRAM
+          ROM:
+            - id: 1
+              isChecked: false
+              isStartup: false
+              mem:
+                size: "0x0"
+                startAddr: "0x0"
+              tag: ROM
+            - id: 2
+              isChecked: false
+              isStartup: false
+              mem:
+                size: "0x0"
+                startAddr: "0x0"
+              tag: ROM
+            - id: 3
+              isChecked: false
+              isStartup: false
+              mem:
+                size: "0x0"
+                startAddr: "0x0"
+              tag: ROM
+            - id: 1
+              isChecked: true
+              isStartup: true
+              mem:
+                size: "0x100000"
+                startAddr: "0x8000000"
+              tag: IROM
+            - id: 2
+              isChecked: false
+              isStartup: false
+              mem:
+                size: "0x0"
+                startAddr: "0x0"
+              tag: IROM
+        useCustomScatterFile: false
+    uploadConfigMap:
+      JLink:
+        baseAddr: ""
+        bin: ""
+        cpuInfo:
+          cpuName: "null"
+          vendor: "null"
+        otherCmds: ""
+        proType: 1
+        speed: 8000
+      STLink:
+        address: "0x8000000"
+        bin: ""
+        elFile: None
+        optionBytes: .eide/target 1.st.option.bytes.ini
+        otherCmds: ""
+        proType: SWD
+        resetMode: default
+        runAfterProgram: true
+        speed: 4000
+    uploader: STLink

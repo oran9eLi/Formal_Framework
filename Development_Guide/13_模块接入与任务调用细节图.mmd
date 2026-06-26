@@ -1,0 +1,57 @@
+flowchart LR
+    subgraph DEV["Module Developer"]
+        C1["1. Add enable/resource definitions<br/>bsp_config.h"]
+        C2["2. Configure MCU resources<br/>HAL MSP"]
+        C3["3. Implement BSP Init/Read/Write<br/>runtime parameters"]
+        C4["4. Implement typed driver<br/>Init/Service/Copy or FIFO"]
+        C5["5. Implement Platform Adapter<br/>convert units and flags"]
+        C6["6. Register lifecycle callbacks"]
+        C7["7. Add WorkItem to owner task"]
+        C8["8. Publish complete Topic"]
+        C9["9. Add Health timeout/recovery"]
+        C10["10. Add independent Debug monitor"]
+    end
+
+    subgraph RTOS["FreeRTOS Runtime"]
+        SENSOR["SensorTask<br/>owns physical sensor acquisition"]
+        EST["EstimatorTask<br/>calculation/fusion"]
+        HEALTH["HealthTask<br/>state/timeout/watchdog gate"]
+        BIZ["Business Tasks<br/>Display/LoRa/Logger/Alarm"]
+        DEBUG["DebugTask<br/>serial diagnostics only"]
+    end
+
+    subgraph DATA["Data Access"]
+        SNAP["Low-rate complete Snapshot"]
+        FIFO["High-rate FIFO"]
+        DOMAIN["Domain Snapshot"]
+        APPAPI["App_Copy... read-only API"]
+        EVENT["EventBus / Command Queue"]
+    end
+
+    C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> C7
+    C7 --> SENSOR
+    SENSOR --> C8
+    C8 --> SNAP
+    C8 --> FIFO
+    SNAP --> EST
+    FIFO --> EST
+    EST --> DOMAIN
+    DOMAIN --> APPAPI
+    APPAPI --> BIZ
+    EVENT <--> BIZ
+    SNAP --> HEALTH
+    DOMAIN --> HEALTH
+    C9 --> HEALTH
+    SNAP -. copy only .-> DEBUG
+    DOMAIN -. copy only .-> DEBUG
+    C10 --> DEBUG
+
+    RULE1["No task reads driver private memory"]
+    RULE2["No ISR parsing/printf/storage"]
+    RULE3["No partial snapshot/frame publication"]
+    RULE4["One hardware owner per device"]
+
+    RULE1 -. mandatory .-> APPAPI
+    RULE2 -. mandatory .-> SENSOR
+    RULE3 -. mandatory .-> SNAP
+    RULE4 -. mandatory .-> SENSOR

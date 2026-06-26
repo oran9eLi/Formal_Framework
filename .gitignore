@@ -1,0 +1,33 @@
+# Keil MDK generated build outputs
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+MDK-ARM/*.log
+MDK-ARM/*.uvguix.*
+MDK-ARM/*.uvgui.*
+MDK-ARM/*.uvgui
+
+# EIDE / local build outputs
+build/
+Target 1/
+.uvtmp/
+formal_framework.code-workspace
+
+# Release binaries generated from Keil builds
+Release/Latest/*.axf
+Release/Latest/*.hex
+Release/Latest/*.map
+Release/Latest/*.log
+
+# Local editor / assistant state
+.claude/settings.local.json
+.vscode/
+.idea/
+.vs/
+.cursor/
+tmp/
+.pack/
+*.code-workspace
+
+# OS generated files
+Thumbs.db
+Desktop.ini
