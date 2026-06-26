@@ -128,6 +128,12 @@ typedef struct {
   uint32_t voltage_mv;          /**< 电池或输入电压，单位：mV。 */
   int32_t current_ma;           /**< 电流，单位：mA；未知时可为 0。 */
   uint8_t battery_percent;      /**< 电量百分比，范围：0 到 100；未知时为 0。 */
+  uint8_t low_voltage;          /**< 主控电池低电压标志，1 表示低电压。 */
+  uint16_t reserved_power0;     /**< 保留字段，保持结构体对齐。 */
+  uint32_t voltage2_mv;         /**< 电机电池电压，单位：mV。 */
+  uint8_t battery2_percent;     /**< 电机电池电量百分比，范围：0 到 100；未知时为 0。 */
+  uint8_t low_voltage2;         /**< 电机电池低电压标志，1 表示低电压。 */
+  uint16_t reserved_power1;     /**< 保留字段，保持结构体对齐。 */
   uint32_t date_ymd;            /**< 远端本地日期，编码 YYYYMMDD。 */
   uint32_t time_hhmmss;         /**< 远端本地时间，编码 HHMMSS。 */
   uint8_t motor_duty_percent[PX4LITE_MOTOR_COUNT]; /**< 远端电机目标油门百分比，范围 0 到 100。 */

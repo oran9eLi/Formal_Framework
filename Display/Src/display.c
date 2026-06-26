@@ -219,7 +219,7 @@ static volatile uint8_t s_recover_requested   = 0U;
 static uint16_t s_refresh_cursor              = 0U;
 static uint8_t s_static_redraw_pending        = 0U;
 static uint8_t s_motor_bat_cutoff             = 0U; /* 电机电池电压不足：停机并锁定 PWM 滑块 */
-static uint8_t s_motor_band                   = 4U; /* 电机电池档位(带滞回)，初值=正常 */
+static uint8_t s_motor_band                   = 0U; /* 电机电池档位(带滞回)，初值=断开 */
 static uint8_t s_main_band                    = 2U; /* 主控电池档位(带滞回)，初值=正常 */
 static Display_HmiPage_t s_page_before_hidden = DISPLAY_HMI_PAGE_SELF_CHECK; /* 进入隐藏页前的页面，供 KEY0 返回 */
 static uint8_t s_key0_last_raw                = 0U;

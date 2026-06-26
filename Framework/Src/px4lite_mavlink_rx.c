@@ -189,6 +189,16 @@ static Px4Lite_Result_t MavlinkRx_HandleNamedValueInt(const mavlink_message_t *m
     return PX4LITE_OK;
   }
 
+  if (MavlinkRx_NameEquals(named.name, "MOTBAT", 6U) != 0U) {
+    packed = (uint32_t)named.value;
+    snapshot->voltage2_mv      = (uint32_t)(packed & 0xFFFFU);
+    snapshot->battery2_percent = (uint8_t)((packed >> 16U) & 0xFFU);
+    if (snapshot->battery2_percent > 100U) { snapshot->battery2_percent = 100U; }
+    snapshot->low_voltage2     = (uint8_t)((packed >> 24U) & 0x01U);
+    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_POWER, now_ms);
+    return PX4LITE_OK;
+  }
+
   if (MavlinkRx_NameEquals(named.name, "MODSTAT", 7U) != 0U) {
     packed = (uint32_t)named.value;
     snapshot->module_state[PX4LITE_MODULE_GNSS]    = (uint8_t)(packed & 0x0FU);
@@ -266,6 +276,7 @@ static Px4Lite_Result_t MavlinkRx_HandleSysStatus(const mavlink_message_t *msg, 
   snapshot->voltage_mv      = sys.voltage_battery;
   snapshot->current_ma      = sys.current_battery;
   snapshot->battery_percent = (sys.battery_remaining < 0) ? 0U : (uint8_t)sys.battery_remaining;
+  snapshot->low_voltage     = ((sys.battery_remaining >= 0) && (sys.battery_remaining < 20)) ? 1U : 0U;
   Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_POWER | PX4LITE_REMOTE_VALID_STATUS, now_ms);
   return PX4LITE_OK;
 }
@@ -287,6 +298,7 @@ static Px4Lite_Result_t MavlinkRx_HandleBatteryStatus(const mavlink_message_t *m
   if (cells != 0U) { snapshot->voltage_mv = total_mv; }
   snapshot->current_ma      = battery.current_battery * 10;
   snapshot->battery_percent = (battery.battery_remaining < 0) ? 0U : (uint8_t)battery.battery_remaining;
+  snapshot->low_voltage     = (battery.charge_state == MAV_BATTERY_CHARGE_STATE_LOW) ? 1U : 0U;
   Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_POWER, now_ms);
   return PX4LITE_OK;
 }
@@ -411,6 +423,4 @@ void Px4Lite_MavlinkRxGetStats(Px4Lite_MavlinkRxStats_t *out)
   if (out == 0) { return; }
   *out = s_stats;
 }
-
-
 

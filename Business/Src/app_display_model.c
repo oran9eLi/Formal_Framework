@@ -98,6 +98,10 @@ Px4Lite_Result_t App_GetDisplayEnvironment(App_EnvironmentSnapshot_t *out, uint3
   out->relative_humidity_pct = remote.relative_humidity_pct;
   out->voltage_mv            = remote.voltage_mv;
   out->battery_percent       = remote.battery_percent;
+  out->low_voltage           = remote.low_voltage;
+  out->voltage2_mv           = remote.voltage2_mv;
+  out->battery2_percent      = remote.battery2_percent;
+  out->low_voltage2          = remote.low_voltage2;
   return fresh;
 }
 

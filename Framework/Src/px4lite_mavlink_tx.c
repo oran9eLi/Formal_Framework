@@ -73,7 +73,7 @@ static uint8_t s_remote_motor_urgent_pair;
 static uint8_t s_slot;
 
 #define MAV_TX_DEG100_TO_RAD 0.0001745329252f
-#define MAV_TX_REMOTE_DETAIL_COUNT 3U
+#define MAV_TX_REMOTE_DETAIL_COUNT 4U
 #define MAV_TX_REMOTE_MOTOR_COUNT 2U
 #define MAV_TX_REMOTE_STATUS_COUNT 3U
 #define MAV_TX_REMOTE_MOTOR_URGENT_FRAMES 4U
@@ -366,6 +366,24 @@ static Px4Lite_Result_t MavTx_SendRemoteHumidity(uint32_t now_ms)
 }
 
 /**
+ * @brief 发送远程显示使用的电机电池电压、电量和低压标志。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteMotorBattery(uint32_t now_ms)
+{
+  Px4Lite_BatteryStatus_t battery;
+  uint32_t packed;
+
+  if (Px4Lite_CopyBattery2(&battery) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&battery.header, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
+
+  packed = (uint32_t)MavTx_SaturateUint16(battery.voltage_mv);
+  packed |= ((uint32_t)MavTx_SaturatePercent(battery.percent) << 16U);
+  packed |= ((uint32_t)(battery.low_voltage != 0U ? 1U : 0U) << 24U);
+
+  return MavTx_SendNamedValueInt(now_ms, "MOTBAT", 6U, (int32_t)packed);
+}
+
+/**
  * @brief 发送远程显示使用的电机占空比对。
  */
 static Px4Lite_Result_t MavTx_SendRemoteMotorPair(uint32_t now_ms, uint8_t pair_index)
@@ -457,7 +475,7 @@ static Px4Lite_Result_t MavTx_RunRemoteMotorUrgent(uint32_t now_ms)
 }
 
 /**
- * @brief 轮转发送远程显示扩展字段（时间、日期、湿度）。
+ * @brief 轮转发送远程显示扩展字段（时间、日期、湿度、电机电池）。
  *
  * @details
  * 电机占空比已拆到独立的 MAV_TX_SLOT_REMOTE_MOTOR 高频槽，不再走本轮转。
@@ -478,8 +496,11 @@ static Px4Lite_Result_t MavTx_SendRemoteDetail(uint32_t now_ms)
       case 1U:
         result = MavTx_SendRemoteTime(now_ms, 1U);
         break;
-      default:
+      case 2U:
         result = MavTx_SendRemoteHumidity(now_ms);
+        break;
+      default:
+        result = MavTx_SendRemoteMotorBattery(now_ms);
         break;
     }
 
