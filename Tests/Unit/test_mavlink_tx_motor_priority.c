@@ -144,12 +144,53 @@ static int TestMotor34ChangePreemptsWithMotor34(void)
   return failures;
 }
 
+static int TestMotor34ChangeWithSpeedLevelStillPrefersMotor34(void)
+{
+  mavlink_message_t msg;
+  mavlink_named_value_int_t named;
+  int failures = 0;
+
+  memset(&s_motor, 0, sizeof(s_motor));
+  s_motor.header.valid = 1U;
+  s_motor.header.sequence = 20U;
+  s_motor.header.sample_time_ms = 3000U;
+  s_motor.duty_percent[0] = 10U;
+  s_motor.duty_percent[1] = 20U;
+  s_motor.duty_percent[2] = 30U;
+  s_motor.duty_percent[3] = 40U;
+  s_motor.run_state = 1U;
+  s_motor.speed_level = 40U; /* 当前最大油门 = duty[3] */
+  s_last_tx_len = 0U;
+
+  failures += ExpectU32("tx init speed", Px4Lite_MavlinkTxInit(3000U), PX4LITE_OK);
+  failures += ExpectU32("baseline speed frame", Px4Lite_MavlinkTxRun(3010U), PX4LITE_OK);
+
+  /* 拖动 4 号滑块成为新的最大油门：duty[3] 与 speed_level 同时变化。
+     回归点：必须仍优先发 MOTOR34，而不是被 speed_level 变化误带回 MOTOR12。 */
+  s_motor.header.sequence = 21U;
+  s_motor.header.sample_time_ms = 3020U;
+  s_motor.duty_percent[3] = 90U;
+  s_motor.speed_level = 90U;
+  s_last_tx_len = 0U;
+
+  failures += ExpectU32("motor34 speed changed tx", Px4Lite_MavlinkTxRun(3020U), PX4LITE_OK);
+  failures += ExpectU32("decode motor34 speed tx", (uint32_t)DecodeLastMessage(&msg), 1U);
+  failures += ExpectU32("motor34 speed msg id", msg.msgid, MAVLINK_MSG_ID_NAMED_VALUE_INT);
+
+  mavlink_msg_named_value_int_decode(&msg, &named);
+  failures += ExpectName("motor34 speed name", named.name, "MOTOR34", 7U);
+  failures += ExpectU32("motor34 speed value low", (uint32_t)(named.value & 0xFF), 30U);
+  failures += ExpectU32("motor34 speed value high", (uint32_t)((named.value >> 8) & 0xFF), 90U);
+  return failures;
+}
+
 int main(void)
 {
   int failures = 0;
 
   failures += TestMotorChangePreemptsNormalTelemetry();
   failures += TestMotor34ChangePreemptsWithMotor34();
+  failures += TestMotor34ChangeWithSpeedLevelStillPrefersMotor34();
 
   if (failures != 0) {
     printf("mavlink tx motor priority tests failed: %d\n", failures);

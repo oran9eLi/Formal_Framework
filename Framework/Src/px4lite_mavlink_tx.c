@@ -397,13 +397,18 @@ static uint8_t MavTx_RemoteMotorChanged(const Px4Lite_MotorOutputs_t *motor, uin
   if (first_pair == 0) { return 0U; }
   *first_pair = 0U;
   if (s_last_remote_motor_valid == 0U) { return 1U; }
-  if (s_last_remote_motor.run_state != motor->run_state) { return 1U; }
-  if (s_last_remote_motor.speed_level != motor->speed_level) { return 1U; }
 
+  /* 先判断哪一对占空比真的变了，并据此选择优先发送的对。
+     run_state/speed_level 是两对共有的元数据(speed_level = 四路油门最大值)，必须在
+     占空比判定之后再作为兜底触发；否则拖动 3/4 改变最大油门时会因 speed_level 变化
+     提前返回并把 first_pair 误设为 0，导致 MOTOR34 被 MOTOR12 抢占而明显不跟手。 */
   pair0_changed = ((s_last_remote_motor.duty_percent[0] != motor->duty_percent[0]) || (s_last_remote_motor.duty_percent[1] != motor->duty_percent[1])) ? 1U : 0U;
   pair1_changed = ((s_last_remote_motor.duty_percent[2] != motor->duty_percent[2]) || (s_last_remote_motor.duty_percent[3] != motor->duty_percent[3])) ? 1U : 0U;
   if ((pair1_changed != 0U) && (pair0_changed == 0U)) { *first_pair = 1U; }
   if ((pair0_changed != 0U) || (pair1_changed != 0U)) { return 1U; }
+
+  if (s_last_remote_motor.run_state != motor->run_state) { return 1U; }
+  if (s_last_remote_motor.speed_level != motor->speed_level) { return 1U; }
   return 0U;
 }
 
