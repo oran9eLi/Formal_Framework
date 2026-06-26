@@ -148,6 +148,11 @@ typedef struct {
   uint16_t highest_fault_code;  /**< 远端最高严重度告警的故障码，0 表示无活动告警。 */
   uint16_t reserved3;           /**< 保留字段，保持结构体对齐。 */
   uint32_t alarm_active_mask;   /**< 远端活动告警来源位图，bit 对应来源 ID。 */
+  Px4Lite_AlarmRecord_t alarm_records[PX4LITE_MODULE_COUNT]; /**< 远端活动告警行(完整告警表)。 */
+  uint8_t alarm_table_count;    /**< 远端活动告警行数。 */
+  uint8_t alarm_table_ver;      /**< 远端告警表内容版本(TUNNEL ver)。 */
+  uint16_t reserved_alarm_tbl;  /**< 保留字段，保持结构体对齐。 */
+  uint32_t alarm_table_update_ms; /**< 告警表最近更新时间，单位 ms。 */
   char status_text[32];         /**< 远端状态文本，UTF-8/ASCII，以 0 结尾。 */
 } Px4Lite_RemoteTelemetrySnapshot_t;
 

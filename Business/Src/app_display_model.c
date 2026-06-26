@@ -149,12 +149,27 @@ Px4Lite_Result_t App_GetDisplayAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms)
   fresh = AppDisplay_RemoteDomain(&remote, PX4LITE_REMOTE_VALID_ALARM, now_ms);
   if (fresh == PX4LITE_NOT_READY) { return PX4LITE_NOT_READY; }
 
-  /* 阶段 A：远端只有告警摘要，最高项作为单行；完整告警表依赖第二件事(doc 18 同步)。 */
   out->header             = remote.header;
   out->highest_fault_code = remote.highest_fault_code;
   out->highest_source_id  = remote.highest_source_id;
   out->highest_severity   = remote.highest_severity;
-  if (remote.highest_fault_code != 0U) {
+  if (remote.alarm_table_count > 0U) {
+    /* 完整告警表：用远端逐行填满 records(doc 18 同步)。 */
+    uint8_t i;
+    uint8_t n = remote.alarm_table_count;
+    if (n > (uint8_t)PX4LITE_MODULE_COUNT) { n = (uint8_t)PX4LITE_MODULE_COUNT; }
+    out->active_count = n;
+    for (i = 0U; i < n; ++i) {
+      out->records[i].source_id  = remote.alarm_records[i].source_id;
+      out->records[i].fault_code = remote.alarm_records[i].fault_code;
+      out->records[i].severity   = (uint8_t)remote.alarm_records[i].severity;
+      out->records[i].active     = remote.alarm_records[i].active;
+      out->records[i].raised_ms  = remote.alarm_records[i].raised_ms;
+      out->records[i].updated_ms = now_ms;
+      out->records[i].detail     = remote.alarm_records[i].detail;
+    }
+  } else if (remote.highest_fault_code != 0U) {
+    /* 仅收到摘要(整表未到/无活动行)：退回最高项单行。 */
     out->active_count          = 1U;
     out->records[0].source_id  = remote.highest_source_id;
     out->records[0].fault_code = remote.highest_fault_code;
