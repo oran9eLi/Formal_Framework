@@ -97,7 +97,7 @@ Display_Result_t Display_PagesDrawHeaderLogo(uint16_t x, uint16_t y)
     for (col = 0U; col < DISPLAY_HEADER_LOGO_WIDTH; col++) {
       offset = ((uint32_t)row * (uint32_t)DISPLAY_HEADER_LOGO_WIDTH + (uint32_t)col) * 2U;
       lo     = display_logo_rgb565_data[offset];
-      hi     = s_header_logo_map[offset + 1U];
+      hi     = display_logo_rgb565_data[offset + 1U];
       color  = (uint16_t)(((uint16_t)hi << 8U) | (uint16_t)lo);
       if (color != DISPLAY_HEADER_LOGO_TRANSPARENT_COLOR) { (void)Display_GfxDrawPixel((uint16_t)(x + col), (uint16_t)(y + row), color); }
     }
