@@ -14,7 +14,6 @@
 #include "app_data_api.h"
 #include "display_lvgl_font_zh.h"
 #include "display_pages.h"
-#include "display_text.h"
 #include "lv_port_disp.h"
 #include "lv_port_indev.h"
 #include "px4lite_platform.h"
@@ -23,6 +22,17 @@
 #include "px4lite_faults.h"
 
 #include <stdio.h>
+#include <math.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+/* 地平仪绘制参数：每度对应的像素、横滚/俯仰方向符号。
+   若实测方向与显示相反，只需把对应 SIGN 改成 -1.0f。 */
+#define HZ_PX_PER_DEG  2.6f
+#define HZ_ROLL_SIGN   1.0f
+#define HZ_PITCH_SIGN  1.0f
 
 #define DISPLAY_LVGL_WIDTH           800U
 #define DISPLAY_LVGL_HEIGHT          480U
@@ -113,6 +123,9 @@ static lv_obj_t *s_screen;
 static lv_obj_t *s_status_leds[DISPLAY_LVGL_STATUS_COUNT];
 static lv_obj_t *s_motor_pwm_bars[DISPLAY_LVGL_MOTOR_COUNT];
 static lv_obj_t *s_log_alarm_label;
+static lv_obj_t *s_attitude_obj;
+static int16_t s_attitude_roll_deg10;
+static int16_t s_attitude_pitch_deg10;
 static Display_LvglLogRow_t s_log_rows[DISPLAY_LVGL_LOG_ROWS];
 static Display_LvglAlarmRow_t s_alarm_rows[DISPLAY_LVGL_ALARM_ROWS];
 static uint8_t s_log_visible_rows;
@@ -210,6 +223,7 @@ static void Display_LvglClearActiveObjects(void)
     s_alarm_rows[i].reason_label = 0;
   }
   s_log_alarm_label = 0;
+  s_attitude_obj = 0;
   s_log_visible_rows = 0U;
 }
 
@@ -852,6 +866,17 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
     Display_LvglUpdateAlarmRow((uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_ALARM_ROW1_CODE), value);
   }
 
+  if ((id == DISPLAY_HMI_VAR_ROLL) || (id == DISPLAY_HMI_VAR_PITCH)) {
+    if (id == DISPLAY_HMI_VAR_ROLL) {
+      s_attitude_roll_deg10 = (int16_t)value;
+    } else {
+      s_attitude_pitch_deg10 = (int16_t)value;
+    }
+    if (s_attitude_obj != 0) {
+      lv_obj_invalidate(s_attitude_obj);
+    }
+  }
+
   if (s_value_slots[id].label != 0) {
     Display_LvglFormatValue(id, value);
     lv_label_set_text_static(s_value_slots[id].label, s_value_slots[id].text);
@@ -960,8 +985,15 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
     lv_obj_center(lr_label);
   }
 
-  (void)Display_LvglCreateLabel(bar, "\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 690, 12, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_SYSTEM_STATUS, 728, 10, 58, &lv_font_montserrat_14);
+  /* 顶栏右上角：原"系统"状态模块替换为通信统计三行——发送计数 / 接收计数 / 丢包率。
+     顶栏所有页面共用，故三项在每个页面都显示。丢包率直接复用
+     DISPLAY_HMI_VAR_LORA_LOSS_RATE（由 link.loss_permille 提供，单位 0.1%），无需另算。 */
+  (void)Display_LvglCreateLabel(bar, "\xE5""\x8F""\x91""\xE9""\x80""\x81", 672, 6, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_LORA_TX_COUNT, 710, 4, 82, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x8E""\xA5""\xE6""\x94""\xB6", 672, 26, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_LORA_RX_COUNT, 710, 24, 82, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE4""\xB8""\xA2""\xE5""\x8C""\x85", 672, 46, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_LORA_LOSS_RATE, 710, 44, 82, &lv_font_montserrat_14);
 }
 
 /**
@@ -1279,20 +1311,267 @@ static void Display_LvglCreateFlightPage(lv_obj_t *parent)
 }
 
 /**
+ * @brief 在姿态卡片预留容器内绘制地平仪（DRAW_POST 直绘，不占额外帧缓冲）。
+ *
+ * @details 天/地随横滚旋转、随俯仰平移，叠加俯仰刻度梯、随横滚转动的横滚刻度
+ *          与顶部固定 0 位指针，最后画固定飞机符号。横滚/俯仰取自
+ *          DISPLAY_HMI_VAR_ROLL / PITCH（int16，单位 0.1°）。方向相反时
+ *          调整 HZ_ROLL_SIGN / HZ_PITCH_SIGN。
+ */
+static void Display_LvglHorizonDrawCb(lv_event_t *e)
+{
+  lv_obj_t *obj = lv_event_get_target(e);
+  lv_draw_ctx_t *dc = lv_event_get_draw_ctx(e);
+  lv_area_t co;
+  lv_area_t fill;
+  lv_draw_rect_dsc_t rdsc;
+  lv_draw_line_dsc_t ldsc;
+  lv_draw_mask_radius_param_t mcirc;
+  lv_draw_mask_line_param_t mline;
+  lv_point_t pa;
+  lv_point_t pb;
+  lv_coord_t w;
+  lv_coord_t h;
+  lv_coord_t cx;
+  lv_coord_t cy;
+  lv_coord_t r_out;
+  lv_coord_t r;
+  float a;
+  float ca;
+  float sa;
+  float pitch_deg;
+  float pitch_px;
+  float tx;
+  float ty;
+  float nx;
+  float ny;
+  float ox;
+  float oy;
+  int16_t id_c;
+  int16_t id_l;
+  uint16_t i;
+  static const int8_t ladder[] = {-30, -25, -20, -15, -10, -5, 5, 10, 15, 20, 25, 30};
+  static const int8_t bank[]   = {-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60};
+
+  if (dc == NULL) {
+    return;
+  }
+
+  lv_obj_get_coords(obj, &co);
+  w = lv_area_get_width(&co);
+  h = lv_area_get_height(&co);
+  cx = (lv_coord_t)(co.x1 + (w / 2));
+  cy = (lv_coord_t)(co.y1 + (h / 2));
+  r_out = (lv_coord_t)((LV_MIN(w, h) / 2) - 4);
+  r = (lv_coord_t)(r_out - 12);
+
+  pitch_deg = ((float)s_attitude_pitch_deg10 / 10.0f) * HZ_PITCH_SIGN;
+  a = ((float)s_attitude_roll_deg10 / 10.0f) * HZ_ROLL_SIGN * (float)(M_PI / 180.0);
+  ca = cosf(a);
+  sa = sinf(a);
+  tx = ca;            /* 地平线切向 */
+  ty = sa;
+  nx = sa;            /* 指向天空的法向（a=0 时为屏幕上方）*/
+  ny = -ca;
+  pitch_px = pitch_deg * HZ_PX_PER_DEG;
+  ox = (float)cx - (nx * pitch_px);   /* 当前地平线中心，随俯仰平移 */
+  oy = (float)cy - (ny * pitch_px);
+
+  fill.x1 = (lv_coord_t)(cx - r);
+  fill.y1 = (lv_coord_t)(cy - r);
+  fill.x2 = (lv_coord_t)(cx + r);
+  fill.y2 = (lv_coord_t)(cy + r);
+
+  /* 圆形遮罩：动态内容全部裁进圆盘 */
+  lv_draw_mask_radius_init(&mcirc, &fill, LV_RADIUS_CIRCLE, false);
+  id_c = lv_draw_mask_add(&mcirc, NULL);
+
+  /* 天空铺满圆盘 */
+  lv_draw_rect_dsc_init(&rdsc);
+  rdsc.bg_opa = LV_OPA_COVER;
+  rdsc.bg_color = lv_color_hex(0x2E8BE6);
+  lv_draw_rect(dc, &rdsc, &fill);
+
+  /* 地面：沿地平线加直线遮罩（保留下半侧）后覆盖棕色 */
+  {
+    lv_coord_t p1x = (lv_coord_t)(ox - (tx * (float)(r + 4)));
+    lv_coord_t p1y = (lv_coord_t)(oy - (ty * (float)(r + 4)));
+    lv_coord_t p2x = (lv_coord_t)(ox + (tx * (float)(r + 4)));
+    lv_coord_t p2y = (lv_coord_t)(oy + (ty * (float)(r + 4)));
+    lv_draw_mask_line_points_init(&mline, p1x, p1y, p2x, p2y, LV_DRAW_MASK_LINE_SIDE_BOTTOM);
+    id_l = lv_draw_mask_add(&mline, NULL);
+    rdsc.bg_color = lv_color_hex(0x8A5A2B);
+    lv_draw_rect(dc, &rdsc, &fill);
+    lv_draw_mask_remove_id(id_l);
+    lv_draw_mask_free_param(&mline);
+  }
+
+  /* 地平线（俯仰刻度梯 v=0），整条略粗 */
+  lv_draw_line_dsc_init(&ldsc);
+  ldsc.opa = LV_OPA_COVER;
+  ldsc.color = lv_color_hex(0xFFFFFF);
+  ldsc.round_start = 1;
+  ldsc.round_end = 1;
+  ldsc.width = 3;
+  pa.x = (lv_coord_t)(ox - (tx * (float)r));
+  pa.y = (lv_coord_t)(oy - (ty * (float)r));
+  pb.x = (lv_coord_t)(ox + (tx * (float)r));
+  pb.y = (lv_coord_t)(oy + (ty * (float)r));
+  lv_draw_line(dc, &ldsc, &pa, &pb);
+
+  /* 其余俯仰刻度线（两段，中间留出飞机符号缺口）*/
+  for (i = 0U; i < (uint16_t)(sizeof(ladder) / sizeof(ladder[0])); i++) {
+    float k = ((float)ladder[i] - pitch_deg) * HZ_PX_PER_DEG;
+    float mx = (float)cx + (nx * k);
+    float my = (float)cy + (ny * k);
+    float half = ((ladder[i] % 10) == 0) ? 22.0f : 12.0f;
+    float gap = 14.0f;
+
+    ldsc.width = ((ladder[i] % 10) == 0) ? 2 : 1;
+    pa.x = (lv_coord_t)(mx - (tx * half));
+    pa.y = (lv_coord_t)(my - (ty * half));
+    pb.x = (lv_coord_t)(mx - (tx * gap));
+    pb.y = (lv_coord_t)(my - (ty * gap));
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    pa.x = (lv_coord_t)(mx + (tx * gap));
+    pa.y = (lv_coord_t)(my + (ty * gap));
+    pb.x = (lv_coord_t)(mx + (tx * half));
+    pb.y = (lv_coord_t)(my + (ty * half));
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+  }
+
+  lv_draw_mask_remove_id(id_c);
+  lv_draw_mask_free_param(&mcirc);
+
+  /* ===== 固定层（不旋转/不裁剪）===== */
+  /* 圆形外环 */
+  {
+    lv_draw_arc_dsc_t adsc;
+    lv_point_t ctr;
+    ctr.x = cx;
+    ctr.y = cy;
+    lv_draw_arc_dsc_init(&adsc);
+    adsc.opa = LV_OPA_COVER;
+    adsc.color = lv_color_hex(0x33485C);
+    adsc.width = 3;
+    lv_draw_arc(dc, &adsc, &ctr, r_out, 0, 360);
+  }
+
+  /* 横滚刻度：随横滚转动，只画上弧 */
+  {
+    uint16_t b;
+    lv_draw_line_dsc_init(&ldsc);
+    ldsc.opa = LV_OPA_COVER;
+    ldsc.color = lv_color_hex(0xC8D6E2);
+    for (b = 0U; b < (uint16_t)(sizeof(bank) / sizeof(bank[0])); b++) {
+      float sang = ((float)bank[b] * (float)(M_PI / 180.0)) - a;
+      float cc = cosf(sang);
+      float dxx = sinf(sang);
+      float dyy = -cc;
+      float tlen;
+
+      if (cc < 0.30f) {
+        continue;
+      }
+      tlen = ((bank[b] % 30) == 0) ? 11.0f : 6.0f;
+      ldsc.width = ((bank[b] % 30) == 0) ? 2 : 1;
+      pa.x = (lv_coord_t)((float)cx + (dxx * (float)(r_out - 2)));
+      pa.y = (lv_coord_t)((float)cy + (dyy * (float)(r_out - 2)));
+      pb.x = (lv_coord_t)((float)cx + (dxx * ((float)(r_out - 2) - tlen)));
+      pb.y = (lv_coord_t)((float)cy + (dyy * ((float)(r_out - 2) - tlen)));
+      lv_draw_line(dc, &ldsc, &pa, &pb);
+    }
+  }
+
+  /* 顶部固定 0 位指针三角 */
+  {
+    lv_draw_rect_dsc_t tdsc;
+    lv_point_t tri[3];
+    lv_draw_rect_dsc_init(&tdsc);
+    tdsc.bg_opa = LV_OPA_COVER;
+    tdsc.bg_color = lv_color_hex(0xFFFFFF);
+    tri[0].x = cx;
+    tri[0].y = (lv_coord_t)(cy - r_out + 16);
+    tri[1].x = (lv_coord_t)(cx - 7);
+    tri[1].y = (lv_coord_t)(cy - r_out + 3);
+    tri[2].x = (lv_coord_t)(cx + 7);
+    tri[2].y = (lv_coord_t)(cy - r_out + 3);
+    lv_draw_polygon(dc, &tdsc, tri, 3);
+  }
+
+  /* 固定飞机符号：黄色双翼 + 翼端下折 + 中心点 */
+  {
+    lv_draw_rect_dsc_t ddsc;
+    lv_area_t da;
+    lv_draw_line_dsc_init(&ldsc);
+    ldsc.opa = LV_OPA_COVER;
+    ldsc.color = lv_color_hex(0xFFC400);
+    ldsc.width = 4;
+    ldsc.round_start = 1;
+    ldsc.round_end = 1;
+    pa.x = (lv_coord_t)(cx - 46);
+    pa.y = cy;
+    pb.x = (lv_coord_t)(cx - 14);
+    pb.y = cy;
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    pa.x = (lv_coord_t)(cx - 14);
+    pa.y = cy;
+    pb.x = (lv_coord_t)(cx - 14);
+    pb.y = (lv_coord_t)(cy + 8);
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    pa.x = (lv_coord_t)(cx + 14);
+    pa.y = cy;
+    pb.x = (lv_coord_t)(cx + 46);
+    pb.y = cy;
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    pa.x = (lv_coord_t)(cx + 14);
+    pa.y = cy;
+    pb.x = (lv_coord_t)(cx + 14);
+    pb.y = (lv_coord_t)(cy + 8);
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    lv_draw_rect_dsc_init(&ddsc);
+    ddsc.bg_opa = LV_OPA_COVER;
+    ddsc.bg_color = lv_color_hex(0xFFC400);
+    ddsc.radius = LV_RADIUS_CIRCLE;
+    da.x1 = (lv_coord_t)(cx - 3);
+    da.y1 = (lv_coord_t)(cy - 3);
+    da.x2 = (lv_coord_t)(cx + 3);
+    da.y2 = (lv_coord_t)(cy + 3);
+    lv_draw_rect(dc, &ddsc, &da);
+  }
+}
+
+/**
  * @brief Create aircraft attitude page.
  */
 static void Display_LvglCreateAircraftPage(lv_obj_t *parent)
 {
   lv_obj_t *card;
+  lv_obj_t *horizon;
 
   Display_LvglCreateSystemColumn(parent);
   card = Display_LvglCreateCard(parent, 264, DISPLAY_LVGL_BODY_Y, 268, DISPLAY_LVGL_BODY_H, "\xE9""\xA3""\x9E""\xE6""\x9C""\xBA""\xE5""\xA7""\xBF""\xE6""\x80""\x81");
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_ROLL, "\xE6""\xA8""\xAA""\xE6""\xBB""\x9A", 24, 58, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PITCH, "\xE4""\xBF""\xAF""\xE4""\xBB""\xB0", 24, 100, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_YAW, "\xE5""\x81""\x8F""\xE8""\x88""\xAA", 24, 142, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_TX_COUNT, "\xE5""\x8F""\x91""\xE9""\x80""\x81""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 24, 194, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_RX_COUNT, "\xE6""\x8E""\xA5""\xE6""\x94""\xB6""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 24, 236, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_HEARTBEAT, "\xE5""\xBF""\x83""\xE8""\xB7""\xB3""\xE7""\x8A""\xB6""\xE6""\x80""\x81", 24, 278, 142);
+
+  /* 删除发送/接收/心跳三行；上半部为姿态地平仪区域：卡片内 (8,36) 起，252x212。
+     地平仪由 Display_LvglHorizonDrawCb 在 DRAW_POST 事件里直绘（约 200 直径圆盘）。 */
+  horizon = lv_obj_create(card);
+  lv_obj_set_size(horizon, 252, 212);
+  lv_obj_set_pos(horizon, 8, 36);
+  lv_obj_set_style_radius(horizon, 4, 0);
+  lv_obj_set_style_bg_color(horizon, lv_color_hex(0x0C1622), 0);
+  lv_obj_set_style_bg_opa(horizon, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(horizon, 1, 0);
+  lv_obj_set_style_border_color(horizon, lv_color_hex(0x304357), 0);
+  lv_obj_set_style_pad_all(horizon, 0, 0);
+  lv_obj_clear_flag(horizon, LV_OBJ_FLAG_SCROLLABLE);
+  s_attitude_obj = horizon;
+  lv_obj_add_event_cb(horizon, Display_LvglHorizonDrawCb, LV_EVENT_DRAW_POST, NULL);
+
+  /* 三态姿态数据下移到卡片底部三行，行距压缩到 24px 给地平仪让出高度 */
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_ROLL, "\xE6""\xA8""\xAA""\xE6""\xBB""\x9A", 24, 256, 142);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PITCH, "\xE4""\xBF""\xAF""\xE4""\xBB""\xB0", 24, 280, 142);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_YAW, "\xE5""\x81""\x8F""\xE8""\x88""\xAA", 24, 304, 142);
+
   Display_LvglCreateMessageLogPanel(parent, 540, 252);
 }
 
