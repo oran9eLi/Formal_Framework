@@ -985,6 +985,19 @@ static uint8_t Display_StateHasUsableData(Px4Lite_State_t state)
   return ((state == PX4LITE_STATE_ONLINE) || (state == PX4LITE_STATE_DEGRADED)) ? 1U : 0U;
 }
 
+/**
+ * @brief 判断本轮显示是否应加载快照。
+ *
+ * @details LOCAL 沿用原策略，只显示新鲜快照；REMOTE 模式下 `PX4LITE_STALE`
+ * 表示该域曾收到远端值但超过刷新窗口，显示层应继续保留最后值，避免低空速或
+ * 分域超时造成字段被本机端清零。
+ */
+static uint8_t Display_ShouldLoadSnapshot(Px4Lite_Result_t result, Px4Lite_RemoteMode_t display_mode)
+{
+  if (result == PX4LITE_OK) { return 1U; }
+  return ((display_mode == PX4LITE_REMOTE_MODE_REMOTE) && (result == PX4LITE_STALE)) ? 1U : 0U;
+}
+
 static uint16_t Display_GnssSignalValue(Px4Lite_State_t state)
 {
   return (state == PX4LITE_STATE_ONLINE) ? 1U : 0U;
@@ -1381,6 +1394,24 @@ static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_cod
 }
 
 /*
+ * LoRa 状态灯/链路灯：本机白名单字段。
+ *
+ * 按 doc18/19，LoRa 状态灯永远反映显示端自身链路健康，不随 LOCAL/REMOTE 模式与
+ * 远端系统快照新鲜度变化、不走模式解析。每帧无条件用本机模块状态驱动，确保
+ * REMOTE 模式下即便收不到远端模块遥测，这颗灯也照常显示本机状态而非灰。
+ */
+static void Display_LoadLocalLoraStatus(void)
+{
+  Px4Lite_ModuleStatus_t status;
+
+  if (App_GetModuleStatus(PX4LITE_MODULE_LORA, &status) == PX4LITE_OK) {
+    uint16_t value = Display_MapStateValue(status.state);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, value);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, value);
+  }
+}
+
+/*
  * 将系统状态快照字段写入 Display 缓存。
  */
 static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
@@ -1401,8 +1432,8 @@ static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, Display_GnssSignalValue(system->modules[PX4LITE_MODULE_GNSS].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, Display_MapStateValue(system->modules[PX4LITE_MODULE_IMU].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, Display_MapStateValue(system->modules[PX4LITE_MODULE_BARO].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, Display_MapStateValue(system->modules[PX4LITE_MODULE_LORA].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, Display_MapStateValue(system->modules[PX4LITE_MODULE_LORA].state));
+  /* LoRa 状态灯属于本机白名单(doc18/19)：不走远端归一的系统快照，统一由
+     Display_LoadLocalLoraStatus() 每帧用本机模块状态驱动，此处不再写。 */
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue(system->modules[PX4LITE_MODULE_STORAGE].state));
   /* 电机 4 个状态灯改由 Display_LoadEnvironmentSnapshot 依据电机电池(ADC2)
      电压驱动：<9.0V 红灯，9.0V~9.9V 黄灯，>=9.9V 绿灯，此处不再覆盖。 */
@@ -1421,8 +1452,8 @@ static void Display_ClearSystemSnapshot(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, 0U);
+  /* LoRa 状态灯不在此清零：它是本机白名单字段，由 Display_LoadLocalLoraStatus()
+     永远按本机状态驱动，远端系统快照缺失/清空都不应把它灭成灰(doc18/19)。 */
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, 0U);
   Display_SetMotorSelfCheckLights(0U);
@@ -1689,21 +1720,21 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms / 1000U);
 
   navigation_result = App_GetDisplayNavigation(&navigation, now_ms);
-  if (navigation_result == PX4LITE_OK) {
+  if (Display_ShouldLoadSnapshot(navigation_result, display_mode) != 0U) {
     Display_LoadNavigationSnapshot(&navigation);
   } else {
     Display_ClearNavigationSnapshot();
   }
 
   date_time_result = App_GetDisplayDateTime(&date_time, now_ms);
-  if (date_time_result == PX4LITE_OK) {
+  if (Display_ShouldLoadSnapshot(date_time_result, display_mode) != 0U) {
     Display_LoadDateTimeSnapshot(&date_time);
   } else {
     Display_ClearDateTimeSnapshot();
   }
 
   system_result = App_GetDisplaySystem(&system, now_ms);
-  if (system_result == PX4LITE_OK) {
+  if (Display_ShouldLoadSnapshot(system_result, display_mode) != 0U) {
     Display_LoadSystemSnapshot(&system);
     msglog_highest = system.highest_fault_code;
   } else if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
@@ -1712,14 +1743,18 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
     status_fallback_loaded = Display_LoadModuleStatusFallback();
   }
 
+  /* LoRa 状态灯为本机白名单：无论上面哪条分支、LOCAL 还是 REMOTE，都用本机状态
+     覆盖一次，确保远端模块遥测缺失时这颗灯不会被清成灰(doc18/19)。 */
+  Display_LoadLocalLoraStatus();
+
   /* 环境快照提前取，先用带滞回的档位刷新，再算电机/主控电池告警注入告警表与自检错误码表。 */
   environment_result = App_GetDisplayEnvironment(&environment, now_ms);
-  if (environment_result == PX4LITE_OK) { Display_UpdateBatteryBands(&environment); }
-  motor_fault = (environment_result == PX4LITE_OK) ? Display_EvalMotorFault(&environment) : 0U;
-  main_fault  = (environment_result == PX4LITE_OK) ? Display_EvalMainFault(&environment) : 0U;
+  if (Display_ShouldLoadSnapshot(environment_result, display_mode) != 0U) { Display_UpdateBatteryBands(&environment); }
+  motor_fault = (Display_ShouldLoadSnapshot(environment_result, display_mode) != 0U) ? Display_EvalMotorFault(&environment) : 0U;
+  main_fault  = (Display_ShouldLoadSnapshot(environment_result, display_mode) != 0U) ? Display_EvalMainFault(&environment) : 0U;
 
   alarm_result = App_GetDisplayAlarm(&alarm, now_ms);
-  if (alarm_result == PX4LITE_OK) {
+  if (Display_ShouldLoadSnapshot(alarm_result, display_mode) != 0U) {
     Display_LoadAlarmSnapshot(&alarm, motor_fault, main_fault);
     msglog_highest = alarm.highest_fault_code;
   } else if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
@@ -1734,7 +1769,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
     Display_UpdateMessageLog(now_ms, msglog_highest);
   }
 
-  if (environment_result == PX4LITE_OK) {
+  if (Display_ShouldLoadSnapshot(environment_result, display_mode) != 0U) {
     Display_LoadEnvironmentSnapshot(&environment);
   } else {
     Display_ClearEnvironmentFields();
@@ -1742,7 +1777,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   }
 
   motor_result = App_GetDisplayMotor(&motor, now_ms);
-  if (motor_result == PX4LITE_OK) {
+  if (Display_ShouldLoadSnapshot(motor_result, display_mode) != 0U) {
     Display_LoadMotorSnapshot(&motor);
   } else {
     Display_ClearMotorFields();
@@ -1751,7 +1786,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   /* LoRa 收发帧计数为累计值，独立于上面三个快照，每帧都刷新 */
   Display_LoadLoraStats();
 
-  Display_ApplyOfflineDataPolicy();
+  if (display_mode == PX4LITE_REMOTE_MODE_LOCAL) { Display_ApplyOfflineDataPolicy(); }
 
   /* 消息日志缓冲版本变化即触发日志区重绘 */
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, Display_PagesGetLogVersion());
