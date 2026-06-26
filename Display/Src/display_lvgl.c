@@ -9,6 +9,7 @@
  */
 
 #include "display_lvgl.h"
+#include "display_logo.h"
 
 #include "app_data_api.h"
 #include "display_lvgl_font_zh.h"
@@ -101,6 +102,13 @@ static const Display_LvglTabItem_t s_tabs[DISPLAY_LVGL_TAB_COUNT] = {
 static Display_LvglValueSlot_t s_value_slots[DISPLAY_HMI_VAR_COUNT];
 static uint32_t s_values[DISPLAY_HMI_VAR_COUNT];
 static uint8_t s_value_valid[DISPLAY_HMI_VAR_COUNT];
+static const lv_img_dsc_t s_logo_img_dsc = {
+    .header = { .cf = LV_IMG_CF_TRUE_COLOR, .always_zero = 0, .reserved = 0,
+                .w = DISPLAY_HEADER_LOGO_WIDTH, .h = DISPLAY_HEADER_LOGO_HEIGHT },
+    .data_size = DISPLAY_HEADER_LOGO_WIDTH * DISPLAY_HEADER_LOGO_HEIGHT * 2U,
+    .data = display_logo_rgb565_data,
+};
+
 static lv_obj_t *s_screen;
 static lv_obj_t *s_status_leds[DISPLAY_LVGL_STATUS_COUNT];
 static lv_obj_t *s_motor_pwm_bars[DISPLAY_LVGL_MOTOR_COUNT];
@@ -230,6 +238,15 @@ static lv_obj_t *Display_LvglCreateClipLabel(lv_obj_t *parent, const char *text,
   return label;
 }
 
+static lv_obj_t *Display_LvglCreateCenteredLabel(lv_obj_t *parent, const char *text, lv_coord_t x, lv_coord_t y, lv_coord_t w, const lv_font_t *font, lv_color_t color)
+{
+  lv_obj_t *label;
+
+  label = Display_LvglCreateClipLabel(parent, text, x, y, w, font, color);
+  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+  return label;
+}
+
 /**
  * @brief Create one card panel with a title.
  */
@@ -248,7 +265,7 @@ static lv_obj_t *Display_LvglCreateCard(lv_obj_t *parent, lv_coord_t x, lv_coord
   lv_obj_set_style_pad_all(card, 0, 0);
   lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-  (void)Display_LvglCreateLabel(card, title, 22, 8, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
+  (void)Display_LvglCreateCenteredLabel(card, title, 4, 10, (lv_coord_t)(w - 8), &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
   return card;
 }
 
@@ -903,12 +920,21 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
   lv_obj_set_style_pad_all(bar, 0, 0);
   lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-  (void)Display_LvglCreateLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 344, 10, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
-  (void)Display_LvglCreateLabel(bar, Display_LvglPageTitle(page), 368, 35, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
-  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xA5""\xE6""\x9C""\x9F", 18, 12, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 58, 10, 116, &lv_font_montserrat_14);
-  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xB6""\xE9""\x97""\xB4", 18, 36, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 58, 34, 116, &lv_font_montserrat_14);
+  /* Logo */
+  {
+    lv_obj_t *logo_img = lv_img_create(bar);
+    lv_img_set_src(logo_img, &s_logo_img_dsc);
+    lv_obj_set_pos(logo_img, 0, 0);
+  }
+  /* 公司名：第一行东创大为，第二行CNS飞控系统 */
+  (void)Display_LvglCreateLabel(bar, "\xE4""\xB8""\x9C""\xE5""\x88""\x9B""\xE5""\xA4""\xA7""\xE4""\xB8""\xBA", 68, 10, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  (void)Display_LvglCreateLabel(bar, "CNS\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 68, 36, &display_lvgl_font_zh_16, lv_color_hex(0xB0C8D8));
+  /* 日期时间（无前缀标签，格式自明） */
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 172, 10, 114, &lv_font_montserrat_14);
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 172, 36, 114, &lv_font_montserrat_14);
+  /* 中间标题 */
+  (void)Display_LvglCreateCenteredLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 296, 9, 264, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  (void)Display_LvglCreateCenteredLabel(bar, Display_LvglPageTitle(page), 296, 35, 264, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
   /* 本地/远端按钮：放在"系统"左侧，点按切换本地常规页 / 远端通信连接页；
      标题随当前页显示"本地"或"远端"，按在远端页时高亮。 */
   {
@@ -1028,7 +1054,17 @@ static void Display_LvglCreateMessageLogPanelAt(lv_obj_t *parent, lv_coord_t x, 
   lv_coord_t row_step;
   uint16_t i;
 
-  card = Display_LvglCreateCard(parent, x, y, w, h, "\xE6""\xB6""\x88""\xE6""\x81""\xAF""\xE6""\x97""\xA5""\xE5""\xBF""\x97");
+  card = lv_obj_create(parent);
+  lv_obj_set_size(card, w, h);
+  lv_obj_set_pos(card, x, y);
+  lv_obj_set_style_radius(card, DISPLAY_LVGL_CARD_RADIUS, 0);
+  lv_obj_set_style_bg_color(card, lv_color_hex(0x13202E), 0);
+  lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(card, 1, 0);
+  lv_obj_set_style_border_color(card, lv_color_hex(0x304357), 0);
+  lv_obj_set_style_pad_all(card, 0, 0);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+  (void)Display_LvglCreateClipLabel(card, "\xE6""\xB6""\x88""\xE6""\x81""\xAF""\xE6""\x97""\xA5""\xE5""\xBF""\x97", 14, 10, (lv_coord_t)(w - 100), &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
   msg_x   = (w < 220) ? 66 : 84;
   msg_w   = (w > (msg_x + 14)) ? (lv_coord_t)(w - msg_x - 14) : 64;
   alarm_x = (w > 86) ? (lv_coord_t)(w - 82) : 88;
@@ -1041,6 +1077,7 @@ static void Display_LvglCreateMessageLogPanelAt(lv_obj_t *parent, lv_coord_t x, 
   s_log_visible_rows = max_rows;
 
   s_log_alarm_label = Display_LvglCreateClipLabel(card, "--", alarm_x, 10, 72, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  lv_obj_set_style_text_align(s_log_alarm_label, LV_TEXT_ALIGN_RIGHT, 0);
 
   for (i = 0U; i < max_rows; i++) {
     lv_coord_t row_y = (lv_coord_t)(row_y0 + (i * row_step));
@@ -1308,7 +1345,11 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
     lv_obj_set_style_width(s_motor_pwm_bars[i], 18, LV_PART_KNOB);
     lv_obj_set_style_height(s_motor_pwm_bars[i], 18, LV_PART_KNOB);
     lv_obj_add_event_cb(s_motor_pwm_bars[i], Display_LvglMotorSliderEventCb, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)id);
-    Display_LvglCreateValueLabel(card, id, (lv_coord_t)(x - 16), 238, 64, &lv_font_montserrat_14);
+    Display_LvglCreateValueLabel(card, id, (lv_coord_t)(x - 22), 238, 76, &lv_font_montserrat_14);
+    if (s_value_slots[id].label != 0) {
+      lv_obj_set_style_text_font(s_value_slots[id].label, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_align(s_value_slots[id].label, LV_TEXT_ALIGN_CENTER, 0);
+    }
   }
 
   estop = lv_obj_create(card);
