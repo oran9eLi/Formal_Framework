@@ -9,6 +9,10 @@ MDK-ARM/*.uvgui
 # EIDE / local build outputs
 build/
 .uvtmp/
+# Local Keil device support pack (CMSIS-Pack/DFP), installed per-machine
+.pack/
+# EIDE auto-generated pack component header (regenerated locally per build)
+RTE_Components.h
 
 # Release binaries generated from Keil builds
 Release/Latest/*.axf

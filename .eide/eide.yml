@@ -1,8 +1,8 @@
 version: "4.1"
 name: formal_framework
 type: ARM
-deviceName: null
-packDir: null
+deviceName: STM32F407ZGTx
+packDir: .pack/Keil/STM32F4xx_DFP.2.14.0
 srcDirs: []
 virtualFolder:
   name: <virtual_root>
@@ -81,6 +81,96 @@ virtualFolder:
         - path: Display/Src/display_pages.c
         - path: Display/Src/display_ssd1963.c
         - path: Display/Src/display_text.c
+        - path: Display/Src/display_lvgl.c
+        - path: Display/Src/display_lvgl_font_zh.c
+        - path: Display/Src/lv_port_disp.c
+        - path: Display/Src/lv_port_indev.c
+      folders: []
+    - name: LVGL
+      files:
+        - path: Third_Party/LVGL/src/core/lv_disp.c
+        - path: Third_Party/LVGL/src/core/lv_event.c
+        - path: Third_Party/LVGL/src/core/lv_group.c
+        - path: Third_Party/LVGL/src/core/lv_indev.c
+        - path: Third_Party/LVGL/src/core/lv_indev_scroll.c
+        - path: Third_Party/LVGL/src/core/lv_obj.c
+        - path: Third_Party/LVGL/src/core/lv_obj_class.c
+        - path: Third_Party/LVGL/src/core/lv_obj_draw.c
+        - path: Third_Party/LVGL/src/core/lv_obj_pos.c
+        - path: Third_Party/LVGL/src/core/lv_obj_scroll.c
+        - path: Third_Party/LVGL/src/core/lv_obj_style.c
+        - path: Third_Party/LVGL/src/core/lv_obj_style_gen.c
+        - path: Third_Party/LVGL/src/core/lv_obj_tree.c
+        - path: Third_Party/LVGL/src/core/lv_refr.c
+        - path: Third_Party/LVGL/src/core/lv_theme.c
+        - path: Third_Party/LVGL/src/draw/lv_draw.c
+        - path: Third_Party/LVGL/src/draw/lv_draw_arc.c
+        - path: Third_Party/LVGL/src/draw/lv_draw_img.c
+        - path: Third_Party/LVGL/src/draw/lv_draw_label.c
+        - path: Third_Party/LVGL/src/draw/lv_draw_layer.c
+        - path: Third_Party/LVGL/src/draw/lv_draw_line.c
+        - path: Third_Party/LVGL/src/draw/lv_draw_mask.c
+        - path: Third_Party/LVGL/src/draw/lv_draw_rect.c
+        - path: Third_Party/LVGL/src/draw/lv_draw_transform.c
+        - path: Third_Party/LVGL/src/draw/lv_draw_triangle.c
+        - path: Third_Party/LVGL/src/draw/lv_img_buf.c
+        - path: Third_Party/LVGL/src/draw/lv_img_cache.c
+        - path: Third_Party/LVGL/src/draw/lv_img_decoder.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_arc.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_blend.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_dither.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_gradient.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_img.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_layer.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_letter.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_line.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_polygon.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_rect.c
+        - path: Third_Party/LVGL/src/draw/sw/lv_draw_sw_transform.c
+        - path: Third_Party/LVGL/src/extra/layouts/flex/lv_flex.c
+        - path: Third_Party/LVGL/src/extra/layouts/grid/lv_grid.c
+        - path: Third_Party/LVGL/src/extra/lv_extra.c
+        - path: Third_Party/LVGL/src/extra/themes/basic/lv_theme_basic.c
+        - path: Third_Party/LVGL/src/extra/themes/default/lv_theme_default.c
+        - path: Third_Party/LVGL/src/font/lv_font.c
+        - path: Third_Party/LVGL/src/font/lv_font_fmt_txt.c
+        - path: Third_Party/LVGL/src/font/lv_font_montserrat_12.c
+        - path: Third_Party/LVGL/src/font/lv_font_montserrat_14.c
+        - path: Third_Party/LVGL/src/font/lv_font_montserrat_16.c
+        - path: Third_Party/LVGL/src/font/lv_font_montserrat_18.c
+        - path: Third_Party/LVGL/src/font/lv_font_montserrat_24.c
+        - path: Third_Party/LVGL/src/hal/lv_hal_disp.c
+        - path: Third_Party/LVGL/src/hal/lv_hal_indev.c
+        - path: Third_Party/LVGL/src/hal/lv_hal_tick.c
+        - path: Third_Party/LVGL/src/misc/lv_anim.c
+        - path: Third_Party/LVGL/src/misc/lv_anim_timeline.c
+        - path: Third_Party/LVGL/src/misc/lv_area.c
+        - path: Third_Party/LVGL/src/misc/lv_async.c
+        - path: Third_Party/LVGL/src/misc/lv_bidi.c
+        - path: Third_Party/LVGL/src/misc/lv_color.c
+        - path: Third_Party/LVGL/src/misc/lv_fs.c
+        - path: Third_Party/LVGL/src/misc/lv_gc.c
+        - path: Third_Party/LVGL/src/misc/lv_ll.c
+        - path: Third_Party/LVGL/src/misc/lv_log.c
+        - path: Third_Party/LVGL/src/misc/lv_lru.c
+        - path: Third_Party/LVGL/src/misc/lv_math.c
+        - path: Third_Party/LVGL/src/misc/lv_mem.c
+        - path: Third_Party/LVGL/src/misc/lv_printf.c
+        - path: Third_Party/LVGL/src/misc/lv_style.c
+        - path: Third_Party/LVGL/src/misc/lv_style_gen.c
+        - path: Third_Party/LVGL/src/misc/lv_timer.c
+        - path: Third_Party/LVGL/src/misc/lv_tlsf.c
+        - path: Third_Party/LVGL/src/misc/lv_txt.c
+        - path: Third_Party/LVGL/src/misc/lv_txt_ap.c
+        - path: Third_Party/LVGL/src/misc/lv_utils.c
+        - path: Third_Party/LVGL/src/widgets/lv_arc.c
+        - path: Third_Party/LVGL/src/widgets/lv_bar.c
+        - path: Third_Party/LVGL/src/widgets/lv_btn.c
+        - path: Third_Party/LVGL/src/widgets/lv_img.c
+        - path: Third_Party/LVGL/src/widgets/lv_label.c
+        - path: Third_Party/LVGL/src/widgets/lv_line.c
+        - path: Third_Party/LVGL/src/widgets/lv_slider.c
       folders: []
     - name: Debug
       files:
@@ -143,7 +233,9 @@ targets:
       defineList:
         - STM32F407xx
         - USE_HAL_DRIVER
+        - LV_CONF_INCLUDE_SIMPLE
       incList:
+        - .
         - Core/Inc
         - Debug/Inc
         - Bsp/Inc
@@ -152,6 +244,8 @@ targets:
         - Business/Inc
         - Display/Inc
         - Storage/Inc
+        - Third_Party/LVGL
+        - Third_Party/LVGL/src
         - Third_Party/FatFs
         - Third_Party/Drivers/CMSIS/Device/ST/STM32F4xx/Include
         - Third_Party/Drivers/STM32F4xx_HAL_Driver/Inc
