@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include "px4lite_time.h"
 #include "px4lite_types.h"
+#include "px4lite_remote_telemetry.h"
 
 #define APP_NAVIGATION_MAX_AGE_MS  1500U /**< Navigation 快照最大可接受年龄，单位：ms。 */
 #define APP_SYSTEM_MAX_AGE_MS      500U  /**< System/Health 快照最大可接受年龄，单位：ms。 */
@@ -238,6 +239,9 @@ Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t thrott
  * @retval PX4LITE_STALE 时间快照超过可接受年龄。
  */
 Px4Lite_Result_t App_CopyDateTime(App_DateTimeSnapshot_t *out, uint32_t now_ms);
+
+Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void);
+Px4Lite_Result_t App_CopyRemoteTelemetry(Px4Lite_RemoteTelemetrySnapshot_t *out, uint32_t now_ms);
 
 /**
  * @brief 复制单个 Framework 模块的最新状态。

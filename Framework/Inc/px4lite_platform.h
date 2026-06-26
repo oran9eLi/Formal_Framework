@@ -224,6 +224,20 @@ typedef enum {
  */
 uint8_t Px4Lite_ButtonPressed(Px4Lite_ButtonId_t button);
 
+#ifndef PX4LITE_LORA_RX_PAYLOAD_MAX
+#define PX4LITE_LORA_RX_PAYLOAD_MAX 255U
+#endif
+
+typedef struct {
+  uint16_t frame_len;
+  uint8_t system_id;
+  uint8_t component_id;
+  uint8_t sequence;
+  uint8_t payload_len;
+  uint32_t msg_id;
+  uint8_t data[PX4LITE_LORA_RX_PAYLOAD_MAX];
+} Px4Lite_LoRaRxFrame_t;
+
 /**
  * @brief 初始化 LoRa E22 通信驱动。
  *
@@ -258,6 +272,8 @@ Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms);
  * 调用方在返回 OK 后可以立即复用自己的输入缓冲区。
  */
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
+
+Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_LoRaRxFrame_t *out);
 
 /**
  * @brief 获取 LoRa 模块当前公开状态。

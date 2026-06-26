@@ -13,6 +13,7 @@
 #include "px4lite_alarm.h"
 #include "px4lite_control.h"
 #include "px4lite_modules.h"
+#include "px4lite_remote_telemetry.h"
 #include "px4lite_topics.h"
 
 /**
@@ -236,6 +237,7 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
 
 Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
 {
+  if (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) { return PX4LITE_NOT_READY; }
   return Px4Lite_ControlSetMotorThrottlePercent(motor_index, throttle_percent);
 }
 
@@ -259,6 +261,16 @@ Px4Lite_Result_t App_CopyDateTime(App_DateTimeSnapshot_t *out, uint32_t now_ms)
   out->source            = source.source;
   out->sync_state        = source.sync_state;
   return PX4LITE_OK;
+}
+
+Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void)
+{
+  return Px4Lite_RemoteTelemetryGetMode();
+}
+
+Px4Lite_Result_t App_CopyRemoteTelemetry(Px4Lite_RemoteTelemetrySnapshot_t *out, uint32_t now_ms)
+{
+  return Px4Lite_RemoteTelemetryCopySnapshot(out, now_ms);
 }
 
 /**

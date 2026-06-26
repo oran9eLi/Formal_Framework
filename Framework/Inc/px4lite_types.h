@@ -348,6 +348,9 @@ typedef struct {
   uint32_t last_rx_ms;                /**< 最近接收帧时间，单位：ms。 */
   uint32_t last_tx_ms;                /**< 最近发送完成时间，单位：ms。 */
   uint32_t last_msg_id;               /**< 最近接收的 MAVLink message id。 */
+  uint32_t last_ready_ms;
+  uint16_t rx_loss_permille;
+  uint16_t reserved;
 } Px4Lite_CommDebugInfo_t;
 
 /**

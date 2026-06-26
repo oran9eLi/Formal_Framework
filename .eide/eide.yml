@@ -23,6 +23,8 @@ virtualFolder:
         - path: Framework/Src/px4lite_storage.c
         - path: Framework/Src/px4lite_modules.c
         - path: Framework/Src/px4lite_mavlink_tx.c
+        - path: Framework/Src/px4lite_mavlink_rx.c
+        - path: Framework/Src/px4lite_remote_telemetry.c
         - path: Framework/Src/px4lite_attitude.c
         - path: Framework/Src/px4lite_alarm.c
         - path: Framework/Src/px4lite_time.c
@@ -41,6 +43,7 @@ virtualFolder:
         - path: Business/Src/business_platform_adapter.c
         - path: Business/Src/business_display_placeholder.c
         - path: Business/Src/app_data_api.c
+        - path: Business/Src/app_display_model.c
       folders: []
     - name: GNSS Driver
       files:

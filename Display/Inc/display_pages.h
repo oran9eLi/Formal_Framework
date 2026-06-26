@@ -88,6 +88,7 @@ void Display_PagesSetSelfCheckFaults(const uint32_t *faults, uint16_t count);
  * @param       time_hhmmss: 时间戳，编码 HHMMSS（开机运行时间占位）
  */
 void Display_PagesPushLogMessage(Display_LogMsg_t msg, uint32_t time_hhmmss);
+void Display_PagesClearLogMessages(void);
 
 typedef struct {
   Display_LogMsg_t msg;

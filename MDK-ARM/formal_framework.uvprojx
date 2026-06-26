@@ -439,6 +439,16 @@
               <FilePath>..\Framework\Src\px4lite_mavlink_tx.c</FilePath>
             </File>
             <File>
+              <FileName>px4lite_mavlink_rx.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_mavlink_rx.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_remote_telemetry.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_remote_telemetry.c</FilePath>
+            </File>
+            <File>
               <FileName>px4lite_attitude.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_attitude.c</FilePath>
@@ -517,6 +527,11 @@
               <FileName>app_data_api.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Business\Src\app_data_api.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_display_model.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Business\Src\app_display_model.c</FilePath>
             </File>
           </Files>
         </Group>

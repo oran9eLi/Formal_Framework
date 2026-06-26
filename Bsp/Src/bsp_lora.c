@@ -162,6 +162,16 @@ uint8_t BSP_LoRa_IsBusy(void)
   return (BSP_LoRa_IsReady() != 0U) ? 0U : 1U;
 }
 
+uint32_t BSP_LoRa_GetUartBaud(void)
+{
+  return BSP_LORA_UART_BAUD;
+}
+
+uint32_t BSP_LoRa_GetAirBps(void)
+{
+  return BSP_LORA_AIR_BPS;
+}
+
 /**
  * @brief 从 LoRa 接收环形缓冲复制可用字节。
  */

@@ -18,6 +18,7 @@ Release/Latest/*.log
 
 # Local editor / assistant state
 .claude/settings.local.json
+.codex_lora_ref/
 .vscode/
 .idea/
 .vs/

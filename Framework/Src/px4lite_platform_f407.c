@@ -474,6 +474,30 @@ Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len)
   return PX4LITE_IO_ERROR;
 }
 
+Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_LoRaRxFrame_t *out)
+{
+  Lora_RxFrame_t frame;
+  Lora_Result_t result;
+
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+
+  memset(&frame, 0, sizeof(frame));
+  result = Lora_E22_CopyRxFrame(&frame);
+  if (result == LORA_RESULT_NO_DATA) { return PX4LITE_IDLE; }
+  if (result != LORA_RESULT_OK) { return PX4LITE_IO_ERROR; }
+
+  memset(out, 0, sizeof(*out));
+  out->frame_len    = frame.frame_len;
+  out->system_id    = frame.system_id;
+  out->component_id = frame.component_id;
+  out->sequence     = frame.sequence;
+  out->payload_len  = frame.payload_len;
+  out->msg_id       = frame.msg_id;
+  if (out->payload_len > PX4LITE_LORA_RX_PAYLOAD_MAX) { return PX4LITE_INVALID_PARAM; }
+  memcpy(out->data, frame.data, out->payload_len);
+  return PX4LITE_OK;
+}
+
 uint8_t Px4Lite_LoRaIsPresent(void)
 {
   return Lora_E22_IsPresent();
@@ -511,5 +535,6 @@ void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out)
   out->rx_drop_count     = info.rx_drop_count;
   out->last_rx_ms        = info.last_rx_ms;
   out->last_tx_ms        = info.last_tx_ms;
+  out->last_ready_ms     = info.last_ready_ms;
   out->last_msg_id       = info.last_msg_id;
 }

@@ -24,8 +24,15 @@
 #endif
 #include <string.h>
 
-static Lora_RxFrame_t s_rx_frame;
-static volatile uint8_t s_rx_ready;
+/* 接收帧有界队列：一个 comm 周期内可能解析出多帧，必须全部入队由 comm 任务
+   排空消费。单帧缓冲会在多帧到达时只保留最后一帧，导致低频字段长期不刷新。 */
+#define LORA_RX_QUEUE_LEN 8U
+/* 单次 Service 最多处理的 RX 字节数，避免极端积压独占 comm 周期。 */
+#define LORA_E22_RX_SERVICE_BYTE_BUDGET 128U
+static Lora_RxFrame_t s_rx_queue[LORA_RX_QUEUE_LEN];
+static volatile uint16_t s_rx_q_head;
+static volatile uint16_t s_rx_q_tail;
+static volatile uint16_t s_rx_q_count;
 
 static mavlink_status_t s_parse_status;
 static mavlink_message_t s_parse_msg;
@@ -40,6 +47,7 @@ static uint32_t s_parse_error_count;
 static uint32_t s_rx_byte_count;
 static uint32_t s_rx_drop_count;
 static uint32_t s_last_tx_ms;
+static uint32_t s_last_ready_ms;
 static uint32_t s_last_msg_id;
 static uint8_t s_initialized;
 static uint8_t s_present; /* 模块是否在位(配置寄存器读回握手判定) */
@@ -49,8 +57,10 @@ static volatile uint8_t s_reinit_request;
    The comm task never blocks on the air interface: a frame is staged here,
    the machine waits (without spinning) for AUX to go idle, starts a USART3
    TX DMA, then returns to IDLE when the DMA + UART transfer completes. */
-#define LORA_E22_TX_AUX_TIMEOUT_MS 200U /* give up waiting for AUX idle */
-#define LORA_E22_TX_DMA_TIMEOUT_MS 500U /* backstop for a stuck DMA */
+#define LORA_E22_BITS_PER_BYTE          10U
+#define LORA_E22_TIMEOUT_MIN_MS         20U
+#define LORA_E22_AIR_TIMEOUT_MARGIN_MS  200U
+#define LORA_E22_UART_TIMEOUT_MARGIN_MS 100U
 
 typedef enum {
   LORA_TX_IDLE = 0,
@@ -65,6 +75,10 @@ static uint8_t s_tx_pending[LORA_E22_TX_BUF_SIZE];
 static uint16_t s_tx_pending_len;
 static uint32_t s_tx_state_ms;
 
+static uint32_t Lora_E22_CalcTimeoutMs(uint16_t length_bytes, uint32_t bitrate_bps, uint32_t margin_ms);
+static uint32_t Lora_E22_GetAuxWaitTimeoutMs(void);
+static uint32_t Lora_E22_GetUartDmaTimeoutMs(uint16_t length_bytes);
+static void Lora_E22_ResetRuntimeState(uint32_t now_ms);
 static void Lora_E22_TxStep(uint32_t now_ms);
 
 /* E22 在位检测（基于 AUX 引脚）：
@@ -82,21 +96,21 @@ static uint8_t Lora_E22_AuxPresent(void)
   return 0U;
 }
 
-Lora_Result_t Lora_E22_Init(void)
+static uint8_t Lora_E22_RecordAuxReady(uint32_t now_ms)
 {
-  uint32_t start_ms;
-
-  s_initialized = 0U;
-  s_present     = 0U;
-  BSP_LoRa_SetMode(0U); /* normal mode M0=0 M1=0 */
-  start_ms = BSP_Time_GetTickMs();
-  while (BSP_LoRa_IsReady() == 0U) {
-    /* AUX 下拉：无模块时恒低，超时即判定未接入并让 init 失败。 */
-    if ((uint32_t)(BSP_Time_GetTickMs() - start_ms) > 500U) { return LORA_RESULT_BUSY; }
+  if (BSP_LoRa_IsReady() != 0U) {
+    s_last_ready_ms = now_ms;
+    return 1U;
   }
+  return 0U;
+}
 
-  memset(&s_rx_frame, 0, sizeof(s_rx_frame));
-  s_rx_ready = 0U;
+static void Lora_E22_ResetRuntimeState(uint32_t now_ms)
+{
+  memset(s_rx_queue, 0, sizeof(s_rx_queue));
+  s_rx_q_head = 0U;
+  s_rx_q_tail = 0U;
+  s_rx_q_count = 0U;
   memset(&s_parse_status, 0, sizeof(s_parse_status));
   memset(&s_parse_msg, 0, sizeof(s_parse_msg));
 
@@ -110,11 +124,30 @@ Lora_Result_t Lora_E22_Init(void)
   s_rx_byte_count     = 0U;
   s_rx_drop_count     = 0U;
   s_last_tx_ms        = 0U;
+  s_last_ready_ms     = now_ms;
   s_last_msg_id       = 0U;
   s_tx_state          = LORA_TX_IDLE;
   s_tx_pending_len    = 0U;
   s_tx_state_ms       = 0U;
   s_initialized       = 1U;
+}
+
+Lora_Result_t Lora_E22_Init(void)
+{
+  uint32_t start_ms;
+  uint32_t ready_ms;
+
+  s_initialized = 0U;
+  s_present     = 0U;
+  BSP_LoRa_SetMode(0U); /* normal mode M0=0 M1=0 */
+  start_ms = BSP_Time_GetTickMs();
+  while (BSP_LoRa_IsReady() == 0U) {
+    /* AUX 下拉：无模块时恒低，超时即判定未接入并让 init 失败。 */
+    if ((uint32_t)(BSP_Time_GetTickMs() - start_ms) > 500U) { return LORA_RESULT_BUSY; }
+  }
+
+  ready_ms = BSP_Time_GetTickMs();
+  Lora_E22_ResetRuntimeState(ready_ms);
 
   /* 走到这里说明 AUX 已就绪(变高)，即模块在位；再采样确认避开瞬态忙。 */
   s_present = Lora_E22_AuxPresent();
@@ -138,38 +171,64 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
   uint8_t temp[128];
   uint16_t available;
   uint16_t received;
+  uint16_t rx_budget = LORA_E22_RX_SERVICE_BYTE_BUDGET;
   uint16_t i;
 
-  if (s_reinit_request != 0U) {
-    s_reinit_request = 0U;
-    (void)Lora_E22_Init();
+  if (s_initialized == 0U) {
+    if (Lora_E22_RecordAuxReady(now_ms) == 0U) { return LORA_RESULT_IO_ERROR; }
+    s_present = 1U;
+    Lora_E22_ResetRuntimeState(now_ms);
   }
 
-  while ((available = BSP_LoRa_GetRxCount()) > 0U) {
-    received = BSP_LoRa_GetRxData(temp, (available > sizeof(temp)) ? (uint16_t)sizeof(temp) : available);
+  if (s_reinit_request != 0U) {
+    BSP_LoRa_SetMode(0U);
+    if (BSP_LoRa_IsReady() != 0U) {
+      s_reinit_request = 0U;
+      s_present = 1U;
+      Lora_E22_ResetRuntimeState(now_ms);
+    }
+  } else {
+    (void)Lora_E22_RecordAuxReady(now_ms);
+  }
+
+  while ((rx_budget != 0U) && ((available = BSP_LoRa_GetRxCount()) > 0U)) {
+    uint16_t chunk_len = (available > sizeof(temp)) ? (uint16_t)sizeof(temp) : available;
+    if (chunk_len > rx_budget) { chunk_len = rx_budget; }
+
+    received = BSP_LoRa_GetRxData(temp, chunk_len);
 
     if (received == 0U) { break; }
+    rx_budget = (received >= rx_budget) ? 0U : (uint16_t)(rx_budget - received);
     s_rx_byte_count += received;
 
     for (i = 0U; i < received; i++) {
       uint8_t parse_error_before = s_parse_status.parse_error;
-      uint16_t drop_before       = s_parse_status.packet_rx_drop_count;
 
       if (mavlink_parse_char(MAVLINK_COMM_0, temp[i], &s_parse_msg, &s_parse_status) != 0) {
-        /* --- complete MAVLink frame received --- */
+        /* --- complete MAVLink frame received: 入队，不覆盖 --- */
         uint32_t primask;
+        Lora_RxFrame_t *slot;
 
         primask = __get_PRIMASK();
         __disable_irq();
 
-        s_rx_frame.frame_len    = s_parse_msg.len + MAVLINK_NUM_HEADER_BYTES + MAVLINK_NUM_CHECKSUM_BYTES;
-        s_rx_frame.system_id    = s_parse_msg.sysid;
-        s_rx_frame.component_id = s_parse_msg.compid;
-        s_rx_frame.sequence     = s_parse_msg.seq;
-        s_rx_frame.payload_len  = s_parse_msg.len;
-        s_rx_frame.msg_id       = s_parse_msg.msgid;
-        memcpy(s_rx_frame.data, _MAV_PAYLOAD(&s_parse_msg), s_parse_msg.len);
-        s_rx_ready = 1U;
+        if (s_rx_q_count >= LORA_RX_QUEUE_LEN) {
+          s_rx_q_tail = (uint16_t)((s_rx_q_tail + 1U) % LORA_RX_QUEUE_LEN);
+          s_rx_q_count--;
+          s_rx_drop_count++;
+        }
+
+        slot               = &s_rx_queue[s_rx_q_head];
+        slot->frame_len    = s_parse_msg.len + MAVLINK_NUM_HEADER_BYTES + MAVLINK_NUM_CHECKSUM_BYTES;
+        slot->system_id    = s_parse_msg.sysid;
+        slot->component_id = s_parse_msg.compid;
+        slot->sequence     = s_parse_msg.seq;
+        slot->payload_len  = s_parse_msg.len;
+        slot->msg_id       = s_parse_msg.msgid;
+        memcpy(slot->data, _MAV_PAYLOAD(&s_parse_msg), s_parse_msg.len);
+        s_rx_q_head = (uint16_t)((s_rx_q_head + 1U) % LORA_RX_QUEUE_LEN);
+        s_rx_q_count++;
+
         s_rx_frame_count++;
         s_last_rx_ms  = now_ms;
         s_last_msg_id = s_parse_msg.msgid;
@@ -182,7 +241,6 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
         s_parse_error_count += delta;
         s_crc_error_count += delta;
       }
-      if (s_parse_status.packet_rx_drop_count != drop_before) { s_rx_drop_count += (uint16_t)(s_parse_status.packet_rx_drop_count - drop_before); }
     }
   }
 
@@ -199,13 +257,14 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out)
   primask = __get_PRIMASK();
   __disable_irq();
 
-  if (s_rx_ready == 0U) {
+  if (s_rx_q_count == 0U) {
     if (primask == 0U) { __enable_irq(); }
     return LORA_RESULT_NO_DATA;
   }
 
-  *out       = s_rx_frame;
-  s_rx_ready = 0U;
+  *out        = s_rx_queue[s_rx_q_tail];
+  s_rx_q_tail = (uint16_t)((s_rx_q_tail + 1U) % LORA_RX_QUEUE_LEN);
+  s_rx_q_count--;
 
   if (primask == 0U) { __enable_irq(); }
   return LORA_RESULT_OK;
@@ -214,17 +273,44 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out)
 Lora_State_t Lora_E22_GetState(uint32_t now_ms, uint32_t offline_timeout_ms)
 {
   if (s_initialized == 0U) { return LORA_STATE_NOT_READY; }
-  /* 在线判定只认实际收到对端帧(RX)。本机 TX 是开环串口发送，不插模块/无对端时
-     也会"发出去"，不能作为通信在线的依据，否则会误判为在线并随 AUX 悬空来回抖动。 */
-  if (s_last_rx_ms == 0U) { return LORA_STATE_NOT_READY; }
-  if ((uint32_t)(now_ms - s_last_rx_ms) <= offline_timeout_ms) { return LORA_STATE_ONLINE; }
+  /* LoRa 模块状态按 AUX ready 判定，远端数据是否有效由 RemoteTelemetry 负责判定。 */
+  if (Lora_E22_RecordAuxReady(now_ms) != 0U) { return LORA_STATE_ONLINE; }
+  if (s_last_ready_ms == 0U) { return LORA_STATE_NOT_READY; }
+  if ((uint32_t)(now_ms - s_last_ready_ms) <= offline_timeout_ms) { return LORA_STATE_ONLINE; }
   return LORA_STATE_OFFLINE;
+}
+
+static uint32_t Lora_E22_CalcTimeoutMs(uint16_t length_bytes, uint32_t bitrate_bps, uint32_t margin_ms)
+{
+  uint32_t bits;
+  uint32_t transfer_ms;
+  uint32_t timeout_ms;
+
+  if ((length_bytes == 0U) || (bitrate_bps == 0U)) { return LORA_E22_TIMEOUT_MIN_MS; }
+
+  bits        = (uint32_t)length_bytes * LORA_E22_BITS_PER_BYTE;
+  transfer_ms = ((bits * 1000U) + bitrate_bps - 1U) / bitrate_bps;
+  timeout_ms  = transfer_ms + margin_ms;
+
+  return (timeout_ms < LORA_E22_TIMEOUT_MIN_MS) ? LORA_E22_TIMEOUT_MIN_MS : timeout_ms;
+}
+
+static uint32_t Lora_E22_GetAuxWaitTimeoutMs(void)
+{
+  return Lora_E22_CalcTimeoutMs(LORA_E22_TX_BUF_SIZE, BSP_LoRa_GetAirBps(), LORA_E22_AIR_TIMEOUT_MARGIN_MS);
+}
+
+static uint32_t Lora_E22_GetUartDmaTimeoutMs(uint16_t length_bytes)
+{
+  return Lora_E22_CalcTimeoutMs(length_bytes, BSP_LoRa_GetUartBaud(), LORA_E22_UART_TIMEOUT_MARGIN_MS);
 }
 
 /* Advance the transmit state machine. Called every comm cycle from
    Lora_E22_Service() and once from Lora_E22_Send(). Never blocks. */
 static void Lora_E22_TxStep(uint32_t now_ms)
 {
+  uint32_t timeout_ms;
+
   switch (s_tx_state) {
     case LORA_TX_WAIT_AUX:
       if (BSP_LoRa_IsBusy() == 0U) {
@@ -238,7 +324,8 @@ static void Lora_E22_TxStep(uint32_t now_ms)
         }
         /* r == 1: DMA still busy, stay and retry (bounded below). */
       }
-      if ((s_tx_state == LORA_TX_WAIT_AUX) && ((uint32_t)(now_ms - s_tx_state_ms) > LORA_E22_TX_AUX_TIMEOUT_MS)) {
+      timeout_ms = Lora_E22_GetAuxWaitTimeoutMs();
+      if ((s_tx_state == LORA_TX_WAIT_AUX) && ((uint32_t)(now_ms - s_tx_state_ms) > timeout_ms)) {
         s_tx_busy_count++;
         s_tx_state = LORA_TX_IDLE;
       }
@@ -249,7 +336,7 @@ static void Lora_E22_TxStep(uint32_t now_ms)
         s_tx_frame_count++;
         s_last_tx_ms = now_ms;
         s_tx_state   = LORA_TX_IDLE;
-      } else if ((uint32_t)(now_ms - s_tx_state_ms) > LORA_E22_TX_DMA_TIMEOUT_MS) {
+      } else if ((uint32_t)(now_ms - s_tx_state_ms) > Lora_E22_GetUartDmaTimeoutMs(s_tx_pending_len)) {
         BSP_LoRa_AbortTx();
         s_send_error_count++;
         s_tx_state = LORA_TX_IDLE;
@@ -307,6 +394,7 @@ void Lora_E22_GetDebugInfo(Lora_DebugInfo_t *info)
   info->rx_drop_count     = s_rx_drop_count;
   info->last_rx_ms        = s_last_rx_ms;
   info->last_tx_ms        = s_last_tx_ms;
+  info->last_ready_ms     = s_last_ready_ms;
   info->last_msg_id       = s_last_msg_id;
   if (primask == 0U) { __enable_irq(); }
 

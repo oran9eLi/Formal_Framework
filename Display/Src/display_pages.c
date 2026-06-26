@@ -276,6 +276,16 @@ void Display_PagesPushLogMessage(Display_LogMsg_t msg, uint32_t time_hhmmss)
   s_msglog_version++;
 }
 
+void Display_PagesClearLogMessages(void)
+{
+  if ((s_msglog_count == 0U) && (s_msglog_alarm_valid == 0U)) { return; }
+
+  s_msglog_head        = 0U;
+  s_msglog_count       = 0U;
+  s_msglog_alarm_valid = 0U;
+  s_msglog_version++;
+}
+
 uint32_t Display_PagesGetLogVersion(void)
 {
   return s_msglog_version;

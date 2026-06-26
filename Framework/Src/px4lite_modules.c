@@ -17,7 +17,9 @@
 #include "px4lite_recovery.h"
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
+#include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
+#include "px4lite_remote_telemetry.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
@@ -813,7 +815,9 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
   uint32_t now_ms         = Px4Lite_PlatformGetMs();
   Px4Lite_Result_t result = Px4Lite_LoRaInit();
 
-  if (result == PX4LITE_OK) { result = Px4Lite_MavlinkTxInit(now_ms); }
+  Px4Lite_RemoteTelemetryInit(now_ms);
+  Px4Lite_MavlinkRxInit(now_ms);
+  if (Px4Lite_MavlinkTxInit(now_ms) != PX4LITE_OK) { result = PX4LITE_IO_ERROR; }
 
   Px4Lite_SetStatus(PX4LITE_MODULE_LORA, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   return result;
@@ -828,23 +832,34 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   Px4Lite_CommDebugInfo_t info;
   Px4Lite_State_t state;
   Px4Lite_Result_t result;
-  Px4Lite_Result_t tx_result;
   uint32_t last_valid_ms;
+
+  (void)Px4Lite_RemoteTelemetryUpdateModeButton(Px4Lite_ButtonPressed(PX4LITE_BUTTON_KEY0), now_ms);
 
   result = Px4Lite_LoRaService(now_ms);
   /* 仅在模块在位时发送：未接入时不发，发送/接收计数保持为 0。 */
   if ((result == PX4LITE_OK) && (Px4Lite_LoRaIsPresent() != 0U)) {
-    tx_result = Px4Lite_MavlinkTxRun(now_ms);
-    if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
+    if (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+      Px4Lite_LoRaRxFrame_t rx_frame;
+      uint8_t rx_budget = 16U;
+
+      while ((rx_budget != 0U) && (Px4Lite_LoRaCopyRxFrame(&rx_frame) == PX4LITE_OK)) {
+        Px4Lite_Result_t rx_result = Px4Lite_MavlinkRxHandleFrame(&rx_frame, now_ms);
+        if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY) && (rx_result != PX4LITE_STALE) && (rx_result != PX4LITE_BUSY)) { result = rx_result; }
+        rx_budget--;
+      }
+    } else {
+      Px4Lite_Result_t tx_result = Px4Lite_MavlinkTxRun(now_ms);
+      if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
+    }
   }
 
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
   state = Px4Lite_LoRaGetState(now_ms);
 
-  /* 通信"有效活动"只看 RX：收到对端帧才算链路在线。本机 TX 不计入，
-     否则没插模块/无对端时本机持续发送会让 Health 永不超时、误判在线。 */
-  last_valid_ms = info.last_rx_ms;
+  /* LoRa 模块在位/就绪按 AUX ready 维护；远端数据是否有效由 RemoteTelemetry 判定。 */
+  last_valid_ms = info.last_ready_ms;
 
   taskENTER_CRITICAL();
   s_status[PX4LITE_MODULE_LORA].last_rx_ms    = info.last_rx_ms;
@@ -854,11 +869,8 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   taskEXIT_CRITICAL();
 
   /*
-   * LoRa 三态由 comm 任务单写者按“在位 + 链路”发布（Health 不再下调 LoRa 离线）：
-   *   未接入            -> FAILED   (红, 通信断开故障)
-   *   已接入 + 收到对端  -> ONLINE   (绿)
-   *   已接入 + 未链接对端 -> STARTING (黄, 无故障，等待对端)
-   *   服务异常          -> DEGRADED (黄, 通信超时告警)
+   * LoRa 三态由 comm 任务单写者按模块在位和本地服务状态发布；
+   * 远端数据缺失/过期只影响远端快照，不自动回退到本地显示。
    */
   if (Px4Lite_LoRaIsPresent() == 0U) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_FAILED, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
@@ -877,12 +889,15 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out)
 {
   Px4Lite_MavlinkTxStats_t stats;
+  Px4Lite_MavlinkRxStats_t rx_stats;
 
   if (out == 0) { return; }
 
   Px4Lite_LoRaGetDebugInfo(out);
   memset(&stats, 0, sizeof(stats));
+  memset(&rx_stats, 0, sizeof(rx_stats));
   Px4Lite_MavlinkTxGetStats(&stats);
+  Px4Lite_MavlinkRxGetStats(&rx_stats);
   out->mav_heartbeat_count       = stats.heartbeat_count;
   out->mav_gps_raw_count         = stats.gps_raw_count;
   out->mav_gnss_detail_count     = stats.gnss_detail_count;
@@ -896,4 +911,5 @@ void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out)
   out->mav_stale_count           = stats.stale_count;
   out->mav_error_count           = stats.error_count;
   out->mav_last_tx_msg_id        = stats.last_message_id;
+  out->rx_loss_permille          = rx_stats.rx_loss_permille;
 }
