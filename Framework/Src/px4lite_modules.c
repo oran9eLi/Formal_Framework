@@ -837,9 +837,11 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   (void)Px4Lite_RemoteTelemetryUpdateModeButton(Px4Lite_ButtonPressed(PX4LITE_BUTTON_KEY0), now_ms);
 
   result = Px4Lite_LoRaService(now_ms);
-  /* 仅在模块在位时发送：未接入时不发，发送/接收计数保持为 0。 */
-  if ((result == PX4LITE_OK) && (Px4Lite_LoRaIsPresent() != 0U)) {
+  if (result == PX4LITE_OK) {
     if (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+      /* 接收不依赖在位标志：只要 LoRa Service 正常即排空 RX，与本地/远端无关。
+         模块真未接入时 Service 不会返回 OK，result==OK 已足以挡住；用在位标志硬门控
+         接收会因 AUX 在位误判而把远端显示整段关闭(收不到任何远端消息)。 */
       Px4Lite_LoRaRxFrame_t rx_frame;
       uint8_t rx_budget = 16U;
 
@@ -848,7 +850,8 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
         if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY) && (rx_result != PX4LITE_STALE) && (rx_result != PX4LITE_BUSY)) { result = rx_result; }
         rx_budget--;
       }
-    } else {
+    } else if (Px4Lite_LoRaIsPresent() != 0U) {
+      /* 发送仍要求模块在位：未接入时不发，发送计数保持为 0。 */
       Px4Lite_Result_t tx_result = Px4Lite_MavlinkTxRun(now_ms);
       if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
     }
