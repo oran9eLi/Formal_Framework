@@ -17,6 +17,7 @@
 #include "px4lite_platform.h"
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
+#include "px4lite_remote_tunnel.h"
 
 #if defined(__CC_ARM)
 #define MAVLINK_ALIGNED_FIELDS   0
@@ -43,6 +44,7 @@ typedef enum {
   MAV_TX_SLOT_REMOTE_MOTOR,
   MAV_TX_SLOT_REMOTE_STATUS,
   MAV_TX_SLOT_STATUSTEXT,
+  MAV_TX_SLOT_REMOTE_ALARM,
   MAV_TX_SLOT_COUNT
 } MavTx_Slot_t;
 
@@ -63,6 +65,9 @@ static uint32_t s_next_remote_detail_ms;
 static uint32_t s_next_remote_motor_ms;
 static uint32_t s_next_remote_status_ms;
 static uint32_t s_next_statustext_ms;
+static uint32_t s_next_remote_alarm_ms;
+static uint32_t s_last_alarm_sig;
+static uint8_t  s_alarm_ver;
 static uint8_t s_remote_detail_index;
 static uint8_t s_remote_motor_index;
 static uint8_t s_remote_status_index;
@@ -1007,6 +1012,9 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_next_remote_motor_ms  = now_ms + 250U;
   s_next_remote_status_ms = now_ms + 550U;
   s_next_statustext_ms  = now_ms + 500U;
+  s_next_remote_alarm_ms = now_ms + 600U;
+  s_last_alarm_sig      = 0U;
+  s_alarm_ver           = 0U;
   s_remote_detail_index = 0U;
   s_remote_motor_index  = 0U;
   s_remote_status_index = 0U;
@@ -1016,6 +1024,43 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_remote_motor_urgent_pair = 0U;
   s_slot                = (uint8_t)MAV_TX_SLOT_HEARTBEAT;
   return PX4LITE_OK;
+}
+
+/**
+ * @brief 告警表：内容变化即发，否则按保活周期发；TUNNEL(0x8001) 打包 active 行。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteAlarmTable(uint32_t now_ms)
+{
+  Px4Lite_AlarmSnapshot_t alarm;
+  uint8_t payload[PX4LITE_TUNNEL_ALARM_MAX_BYTES];
+  uint16_t plen;
+  uint32_t sig;
+  uint8_t changed;
+  uint8_t keepalive_due;
+  Px4Lite_Result_t result;
+
+  if (Px4Lite_CopyAlarmSnapshot(&alarm) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+
+  sig           = Px4Lite_AlarmTableSignature(alarm.records, (uint8_t)PX4LITE_MODULE_COUNT);
+  changed       = (sig != s_last_alarm_sig) ? 1U : 0U;
+  keepalive_due = MavTx_TimeReached(now_ms, s_next_remote_alarm_ms);
+  if ((changed == 0U) && (keepalive_due == 0U)) { return PX4LITE_IDLE; }
+
+  if (changed != 0U) { s_alarm_ver++; }
+
+  plen = Px4Lite_PackAlarmTable(alarm.records, (uint8_t)PX4LITE_MODULE_COUNT, s_alarm_ver, now_ms, payload, sizeof(payload));
+  if (plen == 0U) { return PX4LITE_IO_ERROR; }
+
+  (void)mavlink_msg_tunnel_pack_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0,
+                                     &s_message, 0U, 0U,
+                                     PX4LITE_TUNNEL_PT_ALARM_TABLE, (uint8_t)plen, payload);
+  result = MavTx_SendPrepared();
+  if (result == PX4LITE_OK) {
+    s_last_alarm_sig       = sig;
+    s_next_remote_alarm_ms = now_ms + PX4LITE_MAVLINK_REMOTE_ALARM_PERIOD_MS;
+    s_stats.remote_alarm_count++;
+  }
+  return result;
 }
 
 Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
@@ -1112,6 +1157,12 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
         if ((PX4LITE_MAVLINK_ENABLE_STATUSTEXT == 0U) || (MavTx_TimeReached(now_ms, s_next_statustext_ms) == 0U)) { continue; }
         result = MavTx_SendStatusText(now_ms);
         MavTx_RecordResult(result, now_ms, PX4LITE_MAVLINK_STATUSTEXT_PERIOD_MS, &s_next_statustext_ms, MAVLINK_MSG_ID_STATUSTEXT, &s_stats.statustext_count);
+        if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
+        continue;
+
+      case MAV_TX_SLOT_REMOTE_ALARM:
+        if (PX4LITE_MAVLINK_ENABLE_REMOTE_ALARM == 0U) { continue; }
+        result = MavTx_SendRemoteAlarmTable(now_ms);
         if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
         continue;
 

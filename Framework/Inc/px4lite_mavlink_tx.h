@@ -29,6 +29,7 @@ typedef struct {
   uint32_t remote_detail_count;    /**< 远程显示扩展 NAMED_VALUE_INT 已调度次数。 */
   uint32_t remote_motor_count;     /**< 远程电机 NAMED_VALUE_INT 已调度次数。 */
   uint32_t remote_status_count;    /**< 远程模块状态/告警 NAMED_VALUE_INT 已调度次数。 */
+  uint32_t remote_alarm_count;     /**< 完整告警表 TUNNEL 已发送次数。 */
   uint32_t no_data_count;          /**< 因无可用 topic 数据跳过发送的次数。 */
   uint32_t stale_count;            /**< 因 topic 数据过期跳过发送的次数。 */
   uint32_t busy_count;             /**< 因 LoRa 发送忙跳过发送的次数。 */
