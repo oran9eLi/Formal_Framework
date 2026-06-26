@@ -103,7 +103,7 @@ static Display_LvglValueSlot_t s_value_slots[DISPLAY_HMI_VAR_COUNT];
 static uint32_t s_values[DISPLAY_HMI_VAR_COUNT];
 static uint8_t s_value_valid[DISPLAY_HMI_VAR_COUNT];
 static const lv_img_dsc_t s_logo_img_dsc = {
-    .header = { .cf = LV_IMG_CF_TRUE_COLOR, .always_zero = 0, .reserved = 0,
+    .header = { .cf = LV_IMG_CF_TRUE_COLOR_CHROMA_KEYED, .always_zero = 0, .reserved = 0,
                 .w = DISPLAY_HEADER_LOGO_WIDTH, .h = DISPLAY_HEADER_LOGO_HEIGHT },
     .data_size = DISPLAY_HEADER_LOGO_WIDTH * DISPLAY_HEADER_LOGO_HEIGHT * 2U,
     .data = display_logo_rgb565_data,
@@ -929,12 +929,14 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
   /* 公司名：第一行东创大为，第二行CNS飞控系统 */
   (void)Display_LvglCreateLabel(bar, "\xE4""\xB8""\x9C""\xE5""\x88""\x9B""\xE5""\xA4""\xA7""\xE4""\xB8""\xBA", 68, 10, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
   (void)Display_LvglCreateLabel(bar, "CNS\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 68, 36, &display_lvgl_font_zh_16, lv_color_hex(0xB0C8D8));
-  /* 日期时间（无前缀标签，格式自明） */
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 172, 10, 114, &lv_font_montserrat_14);
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 172, 36, 114, &lv_font_montserrat_14);
+  /* 日期时间（含前缀标签，x=174 与公司名之间留约一字宽） */
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xA5""\xE6""\x9C""\x9F", 174, 12, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 208, 10, 82, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xB6""\xE9""\x97""\xB4", 174, 36, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 208, 36, 82, &lv_font_montserrat_14);
   /* 中间标题 */
-  (void)Display_LvglCreateCenteredLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 296, 9, 264, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
-  (void)Display_LvglCreateCenteredLabel(bar, Display_LvglPageTitle(page), 296, 35, 264, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
+  (void)Display_LvglCreateCenteredLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 298, 9, 268, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  (void)Display_LvglCreateCenteredLabel(bar, Display_LvglPageTitle(page), 298, 35, 268, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
   /* 本地/远端按钮：放在"系统"左侧，点按切换本地常规页 / 远端通信连接页；
      标题随当前页显示"本地"或"远端"，按在远端页时高亮。 */
   {
