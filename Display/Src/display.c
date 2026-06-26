@@ -8,67 +8,25 @@
 #include "app_display_model.h"
 #include "px4lite_faults.h"
 #include "px4lite_platform.h"
-#include "display_gfx.h"
-#include "display_gt911.h"
 #include "display_lvgl.h"
 #include "display_pages.h"
-#include "display_logo.h"
-#include "display_ssd1963.h"
 #include "debug_console.h"
 #include <string.h>
 
 #define DISPLAY_USE_LVGL_BACKEND 1U
 
-#if DISPLAY_USE_LVGL_BACKEND
-/* Old pixel renderer symbols remain in this file as a staged migration
- * fallback. They are intentionally unused while the LVGL backend is active. */
-#pragma diag_suppress 177
-#pragma diag_suppress 550
-#endif
-
-/*
- * ATK-MD0700 显示骨架。
- *
- * ATK-MD0700 使用 FSMC/FMC 16-bit 8080 并口显示。
- * 下方 var_addr 是固件内部变量地址，用于 App、Display 和调试链路路由。
- * 实际 LCD 刷新方式基于固定坐标区域，直接绘制 RGB565 像素。
- */
-
 #define DISPLAY_ARRAY_SIZE(array) ((uint16_t)(sizeof(array) / sizeof((array)[0])))
 
-#define DISPLAY_ATK_MD0700_WIDTH  800U
-#define DISPLAY_ATK_MD0700_HEIGHT 480U
-#define DISPLAY_ATK_MD0700_PID    0x61U
-
-#define DISPLAY_HEADER_HEIGHT     64U
-#define DISPLAY_FOOTER_Y          420U
-#define DISPLAY_FOOTER_HEIGHT     60U
-#define DISPLAY_NAV_SIDE_WIDTH    170U
-/* 触摸判定区与底部可见按钮矩形一致：左=上一页，右=下一页。
- * 只命中按钮本身，避免点到中间页码圆点区域误翻页。 */
-#define DISPLAY_NAV_BUTTON_X1_PREV 8U
-#define DISPLAY_NAV_BUTTON_X2_PREV 258U
-#define DISPLAY_NAV_BUTTON_X1_NEXT 542U
-#define DISPLAY_NAV_BUTTON_X2_NEXT 792U
-#define DISPLAY_NAV_BUTTON_Y1      426U
-#define DISPLAY_NAV_BUTTON_Y2      474U
 #define DISPLAY_MOTOR_SLIDER_MAX_VALUE 100U
-#define DISPLAY_MOTOR_HANDLE_GRAB_PAD  18U
+
 typedef struct {
   uint32_t value;           /* 当前缓存的原始显示值 */
   uint32_t drawn_value;     /* 上一次已经绘制到屏幕的值 */
   uint32_t last_refresh_ms; /* 上一次字段重绘时间 */
   uint8_t valid;            /* 0 表示缓存无效，1 表示可用于绘制 */
   uint8_t drawn_valid;      /* 0 表示当前页还未绘制过该字段 */
-  uint8_t dirty;            /* 1 表示下次 Display_Refresh() 需要重绘 */
+  uint8_t dirty;            /* 1 表示下次 LVGL 刷新需要重绘 */
 } Display_ValueCache_t;
-
-typedef enum {
-  DISPLAY_NAV_TOUCH_NONE = 0,
-  DISPLAY_NAV_TOUCH_PREV,
-  DISPLAY_NAV_TOUCH_NEXT,
-  DISPLAY_NAV_TOUCH_TAB
-} Display_NavTouch_t;
 
 /*
  * 页面 ID 用于 App 和调试链路路由，枚举值保持稳定。
@@ -206,62 +164,11 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
 static Display_ValueCache_t s_hmi_values[DISPLAY_HMI_VAR_COUNT];
 static Display_HmiPage_t s_current_page       = DISPLAY_HMI_PAGE_SELF_CHECK;
 static uint8_t s_display_ready                = 0U;
-static uint8_t s_touch_ready                  = 0U;
-static uint8_t s_touch_down                   = 0U;
-static uint8_t s_touch_retry_count            = 0U;
-static uint8_t s_touch_poll_count             = 0U;
-static Display_NavTouch_t s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
-static Display_HmiPage_t s_touch_tab_target   = DISPLAY_HMI_PAGE_SELF_CHECK;
-static const Display_HmiVariableConfig_t *s_touch_slider_latched;
-static uint8_t s_selected_motor_index         = 0U;
 static uint8_t s_display_initialized          = 0U;
 static volatile uint8_t s_recover_requested   = 0U;
-static uint16_t s_refresh_cursor              = 0U;
-static uint8_t s_static_redraw_pending        = 0U;
 static uint8_t s_motor_bat_cutoff             = 0U; /* 电机电池电压不足：停机并锁定 PWM 滑块 */
 static uint8_t s_motor_band                   = 4U; /* 电机电池档位(带滞回)，初值=正常 */
 static uint8_t s_main_band                    = 2U; /* 主控电池档位(带滞回)，初值=正常 */
-static Display_HmiPage_t s_page_before_hidden = DISPLAY_HMI_PAGE_SELF_CHECK; /* 进入隐藏页前的页面，供 KEY0 返回 */
-static uint8_t s_key0_last_raw                = 0U;
-static uint8_t s_key0_stable                  = 0U;
-static uint8_t s_key0_count                   = 0U;
-
-#define DISPLAY_KEY_DEBOUNCE_CYCLES 2U
-
-/*
- * Check whether a point is inside an inclusive rectangle.
- */
-static uint8_t Display_IsPointInBox(uint16_t x, uint16_t y, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
-{
-  return (uint8_t)((x >= x1) && (x <= x2) && (y >= y1) && (y <= y2));
-}
-
-/*
- * 将图元层画点调用转接到底层 LCD 端口。 */
-static void AtkMd0700_GfxDrawPixel(uint16_t x, uint16_t y, uint16_t color)
-{
-  Display_Ssd1963_DrawPixel(x, y, color);
-}
-
-/*
- * 将图元层矩形填充调用转接到底层 LCD 端口。
- */
-static void AtkMd0700_GfxFillRect(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t color)
-{
-  Display_Ssd1963_FillRect(x, y, width, height, color);
-}
-
-static const Display_GfxPort_t s_atk_md0700_gfx_port = {AtkMd0700_GfxDrawPixel, AtkMd0700_GfxFillRect};
-
-/*
- * 读取指定 HMI 变量的缓存值，缓存无效时返回默认值。
- */
-static uint32_t Display_GetCachedValue(Display_HmiVariableId_t id, uint32_t default_value)
-{
-  if ((id < DISPLAY_HMI_VAR_COUNT) && (s_hmi_values[id].valid != 0U)) { return s_hmi_values[id].value; }
-
-  return default_value;
-}
 
 /*
  * 根据变量 ID 查找 HMI 变量配置项。
@@ -275,30 +182,6 @@ static const Display_HmiVariableConfig_t *Display_GetVariableConfig(Display_HmiV
   }
 
   return 0;
-}
-
-/*
- * 判断触摸坐标是否落在底部翻页按钮内。
- * 触摸已是横屏显示坐标，直接与按钮矩形对应：左=上一页，右=下一页。
- */
-static Display_NavTouch_t Display_CheckNavRect(uint16_t x, uint16_t y)
-{
-  uint16_t tab_count = (uint16_t)(DISPLAY_HMI_PAGE_HIDDEN - DISPLAY_HMI_PAGE_SELF_CHECK);
-  uint16_t tab_w     = (uint16_t)(DISPLAY_ATK_MD0700_WIDTH / tab_count);
-  uint16_t idx;
-
-  /* 底部标签栏：落在底栏内即按 X 映射到对应页面，整条都是触摸热区，灵敏直达。 */
-  if (y < DISPLAY_FOOTER_Y) { return DISPLAY_NAV_TOUCH_NONE; }
-
-  idx = (uint16_t)(x / tab_w);
-  if (idx >= tab_count) { idx = (uint16_t)(tab_count - 1U); }
-  s_touch_tab_target = (Display_HmiPage_t)((uint16_t)DISPLAY_HMI_PAGE_SELF_CHECK + idx);
-  return DISPLAY_NAV_TOUCH_TAB;
-}
-
-static uint8_t Display_IsMotorSliderId(Display_HmiVariableId_t id)
-{
-  return (uint8_t)((id == DISPLAY_HMI_VAR_MOTOR_PWM_1) || (id == DISPLAY_HMI_VAR_MOTOR_PWM_2) || (id == DISPLAY_HMI_VAR_MOTOR_PWM_3) || (id == DISPLAY_HMI_VAR_MOTOR_PWM_4));
 }
 
 static uint8_t Display_MotorIndexFromId(Display_HmiVariableId_t id, uint8_t *index)
@@ -325,42 +208,6 @@ static uint8_t Display_MotorIndexFromId(Display_HmiVariableId_t id, uint8_t *ind
   return 0U;
 }
 
-static uint16_t Display_MotorHandleCenterY(const Display_HmiVariableConfig_t *variable, uint16_t value)
-{
-  uint32_t filled;
-  uint16_t cy;
-  uint16_t lo;
-  uint16_t hi;
-
-  if ((variable == 0) || (variable->height == 0U)) { return 0U; }
-  if (value > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { value = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
-
-  filled = ((uint32_t)value * variable->height) / DISPLAY_MOTOR_SLIDER_MAX_VALUE;
-  cy     = (uint16_t)(variable->y + variable->height - filled);
-  lo     = (uint16_t)(variable->y + DISPLAY_MOTOR_HANDLE_HALF_H);
-  hi     = (uint16_t)(variable->y + variable->height - DISPLAY_MOTOR_HANDLE_HALF_H);
-  if (cy < lo) { cy = lo; }
-  if (cy > hi) { cy = hi; }
-
-  return cy;
-}
-
-static uint16_t Display_MotorSliderValueFromY(const Display_HmiVariableConfig_t *variable, uint16_t y)
-{
-  uint16_t bottom;
-  uint32_t value;
-
-  if ((variable == 0) || (variable->height == 0U)) { return 0U; }
-
-  bottom = (uint16_t)(variable->y + variable->height);
-  if (y >= bottom) { return 0U; }
-  if (y <= variable->y) { return DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
-
-  value = (((uint32_t)(bottom - y) * DISPLAY_MOTOR_SLIDER_MAX_VALUE) + (variable->height / 2U)) / variable->height;
-  if (value > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { value = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
-  return (uint16_t)value;
-}
-
 static const Display_HmiVariableConfig_t *Display_FindMotorSliderByIndex(uint8_t motor_index)
 {
   uint16_t i;
@@ -376,100 +223,9 @@ static const Display_HmiVariableConfig_t *Display_FindMotorSliderByIndex(uint8_t
   return 0;
 }
 
-static void Display_DrawSelectedMotorTriangle(void)
-{
-  uint8_t i;
-
-  if (s_current_page != DISPLAY_HMI_PAGE_MOTOR) { return; }
-
-  for (i = 0U; i < 4U; i++) {
-    const Display_HmiVariableConfig_t *variable = Display_FindMotorSliderByIndex(i);
-    uint16_t cx;
-    uint16_t top;
-    uint16_t dy;
-
-    if (variable == 0) { continue; }
-
-    cx  = (uint16_t)(variable->x + (variable->width / 2U));
-    top = (uint16_t)(variable->y - 10U);
-    (void)Display_GfxFillRect((uint16_t)(cx - 6U), top, 13U, 8U, DISPLAY_THEME_PANEL);
-    if (i != s_selected_motor_index) { continue; }
-
-    for (dy = 0U; dy < 6U; dy++) {
-      uint16_t half = (uint16_t)(5U - dy);
-      (void)Display_GfxDrawHLine((uint16_t)(cx - half), (uint16_t)(top + dy), (uint16_t)((half * 2U) + 1U), DISPLAY_GFX_COLOR_BLUE);
-    }
-  }
-}
-
-static uint8_t Display_IsOnMotorHandle(const Display_HmiVariableConfig_t *variable, uint16_t x, uint16_t y)
-{
-  uint16_t cx;
-  uint16_t cy;
-  uint16_t hw;
-  uint16_t hh;
-  uint16_t x1;
-  uint16_t x2;
-  uint16_t y1;
-  uint16_t y2;
-
-  if (variable == 0) { return 0U; }
-
-  cx = (uint16_t)(variable->x + (variable->width / 2U));
-  cy = Display_MotorHandleCenterY(variable, (uint16_t)Display_GetCachedValue(variable->id, 0U));
-  hw = (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_W + DISPLAY_MOTOR_HANDLE_GRAB_PAD);
-  hh = (uint16_t)(DISPLAY_MOTOR_HANDLE_HALF_H + DISPLAY_MOTOR_HANDLE_GRAB_PAD);
-  x1 = (cx > hw) ? (uint16_t)(cx - hw) : 0U;
-  x2 = (uint16_t)(cx + hw);
-  y1 = (cy > hh) ? (uint16_t)(cy - hh) : 0U;
-  y2 = (uint16_t)(cy + hh);
-
-  return Display_IsPointInBox(x, y, x1, y1, x2, y2);
-}
-
-static const Display_HmiVariableConfig_t *Display_FindMotorSliderAt(uint16_t x, uint16_t y)
-{
-  uint16_t i;
-
-  if (s_current_page != DISPLAY_HMI_PAGE_MOTOR) { return 0; }
-
-  for (i = 0U; i < DISPLAY_ARRAY_SIZE(s_hmi_variables); i++) {
-    const Display_HmiVariableConfig_t *variable = &s_hmi_variables[i];
-    if ((variable->page != s_current_page) || (Display_IsMotorSliderId(variable->id) == 0U)) { continue; }
-    if (Display_IsOnMotorHandle(variable, x, y) != 0U) { return variable; }
-  }
-
-  return 0;
-}
-
-static Display_Result_t Display_DrawMotorSliderNow(const Display_HmiVariableConfig_t *variable, uint16_t throttle_percent, uint8_t draw_percent)
-{
-  Display_ValueCache_t *cache;
-
-  if (variable == 0) { return DISPLAY_ERROR; }
-
-  cache = &s_hmi_values[variable->id];
-  if ((cache->drawn_valid != 0U) && (cache->drawn_value == throttle_percent) && (draw_percent == 0U)) {
-    cache->last_refresh_ms = 0U;
-    cache->dirty           = 0U;
-    return DISPLAY_OK;
-  }
-
-  if (Display_PagesDrawMotorSliderField(variable, cache->drawn_value, throttle_percent, (cache->drawn_valid == 0U) ? 1U : 0U, draw_percent) != DISPLAY_OK) { return DISPLAY_ERROR; }
-  cache->drawn_value     = throttle_percent;
-  cache->drawn_valid     = 1U;
-  cache->last_refresh_ms = 0U;
-  cache->dirty           = 0U;
-
-  return DISPLAY_OK;
-}
-
 static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariableConfig_t *variable, uint16_t throttle_percent)
 {
   uint8_t motor_index;
-#if !DISPLAY_USE_LVGL_BACKEND
-  uint8_t selection_changed;
-#endif
 
   if ((variable == 0) || (Display_MotorIndexFromId(variable->id, &motor_index) == 0U)) { return DISPLAY_ERROR; }
 
@@ -482,33 +238,9 @@ static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariabl
 
   if (App_SetMotorThrottlePercent(motor_index, (uint8_t)throttle_percent) != PX4LITE_OK) { return DISPLAY_ERROR; }
 
-#if !DISPLAY_USE_LVGL_BACKEND
-  selection_changed      = (s_selected_motor_index != motor_index) ? 1U : 0U;
-#endif
-  s_selected_motor_index = motor_index;
   (void)Display_SetHmiValueU16(variable->id, throttle_percent);
 
-#if !DISPLAY_USE_LVGL_BACKEND
-  if (s_current_page == DISPLAY_HMI_PAGE_MOTOR) {
-    if (selection_changed != 0U) { Display_DrawSelectedMotorTriangle(); }
-    return Display_DrawMotorSliderNow(variable, throttle_percent, 1U);
-  }
-#endif
-
   return DISPLAY_OK;
-}
-
-static Display_Result_t Display_HandleMotorSliderTouch(const Display_HmiVariableConfig_t *variable, uint16_t y, Display_HmiVariableId_t *id, uint32_t *value)
-{
-  uint16_t throttle_percent;
-
-  if (variable == 0) { return DISPLAY_ERROR; }
-
-  throttle_percent = Display_MotorSliderValueFromY(variable, y);
-  if (id != 0) { *id = variable->id; }
-  if (value != 0) { *value = throttle_percent; }
-
-  return Display_SetMotorThrottleCommand(variable, throttle_percent);
 }
 
 static Display_Result_t Display_MotorEmergencyStop(void)
@@ -523,9 +255,6 @@ static Display_Result_t Display_MotorEmergencyStop(void)
     (void)App_SetMotorThrottlePercent(i, 0U);
     if (variable != 0) {
       (void)Display_SetHmiValueU16(variable->id, 0U);
-#if !DISPLAY_USE_LVGL_BACKEND
-      if (s_current_page == DISPLAY_HMI_PAGE_MOTOR) { (void)Display_DrawMotorSliderNow(variable, 0U, 1U); }
-#endif
     }
   }
 
@@ -559,52 +288,6 @@ static void Display_ForceMotorsOff(void)
     (void)App_SetMotorThrottlePercent(i, 0U);
     if (variable != 0) { (void)Display_SetHmiValueU16(variable->id, 0U); }
   }
-}
-
-static uint8_t Display_IsMotorEstopTouch(uint16_t x, uint16_t y)
-{
-  if (s_current_page != DISPLAY_HMI_PAGE_MOTOR) { return 0U; }
-
-  return Display_IsPointInBox(x, y, DISPLAY_MOTOR_ESTOP_X, DISPLAY_MOTOR_ESTOP_Y, (uint16_t)(DISPLAY_MOTOR_ESTOP_X + DISPLAY_MOTOR_ESTOP_W), (uint16_t)(DISPLAY_MOTOR_ESTOP_Y + DISPLAY_MOTOR_ESTOP_H));
-}
-
-/*
- * 根据触摸芯片输出坐标判断导航触摸。
- */
-static Display_NavTouch_t Display_GetNavTouch(uint16_t x, uint16_t y)
-{
-  return Display_CheckNavRect(x, y);
-}
-
-static Display_Result_t Display_HandleNavTouch(Display_NavTouch_t nav_touch)
-{
-  if (nav_touch == DISPLAY_NAV_TOUCH_TAB) {
-    if (s_touch_tab_target == s_current_page) { return DISPLAY_OK; }
-    return Display_SetHmiPage(s_touch_tab_target);
-  }
-
-  if (nav_touch == DISPLAY_NAV_TOUCH_PREV) { return Display_SetHmiPage(Display_PagesGetPrevPage(s_current_page)); }
-
-  if (nav_touch == DISPLAY_NAV_TOUCH_NEXT) { return Display_SetHmiPage(Display_PagesGetNextPage(s_current_page)); }
-
-  return DISPLAY_OK;
-}
-
-/*
- * 初始化 LCD、图元层和触摸端口。
- */
-static Display_Result_t AtkMd0700_PortInit(void)
-{
-  if (Display_Ssd1963_Init() != DISPLAY_SSD1963_OK) { return DISPLAY_NOT_READY; }
-
-  if (Display_GfxInit(&s_atk_md0700_gfx_port) != DISPLAY_GFX_OK) { return DISPLAY_ERROR; }
-
-  s_touch_ready       = (Display_Gt911_Init() == DISPLAY_GT911_OK) ? 1U : 0U;
-  s_touch_down        = 0U;
-  s_touch_retry_count = 0U;
-  DBG_PRINT("display touch init=%u", (unsigned int)s_touch_ready);
-
-  return DISPLAY_OK;
 }
 
 static void Display_InitSelfCheckValues(void)
@@ -815,38 +498,10 @@ Display_Result_t Display_Init(void)
   s_display_ready         = 1U;
   s_display_initialized   = 1U;
   s_current_page          = DISPLAY_HMI_PAGE_SELF_CHECK;
-  s_touch_down            = 0U;
-  s_touch_nav_latched     = DISPLAY_NAV_TOUCH_NONE;
-  s_touch_slider_latched  = 0;
-  s_refresh_cursor        = 0U;
-  s_static_redraw_pending = 1U;
   Display_InitSelfCheckValues();
 #ifdef DEBUG_ENABLE
   Display_LoadMockValues();
 #endif
-  return DISPLAY_OK;
-#else
-  if (AtkMd0700_PortInit() != DISPLAY_OK) {
-    s_display_ready       = 0U;
-    s_display_initialized = 1U;
-    return DISPLAY_ERROR;
-  }
-
-  s_display_ready         = 1U;
-  s_display_initialized   = 1U;
-  s_current_page          = DISPLAY_HMI_PAGE_SELF_CHECK;
-  s_touch_down            = 0U;
-  s_touch_nav_latched     = DISPLAY_NAV_TOUCH_NONE;
-  s_touch_slider_latched  = 0;
-  s_refresh_cursor        = 0U;
-  s_static_redraw_pending = 0U;
-  Display_InitSelfCheckValues();
-#ifdef DEBUG_ENABLE
-  Display_LoadMockValues();
-#endif
-
-  if (Display_PagesDrawStatic(s_current_page, Display_GetCachedValue) != DISPLAY_OK) { return DISPLAY_ERROR; }
-
   return DISPLAY_OK;
 #endif
 }
@@ -856,60 +511,13 @@ Display_Result_t Display_Init(void)
  */
 Display_Result_t Display_SelfCheck(uint16_t *error_code)
 {
-#if DISPLAY_USE_LVGL_BACKEND
   return Display_LvglSelfCheck(error_code);
-#else
-  if (error_code != 0) { *error_code = 0U; }
-
-  if (s_display_ready == 0U) {
-    if (error_code != 0) { *error_code = 1U; }
-    return DISPLAY_NOT_READY;
-  }
-
-  return DISPLAY_OK;
-#endif
 }
 
 void Display_RequestRecover(void)
 {
-#if DISPLAY_USE_LVGL_BACKEND
   Display_LvglRequestRecover();
-#endif
   s_recover_requested = 1U;
-}
-
-/*
- * 根据当前时间刷新当前页的动态字段和告警图标。
- */
-Display_Result_t Display_Refresh(uint32_t now_ms)
-{
-  uint16_t i;
-
-  if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
-
-  for (i = 0U; i < DISPLAY_ARRAY_SIZE(s_hmi_variables); i++) {
-    const Display_HmiVariableConfig_t *variable = &s_hmi_variables[i];
-    Display_ValueCache_t *cache                 = &s_hmi_values[variable->id];
-
-    if ((cache->valid == 0U) || (variable->page != s_current_page)) { continue; }
-
-    if ((cache->dirty == 0U) && (cache->drawn_valid != 0U) && (cache->value == cache->drawn_value)) { continue; }
-
-    if ((cache->dirty == 0U) && (variable->refresh_ms != 0U) && (cache->last_refresh_ms != 0U) && ((now_ms - cache->last_refresh_ms) < variable->refresh_ms)) { continue; }
-
-    if ((cache->dirty == 0U) && (variable->refresh_ms == 0U) && (cache->drawn_valid != 0U)) { continue; }
-
-    if (Display_PagesDrawField(variable, cache->value) != DISPLAY_OK) { return DISPLAY_ERROR; }
-
-    cache->drawn_value     = cache->value;
-    cache->drawn_valid     = 1U;
-    cache->last_refresh_ms = now_ms;
-    cache->dirty           = 0U;
-  }
-
-  (void)Display_PagesDrawHeaderDynamic(Display_GetCachedValue, 0U);
-
-  return DISPLAY_OK;
 }
 
 /*
@@ -1761,114 +1369,13 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   return DISPLAY_OK;
 }
 
-/**
- * @brief 优先刷新当前页内的强节奏字段。
- *
- * @param[in] id 待优先刷新的 HMI 变量 ID。
- * @param[in] now_ms 当前系统毫秒时间。
- *
- * @return DISPLAY_NOT_READY 表示本次已经绘制一个字段，DISPLAY_OK 表示无需绘制。
- */
-static Display_Result_t Display_RefreshPriorityField(Display_HmiVariableId_t id, uint32_t now_ms)
-{
-  uint16_t i;
-
-  for (i = 0U; i < DISPLAY_ARRAY_SIZE(s_hmi_variables); i++) {
-    const Display_HmiVariableConfig_t *variable = &s_hmi_variables[i];
-    Display_ValueCache_t *cache;
-
-    if ((variable->id != id) || (variable->page != s_current_page)) { continue; }
-
-    cache = &s_hmi_values[variable->id];
-    if (cache->valid == 0U) { return DISPLAY_OK; }
-    if ((cache->drawn_valid != 0U) && (cache->value == cache->drawn_value)) { return DISPLAY_OK; }
-
-    if (Display_PagesDrawField(variable, cache->value) != DISPLAY_OK) { return DISPLAY_ERROR; }
-
-    cache->drawn_value     = cache->value;
-    cache->drawn_valid     = 1U;
-    cache->last_refresh_ms = now_ms;
-    cache->dirty           = 0U;
-    return DISPLAY_NOT_READY;
-  }
-
-  return DISPLAY_OK;
-}
-
 /*
  * 执行一次有预算约束的显示刷新步骤。
  */
 Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
 {
-#if DISPLAY_USE_LVGL_BACKEND
   if (Display_EnsureInit() != DISPLAY_OK) { return DISPLAY_NOT_READY; }
   return Display_LvglRefreshStep(now_ms, budget_us);
-#else
-  Display_Result_t result;
-  uint16_t scanned;
-  uint32_t start_us;
-
-  if (Display_EnsureInit() != DISPLAY_OK) { return DISPLAY_NOT_READY; }
-
-  if (s_static_redraw_pending != 0U) {
-    if (Display_PagesDrawStatic(s_current_page, Display_GetCachedValue) != DISPLAY_OK) { return DISPLAY_ERROR; }
-    Display_DrawSelectedMotorTriangle();
-    s_static_redraw_pending = 0U;
-    s_refresh_cursor        = 0U;
-    return DISPLAY_NOT_READY;
-  }
-
-  result = Display_RefreshPriorityField(DISPLAY_HMI_VAR_CLOCK_TIME, now_ms);
-  if (result != DISPLAY_OK) { return result; }
-
-  result = Display_RefreshPriorityField(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms);
-  if (result != DISPLAY_OK) { return result; }
-
-  /* 一次调用内扫描整张变量表，绘制当前页所有到期字段；每画完一个字段检查
-     时间预算，超出即让出，剩余字段在下个节拍续绘。扫满整表(scanned 上界)是
-     硬性终止条件，即使微秒时基异常也不会卡死或漏刷。 */
-  start_us = Px4Lite_PlatformGetUs();
-
-  for (scanned = 0U; scanned < DISPLAY_ARRAY_SIZE(s_hmi_variables); scanned++) {
-    const Display_HmiVariableConfig_t *variable;
-    Display_ValueCache_t *cache;
-
-    variable = &s_hmi_variables[s_refresh_cursor];
-    cache    = &s_hmi_values[variable->id];
-    s_refresh_cursor++;
-    if (s_refresh_cursor >= DISPLAY_ARRAY_SIZE(s_hmi_variables)) { s_refresh_cursor = 0U; }
-
-    if ((cache->valid == 0U) || (variable->page != s_current_page)) { continue; }
-
-    if ((cache->dirty == 0U) && (cache->drawn_valid != 0U) && (cache->value == cache->drawn_value)) { continue; }
-
-    if ((cache->dirty == 0U) && (variable->refresh_ms != 0U) && (cache->last_refresh_ms != 0U) && ((now_ms - cache->last_refresh_ms) < variable->refresh_ms)) { continue; }
-
-    if (Display_IsMotorSliderId(variable->id) != 0U) {
-      if (Display_PagesDrawMotorSliderField(variable, cache->drawn_value, cache->value, (cache->drawn_valid == 0U) ? 1U : 0U, 1U) != DISPLAY_OK) { return DISPLAY_ERROR; }
-    } else if (Display_PagesDrawField(variable, cache->value) != DISPLAY_OK) {
-      return DISPLAY_ERROR;
-    }
-
-    cache->drawn_value     = cache->value;
-    cache->drawn_valid     = 1U;
-    cache->last_refresh_ms = now_ms;
-    cache->dirty           = 0U;
-
-    if ((budget_us != 0U) && ((uint32_t)(Px4Lite_PlatformGetUs() - start_us) >= budget_us)) {
-      return DISPLAY_NOT_READY;
-    }
-  }
-
-  (void)Display_PagesDrawHeaderDynamic(Display_GetCachedValue, 0U);
-
-  /* LoRa 连接页内容由版本号驱动重绘（业务回写节点/连接状态时触发） */
-  if ((s_current_page == DISPLAY_HMI_PAGE_HIDDEN) && (Display_PagesLoraContentDirty() != 0U)) {
-    Display_PagesDrawLoraContent();
-  }
-
-  return DISPLAY_OK;
-#endif
 }
 
 /*
@@ -1876,33 +1383,12 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
  */
 Display_Result_t Display_SetHmiPage(Display_HmiPage_t page)
 {
-#if DISPLAY_USE_LVGL_BACKEND
   Display_Result_t result;
 
   result = Display_LvglSetPage(page);
   if (result != DISPLAY_OK) { return result; }
   s_current_page = page;
   return DISPLAY_OK;
-#else
-  uint16_t i;
-
-  if (page >= DISPLAY_HMI_PAGE_COUNT) { return DISPLAY_ERROR; }
-
-  if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
-
-  s_current_page = page;
-
-  for (i = 0U; i < DISPLAY_HMI_VAR_COUNT; i++) {
-    s_hmi_values[i].dirty       = 1U;
-    s_hmi_values[i].drawn_valid = 0U;
-  }
-
-  s_static_redraw_pending = 1U;
-  s_refresh_cursor        = 0U;
-  s_touch_slider_latched  = 0;
-
-  return DISPLAY_OK;
-#endif
 }
 
 /*
@@ -1919,11 +1405,7 @@ Display_HmiPage_t Display_GetCurrentHmiPage(void)
  */
 uint8_t Display_HasPendingRedraw(void)
 {
-#if DISPLAY_USE_LVGL_BACKEND
   return Display_LvglNeedsRefresh();
-#else
-  return s_static_redraw_pending;
-#endif
 }
 
 void Display_ShowBootCode(uint8_t code)
@@ -1936,88 +1418,7 @@ void Display_ShowBootCode(uint8_t code)
  */
 Display_Result_t Display_PollTouch(void)
 {
-#if DISPLAY_USE_LVGL_BACKEND
   return (s_display_ready != 0U) ? DISPLAY_OK : DISPLAY_NOT_READY;
-#else
-  uint16_t x;
-  uint16_t y;
-  Display_NavTouch_t nav_touch;
-  const Display_HmiVariableConfig_t *slider;
-  Display_ValueCache_t *cache = 0;
-  Display_Gt911Result_t touch_result;
-
-  if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
-
-  s_touch_poll_count++;
-
-  if (s_touch_ready == 0U) {
-    s_touch_retry_count++;
-    if (s_touch_retry_count >= 5U) {
-      s_touch_ready       = (Display_Gt911_Init() == DISPLAY_GT911_OK) ? 1U : 0U;
-      s_touch_down        = 0U;
-      s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
-      s_touch_slider_latched = 0;
-      s_touch_retry_count = 0U;
-    }
-    return DISPLAY_OK;
-  }
-
-  touch_result = Display_Gt911_Scan(&x, &y);
-  if (touch_result == DISPLAY_GT911_OK) {
-    s_touch_retry_count = 0U;
-    if (s_touch_down == 0U) {
-      s_touch_down = 1U;
-      if (s_current_page == DISPLAY_HMI_PAGE_HIDDEN) {
-        s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
-        if (Display_PagesLoraHandleTouch(x, y) != DISPLAY_LORA_TOUCH_NONE) { Display_PagesDrawLoraContent(); }
-        return DISPLAY_OK;
-      }
-      if (Display_IsMotorEstopTouch(x, y) != 0U) {
-        s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
-        return Display_MotorEmergencyStop();
-      }
-      slider = Display_FindMotorSliderAt(x, y);
-      if (slider != 0) {
-        s_touch_slider_latched = slider;
-        s_touch_nav_latched    = DISPLAY_NAV_TOUCH_NONE;
-        return Display_HandleMotorSliderTouch(slider, y, 0, 0);
-      }
-      s_touch_nav_latched = Display_GetNavTouch(x, y);
-    } else if (s_touch_slider_latched != 0) {
-      return Display_HandleMotorSliderTouch(s_touch_slider_latched, y, 0, 0);
-    }
-
-    return DISPLAY_OK;
-  }
-
-  if (touch_result == DISPLAY_GT911_NO_DATA) {
-    s_touch_retry_count = 0U;
-    return DISPLAY_OK;
-  }
-
-  if (touch_result == DISPLAY_GT911_NO_POINT) {
-    nav_touch           = s_touch_nav_latched;
-    if (s_touch_slider_latched != 0) {
-      cache = &s_hmi_values[s_touch_slider_latched->id];
-      if (cache->drawn_valid != 0U) { (void)Display_DrawMotorSliderNow(s_touch_slider_latched, (uint16_t)cache->drawn_value, 1U); }
-    }
-    s_touch_down        = 0U;
-    s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
-    s_touch_slider_latched = 0;
-    s_touch_retry_count = 0U;
-    return Display_HandleNavTouch(nav_touch);
-  }
-
-  s_touch_down        = 0U;
-  s_touch_nav_latched = DISPLAY_NAV_TOUCH_NONE;
-  s_touch_slider_latched = 0;
-  s_touch_retry_count++;
-  if (s_touch_retry_count >= 3U) {
-    s_touch_ready       = (Display_Gt911_Init() == DISPLAY_GT911_OK) ? 1U : 0U;
-    s_touch_retry_count = 0U;
-  }
-  return DISPLAY_OK;
-#endif
 }
 
 /*
@@ -2026,33 +1427,7 @@ Display_Result_t Display_PollTouch(void)
  */
 Display_Result_t Display_PollKey(void)
 {
-#if DISPLAY_USE_LVGL_BACKEND
   return (s_display_ready != 0U) ? DISPLAY_OK : DISPLAY_NOT_READY;
-#else
-  uint8_t raw;
-
-  if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
-
-  raw = Px4Lite_ButtonPressed(PX4LITE_BUTTON_KEY0);
-  if (raw == s_key0_last_raw) {
-    if (s_key0_count < DISPLAY_KEY_DEBOUNCE_CYCLES) { s_key0_count++; }
-  } else {
-    s_key0_last_raw = raw;
-    s_key0_count    = 1U;
-  }
-
-  if ((s_key0_count >= DISPLAY_KEY_DEBOUNCE_CYCLES) && (raw != s_key0_stable)) {
-    s_key0_stable = raw;
-    if (raw != 0U) {
-      if (s_current_page == DISPLAY_HMI_PAGE_HIDDEN) { return Display_SetHmiPage(s_page_before_hidden); }
-
-      s_page_before_hidden = s_current_page;
-      return Display_SetHmiPage(DISPLAY_HMI_PAGE_HIDDEN);
-    }
-  }
-
-  return DISPLAY_OK;
-#endif
 }
 
 /*
@@ -2060,34 +1435,11 @@ Display_Result_t Display_PollKey(void)
  */
 Display_Result_t Display_HandleTouch(uint16_t x, uint16_t y, Display_HmiVariableId_t *id, uint32_t *value)
 {
-#if DISPLAY_USE_LVGL_BACKEND
   (void)x;
   (void)y;
   if (id != 0) { *id = DISPLAY_HMI_VAR_COUNT; }
   if (value != 0) { *value = 0U; }
   return (s_display_ready != 0U) ? DISPLAY_OK : DISPLAY_NOT_READY;
-#else
-  Display_NavTouch_t nav_touch;
-  const Display_HmiVariableConfig_t *slider;
-
-  if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
-
-  nav_touch = Display_GetNavTouch(x, y);
-
-  if (Display_IsMotorEstopTouch(x, y) != 0U) {
-    if (id != 0) { *id = DISPLAY_HMI_VAR_COUNT; }
-    if (value != 0) { *value = 0U; }
-    return Display_MotorEmergencyStop();
-  }
-
-  slider = Display_FindMotorSliderAt(x, y);
-  if (slider != 0) { return Display_HandleMotorSliderTouch(slider, y, id, value); }
-
-  if (id != 0) { *id = DISPLAY_HMI_VAR_COUNT; }
-  if (value != 0) { *value = 0U; }
-
-  return Display_HandleNavTouch(nav_touch);
-#endif
 }
 
 /*

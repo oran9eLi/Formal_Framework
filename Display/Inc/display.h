@@ -216,8 +216,6 @@ void Display_RequestRecover(void);
  * @param       now_ms: 当前系统时间，单位 ms
  * @retval      Display_Result_t: 刷新结果
  */
-Display_Result_t Display_Refresh(uint32_t now_ms);
-
 /**
  * @brief       从应用只读快照准备一版完整显示缓存
  * @param       now_ms: 当前系统时间，单位 ms

@@ -659,11 +659,6 @@
               <FilePath>..\Display\Src\display.c</FilePath>
             </File>
             <File>
-              <FileName>display_gfx.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Display\Src\display_gfx.c</FilePath>
-            </File>
-            <File>
               <FileName>display_gt911.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Display\Src\display_gt911.c</FilePath>
@@ -682,11 +677,6 @@
               <FileName>display_ssd1963.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Display\Src\display_ssd1963.c</FilePath>
-            </File>
-            <File>
-              <FileName>display_text.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Display\Src\display_text.c</FilePath>
             </File>
             <File>
               <FileName>display_lvgl.c</FileName>
