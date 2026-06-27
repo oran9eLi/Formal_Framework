@@ -247,7 +247,7 @@ typedef struct {
   uint32_t lora_tx_count;                                /**< LoRa 本机发送完成帧计数。 */
   uint32_t lora_rx_count;                                /**< LoRa 接收合法帧计数。 */
   uint32_t lora_lost_count;                              /**< LoRa 接收侧按 MAVLink 序号估算的丢帧数量。 */
-  uint32_t lora_ack_count;                               /**< LoRa ACK 计数；当前未定义 ACK 协议，固定为 0。 */
+  uint32_t lora_ack_count;                               /**< LoRa stream/poll 控制面的真实 COMMAND_ACK 收发计数。 */
   uint16_t lora_loss_rate_x10;                           /**< LoRa 接收侧估算丢包率，单位：0.1%。 */
   uint16_t reserved2;                                    /**< 保留字段，保持结构体对齐。 */
   uint16_t alarm_active_count;                           /**< 活动告警数量。 */
@@ -280,6 +280,8 @@ typedef enum {
 typedef struct {
   uint8_t node_id;                                       /**< 远端节点 ID，主机为 0，从机从 1 递增。 */
   uint8_t system_id;                                     /**< 对应 MAVLink system id。 */
+  uint8_t heartbeat_type;                                /**< HEARTBEAT type，用于调试和后续节点分类。 */
+  uint8_t heartbeat_system_status;                       /**< HEARTBEAT system_status，用于调试和后续健康分类。 */
   App_RemoteNodeState_t state;                           /**< App 层远端节点显示状态。 */
   uint32_t last_heartbeat_ms;                            /**< 最近一次心跳时间，单位 ms。 */
   uint32_t last_data_ms;                                 /**< 最近一次主数据时间，单位 ms。 */

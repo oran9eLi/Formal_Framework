@@ -17,6 +17,7 @@ static lv_indev_drv_t s_indev_drv;
 static lv_indev_t *s_indev;
 static uint16_t s_last_x;
 static uint16_t s_last_y;
+static Display_Gt911Result_t s_init_result = DISPLAY_GT911_NOT_READY;
 
 /**
  * @brief Read one GT911 point for LVGL.
@@ -48,7 +49,7 @@ static void LvPortIndev_Read(lv_indev_drv_t *drv, lv_indev_data_t *data)
  */
 uint8_t LvPortIndev_Init(void)
 {
-  (void)Display_Gt911_Init();
+  s_init_result = Display_Gt911_Init();
 
   if (s_indev == 0) {
     lv_indev_drv_init(&s_indev_drv);
@@ -57,5 +58,5 @@ uint8_t LvPortIndev_Init(void)
     s_indev             = lv_indev_drv_register(&s_indev_drv);
   }
 
-  return (s_indev != 0) ? 1U : 0U;
+  return ((s_indev != 0) && (s_init_result == DISPLAY_GT911_OK)) ? 1U : 0U;
 }

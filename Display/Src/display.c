@@ -18,6 +18,7 @@
 #define DISPLAY_ARRAY_SIZE(array) ((uint16_t)(sizeof(array) / sizeof((array)[0])))
 
 #define DISPLAY_MOTOR_SLIDER_MAX_VALUE 100U
+#define DISPLAY_PRESSURE_MAX_PA        110000.0f
 typedef struct {
   uint32_t value; /* 当前缓存的原始显示值 */
   uint8_t valid;  /* 0 表示缓存无效，1 表示可用于 LVGL 页面 */
@@ -589,8 +590,8 @@ static uint16_t Display_FloatToU16Tenths(float value)
 
 static uint32_t Display_FloatPaToU32(float pressure_pa)
 {
-  if (pressure_pa <= 0.0f) { return 0U; }
-  if (pressure_pa > 4294967040.0f) { return 0xFFFFFFFFUL; }
+  if (!(pressure_pa > 0.0f)) { return 0U; }
+  if (pressure_pa > DISPLAY_PRESSURE_MAX_PA) { return (uint32_t)DISPLAY_PRESSURE_MAX_PA; }
 
   return (uint32_t)(pressure_pa + 0.5f);
 }
@@ -803,6 +804,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, const App_DisplaySnapshot_
   static Display_LogMsg_t boot_comm     = DISPLAY_LOGMSG_COUNT;
   static Display_LogMsg_t boot_store    = DISPLAY_LOGMSG_COUNT;
   static Display_LogMsg_t boot_alarm    = DISPLAY_LOGMSG_COUNT;
+  static uint8_t imu_level_done_logged   = 0U;
   static uint32_t boot_since_ms         = 0U;
   static uint32_t boot_start_t          = 0U;
   App_ViewState_t states[5];
@@ -826,6 +828,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, const App_DisplaySnapshot_
   now_self  = Display_SelfCheckLogMsg(states, 5U);
   now_gps   = Display_GpsLogMsg(states[0]);
   now_att   = Display_TwoStateLogMsg(states[1], DISPLAY_LOGMSG_ATT_OK, DISPLAY_LOGMSG_ATT_LOST);
+  if (view->attitude_valid == 0U) { now_att = DISPLAY_LOGMSG_ATT_LOST; }
   now_env   = Display_TwoStateLogMsg(states[2], DISPLAY_LOGMSG_ENV_OK, DISPLAY_LOGMSG_ENV_LOST);
   now_comm  = Display_TwoStateLogMsg(states[3], DISPLAY_LOGMSG_COMM_OK, DISPLAY_LOGMSG_COMM_LOST);
   now_store = Display_TwoStateLogMsg(states[4], DISPLAY_LOGMSG_STORAGE_OK, DISPLAY_LOGMSG_STORAGE_LOST);
@@ -844,6 +847,7 @@ static void Display_UpdateMessageLog(uint32_t now_ms, const App_DisplaySnapshot_
       if (boot_tracking == 0U) {
         boot_start_t = t;
         Display_LogPushMessage(DISPLAY_LOGMSG_SYSTEM_START, boot_start_t);
+        Display_LogPushMessage(DISPLAY_LOGMSG_IMU_LEVEL_WAIT, boot_start_t);
         boot_tracking = 1U;
       }
       return;
@@ -858,6 +862,10 @@ static void Display_UpdateMessageLog(uint32_t now_ms, const App_DisplaySnapshot_
     Display_LogPushMessage(boot_comm, t);
     Display_LogPushMessage(boot_store, t);
     Display_LogPushMessage(boot_alarm, t);
+    if (boot_att == DISPLAY_LOGMSG_ATT_OK) {
+      Display_LogPushMessage(DISPLAY_LOGMSG_IMU_LEVEL_OK, t);
+      imu_level_done_logged = 1U;
+    }
 
     Display_LogCommitInitial(&db_gps, boot_gps, now_ms);
     Display_LogCommitInitial(&db_att, boot_att, now_ms);
@@ -871,7 +879,10 @@ static void Display_UpdateMessageLog(uint32_t now_ms, const App_DisplaySnapshot_
 
   /* 启动批量日志之后，各类状态按真实变化继续去抖追加。 */
   (void)Display_LogDebounce(&db_gps, now_gps, now_ms, t);
-  (void)Display_LogDebounce(&db_att, now_att, now_ms, t);
+  if ((Display_LogDebounce(&db_att, now_att, now_ms, t) != 0U) && (now_att == DISPLAY_LOGMSG_ATT_OK) && (imu_level_done_logged == 0U)) {
+    Display_LogPushMessage(DISPLAY_LOGMSG_IMU_LEVEL_OK, t);
+    imu_level_done_logged = 1U;
+  }
   (void)Display_LogDebounce(&db_env, now_env, now_ms, t);
   (void)Display_LogDebounce(&db_comm, now_comm, now_ms, t);
   (void)Display_LogDebounce(&db_store, now_store, now_ms, t);
@@ -989,6 +1000,19 @@ static void Display_LoadLoraStats(const App_DisplaySnapshot_t *view)
 }
 
 /*
+ * 远端快照断链或超时后，立即回到本机视图并重建当前 LVGL 页面。
+ * 这样显示任务不会长期停在远端数据源的 NOT_READY 状态，也不会继续显示过期从机页面。
+ */
+static void Display_ReturnToLocalView(uint32_t now_ms)
+{
+  (void)App_SetRemoteViewEnabled(0U, now_ms);
+  (void)Display_SetDataSource(DISPLAY_DATA_SOURCE_LOCAL);
+  if (s_display_ready != 0U) {
+    (void)Display_LvglSetPage(s_current_page);
+  }
+}
+
+/*
  * 从应用只读快照准备一版完整显示缓存。
  */
 Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
@@ -1002,11 +1026,19 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms / 1000U);
 
   if ((s_data_source == DISPLAY_DATA_SOURCE_REMOTE) && (App_RemoteViewExpired(now_ms) != 0U)) {
-    (void)App_SetRemoteViewEnabled(0U, now_ms);
-    (void)Display_SetDataSource(DISPLAY_DATA_SOURCE_LOCAL);
+    Display_ReturnToLocalView(now_ms);
   }
 
-  snapshot_ready = (s_data_source == DISPLAY_DATA_SOURCE_REMOTE) ? App_CopyRemoteDisplaySnapshot(&s_display_snapshot, now_ms) : App_CopyDisplaySnapshot(&s_display_snapshot, now_ms);
+  if (s_data_source == DISPLAY_DATA_SOURCE_REMOTE) {
+    snapshot_ready = App_CopyRemoteDisplaySnapshot(&s_display_snapshot, now_ms);
+    if (snapshot_ready == 0U) {
+      Display_ReturnToLocalView(now_ms);
+      snapshot_ready = App_CopyDisplaySnapshot(&s_display_snapshot, now_ms);
+    }
+  } else {
+    snapshot_ready = App_CopyDisplaySnapshot(&s_display_snapshot, now_ms);
+  }
+
   if (snapshot_ready == 0U) { return DISPLAY_NOT_READY; }
 
   if (s_display_snapshot.navigation_valid != 0U) {

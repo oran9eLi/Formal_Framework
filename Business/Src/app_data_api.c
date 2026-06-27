@@ -708,6 +708,8 @@ Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t c
 #endif
     out[written].node_id = s_remote_node_status_scratch[i].node_id;
     out[written].system_id = s_remote_node_status_scratch[i].system_id;
+    out[written].heartbeat_type = s_remote_node_status_scratch[i].heartbeat_type;
+    out[written].heartbeat_system_status = s_remote_node_status_scratch[i].heartbeat_system_status;
     out[written].state = App_MapRemoteNodeState(s_remote_node_status_scratch[i].state);
     out[written].last_heartbeat_ms = s_remote_node_status_scratch[i].last_heartbeat_ms;
     out[written].last_data_ms = s_remote_node_status_scratch[i].last_data_ms;

@@ -12,6 +12,7 @@
 
 #include "app_data_api.h"
 #include "display_log.h"
+#include "display_logo.h"
 #include "display_lvgl_font_zh.h"
 #include "lv_port_disp.h"
 #include "lv_port_indev.h"
@@ -34,7 +35,7 @@
 #define DISPLAY_LVGL_MOTOR_COUNT     4U
 #define DISPLAY_LVGL_LOG_ROWS        9U
 #define DISPLAY_LVGL_ALARM_ROWS      5U
-#define DISPLAY_LVGL_REMOTE_ROWS     5U
+#define DISPLAY_LVGL_REMOTE_ROWS     16U
 #define DISPLAY_LVGL_LCD_PROBE_MS    1000U
 
 /*
@@ -100,6 +101,16 @@ static const Display_LvglTabItem_t s_tabs[DISPLAY_LVGL_TAB_COUNT] = {
 static Display_LvglValueSlot_t s_value_slots[DISPLAY_HMI_VAR_COUNT];
 static uint32_t s_values[DISPLAY_HMI_VAR_COUNT];
 static uint8_t s_value_valid[DISPLAY_HMI_VAR_COUNT];
+static const lv_img_dsc_t s_logo_img_dsc = {
+    .header = {.cf = LV_IMG_CF_TRUE_COLOR_CHROMA_KEYED,
+               .always_zero = 0,
+               .reserved = 0,
+               .w = DISPLAY_HEADER_LOGO_WIDTH,
+               .h = DISPLAY_HEADER_LOGO_HEIGHT},
+    .data_size = DISPLAY_HEADER_LOGO_WIDTH * DISPLAY_HEADER_LOGO_HEIGHT * 2U,
+    .data = display_logo_rgb565_data,
+};
+static App_RemoteNodeView_t s_remote_node_views[DISPLAY_LVGL_REMOTE_ROWS];
 static char s_remote_node_texts[DISPLAY_LVGL_REMOTE_ROWS][48];
 static lv_obj_t *s_screen;
 static lv_obj_t *s_status_leds[DISPLAY_LVGL_STATUS_COUNT];
@@ -112,6 +123,7 @@ static Display_HmiPage_t s_current_lvgl_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static Display_HmiPage_t s_requested_page    = DISPLAY_HMI_PAGE_SELF_CHECK;
 static Display_HmiPage_t s_page_before_hidden = DISPLAY_HMI_PAGE_SELF_CHECK; /* 进入远端(隐藏)页前的页面，供本地/远端按钮返回 */
 static uint8_t s_page_change_requested;
+static uint8_t s_page_rebuild_requested;
 static uint8_t s_lvgl_core_ready;
 static uint8_t s_lvgl_display_ready;
 static uint8_t s_control_update_active;
@@ -124,6 +136,18 @@ static void Display_LvglTouchActivity(void)
   if (Display_GetDataSource() == DISPLAY_DATA_SOURCE_REMOTE) {
     (void)App_SetRemoteViewEnabled(1U, s_last_tick_ms);
   }
+}
+
+/**
+ * @brief 延迟切回本机数据源，并在需要时重建当前页眉状态。
+ */
+static void Display_LvglRequestLocalView(Display_HmiPage_t target_page, uint8_t force_rebuild)
+{
+  (void)App_SetRemoteViewEnabled(0U, s_last_tick_ms);
+  (void)Display_SetDataSource(DISPLAY_DATA_SOURCE_LOCAL);
+  s_requested_page          = target_page;
+  s_page_change_requested   = 1U;
+  s_page_rebuild_requested |= force_rebuild;
 }
 
 /**
@@ -453,8 +477,8 @@ static void Display_LvglCreateValueLabel(lv_obj_t *parent, Display_HmiVariableId
 
   label = lv_label_create(parent);
   s_value_slots[id].label = label;
-  (void)font;
-  lv_obj_set_style_text_font(label, &display_lvgl_font_zh_16, 0);
+  if (font == 0) { font = &display_lvgl_font_zh_16; }
+  lv_obj_set_style_text_font(label, font, 0);
   lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
   lv_obj_set_width(label, w);
   lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
@@ -513,6 +537,10 @@ static const char *Display_LvglLogMessageText(Display_LogMsg_t msg)
   switch (msg) {
     case DISPLAY_LOGMSG_SYSTEM_START:
       return "\xE7""\xB3""\xBB""\xE7""\xBB""\x9F""\xE5""\x90""\xAF""\xE5""\x8A""\xA8";
+    case DISPLAY_LOGMSG_IMU_LEVEL_WAIT:
+      return "\xE6""\xB0""\xB4""\xE5""\xB9""\xB3""\xE9""\x9D""\x99""\xE6""\xAD""\xA2""5""\xE7""\xA7""\x92";
+    case DISPLAY_LOGMSG_IMU_LEVEL_OK:
+      return "\xE5""\x9F""\xBA""\xE5""\x87""\x86""\xE5""\xAE""\x8C""\xE6""\x88""\x90";
     case DISPLAY_LOGMSG_SELFCHECK_OK:
       return "\xE8""\x87""\xAA""\xE6""\xA3""\x80""\xE9""\x80""\x9A""\xE8""\xBF""\x87";
     case DISPLAY_LOGMSG_SELFCHECK_PART:
@@ -790,6 +818,7 @@ static void Display_LvglTabEventCb(lv_event_t *event)
 
   s_requested_page          = (Display_HmiPage_t)(uintptr_t)lv_event_get_user_data(event);
   s_page_change_requested  = 1U;
+  s_page_rebuild_requested = 0U;
 }
 
 /**
@@ -810,6 +839,7 @@ static void Display_LvglRemoteNodeEventCb(lv_event_t *event)
     (void)Display_SetDataSource(DISPLAY_DATA_SOURCE_REMOTE);
     s_requested_page        = s_page_before_hidden;
     s_page_change_requested = 1U;
+    s_page_rebuild_requested = 0U;
   }
 }
 
@@ -821,14 +851,15 @@ static void Display_LvglLocalRemoteEventCb(lv_event_t *event)
   Display_LvglTouchActivity();
 
   if (s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) {
-    (void)App_SetRemoteViewEnabled(0U, s_last_tick_ms);
-    (void)Display_SetDataSource(DISPLAY_DATA_SOURCE_LOCAL);
-    s_requested_page = s_page_before_hidden;
+    Display_LvglRequestLocalView(s_page_before_hidden, 0U);
+  } else if (Display_GetDataSource() == DISPLAY_DATA_SOURCE_REMOTE) {
+    Display_LvglRequestLocalView(s_current_lvgl_page, 1U);
   } else {
     s_page_before_hidden = s_current_lvgl_page;
     s_requested_page     = DISPLAY_HMI_PAGE_HIDDEN;
+    s_page_change_requested = 1U;
+    s_page_rebuild_requested = 0U;
   }
-  s_page_change_requested = 1U;
 }
 
 /**
@@ -848,25 +879,43 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
   lv_obj_set_style_pad_all(bar, 0, 0);
   lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
+  {
+    lv_obj_t *logo_img;
+
+    logo_img = lv_img_create(bar);
+    lv_img_set_src(logo_img, &s_logo_img_dsc);
+    lv_obj_set_pos(logo_img, 0, 0);
+  }
+
+  (void)Display_LvglCreateLabel(bar, "\xE4""\xB8""\x9C""\xE5""\x88""\x9B""\xE5""\xA4""\xA7""\xE4""\xB8""\xBA", 68, 10, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  (void)Display_LvglCreateLabel(bar, "CNS\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 68, 36, &display_lvgl_font_zh_16, lv_color_hex(0xB0C8D8));
   (void)Display_LvglCreateLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 344, 10, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
   (void)Display_LvglCreateLabel(bar, Display_LvglPageTitle(page), 368, 35, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
-  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xA5""\xE6""\x9C""\x9F", 18, 12, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 58, 10, 116, &lv_font_montserrat_14);
-  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xB6""\xE9""\x97""\xB4", 18, 36, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 58, 34, 116, &lv_font_montserrat_14);
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_VIEW_NODE_ID, 178, 10, 74, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xA5""\xE6""\x9C""\x9F", 184, 12, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 224, 10, 84, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xB6""\xE9""\x97""\xB4", 184, 36, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 224, 34, 84, &lv_font_montserrat_14);
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_VIEW_NODE_ID, 310, 10, 32, &lv_font_montserrat_14);
   /* 本地/远端按钮：放在"系统"左侧，点按切换本地常规页 / 远端通信连接页；
      标题随当前页显示"本地"或"远端"，按在远端页时高亮。 */
   {
     lv_obj_t *lr_btn;
     lv_obj_t *lr_label;
     uint8_t on_hidden = (uint8_t)(page == DISPLAY_HMI_PAGE_HIDDEN);
+    uint8_t on_remote = (uint8_t)(Display_GetDataSource() == DISPLAY_DATA_SOURCE_REMOTE);
+    const char *label_text;
+
+    if ((on_hidden != 0U) || (on_remote != 0U)) {
+      label_text = "\xE8""\xBF""\x94""\xE5""\x9B""\x9E";
+    } else {
+      label_text = "\xE8""\xBF""\x9C""\xE7""\xAB""\xAF";
+    }
 
     lr_btn = lv_obj_create(bar);
     lv_obj_set_size(lr_btn, 70, 32);
     lv_obj_set_pos(lr_btn, 596, 16);
     lv_obj_set_style_radius(lr_btn, 4, 0);
-    lv_obj_set_style_bg_color(lr_btn, on_hidden ? lv_color_hex(0x1DB7C9) : lv_color_hex(0x143747), 0);
+    lv_obj_set_style_bg_color(lr_btn, ((on_hidden != 0U) || (on_remote != 0U)) ? lv_color_hex(0x1DB7C9) : lv_color_hex(0x143747), 0);
     lv_obj_set_style_bg_opa(lr_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(lr_btn, 1, 0);
     lv_obj_set_style_border_color(lr_btn, lv_color_hex(0x1DB7C9), 0);
@@ -874,7 +923,7 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
     lv_obj_add_flag(lr_btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(lr_btn, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(lr_btn, Display_LvglLocalRemoteEventCb, LV_EVENT_CLICKED, 0);
-    lr_label = Display_LvglCreateLabel(lr_btn, on_hidden ? "\xE8""\xBF""\x9C""\xE7""\xAB""\xAF" : "\xE6""\x9C""\xAC""\xE5""\x9C""\xB0", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+    lr_label = Display_LvglCreateLabel(lr_btn, label_text, 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
     lv_obj_center(lr_label);
   }
 
@@ -1290,37 +1339,65 @@ static void Display_LvglCreateAlarmPage(lv_obj_t *parent)
 static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
 {
   lv_obj_t *card;
-  App_RemoteNodeView_t nodes[DISPLAY_LVGL_REMOTE_ROWS];
+  lv_obj_t *back_btn;
+  lv_obj_t *back_label;
+  lv_obj_t *list;
   uint8_t count = 0U;
   uint8_t i;
   uint8_t selected_node = 0xFFU;
 
   card = Display_LvglCreateCard(parent, 70, 96, 660, 292, "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE8""\xBF""\x9E""\xE6""\x8E""\xA5");
+  back_btn = lv_obj_create(card);
+  lv_obj_set_size(back_btn, 120, 32);
+  lv_obj_set_pos(back_btn, 32, 34);
+  lv_obj_set_style_radius(back_btn, 4, 0);
+  lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x25384A), 0);
+  lv_obj_set_style_bg_opa(back_btn, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(back_btn, 1, 0);
+  lv_obj_set_style_border_color(back_btn, lv_color_hex(0x1DB7C9), 0);
+  lv_obj_set_style_pad_all(back_btn, 0, 0);
+  lv_obj_add_flag(back_btn, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(back_btn, Display_LvglLocalRemoteEventCb, LV_EVENT_CLICKED, 0);
+  back_label = Display_LvglCreateLabel(back_btn, "\xE8""\xBF""\x94""\xE5""\x9B""\x9E""\xE6""\x9C""\xAC""\xE5""\x9C""\xB0", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  lv_obj_center(back_label);
+
   (void)Display_LvglCreateLabel(card, "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE8""\x8A""\x82""\xE7""\x82""\xB9""\xE9""\x80""\x89""\xE6""\x8B""\xA9""\xE5""\x90""\x8E""\xE7""\xBB""\xAD""\xE8""\xBF""\x81""\xE7""\xA7""\xBB", 32, 82, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
   (void)App_GetSelectedRemoteNode(&selected_node);
 
-  if ((App_CopyRemoteNodeStatuses(nodes, DISPLAY_LVGL_REMOTE_ROWS, &count, s_last_tick_ms) == PX4LITE_OK) && (count != 0U)) {
+  list = lv_obj_create(card);
+  lv_obj_set_size(list, 318, 188);
+  lv_obj_set_pos(list, 306, 66);
+  lv_obj_set_style_radius(list, 4, 0);
+  lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(list, 0, 0);
+  lv_obj_set_style_pad_all(list, 0, 0);
+  lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
+
+  if ((App_CopyRemoteNodeStatuses(s_remote_node_views, DISPLAY_LVGL_REMOTE_ROWS, &count, s_last_tick_ms) == PX4LITE_OK) && (count != 0U)) {
     for (i = 0U; (i < count) && (i < DISPLAY_LVGL_REMOTE_ROWS); i++) {
       lv_obj_t *btn;
       lv_obj_t *label;
       lv_obj_t *dot;
       lv_color_t dot_color;
-      uint8_t selected = (uint8_t)(nodes[i].node_id == selected_node);
+      uint8_t selected = (uint8_t)(s_remote_node_views[i].node_id == selected_node);
 
-      if ((nodes[i].state == APP_REMOTE_NODE_ACTIVE) || (nodes[i].state == APP_REMOTE_NODE_DISCOVERED)) {
+      if ((s_remote_node_views[i].state == APP_REMOTE_NODE_ACTIVE) || (s_remote_node_views[i].state == APP_REMOTE_NODE_DISCOVERED)) {
         dot_color = lv_palette_main(LV_PALETTE_GREEN);
       } else {
         dot_color = lv_palette_main(LV_PALETTE_AMBER);
       }
 
       (void)snprintf(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), "Node %u  RX %lu  Loss %u.%u%%",
-                     (unsigned int)nodes[i].node_id,
-                     (unsigned long)nodes[i].rx_frame_count,
-                     (unsigned int)(nodes[i].rx_loss_rate_x10 / 10U),
-                     (unsigned int)(nodes[i].rx_loss_rate_x10 % 10U));
-      btn = lv_obj_create(card);
+                     (unsigned int)s_remote_node_views[i].node_id,
+                     (unsigned long)s_remote_node_views[i].rx_frame_count,
+                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 / 10U),
+                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 % 10U));
+      btn = lv_obj_create(list);
       lv_obj_set_size(btn, 300, 30);
-      lv_obj_set_pos(btn, 320, (lv_coord_t)(70 + (i * 36U)));
+      lv_obj_set_pos(btn, 0, (lv_coord_t)(i * 36U));
       lv_obj_set_style_radius(btn, 4, 0);
       lv_obj_set_style_bg_color(btn, selected ? lv_color_hex(0x143747) : lv_color_hex(0x25384A), 0);
       lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
@@ -1329,7 +1406,7 @@ static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
       lv_obj_set_style_pad_all(btn, 0, 0);
       lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
       lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-      lv_obj_add_event_cb(btn, Display_LvglRemoteNodeEventCb, LV_EVENT_CLICKED, (void *)(uintptr_t)nodes[i].node_id);
+      lv_obj_add_event_cb(btn, Display_LvglRemoteNodeEventCb, LV_EVENT_CLICKED, (void *)(uintptr_t)s_remote_node_views[i].node_id);
       dot = lv_obj_create(btn);
       lv_obj_set_size(dot, 12, 12);
       lv_obj_set_pos(dot, 10, 9);
@@ -1343,7 +1420,7 @@ static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
       (void)label;
     }
   } else {
-    (void)Display_LvglCreateLabel(card, "No remote heartbeat", 340, 96, &lv_font_montserrat_14, lv_color_hex(0x7D91A6));
+    (void)Display_LvglCreateLabel(list, "No remote heartbeat", 16, 30, &lv_font_montserrat_14, lv_color_hex(0x7D91A6));
   }
 
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_TX_COUNT, "\xE5""\x8F""\x91""\xE9""\x80""\x81""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 32, 148, 180);
@@ -1503,7 +1580,8 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
 
   if (s_page_change_requested != 0U) {
     s_page_change_requested = 0U;
-    if (s_requested_page != s_current_lvgl_page) {
+    if ((s_requested_page != s_current_lvgl_page) || (s_page_rebuild_requested != 0U)) {
+      s_page_rebuild_requested = 0U;
       (void)Display_SetHmiPage(s_requested_page);
       if (budget_us != 0U) {
         elapsed_us = Px4Lite_PlatformGetUs() - start_us;

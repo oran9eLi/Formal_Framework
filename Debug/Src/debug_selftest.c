@@ -35,6 +35,20 @@
 #include "sensor_mpu6050.h"
 #endif
 
+#if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_GNSS_ENABLE
+static App_NavigationSnapshot_t s_selftest_navigation;
+static Px4Lite_ModuleStatus_t s_selftest_gnss_status;
+#endif
+
+#if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_LORA_ENABLE
+static Px4Lite_CommDebugInfo_t s_selftest_comm;
+static Px4Lite_ModuleStatus_t s_selftest_lora_status;
+#endif
+
+#if DEBUG_SELFTEST_ACTIVE_ENABLE && (DEBUG_SELFTEST_REMOTE_VIEW_ENABLE || DEBUG_SELFTEST_LORA_ENABLE)
+static App_RemoteNodeView_t s_selftest_remote_nodes[PX4LITE_REMOTE_NODE_MAX];
+#endif
+
 #if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_IMU_SNAPSHOT_ENABLE
 /**
  * @brief 将浮点量按指定比例转换为整数，避免调试串口使用浮点格式化。
@@ -116,6 +130,57 @@ static void DebugSelfTest_ReportDisplayBudget(void)
 }
 #endif
 
+#if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_GNSS_ENABLE
+/**
+ * @brief 打印 GNSS 业务可见快照和模块状态。
+ *
+ * @param[in] now_ms 当前系统毫秒时间，用于 App 新鲜度判断。
+ */
+static void DebugSelfTest_ReportGnss(uint32_t now_ms)
+{
+  Px4Lite_Result_t nav_rc;
+  Px4Lite_Result_t status_rc;
+  uint32_t age_ms = 0U;
+
+  nav_rc = App_CopyNavigation(&s_selftest_navigation, now_ms);
+  status_rc = App_GetModuleStatus(PX4LITE_MODULE_GNSS, &s_selftest_gnss_status);
+  if (status_rc == PX4LITE_OK) { age_ms = Px4Lite_ElapsedMs(now_ms, s_selftest_gnss_status.last_rx_ms); }
+
+  DBG_PRINT("SELFTEST GNSS: nav_rc=%d status_rc=%d state=%u fault=%u age=%lu "
+            "mask=0x%08lX fix=%u sats=%u hdop=%u quality=%u lat=%ld lon=%ld",
+            (int)nav_rc, (int)status_rc, (status_rc == PX4LITE_OK) ? (unsigned int)s_selftest_gnss_status.state : 0U, (status_rc == PX4LITE_OK) ? (unsigned int)s_selftest_gnss_status.fault_code : 0U, (unsigned long)age_ms, (nav_rc == PX4LITE_OK) ? (unsigned long)s_selftest_navigation.valid_mask : 0UL, (nav_rc == PX4LITE_OK) ? (unsigned int)s_selftest_navigation.gnss_fix_type : 0U, (nav_rc == PX4LITE_OK) ? (unsigned int)s_selftest_navigation.satellites_used : 0U, (nav_rc == PX4LITE_OK) ? (unsigned int)s_selftest_navigation.hdop_x100 : 0U, (nav_rc == PX4LITE_OK) ? (unsigned int)s_selftest_navigation.navigation_quality : 0U, (nav_rc == PX4LITE_OK) ? (long)s_selftest_navigation.latitude_e7 : 0L, (nav_rc == PX4LITE_OK) ? (long)s_selftest_navigation.longitude_e7 : 0L);
+}
+#endif
+
+#if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_LORA_ENABLE
+/**
+ * @brief 打印 LoRa/MAVLink 统计和远端节点摘要。
+ *
+ * @param[in] now_ms 当前系统毫秒时间，用于远端节点新鲜度判断。
+ */
+static void DebugSelfTest_ReportLoRa(uint32_t now_ms)
+{
+  Px4Lite_Result_t status_rc;
+  Px4Lite_Result_t nodes_rc;
+  uint8_t count = 0U;
+  uint8_t i;
+
+  App_GetCommStats(&s_selftest_comm);
+  status_rc = App_GetModuleStatus(PX4LITE_MODULE_LORA, &s_selftest_lora_status);
+  nodes_rc = App_CopyRemoteNodeStatuses(s_selftest_remote_nodes, PX4LITE_REMOTE_NODE_MAX, &count, now_ms);
+
+  DBG_PRINT("SELFTEST LORA: status_rc=%d nodes_rc=%d state=%u fault=%u "
+            "tx=%lu rx=%lu busy=%lu err=%lu ack=%lu/%lu lost=%lu loss_x10=%u last_msg=%lu nodes=%u",
+            (int)status_rc, (int)nodes_rc, (status_rc == PX4LITE_OK) ? (unsigned int)s_selftest_lora_status.state : 0U, (status_rc == PX4LITE_OK) ? (unsigned int)s_selftest_lora_status.fault_code : 0U, (unsigned long)s_selftest_comm.tx_frame_count, (unsigned long)s_selftest_comm.rx_frame_count, (unsigned long)s_selftest_comm.tx_busy_count, (unsigned long)(s_selftest_comm.send_error_count + s_selftest_comm.mav_error_count), (unsigned long)s_selftest_comm.mav_command_ack_tx_count, (unsigned long)s_selftest_comm.mav_command_ack_rx_count, (unsigned long)s_selftest_comm.rx_sequence_lost_count, (unsigned int)s_selftest_comm.rx_loss_rate_x10, (unsigned long)s_selftest_comm.last_msg_id, (unsigned int)count);
+
+  for (i = 0U; i < count; ++i) {
+    DBG_PRINT("SELFTEST LORA_NODE[%u]: node=%u sys=%u type=%u sys_status=%u state=%u "
+              "hb_ms=%lu data_ms=%lu rx=%lu lost=%lu loss_x10=%u",
+              (unsigned int)i, (unsigned int)s_selftest_remote_nodes[i].node_id, (unsigned int)s_selftest_remote_nodes[i].system_id, (unsigned int)s_selftest_remote_nodes[i].heartbeat_type, (unsigned int)s_selftest_remote_nodes[i].heartbeat_system_status, (unsigned int)s_selftest_remote_nodes[i].state, (unsigned long)s_selftest_remote_nodes[i].last_heartbeat_ms, (unsigned long)s_selftest_remote_nodes[i].last_data_ms, (unsigned long)s_selftest_remote_nodes[i].rx_frame_count, (unsigned long)s_selftest_remote_nodes[i].rx_sequence_lost_count, (unsigned int)s_selftest_remote_nodes[i].rx_loss_rate_x10);
+  }
+}
+#endif
+
 #if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_REMOTE_VIEW_ENABLE
 /**
  * @brief 打印远端节点选择和节点列表视图。
@@ -124,20 +189,19 @@ static void DebugSelfTest_ReportDisplayBudget(void)
  */
 static void DebugSelfTest_ReportRemoteView(uint32_t now_ms)
 {
-  App_RemoteNodeView_t nodes[PX4LITE_REMOTE_NODE_MAX];
   Px4Lite_Result_t result;
   uint8_t selected_node = 0U;
   uint8_t count = 0U;
   uint8_t i;
 
   (void)App_GetSelectedRemoteNode(&selected_node);
-  result = App_CopyRemoteNodeStatuses(nodes, PX4LITE_REMOTE_NODE_MAX, &count, now_ms);
+  result = App_CopyRemoteNodeStatuses(s_selftest_remote_nodes, PX4LITE_REMOTE_NODE_MAX, &count, now_ms);
 
   DBG_PRINT("SELFTEST REMOTE: rc=%d selected=%u count=%u", (int)result, (unsigned int)selected_node, (unsigned int)count);
 
   for (i = 0U; i < count; ++i) {
-    DBG_PRINT("SELFTEST REMOTE[%u]: node=%u sys=%u state=%u hb_ms=%lu data_ms=%lu rx=%lu lost=%lu loss_x10=%u",
-              (unsigned int)i, (unsigned int)nodes[i].node_id, (unsigned int)nodes[i].system_id, (unsigned int)nodes[i].state, (unsigned long)nodes[i].last_heartbeat_ms, (unsigned long)nodes[i].last_data_ms, (unsigned long)nodes[i].rx_frame_count, (unsigned long)nodes[i].rx_sequence_lost_count, (unsigned int)nodes[i].rx_loss_rate_x10);
+    DBG_PRINT("SELFTEST REMOTE[%u]: node=%u sys=%u type=%u sys_status=%u state=%u hb_ms=%lu data_ms=%lu rx=%lu lost=%lu loss_x10=%u",
+              (unsigned int)i, (unsigned int)s_selftest_remote_nodes[i].node_id, (unsigned int)s_selftest_remote_nodes[i].system_id, (unsigned int)s_selftest_remote_nodes[i].heartbeat_type, (unsigned int)s_selftest_remote_nodes[i].heartbeat_system_status, (unsigned int)s_selftest_remote_nodes[i].state, (unsigned long)s_selftest_remote_nodes[i].last_heartbeat_ms, (unsigned long)s_selftest_remote_nodes[i].last_data_ms, (unsigned long)s_selftest_remote_nodes[i].rx_frame_count, (unsigned long)s_selftest_remote_nodes[i].rx_sequence_lost_count, (unsigned int)s_selftest_remote_nodes[i].rx_loss_rate_x10);
   }
 }
 #endif
@@ -177,14 +241,24 @@ void DebugSelfTest_Run(uint32_t now_ms)
   DebugSelfTest_ReportDisplayBudget();
 #endif
 
+#if DEBUG_SELFTEST_GNSS_ENABLE
+  DebugSelfTest_ReportGnss(now_ms);
+#endif
+
+#if DEBUG_SELFTEST_LORA_ENABLE
+  DebugSelfTest_ReportLoRa(now_ms);
+#endif
+
 #if DEBUG_SELFTEST_REMOTE_VIEW_ENABLE
   DebugSelfTest_ReportRemoteView(now_ms);
-#else
-  (void)now_ms;
 #endif
 
 #if DEBUG_SELFTEST_GT911_ENABLE
   DebugSelfTest_ReportGt911();
+#endif
+
+#if !(DEBUG_SELFTEST_GNSS_ENABLE || DEBUG_SELFTEST_LORA_ENABLE || DEBUG_SELFTEST_REMOTE_VIEW_ENABLE)
+  (void)now_ms;
 #endif
 }
 

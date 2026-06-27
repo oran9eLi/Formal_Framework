@@ -80,7 +80,8 @@ void Px4Lite_MavlinkTxGetStats(Px4Lite_MavlinkTxStats_t *out);
 
 Px4Lite_Result_t Px4Lite_MavlinkSetRemoteView(uint8_t enabled, uint8_t target_node_id, uint32_t now_ms);
 uint8_t Px4Lite_MavlinkRemoteViewExpired(uint32_t now_ms);
-Px4Lite_Result_t Px4Lite_MavlinkHandleCommandLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, uint32_t now_ms);
-Px4Lite_Result_t Px4Lite_MavlinkHandleCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component, uint32_t now_ms);
+void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component);
+void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result);
+Px4Lite_Result_t Px4Lite_MavlinkApplyStreamControl(uint8_t action, uint32_t stream_mask, uint32_t lease_ms, uint32_t now_ms);
 
 #endif

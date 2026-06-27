@@ -396,14 +396,15 @@ typedef struct {
   uint8_t node_id;
   uint8_t system_id;
   uint8_t component_id;
-  uint8_t reserved0;
+  uint8_t heartbeat_type;
   Px4Lite_RemoteNodeState_t state;
   uint32_t last_heartbeat_ms;
   uint32_t last_data_ms;
   uint32_t rx_frame_count;
   uint32_t rx_sequence_lost_count;
   uint16_t rx_loss_rate_x10;
-  uint16_t reserved1;
+  uint8_t heartbeat_system_status;
+  uint8_t reserved1;
 } Px4Lite_RemoteNodeStatus_t;
 
 /**
@@ -432,6 +433,12 @@ typedef struct {
   uint16_t rx_loss_rate_x10;                          /**< 当前远端节点接收侧估算丢包率，单位：0.1%。 */
   uint8_t last_packet_sequence;                       /**< 当前远端节点最近 MAVLink packet sequence。 */
   uint8_t sequence_seen;                              /**< 当前远端节点是否已有序号基准。 */
+  uint8_t heartbeat_type;                             /**< HEARTBEAT type 字段，用于区分飞控、GCS、伴侣等节点类型。 */
+  uint8_t heartbeat_autopilot;                        /**< HEARTBEAT autopilot 字段。 */
+  uint8_t heartbeat_base_mode;                        /**< HEARTBEAT base_mode 字段。 */
+  uint8_t heartbeat_system_status;                    /**< HEARTBEAT system_status 字段。 */
+  uint8_t heartbeat_mavlink_version;                  /**< HEARTBEAT mavlink_version 字段。 */
+  uint8_t reserved_heartbeat[3];                      /**< 保留字段，保持结构体对齐。 */
   uint32_t module_state_valid_mask;                   /**< 远端模块状态有效位，bit 对应 `Px4Lite_ModuleId_t`。 */
   Px4Lite_State_t module_state[PX4LITE_MODULE_COUNT]; /**< 远端模块公开状态。 */
   uint32_t gnss_utc_sec;                              /**< GNSS UTC 当日秒数，单位：s；未提供时为 0。 */

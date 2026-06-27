@@ -21,7 +21,31 @@
 #include "px4lite_mavlink_tx.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include <math.h>
 #include <string.h>
+
+#define PX4LITE_ESTIMATOR_DEG100_TO_RAD 0.000174532925f
+#define PX4LITE_IMU_ACCEL_NORM_TARGET_MG 1000
+#define PX4LITE_IMU_ACCEL_NORM_WARN_MG   150
+#define PX4LITE_IMU_ACCEL_NORM_BAD_MG    350
+#define PX4LITE_IMU_GYRO_WARN_MDPS       100000
+#define PX4LITE_IMU_GYRO_BAD_MDPS        240000
+
+typedef struct {
+  int64_t accel_sum_mg[3];   /**< 静止标定期间累计加速度，单位 mg。 */
+  int64_t gyro_sum_mdps[3];  /**< 静止标定期间累计角速度，单位 mdps。 */
+  int32_t accel_bias_mg[3];  /**< 启动静止零偏，单位 mg。 */
+  int32_t gyro_bias_mdps[3]; /**< 启动静止零偏，单位 mdps。 */
+  uint16_t sample_count;     /**< 已累计静止样本数量。 */
+  uint8_t calibrated;        /**< 1 表示当前启动周期零偏标定完成。 */
+  uint8_t reserved;          /**< 对齐预留。 */
+} Px4Lite_ImuCalibration_t;
+
+typedef struct {
+  int32_t baro_to_gnss_offset_mm; /**< 气压高度对齐 GNSS 高度的偏移，单位 mm。 */
+  uint8_t offset_valid;           /**< 1 表示偏移已经由一次有效 GNSS 高度校准。 */
+  uint8_t reserved[3];            /**< 对齐预留。 */
+} Px4Lite_AltitudeFusion_t;
 
 static Px4Lite_ModuleStatus_t s_status[PX4LITE_MODULE_COUNT];
 static uint32_t s_status_version;
@@ -36,6 +60,15 @@ static uint32_t s_last_imu_work_ms;
 static uint32_t s_last_baro_work_ms;
 static uint32_t s_last_battery_work_ms;
 static Px4Lite_AttitudeState_t s_attitude_state;
+static Px4Lite_ImuCalibration_t s_imu_calibration;
+static Px4Lite_AltitudeFusion_t s_altitude_fusion;
+static Px4Lite_VehicleNavigation_t s_estimator_navigation;
+static Px4Lite_SensorGnss_t s_estimator_gnss;
+static Px4Lite_SensorImu_t s_estimator_imu;
+static Px4Lite_SensorImu_t s_estimator_calibrated_imu;
+static Px4Lite_SensorBaro_t s_estimator_baro;
+static uint32_t s_estimator_last_gnss_sequence;
+static uint32_t s_estimator_last_baro_sequence;
 
 /**
  * @brief 根据定位类型、卫星数和 HDOP 计算有限范围 GNSS 质量分。
@@ -78,6 +111,255 @@ static uint8_t Px4Lite_GnssDisplayFixState(const Px4Lite_SensorGnss_t *gnss)
   if (gnss->fix_dimension == 3U) { return 3U; }
 
   return (gnss->satellites_used >= 4U) ? 3U : 2U;
+}
+
+/**
+ * @brief 返回 int32 绝对值，避免在质量评分中重复展开。
+ */
+static int32_t Px4Lite_AbsI32(int32_t value)
+{
+  return (value >= 0) ? value : -value;
+}
+
+/**
+ * @brief 计算两个毫秒时间戳的绝对差，要求差值小于 int32 可表达范围。
+ */
+static uint32_t Px4Lite_AbsTimeDeltaMs(uint32_t a_ms, uint32_t b_ms)
+{
+  return (a_ms >= b_ms) ? (a_ms - b_ms) : (b_ms - a_ms);
+}
+
+/**
+ * @brief 将浮点值四舍五入为 int32。
+ */
+static int32_t Px4Lite_ModulesRoundFloatToI32(float value)
+{
+  if (value >= 0.0f) { return (int32_t)(value + 0.5f); }
+  return (int32_t)(value - 0.5f);
+}
+
+/**
+ * @brief 计算三轴加速度模长，单位 mg。
+ */
+static uint32_t Px4Lite_ImuAccelNormMg(const Px4Lite_SensorImu_t *imu)
+{
+  float x;
+  float y;
+  float z;
+
+  x = (float)imu->accel_mg[0];
+  y = (float)imu->accel_mg[1];
+  z = (float)imu->accel_mg[2];
+  return (uint32_t)Px4Lite_ModulesRoundFloatToI32(sqrtf((x * x) + (y * y) + (z * z)));
+}
+
+/**
+ * @brief 判断一帧 IMU 是否适合参与启动静止零偏标定。
+ */
+static uint8_t Px4Lite_ImuSampleStationary(const Px4Lite_SensorImu_t *imu)
+{
+  uint32_t accel_norm_mg;
+  uint8_t i;
+
+  accel_norm_mg = Px4Lite_ImuAccelNormMg(imu);
+  if ((accel_norm_mg < PX4LITE_IMU_CALIB_ACCEL_MIN_MG) || (accel_norm_mg > PX4LITE_IMU_CALIB_ACCEL_MAX_MG)) { return 0U; }
+
+  for (i = 0U; i < 3U; ++i) {
+    if (Px4Lite_AbsI32(imu->gyro_mdps[i]) > (int32_t)PX4LITE_IMU_CALIB_GYRO_MAX_MDPS) { return 0U; }
+  }
+  return 1U;
+}
+
+/**
+ * @brief 复位启动 IMU 零偏标定状态。
+ */
+static void Px4Lite_ImuCalibrationReset(void)
+{
+  memset(&s_imu_calibration, 0, sizeof(s_imu_calibration));
+}
+
+/**
+ * @brief 累计静止 IMU 样本并在达到样本数后生成零偏。
+ */
+static void Px4Lite_ImuCalibrationUpdate(const Px4Lite_SensorImu_t *imu)
+{
+  uint8_t i;
+
+  if ((s_imu_calibration.calibrated != 0U) || (imu == 0)) { return; }
+
+  if (Px4Lite_ImuSampleStationary(imu) == 0U) {
+    s_imu_calibration.sample_count = 0U;
+    memset(s_imu_calibration.accel_sum_mg, 0, sizeof(s_imu_calibration.accel_sum_mg));
+    memset(s_imu_calibration.gyro_sum_mdps, 0, sizeof(s_imu_calibration.gyro_sum_mdps));
+    return;
+  }
+
+  for (i = 0U; i < 3U; ++i) {
+    s_imu_calibration.accel_sum_mg[i] += imu->accel_mg[i];
+    s_imu_calibration.gyro_sum_mdps[i] += imu->gyro_mdps[i];
+  }
+
+  if (s_imu_calibration.sample_count < 65535U) { s_imu_calibration.sample_count++; }
+  if (s_imu_calibration.sample_count >= PX4LITE_IMU_CALIBRATION_SAMPLES) {
+    int32_t avg_accel_mg[3];
+    int32_t expected_z_mg;
+
+    for (i = 0U; i < 3U; ++i) {
+      avg_accel_mg[i] = (int32_t)(s_imu_calibration.accel_sum_mg[i] / (int64_t)s_imu_calibration.sample_count);
+      s_imu_calibration.gyro_bias_mdps[i] = (int32_t)(s_imu_calibration.gyro_sum_mdps[i] / (int64_t)s_imu_calibration.sample_count);
+    }
+    expected_z_mg = (avg_accel_mg[2] >= 0) ? PX4LITE_IMU_ACCEL_NORM_TARGET_MG : -PX4LITE_IMU_ACCEL_NORM_TARGET_MG;
+    s_imu_calibration.accel_bias_mg[0] = avg_accel_mg[0];
+    s_imu_calibration.accel_bias_mg[1] = avg_accel_mg[1];
+    s_imu_calibration.accel_bias_mg[2] = avg_accel_mg[2] - expected_z_mg;
+    s_imu_calibration.calibrated       = 1U;
+  }
+}
+
+/**
+ * @brief 对 IMU 样本应用启动零偏标定结果。
+ */
+static void Px4Lite_ImuCalibrationApply(const Px4Lite_SensorImu_t *in, Px4Lite_SensorImu_t *out)
+{
+  uint8_t i;
+
+  *out = *in;
+  if (s_imu_calibration.calibrated == 0U) { return; }
+
+  for (i = 0U; i < 3U; ++i) {
+    out->accel_mg[i] -= s_imu_calibration.accel_bias_mg[i];
+    out->gyro_mdps[i] -= s_imu_calibration.gyro_bias_mdps[i];
+  }
+  out->header.flags |= PX4LITE_DATA_CALIBRATED;
+}
+
+/**
+ * @brief 基于新鲜度、零偏、加速度模长和角速度范围计算姿态质量。
+ */
+static uint8_t Px4Lite_AttitudeQuality(const Px4Lite_SensorImu_t *imu)
+{
+  uint32_t accel_norm_mg;
+  int32_t accel_error_mg;
+  int32_t max_gyro_mdps = 0;
+  int32_t quality       = 100;
+  uint8_t i;
+
+  if (imu == 0) { return 0U; }
+  if (s_imu_calibration.calibrated == 0U) { quality -= 50; }
+
+  accel_norm_mg = Px4Lite_ImuAccelNormMg(imu);
+  accel_error_mg = (int32_t)accel_norm_mg - PX4LITE_IMU_ACCEL_NORM_TARGET_MG;
+  accel_error_mg = Px4Lite_AbsI32(accel_error_mg);
+  if (accel_error_mg > PX4LITE_IMU_ACCEL_NORM_BAD_MG) {
+    quality -= 50;
+  } else if (accel_error_mg > PX4LITE_IMU_ACCEL_NORM_WARN_MG) {
+    quality -= 20;
+  }
+
+  for (i = 0U; i < 3U; ++i) {
+    int32_t gyro_abs = Px4Lite_AbsI32(imu->gyro_mdps[i]);
+    if (gyro_abs > max_gyro_mdps) { max_gyro_mdps = gyro_abs; }
+  }
+  if (max_gyro_mdps > PX4LITE_IMU_GYRO_BAD_MDPS) {
+    quality -= 40;
+  } else if (max_gyro_mdps > PX4LITE_IMU_GYRO_WARN_MDPS) {
+    quality -= 15;
+  }
+
+  if (quality < 0) { quality = 0; }
+  return (uint8_t)quality;
+}
+
+/**
+ * @brief 根据压力范围、垂直速度和跳变结果计算气压计质量。
+ */
+static uint8_t Px4Lite_BaroQuality(const Px4Lite_SensorBaro_t *baro)
+{
+  int32_t quality = 100;
+
+  if (baro == 0) { return 0U; }
+  if ((baro->pressure_pa < PX4LITE_BARO_PRESSURE_MIN_PA) || (baro->pressure_pa > PX4LITE_BARO_PRESSURE_MAX_PA)) { return 0U; }
+  if (Px4Lite_AbsI32(baro->vertical_speed_cms) > 1000) { quality -= 25; }
+  if ((baro->pressure_altitude_mm == 0) && (baro->pressure_pa < 100000.0f)) { quality -= 20; }
+  return (quality > 0) ? (uint8_t)quality : 0U;
+}
+
+/**
+ * @brief 将 GNSS 地速和航向转换为 N/E 速度。
+ */
+static void Px4Lite_FillGnssHorizontalVelocity(Px4Lite_VehicleNavigation_t *navigation, const Px4Lite_SensorGnss_t *gnss)
+{
+  float heading_rad;
+
+  if ((navigation == 0) || (gnss == 0) || (gnss->heading_deg100 > 36000U)) { return; }
+
+  heading_rad = ((float)gnss->heading_deg100) * PX4LITE_ESTIMATOR_DEG100_TO_RAD;
+  navigation->velocity_north_cms = Px4Lite_ModulesRoundFloatToI32(((float)gnss->ground_speed_cms) * cosf(heading_rad));
+  navigation->velocity_east_cms  = Px4Lite_ModulesRoundFloatToI32(((float)gnss->ground_speed_cms) * sinf(heading_rad));
+  navigation->valid_mask |= PX4LITE_NAV_VALID_VELOCITY;
+}
+
+/**
+ * @brief 使用 GNSS 高度校准气压高度偏移，并输出当前可用融合高度。
+ */
+static void Px4Lite_UpdateAltitudeFusion(Px4Lite_VehicleNavigation_t *navigation, const Px4Lite_SensorGnss_t *gnss, const Px4Lite_SensorBaro_t *baro, uint8_t gnss_alt_valid, uint8_t baro_valid)
+{
+  int32_t corrected_baro_altitude_mm;
+  uint8_t aligned = 0U;
+
+  if ((navigation == 0) || (baro_valid == 0U) || (baro == 0)) { return; }
+
+  corrected_baro_altitude_mm = baro->pressure_altitude_mm;
+  if ((gnss_alt_valid != 0U) && (gnss != 0)) {
+    int32_t new_offset = gnss->altitude_mm - baro->pressure_altitude_mm;
+
+    if (s_altitude_fusion.offset_valid == 0U) {
+      s_altitude_fusion.baro_to_gnss_offset_mm = new_offset;
+      s_altitude_fusion.offset_valid           = 1U;
+    } else {
+      s_altitude_fusion.baro_to_gnss_offset_mm = ((s_altitude_fusion.baro_to_gnss_offset_mm * 15) + new_offset) / 16;
+    }
+
+    aligned = (Px4Lite_AbsTimeDeltaMs(gnss->header.sample_time_ms, baro->header.sample_time_ms) <= PX4LITE_FUSION_TIME_ALIGN_MS) ? 1U : 0U;
+  }
+
+  if (s_altitude_fusion.offset_valid != 0U) { corrected_baro_altitude_mm += s_altitude_fusion.baro_to_gnss_offset_mm; }
+
+  if ((gnss_alt_valid != 0U) && (gnss != 0) && (aligned != 0U)) {
+    navigation->fused_altitude_mm = ((gnss->altitude_mm * 3) + corrected_baro_altitude_mm) / 4;
+    navigation->header.flags |= PX4LITE_DATA_FUSED;
+  } else if (navigation->valid_mask == 0U) {
+    navigation->fused_altitude_mm = corrected_baro_altitude_mm;
+  } else if ((navigation->valid_mask & PX4LITE_NAV_VALID_ALTITUDE) == 0U) {
+    navigation->fused_altitude_mm = corrected_baro_altitude_mm;
+  }
+
+  navigation->vertical_speed_cms = baro->vertical_speed_cms;
+  navigation->velocity_down_cms  = -baro->vertical_speed_cms;
+  navigation->valid_mask |= PX4LITE_NAV_VALID_ALTITUDE;
+}
+
+/**
+ * @brief 汇总当前有效源的最低质量作为导航置信度。
+ */
+static uint8_t Px4Lite_NavigationQuality(uint8_t gnss_quality, uint8_t baro_quality, uint8_t attitude_quality, uint32_t valid_mask)
+{
+  uint8_t quality = 100U;
+  uint8_t any     = 0U;
+
+  if ((valid_mask & (PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY)) != 0U) {
+    quality = gnss_quality;
+    any     = 1U;
+  }
+  if (((valid_mask & PX4LITE_NAV_VALID_ALTITUDE) != 0U) && (baro_quality != 0U)) {
+    if ((any == 0U) || (baro_quality < quality)) { quality = baro_quality; }
+    any = 1U;
+  }
+  if ((valid_mask & PX4LITE_NAV_VALID_ATTITUDE) != 0U) {
+    if ((any == 0U) || (attitude_quality < quality)) { quality = attitude_quality; }
+    any = 1U;
+  }
+  return (any != 0U) ? quality : 0U;
 }
 
 /**
@@ -433,19 +715,20 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
       baro.header.sequence        = ++s_baro_sequence;
       baro.header.device_id       = (uint16_t)PX4LITE_MODULE_BARO;
       baro.header.valid           = 1U;
-      baro.header.quality         = 100U;
+      baro.header.quality         = Px4Lite_BaroQuality(&baro);
       baro.header.flags           = PX4LITE_DATA_VALID;
+      if (baro.header.quality < 60U) { baro.header.flags |= PX4LITE_DATA_DEGRADED; }
       Px4Lite_PublishBaro(&baro);
 
       taskENTER_CRITICAL();
       s_status[PX4LITE_MODULE_BARO].last_rx_ms         = baro.header.sample_time_ms;
-      s_status[PX4LITE_MODULE_BARO].last_valid_ms      = baro.header.sample_time_ms;
+      if (baro.header.quality >= 50U) { s_status[PX4LITE_MODULE_BARO].last_valid_ms = baro.header.sample_time_ms; }
       s_status[PX4LITE_MODULE_BARO].consecutive_errors = 0U;
       if (s_status[PX4LITE_MODULE_BARO].consecutive_valid < 65535U) { s_status[PX4LITE_MODULE_BARO].consecutive_valid++; }
       s_status_version++;
       taskEXIT_CRITICAL();
 
-      Px4Lite_SetStatus(PX4LITE_MODULE_BARO, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
+      Px4Lite_SetStatus(PX4LITE_MODULE_BARO, (baro.header.quality >= 50U) ? PX4LITE_STATE_ONLINE : PX4LITE_STATE_DEGRADED, (baro.header.quality >= 50U) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SENSOR_INVALID, now_ms);
     } else if (result == PX4LITE_IO_ERROR) {
       Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BARO, now_ms);
     }
@@ -497,22 +780,32 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 Px4Lite_Result_t Px4Lite_EstimatorInit(void)
 {
   Px4Lite_AttitudeInit(&s_attitude_state);
+  Px4Lite_ImuCalibrationReset();
+  memset(&s_altitude_fusion, 0, sizeof(s_altitude_fusion));
+  memset(&s_estimator_navigation, 0, sizeof(s_estimator_navigation));
+  memset(&s_estimator_gnss, 0, sizeof(s_estimator_gnss));
+  memset(&s_estimator_imu, 0, sizeof(s_estimator_imu));
+  memset(&s_estimator_calibrated_imu, 0, sizeof(s_estimator_calibrated_imu));
+  memset(&s_estimator_baro, 0, sizeof(s_estimator_baro));
+  s_estimator_last_gnss_sequence = 0U;
+  s_estimator_last_baro_sequence = 0U;
   Px4Lite_SetStatus(PX4LITE_MODULE_ESTIMATOR, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, Px4Lite_PlatformGetMs());
   return PX4LITE_OK;
 }
 
 /**
- * @brief 将新鲜 GNSS 测量转换为 Navigation 快照。
+ * @brief 融合 GNSS、IMU 和气压计快照，发布带有效位和质量分的 Navigation。
  */
 void Px4Lite_EstimatorRun(uint32_t now_ms)
 {
-  static uint32_t last_gnss_sequence;
-  Px4Lite_SensorGnss_t gnss;
-  Px4Lite_SensorImu_t imu;
-  Px4Lite_VehicleNavigation_t navigation;
   uint8_t publish_navigation = 0U;
   uint8_t attitude_updated   = 0U;
   uint8_t imu_pop_count      = 0U;
+  uint8_t gnss_quality       = 0U;
+  uint8_t baro_quality       = 0U;
+  uint8_t attitude_quality   = 0U;
+  uint8_t gnss_alt_valid     = 0U;
+  uint8_t baro_valid         = 0U;
   int32_t roll_deg100        = 0;
   int32_t pitch_deg100       = 0;
   int32_t yaw_deg100         = 0;
@@ -520,66 +813,102 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
   int32_t pitch_rate_dps100  = 0;
   int32_t yaw_rate_dps100    = 0;
 
-  memset(&navigation, 0, sizeof(navigation));
+  memset(&s_estimator_navigation, 0, sizeof(s_estimator_navigation));
 
-  if ((Px4Lite_CopyGnss(&gnss) == PX4LITE_OK) && (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U)) {
-    navigation.latitude_e7        = gnss.latitude_e7;
-    navigation.longitude_e7       = gnss.longitude_e7;
-    navigation.fused_altitude_mm  = gnss.altitude_mm;
-    navigation.gnss_utc_sec       = gnss.utc_sec;
-    navigation.gnss_utc_date      = gnss.utc_date;
-    navigation.hdop_x100          = gnss.hdop_x100;
-    navigation.satellites_used    = gnss.satellites_used;
-    navigation.gnss_fix_type      = Px4Lite_GnssDisplayFixState(&gnss);
-    navigation.navigation_quality = gnss.header.quality;
+  if ((Px4Lite_CopyGnss(&s_estimator_gnss) == PX4LITE_OK) && (Px4Lite_IsFresh(&s_estimator_gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U)) {
+    gnss_quality                                  = s_estimator_gnss.header.quality;
+    s_estimator_navigation.latitude_e7           = s_estimator_gnss.latitude_e7;
+    s_estimator_navigation.longitude_e7          = s_estimator_gnss.longitude_e7;
+    s_estimator_navigation.fused_altitude_mm     = s_estimator_gnss.altitude_mm;
+    s_estimator_navigation.gnss_utc_sec          = s_estimator_gnss.utc_sec;
+    s_estimator_navigation.gnss_utc_date         = s_estimator_gnss.utc_date;
+    s_estimator_navigation.hdop_x100             = s_estimator_gnss.hdop_x100;
+    s_estimator_navigation.satellites_used       = s_estimator_gnss.satellites_used;
+    s_estimator_navigation.gnss_fix_type         = Px4Lite_GnssDisplayFixState(&s_estimator_gnss);
+    s_estimator_navigation.header.sample_time_ms = s_estimator_gnss.header.sample_time_ms;
 
-    if (gnss.fix_type != 0U) {
-      navigation.valid_mask = PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_ALTITUDE;
+    if (s_estimator_gnss.fix_type != 0U) {
+      s_estimator_navigation.valid_mask = PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_ALTITUDE;
+      gnss_alt_valid                    = 1U;
+      Px4Lite_FillGnssHorizontalVelocity(&s_estimator_navigation, &s_estimator_gnss);
     } else {
-      navigation.header.flags |= PX4LITE_DATA_DEGRADED;
+      s_estimator_navigation.header.flags |= PX4LITE_DATA_DEGRADED;
     }
 
-    navigation.header.sample_time_ms = gnss.header.sample_time_ms;
-    if (gnss.header.sequence != last_gnss_sequence) {
-      last_gnss_sequence = gnss.header.sequence;
-      publish_navigation = 1U;
+    if (s_estimator_gnss.header.sequence != s_estimator_last_gnss_sequence) {
+      s_estimator_last_gnss_sequence = s_estimator_gnss.header.sequence;
+      publish_navigation             = 1U;
     }
   }
 
-  while ((imu_pop_count < 8U) && (Px4Lite_PopImu(&imu) == PX4LITE_OK)) {
+  if ((Px4Lite_CopyBaro(&s_estimator_baro) == PX4LITE_OK) && (Px4Lite_IsFresh(&s_estimator_baro.header, now_ms, PX4LITE_BARO_MAX_AGE_MS) != 0U)) {
+    baro_quality = s_estimator_baro.header.quality;
+    baro_valid   = (baro_quality >= 50U) ? 1U : 0U;
+    if (baro_valid != 0U) {
+      Px4Lite_UpdateAltitudeFusion(&s_estimator_navigation, &s_estimator_gnss, &s_estimator_baro, gnss_alt_valid, baro_valid);
+      if (s_estimator_navigation.header.sample_time_ms == 0U) { s_estimator_navigation.header.sample_time_ms = s_estimator_baro.header.sample_time_ms; }
+      if (s_estimator_baro.header.sequence != s_estimator_last_baro_sequence) {
+        s_estimator_last_baro_sequence = s_estimator_baro.header.sequence;
+        publish_navigation             = 1U;
+      }
+    }
+  }
+
+  while ((imu_pop_count < 8U) && (Px4Lite_PopImu(&s_estimator_imu) == PX4LITE_OK)) {
+    uint8_t current_attitude_quality = 0U;
+
     imu_pop_count++;
-    if ((imu.header.valid != 0U) && (Px4Lite_IsFresh(&imu.header, now_ms, PX4LITE_IMU_MAX_AGE_MS) != 0U) && (Px4Lite_AttitudeUpdate(&s_attitude_state, &imu, &roll_deg100, &pitch_deg100, &yaw_deg100) == PX4LITE_OK)) {
+    if ((s_estimator_imu.header.valid != 0U) && (Px4Lite_IsFresh(&s_estimator_imu.header, now_ms, PX4LITE_IMU_MAX_AGE_MS) != 0U)) {
+      Px4Lite_ImuCalibrationUpdate(&s_estimator_imu);
+      Px4Lite_ImuCalibrationApply(&s_estimator_imu, &s_estimator_calibrated_imu);
+      current_attitude_quality = Px4Lite_AttitudeQuality(&s_estimator_calibrated_imu);
+    }
+
+    if ((current_attitude_quality >= PX4LITE_IMU_ATTITUDE_MIN_QUALITY) && (Px4Lite_AttitudeUpdate(&s_attitude_state, &s_estimator_calibrated_imu, &roll_deg100, &pitch_deg100, &yaw_deg100) == PX4LITE_OK)) {
       attitude_updated                 = 1U;
-      roll_rate_dps100                 = imu.gyro_mdps[0] / 10;
-      pitch_rate_dps100                = imu.gyro_mdps[1] / 10;
-      yaw_rate_dps100                  = imu.gyro_mdps[2] / 10;
-      navigation.header.sample_time_ms = imu.header.sample_time_ms;
+      attitude_quality                 = current_attitude_quality;
+      roll_rate_dps100                 = s_estimator_calibrated_imu.gyro_mdps[0] / 10;
+      pitch_rate_dps100                = s_estimator_calibrated_imu.gyro_mdps[1] / 10;
+      yaw_rate_dps100                  = s_estimator_calibrated_imu.gyro_mdps[2] / 10;
+      s_estimator_navigation.header.sample_time_ms = s_estimator_calibrated_imu.header.sample_time_ms;
     }
   }
 
   if (attitude_updated != 0U) {
-    navigation.roll_deg100       = roll_deg100;
-    navigation.pitch_deg100      = pitch_deg100;
-    navigation.yaw_deg100        = yaw_deg100;
-    navigation.roll_rate_dps100  = roll_rate_dps100;
-    navigation.pitch_rate_dps100 = pitch_rate_dps100;
-    navigation.yaw_rate_dps100   = yaw_rate_dps100;
-    navigation.valid_mask |= PX4LITE_NAV_VALID_ATTITUDE;
-    navigation.valid_mask |= PX4LITE_NAV_VALID_YAW_REL;
-    navigation.header.flags |= PX4LITE_DATA_FILTERED;
+    s_estimator_navigation.roll_deg100       = roll_deg100;
+    s_estimator_navigation.pitch_deg100      = pitch_deg100;
+    s_estimator_navigation.yaw_deg100        = yaw_deg100;
+    s_estimator_navigation.roll_rate_dps100  = roll_rate_dps100;
+    s_estimator_navigation.pitch_rate_dps100 = pitch_rate_dps100;
+    s_estimator_navigation.yaw_rate_dps100   = yaw_rate_dps100;
+    s_estimator_navigation.valid_mask |= PX4LITE_NAV_VALID_ATTITUDE;
+    s_estimator_navigation.valid_mask |= PX4LITE_NAV_VALID_YAW_REL;
+    s_estimator_navigation.header.flags |= PX4LITE_DATA_FILTERED;
+    if (s_imu_calibration.calibrated != 0U) { s_estimator_navigation.header.flags |= PX4LITE_DATA_CALIBRATED; }
     publish_navigation = 1U;
   }
 
   if (publish_navigation == 0U) { return; }
 
-  if (navigation.header.sample_time_ms == 0U) { navigation.header.sample_time_ms = now_ms; }
-  navigation.header.publish_time_ms = now_ms;
-  navigation.header.sequence        = ++s_navigation_sequence;
-  navigation.header.device_id       = 0x0100U;
-  navigation.header.valid           = 1U;
-  navigation.header.flags |= PX4LITE_DATA_VALID;
+  if ((s_estimator_navigation.valid_mask & PX4LITE_NAV_VALID_VELOCITY) == 0U) {
+    s_estimator_navigation.velocity_north_cms = 0;
+    s_estimator_navigation.velocity_east_cms  = 0;
+  }
+  s_estimator_navigation.navigation_quality = Px4Lite_NavigationQuality(gnss_quality, baro_quality, attitude_quality, s_estimator_navigation.valid_mask);
+  if (s_estimator_navigation.navigation_quality < 60U) { s_estimator_navigation.header.flags |= PX4LITE_DATA_DEGRADED; }
+  if (s_estimator_navigation.header.sample_time_ms == 0U) { s_estimator_navigation.header.sample_time_ms = now_ms; }
+  s_estimator_navigation.header.publish_time_ms = now_ms;
+  s_estimator_navigation.header.sequence        = ++s_navigation_sequence;
+  s_estimator_navigation.header.device_id       = 0x0100U;
+  s_estimator_navigation.header.valid           = (s_estimator_navigation.valid_mask != 0U) ? 1U : 0U;
+  s_estimator_navigation.header.quality         = s_estimator_navigation.navigation_quality;
+  if (s_estimator_navigation.header.valid != 0U) {
+    s_estimator_navigation.header.flags |= PX4LITE_DATA_VALID;
+  } else {
+    s_estimator_navigation.header.flags |= PX4LITE_DATA_DEGRADED;
+  }
 
-  Px4Lite_PublishNavigation(&navigation);
+  Px4Lite_PublishNavigation(&s_estimator_navigation);
 }
 
 /**

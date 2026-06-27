@@ -444,6 +444,11 @@
               <FilePath>..\Framework\Src\px4lite_mavlink_rx.c</FilePath>
             </File>
             <File>
+              <FileName>px4lite_command.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_command.c</FilePath>
+            </File>
+            <File>
               <FileName>px4lite_attitude.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_attitude.c</FilePath>
@@ -647,6 +652,11 @@
               <FileName>display_log.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Display\Src\display_log.c</FilePath>
+            </File>
+            <File>
+              <FileName>display_logo.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Display\Src\display_logo.c</FilePath>
             </File>
             <File>
               <FileName>display_ssd1963.c</FileName>

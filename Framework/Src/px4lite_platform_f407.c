@@ -25,10 +25,15 @@
 #include "stm32f4xx_hal.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include <math.h>
 #include <string.h>
 
 static uint32_t s_heartbeat_ms[PX4LITE_HEARTBEAT_COUNT];
 static uint32_t s_heartbeat_seen_mask;
+static uint32_t s_baro_last_sample_ms;
+static int32_t s_baro_last_altitude_mm;
+static int32_t s_baro_vertical_speed_cms;
+static uint8_t s_baro_altitude_valid;
 
 /**
  * @brief 将 float 按四舍五入方式转换为 int32。
@@ -41,6 +46,66 @@ static int32_t Px4Lite_RoundFloatToI32(float value)
 {
   if (value >= 0.0f) { return (int32_t)(value + 0.5f); }
   return (int32_t)(value - 0.5f);
+}
+
+/**
+ * @brief 将整数限制到闭区间内。
+ */
+static int32_t Px4Lite_ClampI32(int32_t value, int32_t min_value, int32_t max_value)
+{
+  if (value < min_value) { return min_value; }
+  if (value > max_value) { return max_value; }
+  return value;
+}
+
+/**
+ * @brief 将标准大气模型下的气压转换为海拔高度。
+ */
+static int32_t Px4Lite_BaroPressureToAltitudeMm(float pressure_pa)
+{
+  float ratio;
+  float altitude_m;
+
+  if (pressure_pa <= 0.0f) { return 0; }
+
+  ratio      = pressure_pa / PX4LITE_BARO_SEA_LEVEL_PA;
+  altitude_m = 44330.0f * (1.0f - powf(ratio, 0.19029495f));
+  return Px4Lite_RoundFloatToI32(altitude_m * 1000.0f);
+}
+
+/**
+ * @brief 更新气压高度差分垂直速度，使用限幅和一阶滤波抑制跳变。
+ */
+static int32_t Px4Lite_BaroUpdateVerticalSpeed(int32_t altitude_mm, uint32_t sample_time_ms)
+{
+  int32_t velocity_cms = 0;
+  uint32_t dt_ms;
+
+  if ((s_baro_altitude_valid == 0U) || (s_baro_last_sample_ms == 0U) || (sample_time_ms <= s_baro_last_sample_ms)) {
+    s_baro_altitude_valid     = 1U;
+    s_baro_last_sample_ms     = sample_time_ms;
+    s_baro_last_altitude_mm   = altitude_mm;
+    s_baro_vertical_speed_cms = 0;
+    return 0;
+  }
+
+  dt_ms = sample_time_ms - s_baro_last_sample_ms;
+  if (dt_ms <= PX4LITE_BARO_MAX_AGE_MS) {
+    int32_t delta_mm = altitude_mm - s_baro_last_altitude_mm;
+
+    if (delta_mm > PX4LITE_BARO_MAX_JUMP_MM) { delta_mm = PX4LITE_BARO_MAX_JUMP_MM; }
+    if (delta_mm < -PX4LITE_BARO_MAX_JUMP_MM) { delta_mm = -PX4LITE_BARO_MAX_JUMP_MM; }
+
+    velocity_cms = (int32_t)(((int64_t)delta_mm * 100) / (int64_t)dt_ms);
+    velocity_cms = Px4Lite_ClampI32(velocity_cms, -PX4LITE_BARO_MAX_VERTICAL_CMS, PX4LITE_BARO_MAX_VERTICAL_CMS);
+    s_baro_vertical_speed_cms += (velocity_cms - s_baro_vertical_speed_cms) / 4;
+  } else {
+    s_baro_vertical_speed_cms = 0;
+  }
+
+  s_baro_last_sample_ms   = sample_time_ms;
+  s_baro_last_altitude_mm = altitude_mm;
+  return s_baro_vertical_speed_cms;
 }
 
 #if PX4LITE_ENABLE_HARDWARE_WATCHDOG
@@ -322,7 +387,13 @@ Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *measurement)
 
 Px4Lite_Result_t Px4Lite_BaroInit(void)
 {
-  return (Sensor_BME280_Init() == BME280_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  Px4Lite_Result_t result = (Sensor_BME280_Init() == BME280_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+
+  s_baro_last_sample_ms     = 0U;
+  s_baro_last_altitude_mm   = 0;
+  s_baro_vertical_speed_cms = 0;
+  s_baro_altitude_valid     = 0U;
+  return result;
 }
 
 void Px4Lite_BaroRequestReinit(void)
@@ -353,6 +424,10 @@ Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement)
   measurement->pressure_pa           = snapshot.pressure_pa;
   measurement->temperature_c         = snapshot.temperature_c;
   measurement->relative_humidity_pct = snapshot.relative_humidity_pct;
+  if ((snapshot.pressure_pa >= PX4LITE_BARO_PRESSURE_MIN_PA) && (snapshot.pressure_pa <= PX4LITE_BARO_PRESSURE_MAX_PA)) {
+    measurement->pressure_altitude_mm = Px4Lite_BaroPressureToAltitudeMm(snapshot.pressure_pa);
+    measurement->vertical_speed_cms   = Px4Lite_BaroUpdateVerticalSpeed(measurement->pressure_altitude_mm, measurement->header.sample_time_ms);
+  }
 
   last_rx_sequence = snapshot.rx_sequence;
   return PX4LITE_OK;

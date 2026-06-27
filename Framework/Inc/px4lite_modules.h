@@ -113,7 +113,7 @@ Px4Lite_Result_t Px4Lite_EstimatorInit(void);
  *
  * @param[in] now_ms 当前 estimator 周期时间，单位：ms。
  *
- * @note 当前负责 GNSS 到 Navigation、IMU 到 Attitude 的基础转换。
+ * @note 当前负责 GNSS/IMU/Baro 到 Navigation 的基础融合、IMU 启动零偏标定和质量过滤。
  */
 void Px4Lite_EstimatorRun(uint32_t now_ms);
 

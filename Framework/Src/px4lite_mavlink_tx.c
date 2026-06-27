@@ -37,6 +37,7 @@ typedef void (*MavTx_SuccessHook_t)(void);
 #define MAV_TX_SCOPE_EXTENSION 2U
 
 #define PX4LITE_MAVLINK_STREAM_COMMAND ((uint16_t)MAV_CMD_USER_1)
+#define PX4LITE_MAVLINK_NODE_POLL_COMMAND ((uint16_t)MAV_CMD_USER_2)
 #define MAV_TX_STREAM_ACTION_STOP      0U
 #define MAV_TX_STREAM_ACTION_START     1U
 
@@ -102,6 +103,10 @@ static uint8_t s_remote_view_target_node;
 static uint32_t s_remote_view_start_ms;
 #endif
 static uint32_t s_next_stream_request_ms;
+#if (PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_PRODUCT) && (PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER) && (PX4LITE_MAVLINK_NODE_POLL_ENABLE != 0U)
+static uint32_t s_next_node_poll_ms;
+static uint8_t s_next_poll_node_id;
+#endif
 static uint32_t s_stream_until_ms;
 static uint32_t s_stream_mask;
 static MavTx_PendingCommand_t s_pending_command;
@@ -122,22 +127,51 @@ static uint8_t MavTx_NodeIdToSystemId(uint8_t node_id)
   return (uint8_t)(node_id + 1U);
 }
 
-static uint8_t MavTx_IsForThisSystem(uint8_t target_system, uint8_t target_component)
-{
-  if ((target_system != 0U) && (target_system != (uint8_t)PX4LITE_MAVLINK_SYSTEM_ID)) { return 0U; }
-  if ((target_component != 0U) && (target_component != (uint8_t)PX4LITE_MAVLINK_COMPONENT_ID)) { return 0U; }
-  return 1U;
-}
-
 static uint8_t MavTx_MainStreamActive(uint32_t now_ms)
 {
   return ((s_stream_mask != 0U) && (MavTx_TimeReached(now_ms, s_stream_until_ms) == 0U)) ? 1U : 0U;
 }
 
+/**
+ * @brief 判断当前是否处于双方互相查看的半双工高负载状态。
+ */
+static uint8_t MavTx_MutualStreamActive(uint32_t now_ms)
+{
+#if PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_PRODUCT
+  return ((s_remote_view_enabled != 0U) && (MavTx_MainStreamActive(now_ms) != 0U)) ? 1U : 0U;
+#else
+  (void)now_ms;
+  return 0U;
+#endif
+}
+
+/**
+ * @brief 计算当前目录项发送周期，互看时仅对主数据自动降频。
+ */
+static uint32_t MavTx_ItemPeriodMs(const MavTx_Item_t *item, uint32_t now_ms)
+{
+  uint32_t period_ms;
+
+  if (item == 0) { return PX4LITE_MAVLINK_RETRY_PERIOD_MS; }
+
+  period_ms = item->period_ms;
+  if ((item->scope != MAV_TX_SCOPE_ALWAYS) && (MavTx_MutualStreamActive(now_ms) != 0U)) {
+    period_ms *= PX4LITE_MAVLINK_MUTUAL_STREAM_THROTTLE;
+  }
+  return period_ms;
+}
+
 static uint8_t MavTx_ItemAllowed(const MavTx_Item_t *item, uint32_t now_ms)
 {
   if (item == 0) { return 0U; }
-  if (item->scope == MAV_TX_SCOPE_ALWAYS) { return 1U; }
+  if (item->scope == MAV_TX_SCOPE_ALWAYS) {
+#if PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_PRODUCT
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_SLAVE
+    if (item->message_id == MAVLINK_MSG_ID_HEARTBEAT) { return 1U; }
+#endif
+#endif
+    return 1U;
+  }
 
 #if PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_GCS
   if (item->scope == MAV_TX_SCOPE_EXTENSION) { return (PX4LITE_MAVLINK_ENABLE_NAMED_VALUE_EXTENSIONS != 0U) ? 1U : 0U; }
@@ -163,6 +197,22 @@ static void MavTx_QueueStreamCommand(uint8_t target_node_id, uint8_t action, uin
   s_pending_command.next_try_ms      = now_ms;
 }
 
+#if (PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_PRODUCT) && (PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER) && (PX4LITE_MAVLINK_NODE_POLL_ENABLE != 0U)
+static void MavTx_QueueNodePollCommand(uint8_t target_node_id, uint32_t now_ms)
+{
+  memset(&s_pending_command, 0, sizeof(s_pending_command));
+  s_pending_command.valid            = 1U;
+  s_pending_command.target_system    = MavTx_NodeIdToSystemId(target_node_id);
+  s_pending_command.target_component = PX4LITE_MAVLINK_COMPONENT_ID;
+  s_pending_command.command          = PX4LITE_MAVLINK_NODE_POLL_COMMAND;
+  s_pending_command.param1           = 1.0f;
+  s_pending_command.param2           = (float)PX4LITE_NODE_ID;
+  s_pending_command.param3           = 0.0f;
+  s_pending_command.param4           = 0.0f;
+  s_pending_command.next_try_ms      = now_ms;
+}
+#endif
+
 static void MavTx_QueueAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component)
 {
   s_pending_ack.valid            = 1U;
@@ -170,6 +220,11 @@ static void MavTx_QueueAck(uint16_t command, uint8_t result, uint8_t target_syst
   s_pending_ack.result           = result;
   s_pending_ack.target_system    = target_system;
   s_pending_ack.target_component = target_component;
+}
+
+void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component)
+{
+  MavTx_QueueAck(command, result, target_system, target_component);
 }
 
 /**
@@ -357,6 +412,24 @@ static void MavTx_UpdateStreamRequest(uint32_t now_ms)
 
   MavTx_QueueStreamCommand(s_remote_view_target_node, MAV_TX_STREAM_ACTION_START, PX4LITE_MAVLINK_STREAM_MASK_ALL, PX4LITE_MAVLINK_STREAM_LEASE_MS, now_ms);
   s_next_stream_request_ms = now_ms + PX4LITE_MAVLINK_STREAM_RENEW_MS;
+#else
+  (void)now_ms;
+#endif
+}
+
+static void MavTx_UpdateNodePoll(uint32_t now_ms)
+{
+#if (PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_PRODUCT) && (PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER) && (PX4LITE_MAVLINK_NODE_POLL_ENABLE != 0U)
+  if (PX4LITE_REMOTE_NODE_MAX <= 1U) { return; }
+  if (s_remote_view_enabled != 0U) { return; }
+  if (MavTx_TimeReached(now_ms, s_next_node_poll_ms) == 0U) { return; }
+  if (s_pending_command.valid != 0U) { return; }
+
+  if ((s_next_poll_node_id == 0U) || (s_next_poll_node_id >= PX4LITE_REMOTE_NODE_MAX)) { s_next_poll_node_id = 1U; }
+  MavTx_QueueNodePollCommand(s_next_poll_node_id, now_ms);
+  s_next_poll_node_id++;
+  if (s_next_poll_node_id >= PX4LITE_REMOTE_NODE_MAX) { s_next_poll_node_id = 1U; }
+  s_next_node_poll_ms = now_ms + PX4LITE_MAVLINK_NODE_POLL_PERIOD_MS;
 #else
   (void)now_ms;
 #endif
@@ -873,7 +946,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   memset(s_frame, 0, sizeof(s_frame));
   memset(&s_stats, 0, sizeof(s_stats));
 
-  s_next_heartbeat_ms   = now_ms;
+  s_next_heartbeat_ms   = now_ms + ((uint32_t)PX4LITE_NODE_ID * PX4LITE_MAVLINK_HEARTBEAT_SLOT_MS);
   s_next_gps_raw_ms     = now_ms + 100U;
   s_next_gnss_detail_ms = now_ms + 150U;
   s_next_attitude_ms    = now_ms + 50U;
@@ -891,8 +964,12 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_remote_view_start_ms = 0U;
 #endif
   s_next_stream_request_ms = now_ms;
-  s_stream_until_ms = 0U;
-  s_stream_mask = 0U;
+#if (PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_PRODUCT) && (PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER) && (PX4LITE_MAVLINK_NODE_POLL_ENABLE != 0U)
+  s_next_node_poll_ms      = now_ms + PX4LITE_MAVLINK_NODE_POLL_PERIOD_MS;
+  s_next_poll_node_id      = 1U;
+#endif
+  s_stream_until_ms        = 0U;
+  s_stream_mask            = 0U;
   memset(&s_pending_command, 0, sizeof(s_pending_command));
   memset(&s_pending_ack, 0, sizeof(s_pending_ack));
   return PX4LITE_OK;
@@ -905,6 +982,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
   uint8_t checked;
 
   MavTx_UpdateStreamRequest(now_ms);
+  MavTx_UpdateNodePoll(now_ms);
 
   result = MavTx_SendPendingAck(now_ms);
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
@@ -919,7 +997,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
     if ((item->enabled == 0U) || (MavTx_ItemAllowed(item, now_ms) == 0U) || (MavTx_TimeReached(now_ms, *item->next_ms) == 0U)) { continue; }
 
     result = item->encode(now_ms);
-    MavTx_RecordResult(result, now_ms, item->period_ms, item->next_ms, item->message_id, item->success_count);
+    MavTx_RecordResult(result, now_ms, MavTx_ItemPeriodMs(item, now_ms), item->next_ms, item->message_id, item->success_count);
     if ((result == PX4LITE_OK) && (item->on_success != 0)) { item->on_success(); }
     if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
   }
@@ -963,38 +1041,25 @@ uint8_t Px4Lite_MavlinkRemoteViewExpired(uint32_t now_ms)
 #endif
 }
 
-Px4Lite_Result_t Px4Lite_MavlinkHandleCommandLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, uint32_t now_ms)
+Px4Lite_Result_t Px4Lite_MavlinkApplyStreamControl(uint8_t action, uint32_t stream_mask, uint32_t lease_ms, uint32_t now_ms)
 {
-  uint32_t lease_ms;
-
-  if (MavTx_IsForThisSystem(target_system, target_component) == 0U) { return PX4LITE_IDLE; }
-  if (command != PX4LITE_MAVLINK_STREAM_COMMAND) {
-    MavTx_QueueAck(command, (uint8_t)MAV_RESULT_UNSUPPORTED, source_system, source_component);
-    return PX4LITE_IDLE;
-  }
-
-  if ((uint8_t)param1 == MAV_TX_STREAM_ACTION_START) {
-    lease_ms = (uint32_t)param4;
+  if (action == MAV_TX_STREAM_ACTION_START) {
     if (lease_ms == 0U) { lease_ms = PX4LITE_MAVLINK_STREAM_LEASE_MS; }
-    s_stream_mask = (uint32_t)param3;
+    s_stream_mask = stream_mask;
     if (s_stream_mask == 0U) { s_stream_mask = PX4LITE_MAVLINK_STREAM_MASK_ALL; }
     s_stream_until_ms = now_ms + lease_ms;
-    MavTx_QueueAck(command, (uint8_t)MAV_RESULT_ACCEPTED, source_system, source_component);
     return PX4LITE_OK;
   }
 
+  if (action != MAV_TX_STREAM_ACTION_STOP) { return PX4LITE_INVALID_PARAM; }
   s_stream_mask = 0U;
   s_stream_until_ms = 0U;
-  MavTx_QueueAck(command, (uint8_t)MAV_RESULT_ACCEPTED, source_system, source_component);
   return PX4LITE_OK;
 }
 
-Px4Lite_Result_t Px4Lite_MavlinkHandleCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component, uint32_t now_ms)
+void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result)
 {
-  (void)now_ms;
-  if (MavTx_IsForThisSystem(target_system, target_component) == 0U) { return PX4LITE_IDLE; }
-  if (command != PX4LITE_MAVLINK_STREAM_COMMAND) { return PX4LITE_IDLE; }
+  (void)command;
   s_stats.command_ack_rx_count++;
   (void)result;
-  return PX4LITE_OK;
 }
