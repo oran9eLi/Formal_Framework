@@ -806,8 +806,15 @@ Display_Result_t Display_Init(void)
     s_hmi_values[i].dirty           = 0U;
   }
 
-  /* 复位业务层消息日志生产者(去抖/档位/环形缓冲)，与显示初始化同生命周期。 */
-  App_MessageLogInit(Px4Lite_PlatformGetMs());
+  /* 业务层消息日志生产者只在首次初始化时复位：显示故障恢复会重入 Display_Init，
+     但日志是历史记录应跨恢复保留(与旧实现的进程级 static 语义一致)。 */
+  {
+    static uint8_t s_msglog_inited = 0U;
+    if (s_msglog_inited == 0U) {
+      App_MessageLogInit(Px4Lite_PlatformGetMs());
+      s_msglog_inited = 1U;
+    }
+  }
 
 #if DISPLAY_USE_LVGL_BACKEND
   if (Display_LvglInit(Px4Lite_PlatformGetMs()) != DISPLAY_OK) {
