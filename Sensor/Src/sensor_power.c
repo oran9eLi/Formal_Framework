@@ -44,6 +44,7 @@ static const Power_PercentPoint_t s_percent_curve[] = {
 static Power_Snapshot_t s_snapshot;
 static uint32_t s_filtered_voltage_mv;
 static uint8_t s_pending_percent_count;
+static uint8_t s_pending_low_voltage_count;
 static uint8_t s_initialized;
 static uint8_t s_filter_valid;
 static volatile uint8_t s_reinit_request;
@@ -222,13 +223,44 @@ static uint8_t Power_ApplyPercentConfirm(uint8_t previous, uint8_t candidate, ui
   return previous;
 }
 
+/**
+ * @brief 根据滤波电压和连续确认次数更新第一电池低压状态。
+ * @param[in] previous 当前已发布的低压状态，1 表示低压。
+ * @param[in] filtered_voltage_mv 已滤波电池电压，单位：mV。
+ * @return 应发布的低压状态，低于 `POWER_LOW_WARNING_MV` 连续确认后置位，
+ *         高于 `POWER_LOW_RECOVER_MV` 连续确认后清除，中间回差区保持原状态。
+ */
+static uint8_t Power_ApplyLowVoltageConfirm(uint8_t previous, uint32_t filtered_voltage_mv)
+{
+  if (previous != 0U) {
+    if (filtered_voltage_mv <= POWER_LOW_RECOVER_MV) {
+      s_pending_low_voltage_count = 0U;
+      return 1U;
+    }
+  } else {
+    if (filtered_voltage_mv >= POWER_LOW_WARNING_MV) {
+      s_pending_low_voltage_count = 0U;
+      return 0U;
+    }
+  }
+
+  if (s_pending_low_voltage_count < POWER_LOW_CONFIRM_COUNT) { s_pending_low_voltage_count++; }
+  if (s_pending_low_voltage_count >= POWER_LOW_CONFIRM_COUNT) {
+    s_pending_low_voltage_count = 0U;
+    return (previous == 0U) ? 1U : 0U;
+  }
+
+  return previous;
+}
+
 Power_Result_t Sensor_Power_Init(void)
 {
   memset(&s_snapshot, 0, sizeof(s_snapshot));
-  s_filtered_voltage_mv   = 0U;
-  s_pending_percent_count = 0U;
-  s_filter_valid          = 0U;
-  s_initialized           = 1U;
+  s_filtered_voltage_mv       = 0U;
+  s_pending_percent_count     = 0U;
+  s_pending_low_voltage_count = 0U;
+  s_filter_valid              = 0U;
+  s_initialized               = 1U;
   return POWER_RESULT_OK;
 }
 
@@ -263,7 +295,7 @@ Power_Result_t Sensor_Power_Service(uint32_t now_ms)
   filtered_voltage_mv       = Power_FilterVoltage(voltage_mv);
   candidate_percent         = Power_CalcPercent(filtered_voltage_mv);
   s_snapshot.percent        = (s_snapshot.rx_sequence == 1U) ? candidate_percent : Power_ApplyPercentConfirm(s_snapshot.percent, candidate_percent, filtered_voltage_mv);
-  s_snapshot.low_voltage    = (voltage_mv < POWER_PERCENT_TABLE_EMPTY_MV) ? 1U : 0U;
+  s_snapshot.low_voltage    = Power_ApplyLowVoltageConfirm(s_snapshot.low_voltage, filtered_voltage_mv);
 
   return POWER_RESULT_OK;
 }

@@ -96,6 +96,21 @@
 #define POWER_PERCENT_TABLE_FULL_MV 12550U
 #endif
 
+#ifndef POWER_LOW_WARNING_MV
+/** @brief 第一电池低压预警进入阈值，滤波电压低于该值并连续确认后置位，单位：mV。 */
+#define POWER_LOW_WARNING_MV 10300U
+#endif
+
+#ifndef POWER_LOW_RECOVER_MV
+/** @brief 第一电池低压预警解除阈值，滤波电压高于该值并连续确认后清除，单位：mV。 */
+#define POWER_LOW_RECOVER_MV 10500U
+#endif
+
+#ifndef POWER_LOW_CONFIRM_COUNT
+/** @brief 第一电池低压预警连续确认次数，默认复用电量档位确认次数。 */
+#define POWER_LOW_CONFIRM_COUNT POWER_PERCENT_CONFIRM_COUNT
+#endif
+
 #ifndef POWER2_PERCENT_TABLE_EMPTY_MV
 /** @brief 第二电池 0% 电量曲线点电压，单位：mV。 */
 #define POWER2_PERCENT_TABLE_EMPTY_MV 10500U

@@ -46,6 +46,14 @@ static uint8_t SnapshotPercent(void)
   return snapshot.percent;
 }
 
+static uint8_t SnapshotLowVoltage(void)
+{
+  Power_Snapshot_t snapshot;
+
+  if (Sensor_Power_CopySnapshot(&snapshot) != POWER_RESULT_OK) { return 255U; }
+  return snapshot.low_voltage;
+}
+
 static int ExpectUint32(const char *label, uint32_t actual, uint32_t expected)
 {
   if (actual != expected) {
@@ -103,28 +111,80 @@ static int TestBatteryPercentClampsAndUsesFivePercentSteps(void)
   return ok;
 }
 
-static int TestBatteryLowVoltageFlagFollowsZeroBand(void)
+static int TestBatteryLowVoltageRequiresConsecutiveWarningSamples(void)
 {
-  static const uint32_t voltages_mv[] = {9800U, POWER_PERCENT_TABLE_EMPTY_MV};
-  static const uint8_t expected_low[] = {1U, 0U};
+  static const uint32_t safe_mv = POWER_LOW_RECOVER_MV + 100U;
+  static const uint32_t low_mv  = POWER_LOW_WARNING_MV - 2500U;
   uint32_t i;
   int ok = 1;
 
-  for (i = 0U; i < (uint32_t)(sizeof(voltages_mv) / sizeof(voltages_mv[0])); ++i) {
-    Power_Snapshot_t snapshot;
-
-    LoadVoltageSequence(&voltages_mv[i], 1U);
-    (void)Sensor_Power_Init();
-    if (Sensor_Power_Service((i + 1U) * 1000U) != POWER_RESULT_OK) {
-      printf("service failed for low voltage sample %lu\n", (unsigned long)i);
-      return 0;
-    }
-    if (Sensor_Power_CopySnapshot(&snapshot) != POWER_RESULT_OK) {
-      printf("snapshot copy failed for low voltage sample %lu\n", (unsigned long)i);
-      return 0;
-    }
-    ok &= ExpectUint32("low voltage flag", snapshot.low_voltage, expected_low[i]);
+  LoadVoltageSequence(&safe_mv, 1U);
+  (void)Sensor_Power_Init();
+  if (Sensor_Power_Service(1000U) != POWER_RESULT_OK) {
+    printf("initial service failed for low voltage confirm test\n");
+    return 0;
   }
+  ok &= ExpectUint32("initial low voltage flag", SnapshotLowVoltage(), 0U);
+
+  LoadVoltageSequence(&low_mv, 1U);
+  for (i = 0U; i < (POWER_LOW_CONFIRM_COUNT - 1U); ++i) {
+    if (Sensor_Power_Service((i + 2U) * 1000U) != POWER_RESULT_OK) {
+      printf("pre-confirm low voltage service failed at sample %lu\n", (unsigned long)i);
+      return 0;
+    }
+    ok &= ExpectUint32("low voltage flag before confirm", SnapshotLowVoltage(), 0U);
+  }
+
+  if (Sensor_Power_Service(12000U) != POWER_RESULT_OK) {
+    printf("confirm low voltage service failed\n");
+    return 0;
+  }
+  ok &= ExpectUint32("low voltage flag after confirm", SnapshotLowVoltage(), 1U);
+
+  return ok;
+}
+
+static int TestBatteryLowVoltageUsesRecoverHysteresis(void)
+{
+  static const uint32_t low_mv      = POWER_LOW_WARNING_MV - 2500U;
+  static const uint32_t boundary_mv = POWER_LOW_WARNING_MV + 100U;
+  static const uint32_t recover_mv  = POWER_LOW_RECOVER_MV + 2000U;
+  uint32_t i;
+  int ok = 1;
+
+  LoadVoltageSequence(&low_mv, 1U);
+  (void)Sensor_Power_Init();
+  for (i = 0U; i < POWER_LOW_CONFIRM_COUNT; ++i) {
+    if (Sensor_Power_Service((i + 1U) * 1000U) != POWER_RESULT_OK) {
+      printf("low voltage setup failed at sample %lu\n", (unsigned long)i);
+      return 0;
+    }
+  }
+  ok &= ExpectUint32("low voltage setup flag", SnapshotLowVoltage(), 1U);
+
+  LoadVoltageSequence(&boundary_mv, 1U);
+  for (i = 0U; i < (POWER_LOW_CONFIRM_COUNT + 2U); ++i) {
+    if (Sensor_Power_Service((i + 20U) * 1000U) != POWER_RESULT_OK) {
+      printf("boundary recovery service failed at sample %lu\n", (unsigned long)i);
+      return 0;
+    }
+    ok &= ExpectUint32("low voltage flag keeps hysteresis", SnapshotLowVoltage(), 1U);
+  }
+
+  LoadVoltageSequence(&recover_mv, 1U);
+  for (i = 0U; i < (POWER_LOW_CONFIRM_COUNT - 1U); ++i) {
+    if (Sensor_Power_Service((i + 40U) * 1000U) != POWER_RESULT_OK) {
+      printf("pre-confirm recovery service failed at sample %lu\n", (unsigned long)i);
+      return 0;
+    }
+    ok &= ExpectUint32("low voltage flag before recover confirm", SnapshotLowVoltage(), 1U);
+  }
+
+  if (Sensor_Power_Service(60000U) != POWER_RESULT_OK) {
+    printf("recover confirm service failed\n");
+    return 0;
+  }
+  ok &= ExpectUint32("low voltage flag after recover confirm", SnapshotLowVoltage(), 0U);
 
   return ok;
 }
@@ -196,7 +256,8 @@ int main(void)
   ok &= TestDividerMatchesMeasuredCalibration();
   ok &= TestPublishedVoltageKeepsMillivoltPrecision();
   ok &= TestBatteryPercentClampsAndUsesFivePercentSteps();
-  ok &= TestBatteryLowVoltageFlagFollowsZeroBand();
+  ok &= TestBatteryLowVoltageRequiresConsecutiveWarningSamples();
+  ok &= TestBatteryLowVoltageUsesRecoverHysteresis();
   ok &= TestBatteryPercentRequiresTenConsecutiveNewSteps();
   ok &= TestBatteryPercentIgnoresBoundaryNoise();
 

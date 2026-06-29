@@ -104,6 +104,8 @@ Storage 使用固定长度静态队列，当前长度为 8。
 
 第二电池用于四个无刷电机供电，电量百分比使用独立动力电池曲线：`10.50V` 为 0%，`12.60V` 为 100%。`low_voltage2` 使用滤波电压和连续确认防抖，低于 `10.80V` 后进入低压预警，高于 `11.00V` 后解除预警。
 
+第一电池用于开发板供电，`low_voltage` 同样使用滤波电压和连续确认防抖，低于 `10.30V` 后进入低压预警，高于 `10.50V` 后解除预警。
+
 缺失数据不会静默写入假值，而是向 `YYMMDD_E.CSV` 记录如 `nav_not_ready`、`baro_not_ready`、`battery_not_ready`、`battery2_not_ready` 等错误事件。第一电池和第二电池低电压分别记录 `low_voltage`、`low_voltage2` 事件。RTC/GNSS 日期尚未有效时，记录写入 `UNSYNC_E.CSV`，行内 `local_date` 和 `local_time` 为 0。
 
 ## 8. 验收要点
