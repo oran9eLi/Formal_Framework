@@ -15,6 +15,8 @@
 
 #include <string.h>
 
+#include "app_message_log.h"
+
 /**
  * @brief 把远端某显示域的字段有效/过期位映射为统一新鲜度返回值。
  *
@@ -220,11 +222,14 @@ Px4Lite_Result_t App_GetDisplayDateTime(App_DateTimeSnapshot_t *out, uint32_t no
 
 Px4Lite_Result_t App_GetDisplayMessageLog(App_DisplayLogSnapshot_t *out, uint32_t now_ms)
 {
-  (void)now_ms;
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
 
-  /* 阶段 A：消息日志尚未上提到业务层(仍由老显示内部生成)。返回 NOT_READY，
-     待第二件事抽取结构化日志后在此 surface(LOCAL 本机日志 / REMOTE 远端同步日志)。 */
+  /* LOCAL：返回本机业务日志缓冲。REMOTE：远端日志同步在 Part 2b 接入，暂 NOT_READY。 */
+  if (App_GetRemoteDisplayMode() != PX4LITE_REMOTE_MODE_REMOTE) {
+    return App_MessageLogCopy(out);
+  }
+
+  (void)now_ms;
   memset(out, 0, sizeof(*out));
   return PX4LITE_NOT_READY;
 }
