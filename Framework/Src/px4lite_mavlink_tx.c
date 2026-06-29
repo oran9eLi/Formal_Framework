@@ -18,6 +18,7 @@
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
 #include "px4lite_remote_tunnel.h"
+#include "px4lite_local_msglog.h"
 
 #if defined(__CC_ARM)
 #define MAVLINK_ALIGNED_FIELDS   0
@@ -45,6 +46,7 @@ typedef enum {
   MAV_TX_SLOT_REMOTE_STATUS,
   MAV_TX_SLOT_STATUSTEXT,
   MAV_TX_SLOT_REMOTE_ALARM,
+  MAV_TX_SLOT_REMOTE_LOG,
   MAV_TX_SLOT_COUNT
 } MavTx_Slot_t;
 
@@ -68,6 +70,8 @@ static uint32_t s_next_statustext_ms;
 static uint32_t s_next_remote_alarm_ms;
 static uint32_t s_last_alarm_sig;
 static uint8_t  s_alarm_ver;
+static uint32_t s_next_remote_log_ms;
+static uint16_t s_last_sent_log_seq;
 static uint8_t s_remote_detail_index;
 static uint8_t s_remote_motor_index;
 static uint8_t s_remote_status_index;
@@ -1015,6 +1019,8 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_next_remote_alarm_ms = now_ms + 600U;
   s_last_alarm_sig      = 0U;
   s_alarm_ver           = 0U;
+  s_next_remote_log_ms  = now_ms + 650U;
+  s_last_sent_log_seq   = 0U;
   s_remote_detail_index = 0U;
   s_remote_motor_index  = 0U;
   s_remote_status_index = 0U;
@@ -1059,6 +1065,38 @@ static Px4Lite_Result_t MavTx_SendRemoteAlarmTable(uint32_t now_ms)
     s_last_alarm_sig       = sig;
     s_next_remote_alarm_ms = now_ms + PX4LITE_MAVLINK_REMOTE_ALARM_PERIOD_MS;
     s_stats.remote_alarm_count++;
+  }
+  return result;
+}
+
+/**
+ * @brief 消息日志：有新条目即增量发，否则按周期发 count=0 的 LOGSEQ 心跳。
+ */
+static Px4Lite_Result_t MavTx_SendRemoteLog(uint32_t now_ms)
+{
+  Px4Lite_LogEntry_t entries[PX4LITE_TUNNEL_LOG_MAX_ENTRIES];
+  uint8_t payload[PX4LITE_TUNNEL_LOG_MAX_BYTES];
+  uint16_t latest = 0U;
+  uint16_t n;
+  uint16_t plen;
+  uint8_t keepalive_due;
+  Px4Lite_Result_t result;
+
+  n = Px4Lite_LocalMsgLogDrainSince(s_last_sent_log_seq, entries, PX4LITE_TUNNEL_LOG_MAX_ENTRIES, &latest);
+  keepalive_due = MavTx_TimeReached(now_ms, s_next_remote_log_ms);
+  if ((n == 0U) && (keepalive_due == 0U)) { return PX4LITE_IDLE; }
+
+  plen = Px4Lite_PackMessageLog(entries, (uint8_t)n, latest, payload, sizeof(payload));
+  if (plen == 0U) { return PX4LITE_IO_ERROR; }
+
+  (void)mavlink_msg_tunnel_pack_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0,
+                                     &s_message, 0U, 0U,
+                                     PX4LITE_TUNNEL_PT_MESSAGE_LOG, (uint8_t)plen, payload);
+  result = MavTx_SendPrepared();
+  if (result == PX4LITE_OK) {
+    if (n > 0U) { s_last_sent_log_seq = entries[n - 1U].sequence; }
+    s_next_remote_log_ms = now_ms + PX4LITE_MAVLINK_REMOTE_LOG_PERIOD_MS;
+    s_stats.remote_log_count++;
   }
   return result;
 }
@@ -1163,6 +1201,12 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
       case MAV_TX_SLOT_REMOTE_ALARM:
         if (PX4LITE_MAVLINK_ENABLE_REMOTE_ALARM == 0U) { continue; }
         result = MavTx_SendRemoteAlarmTable(now_ms);
+        if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
+        continue;
+
+      case MAV_TX_SLOT_REMOTE_LOG:
+        if (PX4LITE_MAVLINK_ENABLE_REMOTE_LOG == 0U) { continue; }
+        result = MavTx_SendRemoteLog(now_ms);
         if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
         continue;
 
