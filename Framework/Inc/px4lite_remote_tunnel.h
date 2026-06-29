@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include "px4lite_types.h"
+#include "px4lite_local_msglog.h"
 
 #define PX4LITE_TUNNEL_PT_ALARM_TABLE 0x8001U /**< TUNNEL payload_type：完整告警表。 */
 
@@ -44,5 +45,30 @@ Px4Lite_Result_t Px4Lite_UnpackAlarmTable(const uint8_t *payload, uint16_t len, 
  * @brief active 行内容签名(source_id+fault_code+severity+active，不含 age_s)，用于 on-change 检测。
  */
 uint32_t Px4Lite_AlarmTableSignature(const Px4Lite_AlarmRecord_t *records, uint8_t record_count);
+
+#define PX4LITE_TUNNEL_PT_MESSAGE_LOG 0x8002U /**< TUNNEL payload_type：消息日志增量/心跳。 */
+
+#define PX4LITE_TUNNEL_LOG_HEADER_BYTES 3U /**< latest_seq(2)+count(1)。 */
+#define PX4LITE_TUNNEL_LOG_ENTRY_BYTES  8U /**< sequence(2)+message_id(2)+time_hhmmss(3)+severity(1)。 */
+#define PX4LITE_TUNNEL_LOG_MAX_ENTRIES  ((uint8_t)PX4LITE_LOCAL_LOG_CAP)
+#define PX4LITE_TUNNEL_LOG_MAX_BYTES \
+  (PX4LITE_TUNNEL_LOG_HEADER_BYTES + (uint16_t)PX4LITE_TUNNEL_LOG_ENTRY_BYTES * PX4LITE_TUNNEL_LOG_MAX_ENTRIES)
+
+/**
+ * @brief 打包日志增量载荷(小端)。count=0 即仅 latest_seq 的 LOGSEQ 心跳。
+ *
+ * @return payload 字节数；out 为空或容量不足表头返回 0；容量不足时截断到整条。
+ */
+uint16_t Px4Lite_PackMessageLog(const Px4Lite_LogEntry_t *entries, uint8_t count, uint16_t latest_seq,
+                                uint8_t *out, uint16_t out_cap);
+
+/**
+ * @brief 解包日志增量载荷。
+ *
+ * @return PX4LITE_OK 成功；PX4LITE_INVALID_PARAM 空指针/长度不足/条目越界。
+ */
+Px4Lite_Result_t Px4Lite_UnpackMessageLog(const uint8_t *payload, uint16_t len,
+                                          Px4Lite_LogEntry_t *out_entries, uint8_t out_cap,
+                                          uint8_t *out_count, uint16_t *out_latest_seq);
 
 #endif /* PX4LITE_REMOTE_TUNNEL_H */

@@ -94,3 +94,70 @@ uint32_t Px4Lite_AlarmTableSignature(const Px4Lite_AlarmRecord_t *records, uint8
   }
   return h;
 }
+
+/* ---- 消息日志增量(payload_type=0x8002) ---- */
+
+static void Tun_PutU24(uint8_t *p, uint32_t v)
+{ p[0] = (uint8_t)(v & 0xFFU); p[1] = (uint8_t)((v >> 8) & 0xFFU); p[2] = (uint8_t)((v >> 16) & 0xFFU); }
+static uint32_t Tun_GetU24(const uint8_t *p)
+{ return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16); }
+
+uint16_t Px4Lite_PackMessageLog(const Px4Lite_LogEntry_t *entries, uint8_t count, uint16_t latest_seq,
+                                uint8_t *out, uint16_t out_cap)
+{
+  uint16_t off = PX4LITE_TUNNEL_LOG_HEADER_BYTES;
+  uint8_t n = 0U;
+  uint8_t i;
+
+  if ((out == 0) || (out_cap < PX4LITE_TUNNEL_LOG_HEADER_BYTES)) { return 0U; }
+
+  for (i = 0U; (i < count) && (entries != 0); ++i) {
+    uint8_t *row;
+    if ((uint16_t)(off + PX4LITE_TUNNEL_LOG_ENTRY_BYTES) > out_cap) { break; }
+    row = &out[off];
+    Tun_PutU16(&row[0], entries[i].sequence);
+    Tun_PutU16(&row[2], entries[i].message_id);
+    Tun_PutU24(&row[4], entries[i].time_hhmmss);
+    row[7] = entries[i].severity;
+    off = (uint16_t)(off + PX4LITE_TUNNEL_LOG_ENTRY_BYTES);
+    n++;
+  }
+
+  Tun_PutU16(&out[0], latest_seq);
+  out[2] = n;
+  return off;
+}
+
+Px4Lite_Result_t Px4Lite_UnpackMessageLog(const uint8_t *payload, uint16_t len,
+                                          Px4Lite_LogEntry_t *out_entries, uint8_t out_cap,
+                                          uint8_t *out_count, uint16_t *out_latest_seq)
+{
+  uint16_t off = PX4LITE_TUNNEL_LOG_HEADER_BYTES;
+  uint8_t stored = 0U;
+  uint8_t n;
+  uint8_t i;
+
+  if ((payload == 0) || (out_entries == 0) || (out_count == 0) || (out_latest_seq == 0)) { return PX4LITE_INVALID_PARAM; }
+  if (len < PX4LITE_TUNNEL_LOG_HEADER_BYTES) { return PX4LITE_INVALID_PARAM; }
+
+  *out_latest_seq = Tun_GetU16(&payload[0]);
+  n = payload[2];
+
+  for (i = 0U; i < n; ++i) {
+    const uint8_t *row;
+    if ((uint16_t)(off + PX4LITE_TUNNEL_LOG_ENTRY_BYTES) > len) { return PX4LITE_INVALID_PARAM; }
+    if (stored < out_cap) {
+      row = &payload[off];
+      memset(&out_entries[stored], 0, sizeof(out_entries[stored]));
+      out_entries[stored].sequence    = Tun_GetU16(&row[0]);
+      out_entries[stored].message_id  = Tun_GetU16(&row[2]);
+      out_entries[stored].time_hhmmss = Tun_GetU24(&row[4]);
+      out_entries[stored].severity    = row[7];
+      stored++;
+    }
+    off = (uint16_t)(off + PX4LITE_TUNNEL_LOG_ENTRY_BYTES);
+  }
+
+  *out_count = stored;
+  return PX4LITE_OK;
+}
