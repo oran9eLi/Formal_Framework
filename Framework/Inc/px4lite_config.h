@@ -146,6 +146,7 @@
 #define PX4LITE_MAVLINK_REMOTE_STATUS_PERIOD_MS 700U
 #define PX4LITE_MAVLINK_REMOTE_ALARM_PERIOD_MS  2000U /**< 告警表保活周期；on-change 不受此限。 */
 #define PX4LITE_MAVLINK_REMOTE_LOG_PERIOD_MS    2000U /**< 日志 LOGSEQ 心跳周期；增量不受此限。 */
+#define PX4LITE_MAVLINK_REMOTE_LOG_FULL_PERIOD_MS 10000U /**< 日志最近 9 条全量重播周期，单位 ms。 */
 #define PX4LITE_MAVLINK_RETRY_PERIOD_MS        50U
 
 #endif
