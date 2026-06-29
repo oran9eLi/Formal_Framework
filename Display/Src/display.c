@@ -6,6 +6,7 @@
 #include "display.h"
 #include "app_data_api.h"
 #include "app_display_model.h"
+#include "app_message_log.h"
 #include "px4lite_faults.h"
 #include "px4lite_platform.h"
 #include "display_gfx.h"
@@ -805,6 +806,9 @@ Display_Result_t Display_Init(void)
     s_hmi_values[i].dirty           = 0U;
   }
 
+  /* 复位业务层消息日志生产者(去抖/档位/环形缓冲)，与显示初始化同生命周期。 */
+  App_MessageLogInit(Px4Lite_PlatformGetMs());
+
 #if DISPLAY_USE_LVGL_BACKEND
   if (Display_LvglInit(Px4Lite_PlatformGetMs()) != DISPLAY_OK) {
     s_display_ready       = 0U;
@@ -1154,245 +1158,6 @@ static void Display_ClearDateTimeSnapshot(void)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, 0U);
 }
 
-/* ---- 消息日志：状态变化检测 ---- */
-
-/* 状态去抖(ms)：某状态需连续稳定这么久才记一条。上电收敛期的瞬时跳变
-   (断开/未通过/有告警)持续不到这个时长即被吞掉；状态一稳定很快就记，
-   不必死等固定时长。想更快可调小，但太小会把上电抖动也记进去。 */
-#define DISPLAY_MSGLOG_DEBOUNCE_MS 1500U
-
-/* 把 now_ms 转成 HHMMSS 编码(开机运行时间占位)。 */
-static uint32_t Display_NowHhmmss(uint32_t now_ms)
-{
-  uint32_t total_s = now_ms / 1000U;
-  uint32_t hh      = (total_s / 3600U) % 100U;
-  uint32_t mm      = (total_s / 60U) % 60U;
-  uint32_t ss      = total_s % 60U;
-
-  return (hh * 10000U) + (mm * 100U) + ss;
-}
-
-/* 每类状态的去抖追踪。 */
-typedef struct {
-  Display_LogMsg_t committed; /* 已记录的状态 */
-  Display_LogMsg_t candidate; /* 当前候选状态 */
-  uint32_t since_ms;          /* 候选状态起始时刻 */
-} Display_LogDebounce_t;
-
-/* 候选状态连续稳定 DEBOUNCE_MS 才提交一条日志，返回是否本次新提交了一条。 */
-static uint8_t Display_LogDebounce(Display_LogDebounce_t *d, Display_LogMsg_t now, uint32_t now_ms, uint32_t t)
-{
-  if (now != d->candidate) {
-    d->candidate = now;
-    d->since_ms  = now_ms;
-  }
-  if ((d->candidate != d->committed) && ((uint32_t)(now_ms - d->since_ms) >= DISPLAY_MSGLOG_DEBOUNCE_MS)) {
-    Display_PagesPushLogMessage(d->candidate, t);
-    d->committed = d->candidate;
-    return 1U;
-  }
-  return 0U;
-}
-
-static void Display_LogCommitInitial(Display_LogDebounce_t *d, Display_LogMsg_t msg, uint32_t now_ms)
-{
-  d->candidate = msg;
-  d->committed = msg;
-  d->since_ms  = now_ms;
-}
-
-/* GPS 三态：在线=正常；已收到模块数据但无定位=无信号；未收到数据/掉线=断开。 */
-static Display_LogMsg_t Display_GpsLogMsg(const Px4Lite_ModuleStatus_t *status)
-{
-  if (status == 0) { return DISPLAY_LOGMSG_GPS_LOST; }
-  if (status->state == PX4LITE_STATE_ONLINE) { return DISPLAY_LOGMSG_GPS_OK; }
-  if ((status->state == PX4LITE_STATE_DEGRADED) && (status->last_rx_ms != 0U)) { return DISPLAY_LOGMSG_GPS_NOSIG; }
-  return DISPLAY_LOGMSG_GPS_LOST;
-}
-
-/* 二态：在线=正常，否则断开。 */
-static Display_LogMsg_t Display_TwoStateLogMsg(Px4Lite_State_t state, Display_LogMsg_t ok_msg, Display_LogMsg_t lost_msg)
-{
-  return (state == PX4LITE_STATE_ONLINE) ? ok_msg : lost_msg;
-}
-
-/* 单模块状态读取，取不到一律按离线处理(与自检灯 fallback 同源)。 */
-static Px4Lite_State_t Display_LogModuleState(Px4Lite_ModuleId_t id)
-{
-  Px4Lite_ModuleStatus_t status;
-
-  if (App_GetModuleStatus(id, &status) == PX4LITE_OK) { return status.state; }
-  return PX4LITE_STATE_OFFLINE;
-}
-
-static Px4Lite_State_t Display_LogModuleStatus(Px4Lite_ModuleId_t id, Px4Lite_ModuleStatus_t *status)
-{
-  if ((status != 0) && (App_GetModuleStatus(id, status) == PX4LITE_OK)) { return status->state; }
-  if (status != 0) {
-    memset(status, 0, sizeof(*status));
-    status->module_id = id;
-    status->state     = PX4LITE_STATE_OFFLINE;
-  }
-  return PX4LITE_STATE_OFFLINE;
-}
-
-/* 自检三态：5 个模块全在线=通过，有掉线/失败=未通过，否则部分通过。 */
-static Display_LogMsg_t Display_SelfCheckLogMsg(const Px4Lite_State_t *states, uint16_t count)
-{
-  uint16_t online = 0U;
-  uint16_t failed = 0U;
-  uint16_t i;
-
-  for (i = 0U; i < count; i++) {
-    if (states[i] == PX4LITE_STATE_ONLINE) {
-      online++;
-    } else if ((states[i] == PX4LITE_STATE_OFFLINE) || (states[i] == PX4LITE_STATE_FAILED)) {
-      failed++;
-    } else {
-      /* STARTING/DEGRADED 计入部分通过 */
-    }
-  }
-
-  if (online == count) { return DISPLAY_LOGMSG_SELFCHECK_OK; }
-  if (failed > 0U) { return DISPLAY_LOGMSG_SELFCHECK_FAIL; }
-  return DISPLAY_LOGMSG_SELFCHECK_PART;
-}
-
-/* 电机电池分档消息(读带滞回的档位)：断开/没电/供电不足/需充电/正常。 */
-static Display_LogMsg_t Display_MotorLogMsg(uint32_t now_ms)
-{
-  (void)now_ms;
-  switch (s_motor_band) {
-    case DISPLAY_MOTOR_BAND_DISCONNECT:
-      return DISPLAY_LOGMSG_MOTOR_DISCONNECT;
-    case DISPLAY_MOTOR_BAND_DEAD:
-      return DISPLAY_LOGMSG_MOTOR_DEAD;
-    case DISPLAY_MOTOR_BAND_LOWPOWER:
-      return DISPLAY_LOGMSG_MOTOR_LOWPOWER;
-    case DISPLAY_MOTOR_BAND_CHARGE:
-      return DISPLAY_LOGMSG_MOTOR_CHARGE;
-    default:
-      return DISPLAY_LOGMSG_MOTOR_OK;
-  }
-}
-
-/* 主控电池(读带滞回的档位)：5~10.5V 提示需充电；未接入或正常返回 COUNT(不追加日志)。 */
-static Display_LogMsg_t Display_MainBatteryLogMsg(uint32_t now_ms)
-{
-  (void)now_ms;
-  return (s_main_band == DISPLAY_MAIN_BAND_CHARGE) ? DISPLAY_LOGMSG_MAIN_CHARGE : DISPLAY_LOGMSG_COUNT;
-}
-
-/*
- * 检测各类状态变化并写入消息日志。数据源与自检灯/告警表同源:
- * 模块状态用 App_GetModuleStatus 逐个取，告警码由调用方传入。
- * 不依赖完整 system 快照，因此 system 快照不可用时日志仍能更新。
- * 电机状态来源电机电池(ADC2)，正常/断开/供电不足三态实时追加。
- */
-static void Display_UpdateMessageLog(uint32_t now_ms, uint16_t highest_fault_code)
-{
-  static uint8_t boot_done              = 0U;
-  static uint8_t boot_tracking          = 0U;
-  static Display_LogDebounce_t db_gps   = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_att   = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_env   = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_comm  = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_store = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_motor = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_main  = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_alarm = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogMsg_t boot_self     = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_gps      = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_att      = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_env      = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_comm     = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_store    = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_alarm    = DISPLAY_LOGMSG_COUNT;
-  static uint32_t boot_since_ms         = 0U;
-  static uint32_t boot_start_t          = 0U;
-  Px4Lite_ModuleStatus_t gnss_status;
-  Px4Lite_State_t states[5];
-  uint32_t t = Display_NowHhmmss(now_ms);
-  Display_LogMsg_t now_self;
-  Display_LogMsg_t now_gps;
-  Display_LogMsg_t now_att;
-  Display_LogMsg_t now_env;
-  Display_LogMsg_t now_comm;
-  Display_LogMsg_t now_store;
-  Display_LogMsg_t now_motor;
-  Display_LogMsg_t now_main;
-  Display_LogMsg_t now_alarm;
-
-  states[0] = Display_LogModuleStatus(PX4LITE_MODULE_GNSS, &gnss_status);
-  states[1] = Display_LogModuleState(PX4LITE_MODULE_IMU);
-  states[2] = Display_LogModuleState(PX4LITE_MODULE_BARO);
-  states[3] = Display_LogModuleState(PX4LITE_MODULE_LORA);
-  states[4] = Display_LogModuleState(PX4LITE_MODULE_STORAGE);
-
-  now_self  = Display_SelfCheckLogMsg(states, 5U);
-  now_gps   = Display_GpsLogMsg(&gnss_status);
-  now_att   = Display_TwoStateLogMsg(states[1], DISPLAY_LOGMSG_ATT_OK, DISPLAY_LOGMSG_ATT_LOST);
-  now_env   = Display_TwoStateLogMsg(states[2], DISPLAY_LOGMSG_ENV_OK, DISPLAY_LOGMSG_ENV_LOST);
-  now_comm  = Display_TwoStateLogMsg(states[3], DISPLAY_LOGMSG_COMM_OK, DISPLAY_LOGMSG_COMM_LOST);
-  now_store = Display_TwoStateLogMsg(states[4], DISPLAY_LOGMSG_STORAGE_OK, DISPLAY_LOGMSG_STORAGE_LOST);
-  now_motor = Display_MotorLogMsg(now_ms);
-  now_main  = Display_MainBatteryLogMsg(now_ms);
-  now_alarm = (highest_fault_code != 0U) ? DISPLAY_LOGMSG_ALARM_ACTIVE : DISPLAY_LOGMSG_ALARM_NONE;
-
-  if (boot_done == 0U) {
-    /* 电机电量收敛慢(滤波+多次确认)，不纳入启动门控，否则会拖慢整批自检日志；
-       提交时直接取电机当前状态，运行阶段再按真实变化追加。 */
-    if ((boot_tracking == 0U) || (now_self != boot_self) || (now_gps != boot_gps) || (now_att != boot_att) || (now_env != boot_env) || (now_comm != boot_comm) || (now_store != boot_store) || (now_alarm != boot_alarm)) {
-      boot_self     = now_self;
-      boot_gps      = now_gps;
-      boot_att      = now_att;
-      boot_env      = now_env;
-      boot_comm     = now_comm;
-      boot_store    = now_store;
-      boot_alarm    = now_alarm;
-      boot_since_ms = now_ms;
-      if (boot_tracking == 0U) {
-        boot_start_t = t;
-        Display_PagesPushLogMessage(DISPLAY_LOGMSG_SYSTEM_START, boot_start_t);
-        boot_tracking = 1U;
-      }
-      return;
-    }
-
-    if ((uint32_t)(now_ms - boot_since_ms) < DISPLAY_MSGLOG_DEBOUNCE_MS) { return; }
-
-    Display_PagesPushLogMessage(boot_self, t);
-    Display_PagesPushLogMessage(boot_gps, t);
-    Display_PagesPushLogMessage(boot_att, t);
-    Display_PagesPushLogMessage(boot_env, t);
-    Display_PagesPushLogMessage(boot_comm, t);
-    Display_PagesPushLogMessage(boot_store, t);
-    Display_PagesPushLogMessage(now_motor, t);
-    Display_PagesPushLogMessage(boot_alarm, t);
-
-    Display_LogCommitInitial(&db_gps, boot_gps, now_ms);
-    Display_LogCommitInitial(&db_att, boot_att, now_ms);
-    Display_LogCommitInitial(&db_env, boot_env, now_ms);
-    Display_LogCommitInitial(&db_comm, boot_comm, now_ms);
-    Display_LogCommitInitial(&db_store, boot_store, now_ms);
-    Display_LogCommitInitial(&db_motor, now_motor, now_ms);
-    Display_LogCommitInitial(&db_main, now_main, now_ms);
-    Display_LogCommitInitial(&db_alarm, boot_alarm, now_ms);
-    boot_done = 1U;
-    return;
-  }
-
-  /* 启动批量日志之后，各类状态按真实变化继续去抖追加。 */
-  (void)Display_LogDebounce(&db_gps, now_gps, now_ms, t);
-  (void)Display_LogDebounce(&db_att, now_att, now_ms, t);
-  (void)Display_LogDebounce(&db_env, now_env, now_ms, t);
-  (void)Display_LogDebounce(&db_comm, now_comm, now_ms, t);
-  (void)Display_LogDebounce(&db_store, now_store, now_ms, t);
-  (void)Display_LogDebounce(&db_motor, now_motor, now_ms, t);
-  (void)Display_LogDebounce(&db_main, now_main, now_ms, t);
-  (void)Display_LogDebounce(&db_alarm, now_alarm, now_ms, t);
-}
-
 /*
  * LoRa 状态灯/链路灯：本机白名单字段。
  *
@@ -1709,7 +1474,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   uint16_t motor_fault = 0U;
   uint16_t main_fault  = 0U;
   uint8_t status_fallback_loaded = 0U;
-  uint16_t msglog_highest        = 0U;
+  static uint16_t s_log_bridged_seq = 0U; /* 已桥接到渲染环的最高日志序号 */
 
   if (Display_EnsureInit() != DISPLAY_OK) { return DISPLAY_NOT_READY; }
 
@@ -1736,7 +1501,6 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   system_result = App_GetDisplaySystem(&system, now_ms);
   if (Display_ShouldLoadSnapshot(system_result, display_mode) != 0U) {
     Display_LoadSystemSnapshot(&system);
-    msglog_highest = system.highest_fault_code;
   } else if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
     Display_ClearSystemSnapshot();
   } else {
@@ -1756,17 +1520,30 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   alarm_result = App_GetDisplayAlarm(&alarm, now_ms);
   if (Display_ShouldLoadSnapshot(alarm_result, display_mode) != 0U) {
     Display_LoadAlarmSnapshot(&alarm, motor_fault, main_fault);
-    msglog_highest = alarm.highest_fault_code;
   } else if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
     Display_ClearAlarmSnapshot();
   }
 
-  /* 消息日志与自检灯/告警表同源(App_GetModuleStatus + 告警码)，
-     无论完整 system 快照是否可用都更新，避免日志一直空白。 */
-  if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
-    Display_PagesClearLogMessages();
-  } else {
-    Display_UpdateMessageLog(now_ms, msglog_highest);
+  /* 日志生产已上提业务层：每周期 tick 本机生产者(供本机显示，及 Part 2b 的 TX)，
+     再按模式从统一接口 App_GetDisplayMessageLog 取日志，把新条目桥接进既有渲染环
+     (渲染路径不变)。LOCAL 取本机业务日志;REMOTE 取远端同步日志(Part 2b 接入)。 */
+  App_MessageLogUpdate(now_ms);
+  {
+    App_DisplayLogSnapshot_t log;
+    if (App_GetDisplayMessageLog(&log, now_ms) == PX4LITE_OK) {
+      uint16_t i;
+      for (i = 0U; i < log.count; ++i) {
+        uint16_t seq = log.entries[i].sequence;
+        if ((seq != 0U) && (seq > s_log_bridged_seq)) {
+          Display_PagesPushLogMessage((Display_LogMsg_t)log.entries[i].message_id, log.entries[i].time_hhmmss);
+          s_log_bridged_seq = seq;
+        }
+      }
+    } else if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
+      /* REMOTE 远端日志未就绪(Part 2b 接入前)：清渲染环，不残留本机历史，下次进 LOCAL 重建。 */
+      Display_PagesClearLogMessages();
+      s_log_bridged_seq = 0U;
+    }
   }
 
   if (Display_ShouldLoadSnapshot(environment_result, display_mode) != 0U) {
