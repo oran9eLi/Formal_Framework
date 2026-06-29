@@ -50,6 +50,21 @@ typedef enum {
   APP_LOGMSG_COUNT
 } App_LogMessageId_t;
 
+#include "app_display_model.h"
+#include "px4lite_types.h"
+
+/** @brief 复位日志缓冲与去抖/档位状态。 */
+void App_MessageLogInit(uint32_t now_ms);
+
+/** @brief 每周期推进：读本机模块/环境/告警，按去抖规则追加日志。 */
+void App_MessageLogUpdate(uint32_t now_ms);
+
+/**
+ * @brief 拷出当前本机日志快照(按时间旧→新)。
+ * @return PX4LITE_OK 有数据；PX4LITE_NOT_READY 无条目；PX4LITE_INVALID_PARAM 空指针。
+ */
+Px4Lite_Result_t App_MessageLogCopy(App_DisplayLogSnapshot_t *out);
+
 #ifdef __cplusplus
 }
 #endif
