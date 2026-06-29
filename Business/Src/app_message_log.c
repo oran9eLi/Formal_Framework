@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "app_data_api.h"
+#include "px4lite_local_msglog.h"
 
 #define APP_MSGLOG_DEBOUNCE_MS 1500U
 
@@ -35,12 +36,7 @@ typedef struct {
   uint32_t since_ms;
 } AppLog_Debounce_t;
 
-/* 环形缓冲(旧→新由 head 推进)。 */
-static App_DisplayLogEntry_t s_ring[APP_DISPLAY_LOG_CAP];
-static uint16_t s_count;
-static uint16_t s_head;       /* 下一个写入位置 */
-static uint16_t s_next_seq;   /* 下一条序号(从 1 起) */
-static uint32_t s_version;
+/* 日志环形缓冲已下沉到 Framework px4lite_local_msglog(单一真值源)，本层只做生成策略。 */
 
 /* band 自算状态 */
 static uint8_t s_motor_band;  /* 初值=断开 */
@@ -64,18 +60,8 @@ static uint32_t AppLog_Hhmmss(uint32_t now_ms)
 
 static void AppLog_Push(App_LogMessageId_t msg, uint32_t now_ms)
 {
-  App_DisplayLogEntry_t *e = &s_ring[s_head];
-  memset(e, 0, sizeof(*e));
-  e->sequence    = (uint16_t)s_next_seq;
-  e->message_id  = (uint16_t)msg;
-  e->time_hhmmss = AppLog_Hhmmss(now_ms);
-  e->active      = (uint8_t)((msg == APP_LOGMSG_ALARM_ACTIVE) ? 1U : 0U);
-
-  s_next_seq++;
-  if (s_next_seq == 0U) { s_next_seq = 1U; } /* 跳过 0，0 留作“无效” */
-  s_head = (uint16_t)((s_head + 1U) % APP_DISPLAY_LOG_CAP);
-  if (s_count < APP_DISPLAY_LOG_CAP) { s_count++; }
-  s_version++;
+  Px4Lite_LocalMsgLogPush((uint16_t)msg, AppLog_Hhmmss(now_ms),
+                          0U, 0U, 0U, (uint8_t)((msg == APP_LOGMSG_ALARM_ACTIVE) ? 1U : 0U));
 }
 
 static uint8_t AppLog_Debounce(AppLog_Debounce_t *d, App_LogMessageId_t now, uint32_t now_ms)
@@ -160,8 +146,7 @@ static App_LogMessageId_t AppLog_MainMsg(void)
 
 void App_MessageLogInit(uint32_t now_ms)
 {
-  memset(s_ring, 0, sizeof(s_ring));
-  s_count = 0U; s_head = 0U; s_next_seq = 1U; s_version = 0U;
+  Px4Lite_LocalMsgLogReset();
   s_motor_band = APP_MOTOR_BAND_DISCONNECT;
   s_main_band  = 2U;
   s_boot_done = 0U; s_boot_tracking = 0U;
@@ -258,19 +243,25 @@ void App_MessageLogUpdate(uint32_t now_ms)
 
 Px4Lite_Result_t App_MessageLogCopy(App_DisplayLogSnapshot_t *out)
 {
-  uint16_t i;
-  uint16_t start;
+  Px4Lite_LogEntry_t tmp[PX4LITE_LOCAL_LOG_CAP];
+  uint16_t n, i, last = 0U;
+  uint32_t ver = 0U;
 
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
   memset(out, 0, sizeof(*out));
-  out->version = s_version;
-  out->count   = s_count;
-  if (s_count == 0U) { return PX4LITE_NOT_READY; }
-
-  /* 环形展开为旧→新：最旧 = (head - count) mod cap。 */
-  start = (uint16_t)((s_head + APP_DISPLAY_LOG_CAP - s_count) % APP_DISPLAY_LOG_CAP);
-  for (i = 0U; i < s_count; ++i) {
-    out->entries[i] = s_ring[(uint16_t)((start + i) % APP_DISPLAY_LOG_CAP)];
+  n = Px4Lite_LocalMsgLogCopy(tmp, PX4LITE_LOCAL_LOG_CAP, &ver, &last);
+  out->version = ver;
+  out->count   = n;
+  if (n == 0U) { return PX4LITE_NOT_READY; }
+  if (n > (uint16_t)APP_DISPLAY_LOG_CAP) { n = (uint16_t)APP_DISPLAY_LOG_CAP; out->count = n; }
+  for (i = 0U; i < n; ++i) {
+    out->entries[i].sequence    = tmp[i].sequence;
+    out->entries[i].message_id  = tmp[i].message_id;
+    out->entries[i].time_hhmmss = tmp[i].time_hhmmss;
+    out->entries[i].fault_code  = tmp[i].fault_code;
+    out->entries[i].severity    = tmp[i].severity;
+    out->entries[i].source_id   = tmp[i].source_id;
+    out->entries[i].active      = tmp[i].active;
   }
   return PX4LITE_OK;
 }
