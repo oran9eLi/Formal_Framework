@@ -26,6 +26,7 @@ virtualFolder:
         - path: Framework/Src/px4lite_mavlink_rx.c
         - path: Framework/Src/px4lite_remote_telemetry.c
         - path: Framework/Src/px4lite_remote_tunnel.c
+        - path: Framework/Src/px4lite_local_msglog.c
         - path: Framework/Src/px4lite_attitude.c
         - path: Framework/Src/px4lite_alarm.c
         - path: Framework/Src/px4lite_time.c
