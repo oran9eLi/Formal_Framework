@@ -33,6 +33,11 @@
 #define HZ_PX_PER_DEG  2.6f
 #define HZ_ROLL_SIGN   1.0f
 #define HZ_PITCH_SIGN  1.0f
+#define HZ_YAW_SIGN    1.0f
+/* 偏航常量偏置（单位：度）。用于补偿 IMU 相对机头的安装转角，或把相对零位
+   对到已知航向。注意：当前 yaw 为陀螺积分相对航向（开机置零、随时间漂移），
+   该偏置只能修正固定安装偏差，无法消除漂移或得到真北——真北需磁力计/GNSS 航向。 */
+#define HZ_YAW_OFFSET_DEG  0.0f
 
 #define DISPLAY_LVGL_WIDTH           800U
 #define DISPLAY_LVGL_HEIGHT          480U
@@ -126,6 +131,7 @@ static lv_obj_t *s_log_alarm_label;
 static lv_obj_t *s_attitude_obj;
 static int16_t s_attitude_roll_deg10;
 static int16_t s_attitude_pitch_deg10;
+static int16_t s_attitude_yaw_deg10;
 static Display_LvglLogRow_t s_log_rows[DISPLAY_LVGL_LOG_ROWS];
 static Display_LvglAlarmRow_t s_alarm_rows[DISPLAY_LVGL_ALARM_ROWS];
 static uint8_t s_log_visible_rows;
@@ -866,11 +872,13 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
     Display_LvglUpdateAlarmRow((uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_ALARM_ROW1_CODE), value);
   }
 
-  if ((id == DISPLAY_HMI_VAR_ROLL) || (id == DISPLAY_HMI_VAR_PITCH)) {
+  if ((id == DISPLAY_HMI_VAR_ROLL) || (id == DISPLAY_HMI_VAR_PITCH) || (id == DISPLAY_HMI_VAR_YAW)) {
     if (id == DISPLAY_HMI_VAR_ROLL) {
       s_attitude_roll_deg10 = (int16_t)value;
-    } else {
+    } else if (id == DISPLAY_HMI_VAR_PITCH) {
       s_attitude_pitch_deg10 = (int16_t)value;
+    } else {
+      s_attitude_yaw_deg10 = (int16_t)value;
     }
     if (s_attitude_obj != 0) {
       lv_obj_invalidate(s_attitude_obj);
@@ -1313,10 +1321,10 @@ static void Display_LvglCreateFlightPage(lv_obj_t *parent)
 /**
  * @brief 在姿态卡片预留容器内绘制地平仪（DRAW_POST 直绘，不占额外帧缓冲）。
  *
- * @details 天/地随横滚旋转、随俯仰平移，叠加俯仰刻度梯、随横滚转动的横滚刻度
- *          与顶部固定 0 位指针，最后画固定飞机符号。横滚/俯仰取自
- *          DISPLAY_HMI_VAR_ROLL / PITCH（int16，单位 0.1°）。方向相反时
- *          调整 HZ_ROLL_SIGN / HZ_PITCH_SIGN。
+ * @details 内圈姿态盘：天/地随横滚旋转、随俯仰平移，叠加俯仰刻度梯与固定飞机符号；
+ *          外圈指南针：随航向旋转（航向朝上），含 10°刻度、N/E/S/W 方位字母与
+ *          顶部固定航向指针。横滚/俯仰/偏航取自 DISPLAY_HMI_VAR_ROLL / PITCH / YAW
+ *          （int16，单位 0.1°）。方向相反时调整 HZ_ROLL_SIGN / HZ_PITCH_SIGN / HZ_YAW_SIGN。
  */
 static void Display_LvglHorizonDrawCb(lv_event_t *e)
 {
@@ -1334,13 +1342,15 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   lv_coord_t h;
   lv_coord_t cx;
   lv_coord_t cy;
-  lv_coord_t r_out;
+  lv_coord_t r_co;
+  lv_coord_t r_ci;
   lv_coord_t r;
   float a;
   float ca;
   float sa;
   float pitch_deg;
   float pitch_px;
+  float yaw_deg;
   float tx;
   float ty;
   float nx;
@@ -1351,7 +1361,6 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   int16_t id_l;
   uint16_t i;
   static const int8_t ladder[] = {-30, -25, -20, -15, -10, -5, 5, 10, 15, 20, 25, 30};
-  static const int8_t bank[]   = {-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60};
 
   if (dc == NULL) {
     return;
@@ -1362,10 +1371,12 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   h = lv_area_get_height(&co);
   cx = (lv_coord_t)(co.x1 + (w / 2));
   cy = (lv_coord_t)(co.y1 + (h / 2));
-  r_out = (lv_coord_t)((LV_MIN(w, h) / 2) - 4);
-  r = (lv_coord_t)(r_out - 12);
+  r_co = (lv_coord_t)((LV_MIN(w, h) / 2) - 3);   /* 罗盘外半径 */
+  r_ci = (lv_coord_t)(r_co - 22);                /* 罗盘内半径 = 姿态盘外缘 */
+  r = (lv_coord_t)(r_ci - 3);                    /* 姿态盘（天/地）半径 */
 
   pitch_deg = ((float)s_attitude_pitch_deg10 / 10.0f) * HZ_PITCH_SIGN;
+  yaw_deg = (((float)s_attitude_yaw_deg10 / 10.0f) * HZ_YAW_SIGN) + HZ_YAW_OFFSET_DEG;
   a = ((float)s_attitude_roll_deg10 / 10.0f) * HZ_ROLL_SIGN * (float)(M_PI / 180.0);
   ca = cosf(a);
   sa = sinf(a);
@@ -1424,8 +1435,8 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     float k = ((float)ladder[i] - pitch_deg) * HZ_PX_PER_DEG;
     float mx = (float)cx + (nx * k);
     float my = (float)cy + (ny * k);
-    float half = ((ladder[i] % 10) == 0) ? 22.0f : 12.0f;
-    float gap = 14.0f;
+    float half = ((ladder[i] % 10) == 0) ? 18.0f : 11.0f;
+    float gap = 12.0f;
 
     ldsc.width = ((ladder[i] % 10) == 0) ? 2 : 1;
     pa.x = (lv_coord_t)(mx - (tx * half));
@@ -1443,8 +1454,8 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   lv_draw_mask_remove_id(id_c);
   lv_draw_mask_free_param(&mcirc);
 
-  /* ===== 固定层（不旋转/不裁剪）===== */
-  /* 圆形外环 */
+  /* ===== 固定层（不裁剪）===== */
+  /* 姿态盘外缘细圈 */
   {
     lv_draw_arc_dsc_t adsc;
     lv_point_t ctr;
@@ -1453,49 +1464,83 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     lv_draw_arc_dsc_init(&adsc);
     adsc.opa = LV_OPA_COVER;
     adsc.color = lv_color_hex(0x33485C);
-    adsc.width = 3;
-    lv_draw_arc(dc, &adsc, &ctr, r_out, 0, 360);
+    adsc.width = 2;
+    lv_draw_arc(dc, &adsc, &ctr, r_ci, 0, 360);
   }
 
-  /* 横滚刻度：随横滚转动，只画上弧 */
+  /* 外圈指南针：底环 + 刻度 + 方位字母，随航向旋转（航向朝上）。
+     字母直立绘制（LVGL 无法旋转字形），随罗盘平移，常见于嵌入式罗盘。 */
   {
-    uint16_t b;
-    lv_draw_line_dsc_init(&ldsc);
-    ldsc.opa = LV_OPA_COVER;
-    ldsc.color = lv_color_hex(0xC8D6E2);
-    for (b = 0U; b < (uint16_t)(sizeof(bank) / sizeof(bank[0])); b++) {
-      float sang = ((float)bank[b] * (float)(M_PI / 180.0)) - a;
-      float cc = cosf(sang);
-      float dxx = sinf(sang);
-      float dyy = -cc;
-      float tlen;
+    lv_draw_arc_dsc_t bandsc;
+    lv_draw_line_dsc_t tdsc;
+    lv_draw_label_dsc_t txtdsc;
+    lv_point_t ctr;
+    static const int16_t card_deg[4] = {0, 90, 180, 270};
+    static const char *const card_txt[4] = {"N", "E", "S", "W"};
+    float yaw_r = yaw_deg * (float)(M_PI / 180.0);
+    float r_mid = ((float)r_co + (float)r_ci) / 2.0f;
+    int16_t d;
+    uint16_t c;
 
-      if (cc < 0.30f) {
-        continue;
-      }
-      tlen = ((bank[b] % 30) == 0) ? 11.0f : 6.0f;
-      ldsc.width = ((bank[b] % 30) == 0) ? 2 : 1;
-      pa.x = (lv_coord_t)((float)cx + (dxx * (float)(r_out - 2)));
-      pa.y = (lv_coord_t)((float)cy + (dyy * (float)(r_out - 2)));
-      pb.x = (lv_coord_t)((float)cx + (dxx * ((float)(r_out - 2) - tlen)));
-      pb.y = (lv_coord_t)((float)cy + (dyy * ((float)(r_out - 2) - tlen)));
-      lv_draw_line(dc, &ldsc, &pa, &pb);
+    ctr.x = cx;
+    ctr.y = cy;
+    lv_draw_arc_dsc_init(&bandsc);
+    bandsc.opa = LV_OPA_COVER;
+    bandsc.color = lv_color_hex(0x101D29);
+    bandsc.width = (lv_coord_t)(r_co - r_ci);
+    lv_draw_arc(dc, &bandsc, &ctr, (lv_coord_t)r_mid, 0, 360);
+
+    lv_draw_line_dsc_init(&tdsc);
+    tdsc.opa = LV_OPA_COVER;
+    tdsc.color = lv_color_hex(0xC8D6E2);
+    for (d = 0; d < 360; d = (int16_t)(d + 10)) {
+      float sang = ((float)d * (float)(M_PI / 180.0)) - yaw_r;
+      float dxx = sinf(sang);
+      float dyy = -cosf(sang);
+      float tlen = ((d % 30) == 0) ? 9.0f : 5.0f;
+
+      tdsc.width = ((d % 90) == 0) ? 2 : 1;
+      pa.x = (lv_coord_t)((float)cx + (dxx * (float)r_co));
+      pa.y = (lv_coord_t)((float)cy + (dyy * (float)r_co));
+      pb.x = (lv_coord_t)((float)cx + (dxx * ((float)r_co - tlen)));
+      pb.y = (lv_coord_t)((float)cy + (dyy * ((float)r_co - tlen)));
+      lv_draw_line(dc, &tdsc, &pa, &pb);
+    }
+
+    lv_draw_label_dsc_init(&txtdsc);
+    txtdsc.opa = LV_OPA_COVER;
+    txtdsc.font = &lv_font_montserrat_14;
+    txtdsc.align = LV_TEXT_ALIGN_CENTER;
+    for (c = 0U; c < 4U; c++) {
+      float sang = ((float)card_deg[c] * (float)(M_PI / 180.0)) - yaw_r;
+      float dxx = sinf(sang);
+      float dyy = -cosf(sang);
+      lv_coord_t lx = (lv_coord_t)((float)cx + (dxx * r_mid));
+      lv_coord_t ly = (lv_coord_t)((float)cy + (dyy * r_mid));
+      lv_area_t la;
+
+      txtdsc.color = (card_deg[c] == 0) ? lv_color_hex(0xF2C14E) : lv_color_hex(0xDCE8F2);
+      la.x1 = (lv_coord_t)(lx - 8);
+      la.y1 = (lv_coord_t)(ly - 9);
+      la.x2 = (lv_coord_t)(lx + 8);
+      la.y2 = (lv_coord_t)(ly + 9);
+      lv_draw_label(dc, &txtdsc, &la, card_txt[c], NULL);
     }
   }
 
-  /* 顶部固定 0 位指针三角 */
+  /* 顶部固定航向指针：指向罗盘当前航向位（航向朝上） */
   {
     lv_draw_rect_dsc_t tdsc;
     lv_point_t tri[3];
     lv_draw_rect_dsc_init(&tdsc);
     tdsc.bg_opa = LV_OPA_COVER;
-    tdsc.bg_color = lv_color_hex(0xFFFFFF);
+    tdsc.bg_color = lv_color_hex(0xF2C14E);
     tri[0].x = cx;
-    tri[0].y = (lv_coord_t)(cy - r_out + 16);
-    tri[1].x = (lv_coord_t)(cx - 7);
-    tri[1].y = (lv_coord_t)(cy - r_out + 3);
-    tri[2].x = (lv_coord_t)(cx + 7);
-    tri[2].y = (lv_coord_t)(cy - r_out + 3);
+    tri[0].y = (lv_coord_t)(cy - r_ci + 1);
+    tri[1].x = (lv_coord_t)(cx - 6);
+    tri[1].y = (lv_coord_t)(cy - r_co + 2);
+    tri[2].x = (lv_coord_t)(cx + 6);
+    tri[2].y = (lv_coord_t)(cy - r_co + 2);
     lv_draw_polygon(dc, &tdsc, tri, 3);
   }
 
