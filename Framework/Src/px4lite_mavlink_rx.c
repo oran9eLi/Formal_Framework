@@ -339,18 +339,14 @@ void Px4Lite_MavlinkRxInit(uint32_t now_ms)
   s_loss_last_ms   = now_ms;
 }
 
-static Px4Lite_Result_t MavlinkRx_HandleTunnel(const mavlink_message_t *msg, uint32_t now_ms)
+static Px4Lite_Result_t MavlinkRx_HandleTunnelAlarm(const mavlink_tunnel_t *tun, const mavlink_message_t *msg, uint32_t now_ms)
 {
-  mavlink_tunnel_t tun;
   Px4Lite_RemoteTelemetrySnapshot_t *snapshot;
   uint8_t count = 0U;
   uint8_t ver = 0U;
 
-  mavlink_msg_tunnel_decode(msg, &tun);
-  if (tun.payload_type != PX4LITE_TUNNEL_PT_ALARM_TABLE) { return PX4LITE_IDLE; }
-
   snapshot = Px4Lite_RemoteTelemetryMutable();
-  if (Px4Lite_UnpackAlarmTable(tun.payload, tun.payload_length, now_ms,
+  if (Px4Lite_UnpackAlarmTable(tun->payload, tun->payload_length, now_ms,
                                snapshot->alarm_records, (uint8_t)PX4LITE_MODULE_COUNT,
                                &count, &ver) != PX4LITE_OK) {
     return PX4LITE_IO_ERROR;
@@ -360,6 +356,55 @@ static Px4Lite_Result_t MavlinkRx_HandleTunnel(const mavlink_message_t *msg, uin
   snapshot->alarm_table_update_ms = now_ms;
   Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_ALARM, now_ms);
   return PX4LITE_OK;
+}
+
+static Px4Lite_Result_t MavlinkRx_HandleTunnelLog(const mavlink_tunnel_t *tun, const mavlink_message_t *msg, uint32_t now_ms)
+{
+  Px4Lite_RemoteTelemetrySnapshot_t *snapshot;
+  Px4Lite_LogEntry_t rx[PX4LITE_TUNNEL_LOG_MAX_ENTRIES];
+  uint8_t count = 0U;
+  uint16_t latest = 0U;
+  uint8_t i;
+
+  if (Px4Lite_UnpackMessageLog(tun->payload, tun->payload_length, rx,
+                               PX4LITE_TUNNEL_LOG_MAX_ENTRIES, &count, &latest) != PX4LITE_OK) {
+    return PX4LITE_IO_ERROR;
+  }
+
+  snapshot = Px4Lite_RemoteTelemetryMutable();
+  /* 去重追加：仅 sequence > log_last_seq 的条目，允许序号空洞。 */
+  for (i = 0U; i < count; ++i) {
+    if (rx[i].sequence > snapshot->log_last_seq) {
+      uint16_t pos;
+      if (snapshot->log_count < (uint16_t)PX4LITE_REMOTE_LOG_CAP) {
+        pos = snapshot->log_count;
+        snapshot->log_count++;
+      } else {
+        /* 满则左移丢最旧。 */
+        uint16_t k;
+        for (k = 1U; k < (uint16_t)PX4LITE_REMOTE_LOG_CAP; ++k) { snapshot->log_entries[k - 1U] = snapshot->log_entries[k]; }
+        pos = (uint16_t)(PX4LITE_REMOTE_LOG_CAP - 1U);
+      }
+      snapshot->log_entries[pos] = rx[i];
+      snapshot->log_last_seq = rx[i].sequence;
+    }
+  }
+  /* count=0 心跳：仅对齐认知，不补数据；仍刷新时间与有效位。 */
+  snapshot->log_update_ms = now_ms;
+  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_LOG, now_ms);
+  return PX4LITE_OK;
+}
+
+static Px4Lite_Result_t MavlinkRx_HandleTunnel(const mavlink_message_t *msg, uint32_t now_ms)
+{
+  mavlink_tunnel_t tun;
+
+  mavlink_msg_tunnel_decode(msg, &tun);
+  switch (tun.payload_type) {
+    case PX4LITE_TUNNEL_PT_ALARM_TABLE: return MavlinkRx_HandleTunnelAlarm(&tun, msg, now_ms);
+    case PX4LITE_TUNNEL_PT_MESSAGE_LOG: return MavlinkRx_HandleTunnelLog(&tun, msg, now_ms);
+    default:                            return PX4LITE_IDLE;
+  }
 }
 
 Px4Lite_Result_t Px4Lite_MavlinkRxHandleFrame(const Px4Lite_LoRaRxFrame_t *frame, uint32_t now_ms)

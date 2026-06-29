@@ -34,8 +34,8 @@ int main(void)
   rows[1].source_id = 6U; rows[1].fault_code = 0x66U; rows[1].severity = (Px4Lite_AlarmSeverity_t)1U; rows[1].active = 1U; rows[1].raised_ms = now - 1000U;
   plen = Px4Lite_PackAlarmTable(rows, 2U, 9U, now, payload, sizeof(payload));
 
-  /* 远端 sysid(2) 必须 != 本机(PX4LITE_MAVLINK_SYSTEM_ID)，否则被自收过滤。 */
-  (void)mavlink_msg_tunnel_pack_chan(2U, 1U, MAVLINK_COMM_0, &msg,
+  /* 远端 sysid 取 本机+1 以保证 != 本机(PX4LITE_MAVLINK_SYSTEM_ID)，否则被自收过滤。 */
+  (void)mavlink_msg_tunnel_pack_chan((uint8_t)(PX4LITE_MAVLINK_SYSTEM_ID + 1U), 1U, MAVLINK_COMM_0, &msg,
                                      PX4LITE_MAVLINK_SYSTEM_ID, 0U,
                                      PX4LITE_TUNNEL_PT_ALARM_TABLE, (uint8_t)plen, payload);
 

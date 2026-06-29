@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include "px4lite_config.h"
 #include "px4lite_types.h"
+#include "px4lite_local_msglog.h"
 
 #ifndef PX4LITE_REMOTE_TELEMETRY_TIMEOUT_MS
 #define PX4LITE_REMOTE_TELEMETRY_TIMEOUT_MS 3000U /**< 远端遥测失联超时，单位：ms。 */
@@ -32,6 +33,9 @@
 #define PX4LITE_REMOTE_VALID_MOTOR       (1UL << 8) /**< 远端电机只读显示字段有效。 */
 #define PX4LITE_REMOTE_VALID_MODULES     (1UL << 9) /**< 远端模块状态灯/系统就绪字段有效。 */
 #define PX4LITE_REMOTE_VALID_ALARM       (1UL << 10) /**< 远端告警摘要字段有效。 */
+#define PX4LITE_REMOTE_VALID_LOG         (1UL << 11) /**< 远端消息日志字段有效。 */
+
+#define PX4LITE_REMOTE_LOG_CAP PX4LITE_LOCAL_LOG_CAP /**< 远端日志容量，与本机一致(9)。 */
 
 #ifndef PX4LITE_REMOTE_TARGET_SYSID_DEFAULT
 #define PX4LITE_REMOTE_TARGET_SYSID_DEFAULT PX4LITE_REMOTE_TARGET_SYSID_ANY /**< 默认手动目标 sysid。 */
@@ -153,6 +157,10 @@ typedef struct {
   uint8_t alarm_table_ver;      /**< 远端告警表内容版本(TUNNEL ver)。 */
   uint16_t reserved_alarm_tbl;  /**< 保留字段，保持结构体对齐。 */
   uint32_t alarm_table_update_ms; /**< 告警表最近更新时间，单位 ms。 */
+  Px4Lite_LogEntry_t log_entries[PX4LITE_REMOTE_LOG_CAP]; /**< 远端日志(旧→新)。 */
+  uint16_t log_count;           /**< 远端日志有效条目数。 */
+  uint16_t log_last_seq;        /**< 已接收的最高日志序号。 */
+  uint32_t log_update_ms;       /**< 日志最近更新时间，单位 ms。 */
   char status_text[32];         /**< 远端状态文本，UTF-8/ASCII，以 0 结尾。 */
 } Px4Lite_RemoteTelemetrySnapshot_t;
 
