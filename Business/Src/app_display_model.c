@@ -222,16 +222,36 @@ Px4Lite_Result_t App_GetDisplayDateTime(App_DateTimeSnapshot_t *out, uint32_t no
 
 Px4Lite_Result_t App_GetDisplayMessageLog(App_DisplayLogSnapshot_t *out, uint32_t now_ms)
 {
+  Px4Lite_RemoteTelemetrySnapshot_t remote;
+  Px4Lite_Result_t fresh;
+  uint16_t i, n;
+
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
 
-  /* LOCAL：返回本机业务日志缓冲。REMOTE：远端日志同步在 Part 2b 接入，暂 NOT_READY。 */
+  /* LOCAL：返回本机业务日志缓冲。 */
   if (App_GetRemoteDisplayMode() != PX4LITE_REMOTE_MODE_REMOTE) {
     return App_MessageLogCopy(out);
   }
 
-  (void)now_ms;
+  /* REMOTE：返回远端同步日志(version 取 log_last_seq)，断链由新鲜度判 STALE 保留旧值。 */
   memset(out, 0, sizeof(*out));
-  return PX4LITE_NOT_READY;
+  fresh = AppDisplay_RemoteDomain(&remote, PX4LITE_REMOTE_VALID_LOG, now_ms);
+  if (fresh == PX4LITE_NOT_READY) { return PX4LITE_NOT_READY; }
+
+  n = remote.log_count;
+  if (n > (uint16_t)APP_DISPLAY_LOG_CAP) { n = (uint16_t)APP_DISPLAY_LOG_CAP; }
+  out->version = remote.log_last_seq;
+  out->count   = n;
+  for (i = 0U; i < n; ++i) {
+    out->entries[i].sequence    = remote.log_entries[i].sequence;
+    out->entries[i].message_id  = remote.log_entries[i].message_id;
+    out->entries[i].time_hhmmss = remote.log_entries[i].time_hhmmss;
+    out->entries[i].fault_code  = remote.log_entries[i].fault_code;
+    out->entries[i].severity    = remote.log_entries[i].severity;
+    out->entries[i].source_id   = remote.log_entries[i].source_id;
+    out->entries[i].active      = remote.log_entries[i].active;
+  }
+  return fresh;
 }
 
 void App_GetDisplayLinkStatus(App_DisplayLinkStatus_t *out, uint32_t now_ms)
