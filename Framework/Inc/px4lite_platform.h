@@ -169,6 +169,15 @@ Px4Lite_Result_t Px4Lite_BatteryInit(void);
 Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement);
 
 /**
+ * @brief 将最新第二电池驱动快照转换为 Framework 电池状态。
+ *
+ * @param[out] measurement 输出缓冲区，不能为 NULL。
+ *
+ * @return 转换结果。
+ */
+Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement);
+
+/**
  * @brief 初始化电机 PWM 输出并强制进入安全脉宽。
  *
  * @return 初始化结果。
@@ -257,6 +266,13 @@ Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
  * @return LoRa 模块状态。
  */
 Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms);
+
+/**
+ * @brief 查询本机 LoRa 硬件是否存在。
+ *
+ * @return 1 表示存在，0 表示尚未初始化或疑似不可用。
+ */
+uint8_t Px4Lite_LoRaIsPresent(void);
 
 /**
  * @brief 复制 LoRa/MAVLink 通信统计。

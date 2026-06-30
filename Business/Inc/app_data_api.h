@@ -144,9 +144,11 @@ typedef struct {
   float temperature_c;          /**< 温度，单位：摄氏度。 */
   float relative_humidity_pct;  /**< 相对湿度，单位：%。 */
   uint32_t voltage_mv;          /**< 电池或输入电压，单位：mV。 */
+  uint32_t voltage2_mv;         /**< 第二电池或外设独立供电电压，单位：mV。 */
   uint8_t battery_percent;      /**< 电量百分比，范围：0 到 100。 */
+  uint8_t battery2_percent;     /**< 第二电池电量百分比，范围：0 到 100。 */
   uint8_t low_voltage;          /**< 低电压标志，1 表示低电压。 */
-  uint16_t reserved;            /**< 保留字段，保持结构体对齐。 */
+  uint8_t low_voltage2;         /**< 第二电池低电压标志，1 表示低电压。 */
 } App_EnvironmentSnapshot_t;
 
 /**
@@ -241,8 +243,11 @@ typedef struct {
   float temperature_c;                                   /**< 温度，单位：摄氏度。 */
   float relative_humidity_pct;                           /**< 相对湿度，单位：%。 */
   uint32_t voltage_mv;                                   /**< 电压，单位：mV。 */
+  uint32_t voltage2_mv;                                  /**< 第二电池或外设独立供电电压，单位：mV。 */
   uint8_t battery_percent;                               /**< 电量百分比，范围 0 到 100。 */
-  uint8_t reserved1[3];                                  /**< 保留字段，保持结构体对齐。 */
+  uint8_t battery2_percent;                              /**< 第二电池电量百分比，范围 0 到 100。 */
+  uint8_t low_voltage;                                   /**< 主电池低电压标志，1 表示低电压。 */
+  uint8_t low_voltage2;                                  /**< 第二电池低电压标志，1 表示低电压。 */
   uint8_t motor_duty_percent[APP_DISPLAY_MOTOR_COUNT];   /**< 每路电机目标油门百分比。 */
   uint32_t lora_tx_count;                                /**< LoRa 本机发送完成帧计数。 */
   uint32_t lora_rx_count;                                /**< LoRa 接收合法帧计数。 */
@@ -420,6 +425,8 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
  * @return 1 表示至少一个远端主要显示快照可用，0 表示无可用远端显示数据。
  */
 uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
+
+uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint16_t *last_seq, uint32_t now_ms);
 
 /**
  * @brief 开启或关闭当前选中远端节点的主数据查看租约。

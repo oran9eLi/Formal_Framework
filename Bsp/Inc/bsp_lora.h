@@ -34,6 +34,14 @@ uint8_t BSP_LoRa_IsReady(void);
  */
 uint8_t BSP_LoRa_IsBusy(void);
 /**
+ * @brief 返回 LoRa 本地 UART 波特率，单位：bit/s。
+ */
+uint32_t BSP_LoRa_GetUartBaud(void);
+/**
+ * @brief 返回 LoRa E22 当前空中速率，单位：bit/s。
+ */
+uint32_t BSP_LoRa_GetAirBps(void);
+/**
  * @brief 从 LoRa 接收环形缓冲复制可用字节。
  */
 uint16_t BSP_LoRa_GetRxData(uint8_t *dst, uint16_t max_len);

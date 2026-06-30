@@ -245,13 +245,6 @@ Display_Result_t Display_SetDataSource(Display_DataSource_t source);
  */
 Display_DataSource_t Display_GetDataSource(void);
 
-/**
- * @brief       在本机和对端数据源之间切换
- * @param       无
- * @retval      Display_Result_t: 切换结果
- */
-Display_Result_t Display_ToggleDataSource(void);
-
 Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16_t throttle_percent);
 
 Display_Result_t Display_RequestMotorEmergencyStop(void);
@@ -305,30 +298,6 @@ Display_Result_t Display_SetHmiPage(Display_HmiPage_t page);
  * @retval      Display_HmiPage_t: 当前页面 ID
  */
 Display_HmiPage_t Display_GetCurrentHmiPage(void);
-
-/**
- * @brief       兼容旧业务触摸轮询入口，LVGL 触摸由输入设备端口处理
- * @param       无
- * @retval      Display_Result_t: 处理结果
- */
-Display_Result_t Display_PollTouch(void);
-
-/**
- * @brief       在屏幕底部显示启动阶段码
- * @param       code: 阶段码
- * @retval      无
- */
-void Display_ShowBootCode(uint8_t code);
-
-/**
- * @brief       兼容旧触摸坐标入口，当前交互由 LVGL widget 回调处理
- * @param       x: 触摸。X 坐标
- * @param       y: 触摸。Y 坐标
- * @param       id: 命中的显示变量 ID 输出指针，可传入空指针
- * @param       value: 更新后的变量值输出指针，可传入空指针
- * @retval      Display_Result_t: 处理结果
- */
-Display_Result_t Display_HandleTouch(uint16_t x, uint16_t y, Display_HmiVariableId_t *id, uint32_t *value);
 
 /**
  * @brief       获取页面配置表数量

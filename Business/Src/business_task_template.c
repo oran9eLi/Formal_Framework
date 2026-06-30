@@ -9,6 +9,7 @@
 
 #include "business_task_template.h"
 
+#include "app_message_log.h"
 #include "business_template_config.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -52,11 +53,13 @@ void Business_SystemTask(void *argument)
 
   /* 启动日志是边沿事件，只写一次。 */
   (void)Business_LogWrite(&startup_record);
+  App_MessageLogInit(startup_record.timestamp_ms);
   last_wake = xTaskGetTickCount();
 
   for (;;) {
     uint32_t now_ms = Business_PlatformGetMs();
 
+    App_MessageLogUpdate(now_ms);
     Business_RegistryPoll(now_ms);
     Business_StatusHeartbeat(BUSINESS_COMPONENT_SYSTEM);
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BUSINESS_SYSTEM_PERIOD_MS));
@@ -108,13 +111,6 @@ void Business_DisplayServiceTask(void *argument)
   for (;;) {
     Business_ServiceResult_t result;
     uint32_t now_ms = Business_PlatformGetMs();
-
-    /*
-     * Input is always serviced first. Display refresh cannot suppress
-     * touch polling merely because one refresh step failed.
-     */
-    result = Business_DisplayPollTouch(now_ms);
-    if ((result != BUSINESS_SERVICE_OK) && (result != BUSINESS_SERVICE_IDLE)) { Business_DisplayReportResult(result, now_ms); }
 
     if (Business_TimeReached(now_ms, next_refresh_ms) != 0U) {
       result = Business_DisplayPrepareSnapshot(now_ms);

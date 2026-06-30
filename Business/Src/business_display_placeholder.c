@@ -14,12 +14,6 @@ static Business_ServiceResult_t Business_DisplayMapResult(Display_Result_t resul
   return BUSINESS_SERVICE_ERROR;
 }
 
-Business_ServiceResult_t Business_DisplayPollTouch(uint32_t now_ms)
-{
-  (void)now_ms;
-  return Business_DisplayMapResult(Display_PollTouch());
-}
-
 uint8_t Business_DisplayNeedsImmediateRefresh(void)
 {
   return Display_HasPendingRedraw();

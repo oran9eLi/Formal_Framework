@@ -172,6 +172,7 @@ static Mpu6050_Result_t Mpu6050_TryReinit(uint32_t now_ms)
   if ((s_next_init_ms != 0U) && ((int32_t)(now_ms - s_next_init_ms) < 0)) { return MPU6050_RESULT_NO_DATA; }
 
   s_reinit_request = 0U;
+  (void)BSP_I2C_Recover();
   result           = Sensor_MPU6050_Init();
   if (result != MPU6050_RESULT_OK) {
     if (s_init_fail_count < 255U) { s_init_fail_count++; }

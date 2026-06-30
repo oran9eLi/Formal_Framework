@@ -80,6 +80,14 @@
 #define BSP_ADC_DIVIDER_NUM 10080U
 #define BSP_ADC_DIVIDER_DEN 1000U
 
+/* 第二块电池电源采样 ADC2：ADC2 IN4，PA4。与电池 1 同规格，分压系数相同。 */
+#define BSP_ADC2_INS         ADC2
+#define BSP_ADC2_CH          ADC_CHANNEL_4
+#define BSP_ADC2_PORT        GPIOA
+#define BSP_ADC2_PIN         GPIO_PIN_4
+#define BSP_ADC2_DIVIDER_NUM 10080U
+#define BSP_ADC2_DIVIDER_DEN 1000U
+
 /* 电机 PWM 输出：TIM3 PA6/PA7、TIM4 PD12/PD13，50 Hz 对应标准 20 ms ESC 周期。 */
 #define BSP_PWM_FREQ        50U
 #define BSP_PWM_MOTOR1_TIM  TIM3
@@ -241,6 +249,7 @@
 #define BSP_LORA_ENABLE         1U
 #define BSP_LORA_UART           USART3
 #define BSP_LORA_UART_BAUD      9600U
+#define BSP_LORA_AIR_BPS        9600U
 #define BSP_LORA_UART_WORD      UART_WORDLENGTH_8B
 #define BSP_LORA_UART_STOP      UART_STOPBITS_1
 #define BSP_LORA_UART_PARITY    UART_PARITY_NONE

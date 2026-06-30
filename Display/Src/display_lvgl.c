@@ -11,7 +11,7 @@
 #include "display_lvgl.h"
 
 #include "app_data_api.h"
-#include "display_log.h"
+#include "app_message_log.h"
 #include "display_logo.h"
 #include "display_lvgl_font_zh.h"
 #include "lv_port_disp.h"
@@ -19,7 +19,16 @@
 #include "lvgl.h"
 #include "px4lite_platform.h"
 
+#include <math.h>
 #include <stdio.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+#define HZ_PX_PER_DEG  2.6f
+#define HZ_ROLL_SIGN   1.0f
+#define HZ_PITCH_SIGN  1.0f
 
 #define DISPLAY_LVGL_WIDTH           800U
 #define DISPLAY_LVGL_HEIGHT          480U
@@ -116,6 +125,9 @@ static lv_obj_t *s_screen;
 static lv_obj_t *s_status_leds[DISPLAY_LVGL_STATUS_COUNT];
 static lv_obj_t *s_motor_pwm_bars[DISPLAY_LVGL_MOTOR_COUNT];
 static lv_obj_t *s_log_alarm_label;
+static lv_obj_t *s_attitude_obj;
+static int16_t s_attitude_roll_deg10;
+static int16_t s_attitude_pitch_deg10;
 static Display_LvglLogRow_t s_log_rows[DISPLAY_LVGL_LOG_ROWS];
 static Display_LvglAlarmRow_t s_alarm_rows[DISPLAY_LVGL_ALARM_ROWS];
 static uint8_t s_log_visible_rows;
@@ -198,15 +210,15 @@ static lv_color_t Display_LvglStatusColor(uint32_t value)
 static const char *Display_LvglStatusText(uint32_t value)
 {
   if (value == 2U) {
-    return "\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
+    return "OK";
   }
   if (value == 1U) {
-    return "\xE8""\xAD""\xA6""\xE5""\x91""\x8A";
+    return "WARN";
   }
   if (value == 0U) {
-    return "\xE6""\x9C""\xAA""\xE5""\xB0""\xB1""\xE7""\xBB""\xAA";
+    return "WAIT";
   }
-  return "\xE6""\x95""\x85""\xE9""\x9A""\x9C";
+  return "FAIL";
 }
 
 /**
@@ -236,6 +248,7 @@ static void Display_LvglClearActiveObjects(void)
     s_alarm_rows[i].reason_label = 0;
   }
   s_log_alarm_label = 0;
+  s_attitude_obj = 0;
   s_log_visible_rows = 0U;
 }
 
@@ -265,6 +278,18 @@ static lv_obj_t *Display_LvglCreateClipLabel(lv_obj_t *parent, const char *text,
 }
 
 /**
+ * @brief Create one centered clipped label.
+ */
+static lv_obj_t *Display_LvglCreateCenteredLabel(lv_obj_t *parent, const char *text, lv_coord_t x, lv_coord_t y, lv_coord_t w, const lv_font_t *font, lv_color_t color)
+{
+  lv_obj_t *label;
+
+  label = Display_LvglCreateClipLabel(parent, text, x, y, w, font, color);
+  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+  return label;
+}
+
+/**
  * @brief Create one card panel with a title.
  */
 static lv_obj_t *Display_LvglCreateCard(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, const char *title)
@@ -282,7 +307,7 @@ static lv_obj_t *Display_LvglCreateCard(lv_obj_t *parent, lv_coord_t x, lv_coord
   lv_obj_set_style_pad_all(card, 0, 0);
   lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-  (void)Display_LvglCreateLabel(card, title, 22, 8, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
+  (void)Display_LvglCreateCenteredLabel(card, title, 4, 10, (lv_coord_t)(w - 8), &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
   return card;
 }
 
@@ -370,7 +395,7 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "ID:%lu", (unsigned long)value);
       break;
     case DISPLAY_HMI_VAR_UPTIME_MS:
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu""\xE7""\xA7""\x92", (unsigned long)(value / 1000U));
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lus", (unsigned long)(value / 1000U));
       break;
     case DISPLAY_HMI_VAR_FLIGHT_TIME_S:
       hh = value / 3600U;
@@ -380,7 +405,7 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
       break;
     case DISPLAY_HMI_VAR_BATTERY_VOLTAGE:
     case DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE:
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu.%02lu""\xE4""\xBC""\x8F", (unsigned long)(value / 100U), (unsigned long)(value % 100U));
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu.%02luV", (unsigned long)(value / 100U), (unsigned long)(value % 100U));
       break;
     case DISPLAY_HMI_VAR_BATTERY_PERCENT:
     case DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT:
@@ -426,22 +451,22 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
           sign      = "";
           abs_value = (uint32_t)raw;
         }
-        (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s%lu.%03lu""\xE7""\xB1""\xB3", sign, (unsigned long)(abs_value / 1000U), (unsigned long)(abs_value % 1000U));
+        (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s%lu.%03lum", sign, (unsigned long)(abs_value / 1000U), (unsigned long)(abs_value % 1000U));
       }
       break;
     case DISPLAY_HMI_VAR_ROLL:
     case DISPLAY_HMI_VAR_PITCH:
     case DISPLAY_HMI_VAR_YAW:
-      Display_LvglFormatSignedFixed1(text, (int16_t)value, "\xE5""\xBA""\xA6");
+      Display_LvglFormatSignedFixed1(text, (int16_t)value, "deg");
       break;
     case DISPLAY_HMI_VAR_TEMPERATURE:
-      Display_LvglFormatSignedFixed1(text, (int16_t)value, "\xE5""\xBA""\xA6");
+      Display_LvglFormatSignedFixed1(text, (int16_t)value, "C");
       break;
     case DISPLAY_HMI_VAR_HUMIDITY:
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu.%lu%%", (unsigned long)(value / 10U), (unsigned long)(value % 10U));
       break;
     case DISPLAY_HMI_VAR_PRESSURE:
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu""\xE5""\xB8""\x95", (unsigned long)value);
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%luPa", (unsigned long)value);
       break;
     case DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE:
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu", (unsigned long)(value & 0xFFFFU));
@@ -532,78 +557,26 @@ static void Display_LvglFormatClock(char *text, uint32_t hhmmss)
   (void)snprintf(text, 9U, "%02lu:%02lu:%02lu", (unsigned long)hh, (unsigned long)mm, (unsigned long)ss);
 }
 
-static const char *Display_LvglLogMessageText(Display_LogMsg_t msg)
+static const char *Display_LvglLogMessageText(App_LogMessageId_t msg)
 {
-  switch (msg) {
-    case DISPLAY_LOGMSG_SYSTEM_START:
-      return "\xE7""\xB3""\xBB""\xE7""\xBB""\x9F""\xE5""\x90""\xAF""\xE5""\x8A""\xA8";
-    case DISPLAY_LOGMSG_IMU_LEVEL_WAIT:
-      return "\xE6""\xB0""\xB4""\xE5""\xB9""\xB3""\xE9""\x9D""\x99""\xE6""\xAD""\xA2""5""\xE7""\xA7""\x92";
-    case DISPLAY_LOGMSG_IMU_LEVEL_OK:
-      return "\xE5""\x9F""\xBA""\xE5""\x87""\x86""\xE5""\xAE""\x8C""\xE6""\x88""\x90";
-    case DISPLAY_LOGMSG_SELFCHECK_OK:
-      return "\xE8""\x87""\xAA""\xE6""\xA3""\x80""\xE9""\x80""\x9A""\xE8""\xBF""\x87";
-    case DISPLAY_LOGMSG_SELFCHECK_PART:
-      return "\xE8""\x87""\xAA""\xE6""\xA3""\x80""\xE9""\x83""\xA8""\xE5""\x88""\x86""\xE9""\x80""\x9A""\xE8""\xBF""\x87";
-    case DISPLAY_LOGMSG_SELFCHECK_FAIL:
-      return "\xE8""\x87""\xAA""\xE6""\xA3""\x80""\xE6""\x9C""\xAA""\xE9""\x80""\x9A""\xE8""\xBF""\x87";
-    case DISPLAY_LOGMSG_GPS_OK:
-      return "\xE5""\xAE""\x9A""\xE4""\xBD""\x8D""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
-    case DISPLAY_LOGMSG_GPS_NOSIG:
-      return "\xE5""\xAE""\x9A""\xE4""\xBD""\x8D""\xE6""\x97""\xA0""\xE4""\xBF""\xA1""\xE5""\x8F""\xB7";
-    case DISPLAY_LOGMSG_GPS_LOST:
-      return "\xE5""\xAE""\x9A""\xE4""\xBD""\x8D""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
-    case DISPLAY_LOGMSG_ATT_OK:
-      return "\xE5""\xA7""\xBF""\xE6""\x80""\x81""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
-    case DISPLAY_LOGMSG_ATT_LOST:
-      return "\xE5""\xA7""\xBF""\xE6""\x80""\x81""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
-    case DISPLAY_LOGMSG_ENV_OK:
-      return "\xE7""\x8E""\xAF""\xE5""\xA2""\x83""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
-    case DISPLAY_LOGMSG_ENV_LOST:
-      return "\xE7""\x8E""\xAF""\xE5""\xA2""\x83""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
-    case DISPLAY_LOGMSG_COMM_OK:
-      return "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
-    case DISPLAY_LOGMSG_COMM_LOST:
-      return "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
-    case DISPLAY_LOGMSG_STORAGE_OK:
-      return "\xE5""\xAD""\x98""\xE5""\x82""\xA8""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
-    case DISPLAY_LOGMSG_STORAGE_LOST:
-      return "\xE5""\xAD""\x98""\xE5""\x82""\xA8""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
-    case DISPLAY_LOGMSG_MOTOR_OK:
-      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
-    case DISPLAY_LOGMSG_MOTOR_DISCONNECT:
-      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
-    case DISPLAY_LOGMSG_MOTOR_LOWPOWER:
-      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xBE""\x9B""\xE7""\x94""\xB5""\xE4""\xB8""\x8D""\xE8""\xB6""\xB3";
-    case DISPLAY_LOGMSG_MOTOR1_FAIL:
-      return "\xE4""\xB8""\x80""\xE5""\x8F""\xB7""\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE6""\x95""\x85""\xE9""\x9A""\x9C";
-    case DISPLAY_LOGMSG_MOTOR2_FAIL:
-      return "\xE4""\xBA""\x8C""\xE5""\x8F""\xB7""\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE6""\x95""\x85""\xE9""\x9A""\x9C";
-    case DISPLAY_LOGMSG_MOTOR3_FAIL:
-      return "\xE4""\xB8""\x89""\xE5""\x8F""\xB7""\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE6""\x95""\x85""\xE9""\x9A""\x9C";
-    case DISPLAY_LOGMSG_MOTOR4_FAIL:
-      return "\xE5""\x9B""\x9B""\xE5""\x8F""\xB7""\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE6""\x95""\x85""\xE9""\x9A""\x9C";
-    case DISPLAY_LOGMSG_MOTOR_ALL_FAIL:
-      return "\xE5""\x85""\xA8""\xE9""\x83""\xA8""\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE6""\x95""\x85""\xE9""\x9A""\x9C";
-    case DISPLAY_LOGMSG_MOTOR_DEAD:
-      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE6""\xB1""\xA0""\xE6""\xB2""\xA1""\xE7""\x94""\xB5";
-    case DISPLAY_LOGMSG_MOTOR_CHARGE:
-      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE6""\xB1""\xA0""\xE9""\x9C""\x80""\xE5""\x85""\x85""\xE7""\x94""\xB5";
-    case DISPLAY_LOGMSG_MAIN_CHARGE:
-      return "\xE4""\xB8""\xBB""\xE6""\x8E""\xA7""\xE7""\x94""\xB5""\xE6""\xB1""\xA0""\xE9""\x9C""\x80""\xE5""\x85""\x85""\xE7""\x94""\xB5";
-    case DISPLAY_LOGMSG_ALARM_ACTIVE:
-      return "\xE6""\x9C""\x89""\xE5""\x91""\x8A""\xE8""\xAD""\xA6";
-    case DISPLAY_LOGMSG_ALARM_NONE:
-      return "\xE6""\x97""\xA0""\xE5""\x91""\x8A""\xE8""\xAD""\xA6";
-    default:
-      return "--";
+  static const char *text[APP_LOGMSG_COUNT] = {
+      "SYS START", "IMU LEVEL 5S", "IMU LEVEL OK", "SELF OK", "SELF PART", "SELF FAIL",
+      "GNSS OK", "GNSS NO FIX", "GNSS LOST", "ATT OK", "ATT LOST", "ENV OK", "ENV LOST",
+      "COMM OK", "COMM LOST", "SD OK", "SD LOST", "MOTOR OK", "MOTOR NO POWER",
+      "MOTOR LOW", "M1 FAIL", "M2 FAIL", "M3 FAIL", "M4 FAIL", "MOTOR FAIL",
+      "MOTOR DEAD", "MOTOR CHARGE", "MAIN CHARGE", "ALARM ON", "ALARM NONE"};
+
+  if ((uint16_t)msg < (uint16_t)APP_LOGMSG_COUNT) {
+    return text[(uint16_t)msg];
   }
+
+  return "--";
 }
 
 static void Display_LvglUpdateMessageLog(void)
 {
-  Display_MessageLogEntry_t entries[DISPLAY_LVGL_LOG_ROWS];
-  Display_MessageLogEntry_t alarm_entry;
+  Px4Lite_LogEntry_t entries[DISPLAY_LVGL_LOG_ROWS];
+  uint16_t alarm_msg = (uint16_t)APP_LOGMSG_ALARM_NONE;
   uint8_t alarm_valid = 0U;
   uint16_t count;
   uint16_t visible_rows;
@@ -617,12 +590,23 @@ static void Display_LvglUpdateMessageLog(void)
   if (visible_rows > DISPLAY_LVGL_LOG_ROWS) {
     visible_rows = DISPLAY_LVGL_LOG_ROWS;
   }
-  count = Display_LogCopyMessages(entries, visible_rows, &alarm_entry, &alarm_valid);
+  if (Display_GetDataSource() == DISPLAY_DATA_SOURCE_REMOTE) {
+    count = App_CopyRemoteMessageLog(entries, visible_rows, 0, s_last_tick_ms);
+  } else {
+    count = App_MessageLogCopy(entries, visible_rows, 0, 0);
+  }
+
+  for (i = 0U; i < count; i++) {
+    if ((entries[i].message_id == (uint16_t)APP_LOGMSG_ALARM_ACTIVE) || (entries[i].message_id == (uint16_t)APP_LOGMSG_ALARM_NONE)) {
+      alarm_msg = entries[i].message_id;
+      alarm_valid = 1U;
+    }
+  }
 
   if (s_log_alarm_label != 0) {
     if (alarm_valid != 0U) {
-      lv_label_set_text_static(s_log_alarm_label, Display_LvglLogMessageText(alarm_entry.msg));
-      lv_obj_set_style_text_color(s_log_alarm_label, (alarm_entry.msg == DISPLAY_LOGMSG_ALARM_ACTIVE) ? lv_color_hex(0xF76D7E) : lv_color_hex(0xA8B7C7), 0);
+      lv_label_set_text_static(s_log_alarm_label, Display_LvglLogMessageText((App_LogMessageId_t)alarm_msg));
+      lv_obj_set_style_text_color(s_log_alarm_label, (alarm_msg == (uint16_t)APP_LOGMSG_ALARM_ACTIVE) ? lv_color_hex(0xF76D7E) : lv_color_hex(0xA8B7C7), 0);
     } else {
       lv_label_set_text_static(s_log_alarm_label, "--");
       lv_obj_set_style_text_color(s_log_alarm_label, lv_color_hex(0x7D91A6), 0);
@@ -636,7 +620,7 @@ static void Display_LvglUpdateMessageLog(void)
     if (i < count) {
       Display_LvglFormatClock(s_log_rows[i].time_text, entries[i].time_hhmmss);
       lv_label_set_text_static(s_log_rows[i].time_label, s_log_rows[i].time_text);
-      lv_label_set_text_static(s_log_rows[i].msg_label, Display_LvglLogMessageText(entries[i].msg));
+      lv_label_set_text_static(s_log_rows[i].msg_label, Display_LvglLogMessageText((App_LogMessageId_t)entries[i].message_id));
     } else {
       s_log_rows[i].time_text[0] = '\0';
       lv_label_set_text_static(s_log_rows[i].time_label, s_log_rows[i].time_text);
@@ -786,6 +770,17 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
     Display_LvglUpdateAlarmRow((uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_ALARM_ROW1_CODE), value);
   }
 
+  if ((id == DISPLAY_HMI_VAR_ROLL) || (id == DISPLAY_HMI_VAR_PITCH)) {
+    if (id == DISPLAY_HMI_VAR_ROLL) {
+      s_attitude_roll_deg10 = (int16_t)value;
+    } else {
+      s_attitude_pitch_deg10 = (int16_t)value;
+    }
+    if (s_attitude_obj != 0) {
+      lv_obj_invalidate(s_attitude_obj);
+    }
+  }
+
   if (s_value_slots[id].label != 0) {
     Display_LvglFormatValue(id, value);
     lv_label_set_text_static(s_value_slots[id].label, s_value_slots[id].text);
@@ -889,13 +884,12 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
 
   (void)Display_LvglCreateLabel(bar, "\xE4""\xB8""\x9C""\xE5""\x88""\x9B""\xE5""\xA4""\xA7""\xE4""\xB8""\xBA", 68, 10, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
   (void)Display_LvglCreateLabel(bar, "CNS\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 68, 36, &display_lvgl_font_zh_16, lv_color_hex(0xB0C8D8));
-  (void)Display_LvglCreateLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 344, 10, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
-  (void)Display_LvglCreateLabel(bar, Display_LvglPageTitle(page), 368, 35, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
-  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xA5""\xE6""\x9C""\x9F", 184, 12, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 224, 10, 84, &lv_font_montserrat_14);
-  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xB6""\xE9""\x97""\xB4", 184, 36, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 224, 34, 84, &lv_font_montserrat_14);
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_VIEW_NODE_ID, 310, 10, 32, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xA5""\xE6""\x9C""\x9F", 174, 12, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 208, 10, 82, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xB6""\xE9""\x97""\xB4", 174, 36, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 208, 36, 82, &lv_font_montserrat_14);
+  (void)Display_LvglCreateCenteredLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 298, 9, 268, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  (void)Display_LvglCreateCenteredLabel(bar, Display_LvglPageTitle(page), 298, 35, 268, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
   /* 本地/远端按钮：放在"系统"左侧，点按切换本地常规页 / 远端通信连接页；
      标题随当前页显示"本地"或"远端"，按在远端页时高亮。 */
   {
@@ -908,7 +902,7 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
     if ((on_hidden != 0U) || (on_remote != 0U)) {
       label_text = "\xE8""\xBF""\x94""\xE5""\x9B""\x9E";
     } else {
-      label_text = "\xE8""\xBF""\x9C""\xE7""\xAB""\xAF";
+      label_text = "\xE6""\x9C""\xAC""\xE5""\x9C""\xB0";
     }
 
     lr_btn = lv_obj_create(bar);
@@ -927,8 +921,12 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
     lv_obj_center(lr_label);
   }
 
-  (void)Display_LvglCreateLabel(bar, "\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 690, 12, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_SYSTEM_STATUS, 728, 10, 58, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE5""\x8F""\x91""\xE9""\x80""\x81", 672, 6, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_LORA_TX_COUNT, 710, 4, 82, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x8E""\xA5""\xE6""\x94""\xB6", 672, 26, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_LORA_RX_COUNT, 710, 24, 82, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE4""\xB8""\xA2""\xE5""\x8C""\x85", 672, 46, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_LORA_LOSS_RATE, 710, 44, 82, &lv_font_montserrat_14);
 }
 
 /**
@@ -1229,9 +1227,230 @@ static void Display_LvglCreateFlightPage(lv_obj_t *parent)
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_FLIGHT_TIME_S, "\xE9""\xA3""\x9E""\xE8""\xA1""\x8C""\xE6""\x97""\xB6""\xE9""\x97""\xB4", 22, 184, 154);
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_TEMPERATURE, "\xE6""\xB8""\xA9""\xE5""\xBA""\xA6", 22, 218, 154);
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_HUMIDITY, "\xE6""\xB9""\xBF""\xE5""\xBA""\xA6", 22, 252, 154);
-  /* 气压：标签"气压"中的"气"(U+6C14)需重新生成字体后才显示，数值"<值>帕"可正常显示。 */
+  /* 气压：标签使用中文字库，数值使用 ASCII 单位，避免英文字库缺字显示方块。 */
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PRESSURE, "\xE6""\xB0""\x94""\xE5""\x8E""\x8B", 22, 286, 154);
   Display_LvglCreateMessageLogPanel(parent, 540, 252);
+}
+
+/**
+ * @brief 在姿态卡片预留容器内绘制地平仪。
+ *
+ * @details
+ * 本函数由 LVGL `LV_EVENT_DRAW_POST` 回调触发，直接使用 LVGL draw API 画天空、
+ * 地面、俯仰梯、横滚刻度和固定飞机符号，不申请 canvas 或大块缓冲。横滚和
+ * 俯仰来自 Display HMI 缓存，单位为 0.1 度。
+ */
+static void Display_LvglHorizonDrawCb(lv_event_t *event)
+{
+  lv_obj_t *obj = lv_event_get_target(event);
+  lv_draw_ctx_t *dc = lv_event_get_draw_ctx(event);
+  lv_area_t co;
+  lv_area_t fill;
+  lv_draw_rect_dsc_t rdsc;
+  lv_draw_line_dsc_t ldsc;
+  lv_draw_mask_radius_param_t mcirc;
+  lv_draw_mask_line_param_t mline;
+  lv_point_t pa;
+  lv_point_t pb;
+  lv_coord_t w;
+  lv_coord_t h;
+  lv_coord_t cx;
+  lv_coord_t cy;
+  lv_coord_t r_out;
+  lv_coord_t r;
+  float a;
+  float ca;
+  float sa;
+  float pitch_deg;
+  float pitch_px;
+  float tx;
+  float ty;
+  float nx;
+  float ny;
+  float ox;
+  float oy;
+  int16_t id_c;
+  int16_t id_l;
+  uint16_t i;
+  static const int8_t ladder[] = {-30, -25, -20, -15, -10, -5, 5, 10, 15, 20, 25, 30};
+  static const int8_t bank[] = {-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60};
+
+  if (dc == 0) {
+    return;
+  }
+
+  lv_obj_get_coords(obj, &co);
+  w = lv_area_get_width(&co);
+  h = lv_area_get_height(&co);
+  cx = (lv_coord_t)(co.x1 + (w / 2));
+  cy = (lv_coord_t)(co.y1 + (h / 2));
+  r_out = (lv_coord_t)((LV_MIN(w, h) / 2) - 4);
+  r = (lv_coord_t)(r_out - 12);
+
+  pitch_deg = ((float)s_attitude_pitch_deg10 / 10.0f) * HZ_PITCH_SIGN;
+  a = ((float)s_attitude_roll_deg10 / 10.0f) * HZ_ROLL_SIGN * (float)(M_PI / 180.0);
+  ca = cosf(a);
+  sa = sinf(a);
+  tx = ca;
+  ty = sa;
+  nx = sa;
+  ny = -ca;
+  pitch_px = pitch_deg * HZ_PX_PER_DEG;
+  ox = (float)cx - (nx * pitch_px);
+  oy = (float)cy - (ny * pitch_px);
+
+  fill.x1 = (lv_coord_t)(cx - r);
+  fill.y1 = (lv_coord_t)(cy - r);
+  fill.x2 = (lv_coord_t)(cx + r);
+  fill.y2 = (lv_coord_t)(cy + r);
+
+  lv_draw_mask_radius_init(&mcirc, &fill, LV_RADIUS_CIRCLE, false);
+  id_c = lv_draw_mask_add(&mcirc, 0);
+
+  lv_draw_rect_dsc_init(&rdsc);
+  rdsc.bg_opa = LV_OPA_COVER;
+  rdsc.bg_color = lv_color_hex(0x2E8BE6);
+  lv_draw_rect(dc, &rdsc, &fill);
+
+  {
+    lv_coord_t p1x = (lv_coord_t)(ox - (tx * (float)(r + 4)));
+    lv_coord_t p1y = (lv_coord_t)(oy - (ty * (float)(r + 4)));
+    lv_coord_t p2x = (lv_coord_t)(ox + (tx * (float)(r + 4)));
+    lv_coord_t p2y = (lv_coord_t)(oy + (ty * (float)(r + 4)));
+    lv_draw_mask_line_points_init(&mline, p1x, p1y, p2x, p2y, LV_DRAW_MASK_LINE_SIDE_BOTTOM);
+    id_l = lv_draw_mask_add(&mline, 0);
+    rdsc.bg_color = lv_color_hex(0x8A5A2B);
+    lv_draw_rect(dc, &rdsc, &fill);
+    lv_draw_mask_remove_id(id_l);
+    lv_draw_mask_free_param(&mline);
+  }
+
+  lv_draw_line_dsc_init(&ldsc);
+  ldsc.opa = LV_OPA_COVER;
+  ldsc.color = lv_color_hex(0xFFFFFF);
+  ldsc.round_start = 1;
+  ldsc.round_end = 1;
+  ldsc.width = 3;
+  pa.x = (lv_coord_t)(ox - (tx * (float)r));
+  pa.y = (lv_coord_t)(oy - (ty * (float)r));
+  pb.x = (lv_coord_t)(ox + (tx * (float)r));
+  pb.y = (lv_coord_t)(oy + (ty * (float)r));
+  lv_draw_line(dc, &ldsc, &pa, &pb);
+
+  for (i = 0U; i < (uint16_t)(sizeof(ladder) / sizeof(ladder[0])); i++) {
+    float k = ((float)ladder[i] - pitch_deg) * HZ_PX_PER_DEG;
+    float mx = (float)cx + (nx * k);
+    float my = (float)cy + (ny * k);
+    float half = ((ladder[i] % 10) == 0) ? 22.0f : 12.0f;
+    float gap = 14.0f;
+
+    ldsc.width = ((ladder[i] % 10) == 0) ? 2 : 1;
+    pa.x = (lv_coord_t)(mx - (tx * half));
+    pa.y = (lv_coord_t)(my - (ty * half));
+    pb.x = (lv_coord_t)(mx - (tx * gap));
+    pb.y = (lv_coord_t)(my - (ty * gap));
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    pa.x = (lv_coord_t)(mx + (tx * gap));
+    pa.y = (lv_coord_t)(my + (ty * gap));
+    pb.x = (lv_coord_t)(mx + (tx * half));
+    pb.y = (lv_coord_t)(my + (ty * half));
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+  }
+
+  lv_draw_mask_remove_id(id_c);
+  lv_draw_mask_free_param(&mcirc);
+
+  {
+    lv_draw_arc_dsc_t adsc;
+    lv_point_t ctr;
+    ctr.x = cx;
+    ctr.y = cy;
+    lv_draw_arc_dsc_init(&adsc);
+    adsc.opa = LV_OPA_COVER;
+    adsc.color = lv_color_hex(0x33485C);
+    adsc.width = 3;
+    lv_draw_arc(dc, &adsc, &ctr, r_out, 0, 360);
+  }
+
+  {
+    uint16_t b;
+    lv_draw_line_dsc_init(&ldsc);
+    ldsc.opa = LV_OPA_COVER;
+    ldsc.color = lv_color_hex(0xC8D6E2);
+    for (b = 0U; b < (uint16_t)(sizeof(bank) / sizeof(bank[0])); b++) {
+      float sang = ((float)bank[b] * (float)(M_PI / 180.0)) - a;
+      float cc = cosf(sang);
+      float dxx = sinf(sang);
+      float dyy = -cc;
+      float tlen;
+
+      if (cc < 0.30f) {
+        continue;
+      }
+      tlen = ((bank[b] % 30) == 0) ? 11.0f : 6.0f;
+      ldsc.width = ((bank[b] % 30) == 0) ? 2 : 1;
+      pa.x = (lv_coord_t)((float)cx + (dxx * (float)(r_out - 2)));
+      pa.y = (lv_coord_t)((float)cy + (dyy * (float)(r_out - 2)));
+      pb.x = (lv_coord_t)((float)cx + (dxx * ((float)(r_out - 2) - tlen)));
+      pb.y = (lv_coord_t)((float)cy + (dyy * ((float)(r_out - 2) - tlen)));
+      lv_draw_line(dc, &ldsc, &pa, &pb);
+    }
+  }
+
+  {
+    lv_draw_rect_dsc_t tdsc;
+    lv_point_t tri[3];
+    lv_draw_rect_dsc_init(&tdsc);
+    tdsc.bg_opa = LV_OPA_COVER;
+    tdsc.bg_color = lv_color_hex(0xFFFFFF);
+    tri[0].x = cx;
+    tri[0].y = (lv_coord_t)(cy - r_out + 16);
+    tri[1].x = (lv_coord_t)(cx - 7);
+    tri[1].y = (lv_coord_t)(cy - r_out + 3);
+    tri[2].x = (lv_coord_t)(cx + 7);
+    tri[2].y = (lv_coord_t)(cy - r_out + 3);
+    lv_draw_polygon(dc, &tdsc, tri, 3);
+  }
+
+  {
+    lv_draw_rect_dsc_t ddsc;
+    lv_area_t da;
+    lv_draw_line_dsc_init(&ldsc);
+    ldsc.opa = LV_OPA_COVER;
+    ldsc.color = lv_color_hex(0xFFC400);
+    ldsc.width = 4;
+    ldsc.round_start = 1;
+    ldsc.round_end = 1;
+    pa.x = (lv_coord_t)(cx - 46);
+    pa.y = cy;
+    pb.x = (lv_coord_t)(cx - 14);
+    pb.y = cy;
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    pa.x = (lv_coord_t)(cx - 14);
+    pa.y = cy;
+    pb.x = (lv_coord_t)(cx - 14);
+    pb.y = (lv_coord_t)(cy + 8);
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    pa.x = (lv_coord_t)(cx + 14);
+    pa.y = cy;
+    pb.x = (lv_coord_t)(cx + 46);
+    pb.y = cy;
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    pa.x = (lv_coord_t)(cx + 14);
+    pa.y = cy;
+    pb.x = (lv_coord_t)(cx + 14);
+    pb.y = (lv_coord_t)(cy + 8);
+    lv_draw_line(dc, &ldsc, &pa, &pb);
+    lv_draw_rect_dsc_init(&ddsc);
+    ddsc.bg_opa = LV_OPA_COVER;
+    ddsc.bg_color = lv_color_hex(0xFFC400);
+    ddsc.radius = LV_RADIUS_CIRCLE;
+    da.x1 = (lv_coord_t)(cx - 3);
+    da.y1 = (lv_coord_t)(cy - 3);
+    da.x2 = (lv_coord_t)(cx + 3);
+    da.y2 = (lv_coord_t)(cy + 3);
+    lv_draw_rect(dc, &ddsc, &da);
+  }
 }
 
 /**
@@ -1240,15 +1459,27 @@ static void Display_LvglCreateFlightPage(lv_obj_t *parent)
 static void Display_LvglCreateAircraftPage(lv_obj_t *parent)
 {
   lv_obj_t *card;
+  lv_obj_t *horizon;
 
   Display_LvglCreateSystemColumn(parent);
   card = Display_LvglCreateCard(parent, 264, DISPLAY_LVGL_BODY_Y, 268, DISPLAY_LVGL_BODY_H, "\xE9""\xA3""\x9E""\xE6""\x9C""\xBA""\xE5""\xA7""\xBF""\xE6""\x80""\x81");
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_ROLL, "\xE6""\xA8""\xAA""\xE6""\xBB""\x9A", 24, 58, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PITCH, "\xE4""\xBF""\xAF""\xE4""\xBB""\xB0", 24, 100, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_YAW, "\xE5""\x81""\x8F""\xE8""\x88""\xAA", 24, 142, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_TX_COUNT, "\xE5""\x8F""\x91""\xE9""\x80""\x81""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 24, 194, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_RX_COUNT, "\xE6""\x8E""\xA5""\xE6""\x94""\xB6""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 24, 236, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_LOSS_RATE, "\xE4""\xB8""\xA2""\xE5""\x8C""\x85""\xE7""\x8E""\x87", 24, 278, 142);
+
+  horizon = lv_obj_create(card);
+  lv_obj_set_size(horizon, 252, 212);
+  lv_obj_set_pos(horizon, 8, 36);
+  lv_obj_set_style_radius(horizon, 4, 0);
+  lv_obj_set_style_bg_color(horizon, lv_color_hex(0x0C1622), 0);
+  lv_obj_set_style_bg_opa(horizon, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(horizon, 1, 0);
+  lv_obj_set_style_border_color(horizon, lv_color_hex(0x304357), 0);
+  lv_obj_set_style_pad_all(horizon, 0, 0);
+  lv_obj_clear_flag(horizon, LV_OBJ_FLAG_SCROLLABLE);
+  s_attitude_obj = horizon;
+  lv_obj_add_event_cb(horizon, Display_LvglHorizonDrawCb, LV_EVENT_DRAW_POST, 0);
+
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_ROLL, "\xE6""\xA8""\xAA""\xE6""\xBB""\x9A", 24, 256, 142);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PITCH, "\xE4""\xBF""\xAF""\xE4""\xBB""\xB0", 24, 280, 142);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_YAW, "\xE5""\x81""\x8F""\xE8""\x88""\xAA", 24, 304, 142);
   Display_LvglCreateMessageLogPanel(parent, 540, 252);
 }
 
@@ -1303,7 +1534,11 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
     lv_obj_set_style_width(s_motor_pwm_bars[i], 18, LV_PART_KNOB);
     lv_obj_set_style_height(s_motor_pwm_bars[i], 18, LV_PART_KNOB);
     lv_obj_add_event_cb(s_motor_pwm_bars[i], Display_LvglMotorSliderEventCb, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)id);
-    Display_LvglCreateValueLabel(card, id, (lv_coord_t)(x - 16), 238, 64, &lv_font_montserrat_14);
+    Display_LvglCreateValueLabel(card, id, (lv_coord_t)(x - 22), 238, 76, &lv_font_montserrat_14);
+    if (s_value_slots[id].label != 0) {
+      lv_obj_set_style_text_font(s_value_slots[id].label, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_align(s_value_slots[id].label, LV_TEXT_ALIGN_CENTER, 0);
+    }
   }
 
   estop = lv_obj_create(card);

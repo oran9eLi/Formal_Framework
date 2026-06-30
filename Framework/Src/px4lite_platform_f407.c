@@ -22,6 +22,7 @@
 #include "sensor_gnss.h"
 #include "sensor_mpu6050.h"
 #include "sensor_power.h"
+#include "sensor_power2.h"
 #include "stm32f4xx_hal.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -435,12 +436,14 @@ Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement)
 
 Px4Lite_Result_t Px4Lite_BatteryInit(void)
 {
-  return (Sensor_Power_Init() == POWER_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  if (Sensor_Power_Init() != POWER_RESULT_OK) { return PX4LITE_IO_ERROR; }
+  return (Sensor_Power2_Init() == POWER_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
 }
 
 void Px4Lite_BatteryRequestReinit(void)
 {
   Sensor_Power_RequestReinit();
+  Sensor_Power2_RequestReinit();
 }
 
 Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement)
@@ -457,6 +460,34 @@ Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement)
   if (result != POWER_RESULT_OK) { return (result == POWER_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
 
   result = Sensor_Power_CopySnapshot(&snapshot);
+  if (result != POWER_RESULT_OK) { return (result == POWER_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
+
+  if ((snapshot.rx_sequence == 0U) || (snapshot.rx_sequence == last_rx_sequence)) { return PX4LITE_IDLE; }
+
+  memset(measurement, 0, sizeof(*measurement));
+  measurement->header.sample_time_ms = snapshot.sample_time_ms;
+  measurement->voltage_mv            = (uint32_t)((snapshot.voltage_v * 1000.0f) + 0.5f);
+  measurement->percent               = snapshot.percent;
+  measurement->low_voltage           = snapshot.low_voltage;
+
+  last_rx_sequence = snapshot.rx_sequence;
+  return PX4LITE_OK;
+}
+
+Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement)
+{
+  static uint32_t last_rx_sequence;
+  Power_Snapshot_t snapshot;
+  Power_Result_t result;
+  uint32_t now_ms;
+
+  if (measurement == 0) { return PX4LITE_INVALID_PARAM; }
+
+  now_ms = Px4Lite_PlatformGetMs();
+  result = Sensor_Power2_Service(now_ms);
+  if (result != POWER_RESULT_OK) { return (result == POWER_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
+
+  result = Sensor_Power2_CopySnapshot(&snapshot);
   if (result != POWER_RESULT_OK) { return (result == POWER_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
 
   if ((snapshot.rx_sequence == 0U) || (snapshot.rx_sequence == last_rx_sequence)) { return PX4LITE_IDLE; }
@@ -536,6 +567,11 @@ Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms)
     default:
       return PX4LITE_STATE_STARTING;
   }
+}
+
+uint8_t Px4Lite_LoRaIsPresent(void)
+{
+  return Lora_E22_IsPresent();
 }
 
 void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out)

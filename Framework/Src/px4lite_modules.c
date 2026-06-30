@@ -14,6 +14,7 @@
 #include "px4lite_config.h"
 #include "px4lite_faults.h"
 #include "px4lite_platform.h"
+#include "px4lite_remote_telemetry.h"
 #include "px4lite_recovery.h"
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
@@ -53,6 +54,7 @@ static uint32_t s_gnss_sequence;
 static uint32_t s_imu_sequence;
 static uint32_t s_baro_sequence;
 static uint32_t s_battery_sequence;
+static uint32_t s_battery2_sequence;
 static uint32_t s_navigation_sequence;
 static uint32_t s_health_sequence;
 static uint32_t s_start_ms;
@@ -497,6 +499,7 @@ Px4Lite_Result_t Px4Lite_ModulesInit(void)
   s_imu_sequence         = 0U;
   s_baro_sequence        = 0U;
   s_battery_sequence     = 0U;
+  s_battery2_sequence    = 0U;
   s_navigation_sequence  = 0U;
   s_health_sequence      = 0U;
   s_last_imu_work_ms     = 0U;
@@ -738,11 +741,15 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 #if PX4LITE_ENABLE_BATTERY
   if ((s_last_battery_work_ms == 0U) || ((uint32_t)(now_ms - s_last_battery_work_ms) >= PX4LITE_BATTERY_WORK_PERIOD_MS)) {
     Px4Lite_BatteryStatus_t battery;
+    Px4Lite_BatteryStatus_t battery2;
     Px4Lite_Result_t result;
+    Px4Lite_Result_t result2;
 
     s_last_battery_work_ms = now_ms;
     memset(&battery, 0, sizeof(battery));
+    memset(&battery2, 0, sizeof(battery2));
     result = Px4Lite_BatteryRead(&battery);
+    result2 = Px4Lite_Battery2Read(&battery2);
     if (result == PX4LITE_OK) {
       battery.header.sample_time_ms  = (battery.header.sample_time_ms != 0U) ? battery.header.sample_time_ms : now_ms;
       battery.header.publish_time_ms = now_ms;
@@ -764,6 +771,27 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 
       Px4Lite_SetStatus(PX4LITE_MODULE_BATTERY, (battery.low_voltage != 0U) ? PX4LITE_STATE_DEGRADED : PX4LITE_STATE_ONLINE, (battery.low_voltage != 0U) ? PX4LITE_FAULT_SENSOR_INVALID : PX4LITE_FAULT_NONE, now_ms);
     } else if (result == PX4LITE_IO_ERROR) {
+      Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms);
+    }
+
+    if (result2 == PX4LITE_OK) {
+      battery2.header.sample_time_ms  = (battery2.header.sample_time_ms != 0U) ? battery2.header.sample_time_ms : now_ms;
+      battery2.header.publish_time_ms = now_ms;
+      battery2.header.sequence        = ++s_battery2_sequence;
+      battery2.header.device_id       = (uint16_t)(PX4LITE_MODULE_BATTERY + 0x0100U);
+      battery2.header.valid           = 1U;
+      battery2.header.quality         = (battery2.low_voltage != 0U) ? 50U : 100U;
+      battery2.header.flags           = PX4LITE_DATA_VALID;
+      if (battery2.low_voltage != 0U) { battery2.header.flags |= PX4LITE_DATA_DEGRADED; }
+      Px4Lite_PublishBattery2(&battery2);
+
+      taskENTER_CRITICAL();
+      if (battery2.header.sample_time_ms > s_status[PX4LITE_MODULE_BATTERY].last_rx_ms) { s_status[PX4LITE_MODULE_BATTERY].last_rx_ms = battery2.header.sample_time_ms; }
+      if (battery2.header.sample_time_ms > s_status[PX4LITE_MODULE_BATTERY].last_valid_ms) { s_status[PX4LITE_MODULE_BATTERY].last_valid_ms = battery2.header.sample_time_ms; }
+      taskEXIT_CRITICAL();
+
+      if (battery2.low_voltage != 0U) { Px4Lite_SetStatus(PX4LITE_MODULE_BATTERY, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, now_ms); }
+    } else if (result2 == PX4LITE_IO_ERROR) {
       Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms);
     }
   }
@@ -1125,6 +1153,7 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
   uint32_t now_ms         = Px4Lite_PlatformGetMs();
   Px4Lite_Result_t result = Px4Lite_LoRaInit();
 
+  Px4Lite_RemoteTelemetryInit(now_ms);
   if (result == PX4LITE_OK) { result = Px4Lite_MavlinkTxInit(now_ms); }
 
   Px4Lite_SetStatus(PX4LITE_MODULE_LORA, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);

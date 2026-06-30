@@ -208,6 +208,7 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
 {
   Px4Lite_SensorBaro_t baro;
   Px4Lite_BatteryStatus_t battery;
+  Px4Lite_BatteryStatus_t battery2;
   uint8_t copied = 0U;
 
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
@@ -227,6 +228,14 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
     out->battery_percent = battery.percent;
     out->low_voltage     = battery.low_voltage;
     copied               = 1U;
+  }
+
+  if ((Px4Lite_CopyBattery2(&battery2) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery2.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
+    if (copied == 0U) { out->header = battery2.header; }
+    out->voltage2_mv      = battery2.voltage_mv;
+    out->battery2_percent = battery2.percent;
+    out->low_voltage2     = battery2.low_voltage;
+    copied                = 1U;
   }
 
   return (copied != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
@@ -521,7 +530,11 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
     out->temperature_c         = s_display_environment_scratch.temperature_c;
     out->relative_humidity_pct = s_display_environment_scratch.relative_humidity_pct;
     out->voltage_mv            = s_display_environment_scratch.voltage_mv;
+    out->voltage2_mv           = s_display_environment_scratch.voltage2_mv;
     out->battery_percent       = s_display_environment_scratch.battery_percent;
+    out->battery2_percent      = s_display_environment_scratch.battery2_percent;
+    out->low_voltage           = s_display_environment_scratch.low_voltage;
+    out->low_voltage2          = s_display_environment_scratch.low_voltage2;
   }
 
   if (App_CopyMotor(&s_display_motor_scratch, now_ms) == PX4LITE_OK) {
@@ -541,7 +554,12 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
   /* 姿态显示需要同时满足数据位有效和 IMU 模块状态可用。 */
   if (App_ViewStateHasUsableData(out->imu.state) == 0U) { out->attitude_valid = 0U; }
   if (App_ViewStateHasUsableData(out->baro.state) == 0U) { out->environment_valid = 0U; }
-  if (App_ViewStateHasUsableData(out->battery.state) == 0U) { out->battery_percent = 0U; out->voltage_mv = 0U; }
+  if (App_ViewStateHasUsableData(out->battery.state) == 0U) {
+    out->battery_percent = 0U;
+    out->battery2_percent = 0U;
+    out->voltage_mv = 0U;
+    out->voltage2_mv = 0U;
+  }
 
   out->any_valid = ((out->navigation_valid != 0U) || (out->system_valid != 0U) || (out->environment_valid != 0U) || (module_loaded != 0U)) ? 1U : 0U;
   return out->any_valid;
@@ -611,20 +629,40 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_BATTERY) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_BATTERY) == 0U)) {
     out->environment_valid = 1U;
     out->voltage_mv        = s_display_remote_scratch.voltage_mv;
+    out->voltage2_mv       = s_display_remote_scratch.voltage2_mv;
     out->battery_percent   = s_display_remote_scratch.battery_percent;
+    out->battery2_percent  = s_display_remote_scratch.battery2_percent;
+    out->low_voltage       = s_display_remote_scratch.low_voltage;
+    out->low_voltage2      = s_display_remote_scratch.low_voltage2;
   }
 
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ALARM) == 0U)) {
+    uint8_t i;
+
     out->alarm_valid               = 1U;
     out->highest_fault_code        = s_display_remote_scratch.highest_fault_code;
     out->highest_source_id         = s_display_remote_scratch.highest_source_id;
-    out->alarm_active_count        = (s_display_remote_scratch.highest_fault_code != 0U) ? 1U : 0U;
+    out->warning_fault_mask        = s_display_remote_scratch.alarm_active_mask;
+    out->alarm_active_count        = s_display_remote_scratch.alarm_record_count;
     out->alarm_highest_fault_code  = s_display_remote_scratch.highest_fault_code;
-    out->alarms[0].source_id       = s_display_remote_scratch.highest_source_id;
-    out->alarms[0].fault_code      = s_display_remote_scratch.highest_fault_code;
-    out->alarms[0].severity        = s_display_remote_scratch.highest_severity;
-    out->alarms[0].active          = (s_display_remote_scratch.highest_fault_code != 0U) ? 1U : 0U;
-    out->alarms[0].updated_ms      = s_display_remote_scratch.header.sample_time_ms;
+    for (i = 0U; (i < s_display_remote_scratch.alarm_record_count) && (i < APP_DISPLAY_ALARM_MAX) && (i < PX4LITE_REMOTE_ALARM_RECORD_MAX); i++) {
+      out->alarms[i].source_id  = s_display_remote_scratch.alarm_records[i].source_id;
+      out->alarms[i].fault_code = s_display_remote_scratch.alarm_records[i].fault_code;
+      out->alarms[i].severity   = (uint8_t)s_display_remote_scratch.alarm_records[i].severity;
+      out->alarms[i].active     = s_display_remote_scratch.alarm_records[i].active;
+      out->alarms[i].raised_ms  = s_display_remote_scratch.alarm_records[i].raised_ms;
+      out->alarms[i].updated_ms = s_display_remote_scratch.alarm_records[i].updated_ms;
+      out->alarms[i].detail     = s_display_remote_scratch.alarm_records[i].detail;
+    }
+  }
+
+  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MOTOR) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_MOTOR) == 0U)) {
+    uint8_t i;
+
+    out->motor_valid = 1U;
+    for (i = 0U; (i < APP_DISPLAY_MOTOR_COUNT) && (i < PX4LITE_MOTOR_COUNT); i++) {
+      out->motor_duty_percent[i] = s_display_remote_scratch.motor_duty_percent[i];
+    }
   }
 
   App_GetCommStats(&comm);
@@ -636,10 +674,39 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
 
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->imu.state) == 0U)) { out->attitude_valid = 0U; }
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->baro.state) == 0U)) { out->environment_valid = 0U; }
-  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->battery.state) == 0U)) { out->battery_percent = 0U; out->voltage_mv = 0U; }
+  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->battery.state) == 0U)) {
+    out->battery_percent = 0U;
+    out->battery2_percent = 0U;
+    out->voltage_mv = 0U;
+    out->voltage2_mv = 0U;
+  }
 
   out->any_valid = ((out->navigation_valid != 0U) || (out->attitude_valid != 0U) || (out->system_valid != 0U) || (out->environment_valid != 0U) || (out->alarm_valid != 0U) || ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U)) ? 1U : 0U;
   return out->any_valid;
+}
+
+uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint16_t *last_seq, uint32_t now_ms)
+{
+  uint16_t count;
+  uint16_t i;
+
+  if ((entries == 0) || (capacity == 0U)) { return 0U; }
+  if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
+  if (Px4Lite_IsFresh(&s_display_remote_scratch.header, now_ms, APP_REMOTE_MAX_AGE_MS) == 0U) { return 0U; }
+  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) ||
+      ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_LOG) != 0U)) {
+    return 0U;
+  }
+
+  count = s_display_remote_scratch.log_count;
+  if (count > PX4LITE_REMOTE_LOG_ENTRY_MAX) { count = PX4LITE_REMOTE_LOG_ENTRY_MAX; }
+  if (count > capacity) { count = capacity; }
+
+  for (i = 0U; i < count; i++) {
+    entries[i] = s_display_remote_scratch.log_entries[i];
+  }
+  if (last_seq != 0) { *last_seq = s_display_remote_scratch.log_latest_seq; }
+  return count;
 }
 
 uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms)

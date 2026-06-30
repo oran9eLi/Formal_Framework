@@ -14,7 +14,10 @@
 
 #include "px4lite_config.h"
 #include "px4lite_alarm.h"
+#include "px4lite_local_msglog.h"
 #include "px4lite_platform.h"
+#include "px4lite_remote_telemetry.h"
+#include "px4lite_remote_tunnel.h"
 #include "px4lite_topics.h"
 
 #if defined(__CC_ARM)
@@ -70,6 +73,8 @@ typedef struct {
   float param3;
   float param4;
   uint32_t next_try_ms;
+  uint8_t awaiting_ack;
+  uint8_t retry_count;
 } MavTx_PendingCommand_t;
 
 typedef struct {
@@ -94,7 +99,13 @@ static uint32_t s_next_sys_status_ms;
 static uint32_t s_next_module_state_ms;
 static uint32_t s_next_battery_ms;
 static uint32_t s_next_pressure_ms;
+static uint32_t s_next_env_humidity_ms;
 static uint32_t s_next_statustext_ms;
+static uint32_t s_next_remote_status_ms;
+static uint32_t s_next_remote_motor_ms;
+static uint32_t s_next_remote_alarm_ms;
+static uint32_t s_next_remote_log_ms;
+static uint32_t s_next_remote_log_full_ms;
 static uint8_t s_catalog_index;
 static uint8_t s_module_state_part;
 static uint8_t s_remote_view_enabled;
@@ -111,6 +122,14 @@ static uint32_t s_stream_until_ms;
 static uint32_t s_stream_mask;
 static MavTx_PendingCommand_t s_pending_command;
 static MavTx_PendingAck_t s_pending_ack;
+static uint8_t s_tunnel_payload[MAVLINK_MSG_TUNNEL_FIELD_PAYLOAD_LEN];
+static Px4Lite_AlarmSnapshot_t s_alarm_tx_snapshot;
+static Px4Lite_LogEntry_t s_log_tx_entries[PX4LITE_LOCAL_LOG_CAP];
+static uint16_t s_log_tx_after_seq;
+static Px4Lite_MotorOutputs_t s_remote_motor_current;
+static Px4Lite_MotorOutputs_t s_remote_motor_last;
+static uint8_t s_remote_motor_last_valid;
+static uint8_t s_remote_motor_urgent_remaining;
 
 #define MAV_TX_DEG100_TO_RAD 0.0001745329252f
 
@@ -195,6 +214,8 @@ static void MavTx_QueueStreamCommand(uint8_t target_node_id, uint8_t action, uin
   s_pending_command.param3           = (float)stream_mask;
   s_pending_command.param4           = (float)lease_ms;
   s_pending_command.next_try_ms      = now_ms;
+  s_pending_command.awaiting_ack     = 0U;
+  s_pending_command.retry_count      = 0U;
 }
 
 #if (PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_PRODUCT) && (PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER) && (PX4LITE_MAVLINK_NODE_POLL_ENABLE != 0U)
@@ -210,6 +231,8 @@ static void MavTx_QueueNodePollCommand(uint8_t target_node_id, uint32_t now_ms)
   s_pending_command.param3           = 0.0f;
   s_pending_command.param4           = 0.0f;
   s_pending_command.next_try_ms      = now_ms;
+  s_pending_command.awaiting_ack     = 0U;
+  s_pending_command.retry_count      = 0U;
 }
 #endif
 
@@ -394,7 +417,13 @@ static Px4Lite_Result_t MavTx_SendPendingCommand(uint32_t now_ms)
   (void)mavlink_msg_command_long_encode_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
   result = MavTx_SendPrepared();
   if (result == PX4LITE_OK) {
-    s_pending_command.valid = 0U;
+    s_pending_command.awaiting_ack = 1U;
+    if (s_pending_command.retry_count < 255U) { s_pending_command.retry_count++; }
+    if (s_pending_command.retry_count >= PX4LITE_MAVLINK_COMMAND_RETRY_MAX) {
+      s_pending_command.valid = 0U;
+    } else {
+      s_pending_command.next_try_ms = now_ms + PX4LITE_MAVLINK_COMMAND_RETRY_MS;
+    }
     s_stats.command_count++;
     s_stats.last_message_id = MAVLINK_MSG_ID_COMMAND_LONG;
   } else if (result == PX4LITE_BUSY) {
@@ -672,6 +701,30 @@ static uint8_t MavTx_ModuleHealthy(Px4Lite_State_t state)
   return ((state == PX4LITE_STATE_ONLINE) || (state == PX4LITE_STATE_DEGRADED)) ? 1U : 0U;
 }
 
+static Px4Lite_Result_t MavTx_SendEnvHumidity(uint32_t now_ms)
+{
+  Px4Lite_SensorBaro_t baro;
+  mavlink_named_value_int_t packet;
+  Px4Lite_Result_t result;
+  int32_t humidity_x10;
+
+  result = Px4Lite_CopyBaro(&baro);
+  if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&baro.header, now_ms, PX4LITE_BARO_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
+
+  humidity_x10 = (int32_t)((baro.relative_humidity_pct * 10.0f) + 0.5f);
+  if (humidity_x10 < 0) { humidity_x10 = 0; }
+  if (humidity_x10 > 1000) { humidity_x10 = 1000; }
+
+  memset(&packet, 0, sizeof(packet));
+  packet.time_boot_ms = baro.header.sample_time_ms;
+  packet.value = humidity_x10;
+  (void)memcpy(packet.name, "ENVHUM", 6U);
+
+  (void)mavlink_msg_named_value_int_encode_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  return MavTx_SendPrepared();
+}
+
 /**
  * @brief 将 Framework 告警严重度映射为 MAVLink 严重度。
  *
@@ -904,6 +957,142 @@ static void MavTx_ModuleStateSuccess(void)
   s_module_state_part ^= 1U;
 }
 
+static Px4Lite_Result_t MavTx_SendRemoteStatus(uint32_t now_ms)
+{
+  Px4Lite_BatteryStatus_t battery2;
+  mavlink_named_value_int_t packet;
+  Px4Lite_Result_t result;
+  uint32_t packed;
+
+  result = Px4Lite_CopyBattery2(&battery2);
+  if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&battery2.header, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
+
+  packed = ((uint32_t)MavTx_SaturateUint16(battery2.voltage_mv)) |
+           ((uint32_t)battery2.percent << 16U) |
+           ((uint32_t)(battery2.low_voltage & 0x01U) << 24U);
+
+  memset(&packet, 0, sizeof(packet));
+  packet.time_boot_ms = now_ms;
+  packet.value = (int32_t)packed;
+  memcpy(packet.name, "BAT2STAT", 8U);
+
+  (void)mavlink_msg_named_value_int_encode_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  return MavTx_SendPrepared();
+}
+
+static Px4Lite_Result_t MavTx_SendRemoteMotor(uint32_t now_ms)
+{
+  mavlink_named_value_int_t packet;
+  Px4Lite_Result_t result;
+  uint32_t packed;
+  uint8_t i;
+
+  result = Px4Lite_CopyMotor(&s_remote_motor_current);
+  if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&s_remote_motor_current.header, now_ms, PX4LITE_CONTROL_PERIOD_MS * 5U) == 0U) { return PX4LITE_STALE; }
+
+  packed = 0U;
+  for (i = 0U; (i < PX4LITE_MOTOR_COUNT) && (i < 4U); i++) {
+    packed |= ((uint32_t)s_remote_motor_current.duty_percent[i]) << (i * 8U);
+  }
+
+  memset(&packet, 0, sizeof(packet));
+  packet.time_boot_ms = now_ms;
+  packet.value = (int32_t)packed;
+  memcpy(packet.name, "MOTORPWM", 8U);
+
+  (void)mavlink_msg_named_value_int_encode_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  return MavTx_SendPrepared();
+}
+
+static uint8_t MavTx_RemoteMotorChanged(const Px4Lite_MotorOutputs_t *motor)
+{
+  uint8_t i;
+
+  if (motor == 0) { return 0U; }
+  if (s_remote_motor_last_valid == 0U) { return 1U; }
+  if (s_remote_motor_last.run_state != motor->run_state) { return 1U; }
+  if (s_remote_motor_last.speed_level != motor->speed_level) { return 1U; }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (s_remote_motor_last.duty_percent[i] != motor->duty_percent[i]) { return 1U; }
+  }
+  return 0U;
+}
+
+static void MavTx_UpdateRemoteMotorUrgent(uint32_t now_ms)
+{
+  Px4Lite_Result_t result;
+
+  result = Px4Lite_CopyMotor(&s_remote_motor_current);
+  if (result != PX4LITE_OK) { return; }
+  if (Px4Lite_IsFresh(&s_remote_motor_current.header, now_ms, PX4LITE_CONTROL_PERIOD_MS * 5U) == 0U) { return; }
+  if (MavTx_RemoteMotorChanged(&s_remote_motor_current) == 0U) { return; }
+
+  s_remote_motor_last = s_remote_motor_current;
+  s_remote_motor_last_valid = 1U;
+  s_remote_motor_urgent_remaining = PX4LITE_MAVLINK_REMOTE_MOTOR_URGENT_FRAMES;
+}
+
+static Px4Lite_Result_t MavTx_RunRemoteMotorUrgent(uint32_t now_ms)
+{
+  Px4Lite_Result_t result;
+
+  if (PX4LITE_MAVLINK_ENABLE_REMOTE_MOTOR == 0U) { return PX4LITE_IDLE; }
+  MavTx_UpdateRemoteMotorUrgent(now_ms);
+  if (s_remote_motor_urgent_remaining == 0U) { return PX4LITE_IDLE; }
+
+  result = MavTx_SendRemoteMotor(now_ms);
+  if (result == PX4LITE_OK) {
+    s_remote_motor_urgent_remaining--;
+    s_stats.remote_motor_count++;
+    s_stats.last_message_id = MAVLINK_MSG_ID_NAMED_VALUE_INT;
+  } else if ((result != PX4LITE_BUSY) && (result != PX4LITE_STALE) && (result != PX4LITE_NOT_READY)) {
+    s_stats.error_count++;
+  }
+  return result;
+}
+
+static Px4Lite_Result_t MavTx_SendRemoteAlarm(uint32_t now_ms)
+{
+  uint16_t payload_len;
+
+  if (Px4Lite_CopyAlarmSnapshot(&s_alarm_tx_snapshot) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&s_alarm_tx_snapshot.header, now_ms, PX4LITE_HEALTH_PERIOD_MS * 10U) == 0U) { return PX4LITE_STALE; }
+
+  payload_len = Px4Lite_PackAlarmTable(s_alarm_tx_snapshot.records, (uint8_t)PX4LITE_MODULE_COUNT, (uint8_t)(s_alarm_tx_snapshot.header.sequence & 0xFFU), now_ms, s_tunnel_payload, sizeof(s_tunnel_payload));
+  if (payload_len == 0U) { return PX4LITE_IO_ERROR; }
+
+  (void)mavlink_msg_tunnel_pack_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, 0U, 0U, PX4LITE_TUNNEL_PT_ALARM_TABLE, (uint8_t)payload_len, s_tunnel_payload);
+  return MavTx_SendPrepared();
+}
+
+static Px4Lite_Result_t MavTx_SendRemoteLog(uint32_t now_ms)
+{
+  uint16_t latest_seq = 0U;
+  uint16_t count;
+  uint16_t payload_len;
+  Px4Lite_Result_t result;
+  uint8_t full_replay;
+
+  full_replay = (MavTx_TimeReached(now_ms, s_next_remote_log_full_ms) != 0U) ? 1U : 0U;
+  if (full_replay != 0U) {
+    count = Px4Lite_LocalMsgLogCopy(s_log_tx_entries, PX4LITE_LOCAL_LOG_CAP, 0, &latest_seq);
+  } else {
+    count = Px4Lite_LocalMsgLogDrainSince(s_log_tx_after_seq, s_log_tx_entries, PX4LITE_LOCAL_LOG_CAP, &latest_seq);
+  }
+  payload_len = Px4Lite_PackMessageLog(s_log_tx_entries, (uint8_t)count, latest_seq, s_tunnel_payload, sizeof(s_tunnel_payload));
+  if (payload_len == 0U) { return PX4LITE_IO_ERROR; }
+
+  (void)mavlink_msg_tunnel_pack_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, 0U, 0U, PX4LITE_TUNNEL_PT_MESSAGE_LOG, (uint8_t)payload_len, s_tunnel_payload);
+  result = MavTx_SendPrepared();
+  if (result == PX4LITE_OK) {
+    s_log_tx_after_seq = latest_seq;
+    if (full_replay != 0U) { s_next_remote_log_full_ms = now_ms + PX4LITE_MAVLINK_REMOTE_LOG_FULL_PERIOD_MS; }
+  }
+  return result;
+}
+
 static void MavTx_RecordResult(Px4Lite_Result_t result, uint32_t now_ms, uint32_t period_ms, uint32_t *next_ms, uint32_t message_id, uint32_t *success_count)
 {
   if (result == PX4LITE_OK) {
@@ -935,7 +1124,12 @@ static const MavTx_Item_t s_mav_tx_catalog[] = {
     {"MODULE_STATE", PX4LITE_MAVLINK_ENABLE_MODULE_STATE, PX4LITE_MAVLINK_MODULE_STATE_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_module_state_ms, &s_stats.module_state_count, MavTx_SendModuleState, MavTx_ModuleStateSuccess, MAV_TX_SCOPE_EXTENSION},
     {"BATTERY", PX4LITE_MAVLINK_ENABLE_BATTERY_STATUS, PX4LITE_MAVLINK_BATTERY_PERIOD_MS, MAVLINK_MSG_ID_BATTERY_STATUS, &s_next_battery_ms, &s_stats.battery_status_count, MavTx_SendBatteryStatus, 0, MAV_TX_SCOPE_STANDARD},
     {"PRESSURE", PX4LITE_MAVLINK_ENABLE_SCALED_PRESSURE, PX4LITE_MAVLINK_PRESSURE_PERIOD_MS, MAVLINK_MSG_ID_SCALED_PRESSURE, &s_next_pressure_ms, &s_stats.scaled_pressure_count, MavTx_SendScaledPressure, 0, MAV_TX_SCOPE_STANDARD},
+    {"ENV_HUM", PX4LITE_MAVLINK_ENABLE_ENV_HUMIDITY, PX4LITE_MAVLINK_ENV_HUMIDITY_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_env_humidity_ms, &s_stats.scaled_pressure_count, MavTx_SendEnvHumidity, 0, MAV_TX_SCOPE_EXTENSION},
     {"STATUSTEXT", PX4LITE_MAVLINK_ENABLE_STATUSTEXT, PX4LITE_MAVLINK_STATUSTEXT_PERIOD_MS, MAVLINK_MSG_ID_STATUSTEXT, &s_next_statustext_ms, &s_stats.statustext_count, MavTx_SendStatusText, 0, MAV_TX_SCOPE_STANDARD},
+    {"REMOTE_STATUS", PX4LITE_MAVLINK_ENABLE_REMOTE_STATUS, PX4LITE_MAVLINK_REMOTE_STATUS_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_remote_status_ms, &s_stats.remote_status_count, MavTx_SendRemoteStatus, 0, MAV_TX_SCOPE_EXTENSION},
+    {"REMOTE_MOTOR", PX4LITE_MAVLINK_ENABLE_REMOTE_MOTOR, PX4LITE_MAVLINK_REMOTE_MOTOR_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_remote_motor_ms, &s_stats.remote_motor_count, MavTx_SendRemoteMotor, 0, MAV_TX_SCOPE_EXTENSION},
+    {"REMOTE_ALARM", PX4LITE_MAVLINK_ENABLE_REMOTE_ALARM, PX4LITE_MAVLINK_REMOTE_ALARM_PERIOD_MS, MAVLINK_MSG_ID_TUNNEL, &s_next_remote_alarm_ms, &s_stats.remote_alarm_count, MavTx_SendRemoteAlarm, 0, MAV_TX_SCOPE_EXTENSION},
+    {"REMOTE_LOG", PX4LITE_MAVLINK_ENABLE_REMOTE_LOG, PX4LITE_MAVLINK_REMOTE_LOG_PERIOD_MS, MAVLINK_MSG_ID_TUNNEL, &s_next_remote_log_ms, &s_stats.remote_log_count, MavTx_SendRemoteLog, 0, MAV_TX_SCOPE_EXTENSION},
 };
 
 #define MAV_TX_CATALOG_COUNT ((uint8_t)(sizeof(s_mav_tx_catalog) / sizeof(s_mav_tx_catalog[0])))
@@ -955,7 +1149,13 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_next_module_state_ms = now_ms + 320U;
   s_next_battery_ms     = now_ms + 350U;
   s_next_pressure_ms    = now_ms + 400U;
+  s_next_env_humidity_ms = now_ms + 430U;
   s_next_statustext_ms  = now_ms + 450U;
+  s_next_remote_status_ms = now_ms + 520U;
+  s_next_remote_motor_ms  = now_ms + 620U;
+  s_next_remote_alarm_ms  = now_ms + 760U;
+  s_next_remote_log_ms    = now_ms + 900U;
+  s_next_remote_log_full_ms = now_ms + PX4LITE_MAVLINK_REMOTE_LOG_FULL_PERIOD_MS;
   s_catalog_index       = 0U;
   s_module_state_part   = 0U;
   s_remote_view_enabled = 0U;
@@ -972,6 +1172,15 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_stream_mask            = 0U;
   memset(&s_pending_command, 0, sizeof(s_pending_command));
   memset(&s_pending_ack, 0, sizeof(s_pending_ack));
+  memset(s_tunnel_payload, 0, sizeof(s_tunnel_payload));
+  memset(&s_alarm_tx_snapshot, 0, sizeof(s_alarm_tx_snapshot));
+  memset(s_log_tx_entries, 0, sizeof(s_log_tx_entries));
+  s_log_tx_after_seq = 0U;
+  memset(&s_remote_motor_current, 0, sizeof(s_remote_motor_current));
+  memset(&s_remote_motor_last, 0, sizeof(s_remote_motor_last));
+  s_remote_motor_last_valid = 0U;
+  s_remote_motor_urgent_remaining = 0U;
+  Px4Lite_LocalMsgLogReset();
   return PX4LITE_OK;
 }
 
@@ -988,6 +1197,9 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
 
   result = MavTx_SendPendingCommand(now_ms);
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
+
+  result = MavTx_RunRemoteMotorUrgent(now_ms);
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
 
   for (checked = 0U; checked < MAV_TX_CATALOG_COUNT; ++checked) {
@@ -1021,6 +1233,8 @@ Px4Lite_Result_t Px4Lite_MavlinkSetRemoteView(uint8_t enabled, uint8_t target_no
   s_remote_view_start_ms = (enabled != 0U) ? now_ms : 0U;
 #endif
   s_next_stream_request_ms = now_ms;
+  (void)Px4Lite_SelectRemoteNode(target_node_id);
+  (void)Px4Lite_RemoteTelemetrySetMode((enabled != 0U) ? PX4LITE_REMOTE_MODE_REMOTE : PX4LITE_REMOTE_MODE_LOCAL, now_ms);
 
   if (enabled != 0U) {
     MavTx_QueueStreamCommand(target_node_id, MAV_TX_STREAM_ACTION_START, PX4LITE_MAVLINK_STREAM_MASK_ALL, PX4LITE_MAVLINK_STREAM_LEASE_MS, now_ms);
@@ -1059,7 +1273,12 @@ Px4Lite_Result_t Px4Lite_MavlinkApplyStreamControl(uint8_t action, uint32_t stre
 
 void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result)
 {
-  (void)command;
   s_stats.command_ack_rx_count++;
-  (void)result;
+  if ((s_pending_command.valid != 0U) && (s_pending_command.awaiting_ack != 0U) && (s_pending_command.command == command)) {
+    if (result == MAV_RESULT_ACCEPTED) {
+      s_pending_command.valid = 0U;
+    } else {
+      s_pending_command.next_try_ms = 0U;
+    }
+  }
 }

@@ -27,6 +27,10 @@ typedef struct {
   uint32_t battery_status_count;   /**< BATTERY_STATUS 已调度次数。 */
   uint32_t scaled_pressure_count;  /**< SCALED_PRESSURE 已调度次数。 */
   uint32_t statustext_count;       /**< STATUSTEXT 已调度次数。 */
+  uint32_t remote_status_count;    /**< REMOTE_STATUS 扩展帧已调度次数。 */
+  uint32_t remote_motor_count;     /**< REMOTE_MOTOR 扩展帧已调度次数。 */
+  uint32_t remote_alarm_count;     /**< REMOTE_ALARM TUNNEL 已调度次数。 */
+  uint32_t remote_log_count;       /**< REMOTE_LOG TUNNEL 已调度次数。 */
   uint32_t command_count;          /**< COMMAND_LONG 已调度次数。 */
   uint32_t command_ack_tx_count;   /**< COMMAND_ACK 已发送次数。 */
   uint32_t command_ack_rx_count;   /**< COMMAND_ACK 已接收次数。 */

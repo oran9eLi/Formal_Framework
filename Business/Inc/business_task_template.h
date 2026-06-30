@@ -102,14 +102,10 @@ Business_ServiceResult_t Business_LogWrite(const Business_LogRecord_t *record);
 Business_ServiceResult_t Business_AcquisitionRunOnce(uint32_t now_ms);
 
 /**
- * @brief 轮询显示触摸输入。
+ * @brief 查询显示层是否仍有待刷新的 LVGL 工作。
  *
- * @param[in] now_ms 当前系统毫秒时间。
- *
- * @return 执行结果。
+ * @return 1 表示还有显示刷新工作，0 表示当前空闲。
  */
-Business_ServiceResult_t Business_DisplayPollTouch(uint32_t now_ms);
-
 uint8_t Business_DisplayNeedsImmediateRefresh(void);
 
 /**

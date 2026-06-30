@@ -180,24 +180,34 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef *hadc)
 {
   GPIO_InitTypeDef gpio;
 
-  if (hadc->Instance != BSP_ADC_INS) { return; }
+  if ((hadc->Instance != BSP_ADC_INS) && (hadc->Instance != BSP_ADC2_INS)) { return; }
 
   __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_ADC1_CLK_ENABLE();
+  if (hadc->Instance == BSP_ADC_INS) {
+    __HAL_RCC_ADC1_CLK_ENABLE();
+    gpio.Pin = BSP_ADC_PIN;
+  } else {
+    __HAL_RCC_ADC2_CLK_ENABLE();
+    gpio.Pin = BSP_ADC2_PIN;
+  }
 
-  gpio.Pin   = BSP_ADC_PIN;
   gpio.Mode  = GPIO_MODE_ANALOG;
   gpio.Pull  = GPIO_NOPULL;
   gpio.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(BSP_ADC_PORT, &gpio);
+  HAL_GPIO_Init((hadc->Instance == BSP_ADC_INS) ? BSP_ADC_PORT : BSP_ADC2_PORT, &gpio);
 }
 
 void HAL_ADC_MspDeInit(ADC_HandleTypeDef *hadc)
 {
-  if (hadc->Instance != BSP_ADC_INS) { return; }
+  if ((hadc->Instance != BSP_ADC_INS) && (hadc->Instance != BSP_ADC2_INS)) { return; }
 
-  __HAL_RCC_ADC1_CLK_DISABLE();
-  HAL_GPIO_DeInit(BSP_ADC_PORT, BSP_ADC_PIN);
+  if (hadc->Instance == BSP_ADC_INS) {
+    __HAL_RCC_ADC1_CLK_DISABLE();
+    HAL_GPIO_DeInit(BSP_ADC_PORT, BSP_ADC_PIN);
+  } else {
+    __HAL_RCC_ADC2_CLK_DISABLE();
+    HAL_GPIO_DeInit(BSP_ADC2_PORT, BSP_ADC2_PIN);
+  }
 }
 
 /**

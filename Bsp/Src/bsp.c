@@ -16,6 +16,7 @@
 #endif
 #if BSP_ENABLE_ADC
 #include "bsp_adc.h"
+#include "bsp_adc2.h"
 #endif
 #if BSP_ENABLE_GNSS
 #include "bsp_gnss.h"
@@ -72,6 +73,9 @@ BSP_Status_t BSP_Init(void)
 #if BSP_ENABLE_ADC
   s_bsp_init_debug.enabled_mask |= BSP_INIT_ADC_MASK;
   result = BSP_ADC_Init();
+  BSP_RecordInitResult(BSP_INIT_ADC_MASK, result);
+  if (result != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
+  result = BSP_ADC2_Init();
   BSP_RecordInitResult(BSP_INIT_ADC_MASK, result);
   if (result != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
 #endif

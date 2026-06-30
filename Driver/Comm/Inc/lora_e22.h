@@ -113,6 +113,13 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out);
 Lora_State_t Lora_E22_GetState(uint32_t now_ms, uint32_t offline_timeout_ms);
 
 /**
+ * @brief 判断本机 E22 模块是否存在且近期 AUX 有就绪事实。
+ *
+ * @return 1 表示本机 LoRa 硬件存在，0 表示尚未初始化或疑似不可用。
+ */
+uint8_t Lora_E22_IsPresent(void);
+
+/**
  * @brief 异步发送一帧 LoRa 数据。
  *
  * @param[in] data 待发送字节缓冲区，不能为 NULL。

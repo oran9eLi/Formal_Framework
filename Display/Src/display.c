@@ -5,7 +5,7 @@
 
 #include "display.h"
 #include "app_data_api.h"
-#include "display_log.h"
+#include "app_message_log.h"
 #include "display_lvgl.h"
 #include "px4lite_platform.h"
 
@@ -532,6 +532,14 @@ static uint16_t Display_MapStorageStateValue(App_ViewState_t state)
   return (state == APP_VIEW_STATE_ONLINE) ? 2U : 3U;
 }
 
+static uint16_t Display_MapMotorStateValue(const App_DisplaySnapshot_t *view)
+{
+  if (view == 0) { return 0U; }
+  if ((view->voltage2_mv < 5000U) || ((view->battery2_percent == 0U) && (view->voltage2_mv < 9000U))) { return 3U; }
+  if ((view->low_voltage2 != 0U) || (view->voltage2_mv < 10500U)) { return 1U; }
+  return Display_MapStateValue(view->control.state);
+}
+
 static uint32_t Display_AbsI32ToU32(int32_t value)
 {
   if (value < 0) { return (uint32_t)(-(value + 1)) + 1U; }
@@ -614,6 +622,7 @@ static void Display_ClearAttitudeFields(void)
 {
   (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_ROLL, 0);
   (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_PITCH, 0);
+  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_YAW, 0);
 }
 
 static void Display_ClearEnvironmentFields(void)
@@ -667,10 +676,10 @@ static void Display_LoadNavigationSnapshot(const App_DisplaySnapshot_t *view)
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LONGITUDE, view->longitude_e7);
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_ALTITUDE, view->altitude_mm);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SPEED, ground_speed_cms);
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_YAW, (int16_t)(view->yaw_deg100 / 10));
   if (view->attitude_valid != 0U) {
     (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_ROLL, (int16_t)(view->roll_deg100 / 10));
     (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_PITCH, (int16_t)(view->pitch_deg100 / 10));
+    (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_YAW, (int16_t)(view->yaw_deg100 / 10));
   } else {
     Display_ClearAttitudeFields();
   }
@@ -698,207 +707,18 @@ static void Display_ClearDateTimeSnapshot(void)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, 0U);
 }
 
-/* ---- 消息日志：状态变化检测 ---- */
-
-/* 状态去抖(ms)：某状态需连续稳定这么久才记一条。上电收敛期的瞬时跳变
-   (断开/未通过/有告警)持续不到这个时长即被吞掉；状态一稳定很快就记，
-   不必死等固定时长。想更快可调小，但太小会把上电抖动也记进去。 */
-#define DISPLAY_MSGLOG_DEBOUNCE_MS 1500U
-
-/* 把 now_ms 转成 HHMMSS 编码(开机运行时间占位)。 */
-static uint32_t Display_NowHhmmss(uint32_t now_ms)
-{
-  uint32_t total_s = now_ms / 1000U;
-  uint32_t hh      = (total_s / 3600U) % 100U;
-  uint32_t mm      = (total_s / 60U) % 60U;
-  uint32_t ss      = total_s % 60U;
-
-  return (hh * 10000U) + (mm * 100U) + ss;
-}
-
-/* 每类状态的去抖追踪。 */
-typedef struct {
-  Display_LogMsg_t committed; /* 已记录的状态 */
-  Display_LogMsg_t candidate; /* 当前候选状态 */
-  uint32_t since_ms;          /* 候选状态起始时刻 */
-} Display_LogDebounce_t;
-
-/* 候选状态连续稳定 DEBOUNCE_MS 才提交一条日志，返回是否本次新提交了一条。 */
-static uint8_t Display_LogDebounce(Display_LogDebounce_t *d, Display_LogMsg_t now, uint32_t now_ms, uint32_t t)
-{
-  if (now != d->candidate) {
-    d->candidate = now;
-    d->since_ms  = now_ms;
-  }
-  if ((d->candidate != d->committed) && ((uint32_t)(now_ms - d->since_ms) >= DISPLAY_MSGLOG_DEBOUNCE_MS)) {
-    Display_LogPushMessage(d->candidate, t);
-    d->committed = d->candidate;
-    return 1U;
-  }
-  return 0U;
-}
-
-static void Display_LogCommitInitial(Display_LogDebounce_t *d, Display_LogMsg_t msg, uint32_t now_ms)
-{
-  d->candidate = msg;
-  d->committed = msg;
-  d->since_ms  = now_ms;
-}
-
-/* GPS 三态：在线=正常，掉线/失败=断开，其余(启动/降级)=无信号。 */
-static Display_LogMsg_t Display_GpsLogMsg(App_ViewState_t state)
-{
-  if (state == APP_VIEW_STATE_ONLINE) { return DISPLAY_LOGMSG_GPS_OK; }
-  if ((state == APP_VIEW_STATE_OFFLINE) || (state == APP_VIEW_STATE_FAILED)) { return DISPLAY_LOGMSG_GPS_LOST; }
-  return DISPLAY_LOGMSG_GPS_NOSIG;
-}
-
-/* 二态：在线=正常，否则断开。 */
-static Display_LogMsg_t Display_TwoStateLogMsg(App_ViewState_t state, Display_LogMsg_t ok_msg, Display_LogMsg_t lost_msg)
-{
-  return (state == APP_VIEW_STATE_ONLINE) ? ok_msg : lost_msg;
-}
-
-/* 自检三态：5 个模块全在线=通过，有掉线/失败=未通过，否则部分通过。 */
-static Display_LogMsg_t Display_SelfCheckLogMsg(const App_ViewState_t *states, uint16_t count)
-{
-  uint16_t online = 0U;
-  uint16_t failed = 0U;
-  uint16_t i;
-
-  for (i = 0U; i < count; i++) {
-    if (states[i] == APP_VIEW_STATE_ONLINE) {
-      online++;
-    } else if ((states[i] == APP_VIEW_STATE_OFFLINE) || (states[i] == APP_VIEW_STATE_FAILED)) {
-      failed++;
-    } else {
-      /* STARTING/DEGRADED 计入部分通过 */
-    }
-  }
-
-  if (online == count) { return DISPLAY_LOGMSG_SELFCHECK_OK; }
-  if (failed > 0U) { return DISPLAY_LOGMSG_SELFCHECK_FAIL; }
-  return DISPLAY_LOGMSG_SELFCHECK_PART;
-}
-
-/*
- * 检测各类状态变化并写入消息日志。数据源与自检灯/告警表同源:
- * 模块状态和告警码统一来自 App_DisplaySnapshot_t。
- * 不依赖 Display 直接读取 Framework 模块枚举，因此后续新增外设只改 App 视图映射。
- * 电机暂无真实数据源，相关条目暂不产生。
- */
-static void Display_UpdateMessageLog(uint32_t now_ms, const App_DisplaySnapshot_t *view)
-{
-  static uint8_t boot_done              = 0U;
-  static uint8_t boot_tracking          = 0U;
-  static Display_LogDebounce_t db_gps   = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_att   = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_env   = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_comm  = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_store = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogDebounce_t db_alarm = {DISPLAY_LOGMSG_COUNT, DISPLAY_LOGMSG_COUNT, 0U};
-  static Display_LogMsg_t boot_self     = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_gps      = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_att      = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_env      = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_comm     = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_store    = DISPLAY_LOGMSG_COUNT;
-  static Display_LogMsg_t boot_alarm    = DISPLAY_LOGMSG_COUNT;
-  static uint8_t imu_level_done_logged   = 0U;
-  static uint32_t boot_since_ms         = 0U;
-  static uint32_t boot_start_t          = 0U;
-  App_ViewState_t states[5];
-  uint32_t t = Display_NowHhmmss(now_ms);
-  Display_LogMsg_t now_self;
-  Display_LogMsg_t now_gps;
-  Display_LogMsg_t now_att;
-  Display_LogMsg_t now_env;
-  Display_LogMsg_t now_comm;
-  Display_LogMsg_t now_store;
-  Display_LogMsg_t now_alarm;
-
-  if (view == 0) { return; }
-
-  states[0] = view->gnss.state;
-  states[1] = view->imu.state;
-  states[2] = view->baro.state;
-  states[3] = view->lora.state;
-  states[4] = view->storage.state;
-
-  now_self  = Display_SelfCheckLogMsg(states, 5U);
-  now_gps   = Display_GpsLogMsg(states[0]);
-  now_att   = Display_TwoStateLogMsg(states[1], DISPLAY_LOGMSG_ATT_OK, DISPLAY_LOGMSG_ATT_LOST);
-  if (view->attitude_valid == 0U) { now_att = DISPLAY_LOGMSG_ATT_LOST; }
-  now_env   = Display_TwoStateLogMsg(states[2], DISPLAY_LOGMSG_ENV_OK, DISPLAY_LOGMSG_ENV_LOST);
-  now_comm  = Display_TwoStateLogMsg(states[3], DISPLAY_LOGMSG_COMM_OK, DISPLAY_LOGMSG_COMM_LOST);
-  now_store = Display_TwoStateLogMsg(states[4], DISPLAY_LOGMSG_STORAGE_OK, DISPLAY_LOGMSG_STORAGE_LOST);
-  now_alarm = (view->highest_fault_code != 0U) ? DISPLAY_LOGMSG_ALARM_ACTIVE : DISPLAY_LOGMSG_ALARM_NONE;
-
-  if (boot_done == 0U) {
-    if ((boot_tracking == 0U) || (now_self != boot_self) || (now_gps != boot_gps) || (now_att != boot_att) || (now_env != boot_env) || (now_comm != boot_comm) || (now_store != boot_store) || (now_alarm != boot_alarm)) {
-      boot_self     = now_self;
-      boot_gps      = now_gps;
-      boot_att      = now_att;
-      boot_env      = now_env;
-      boot_comm     = now_comm;
-      boot_store    = now_store;
-      boot_alarm    = now_alarm;
-      boot_since_ms = now_ms;
-      if (boot_tracking == 0U) {
-        boot_start_t = t;
-        Display_LogPushMessage(DISPLAY_LOGMSG_SYSTEM_START, boot_start_t);
-        Display_LogPushMessage(DISPLAY_LOGMSG_IMU_LEVEL_WAIT, boot_start_t);
-        boot_tracking = 1U;
-      }
-      return;
-    }
-
-    if ((uint32_t)(now_ms - boot_since_ms) < DISPLAY_MSGLOG_DEBOUNCE_MS) { return; }
-
-    Display_LogPushMessage(boot_self, t);
-    Display_LogPushMessage(boot_gps, t);
-    Display_LogPushMessage(boot_att, t);
-    Display_LogPushMessage(boot_env, t);
-    Display_LogPushMessage(boot_comm, t);
-    Display_LogPushMessage(boot_store, t);
-    Display_LogPushMessage(boot_alarm, t);
-    if (boot_att == DISPLAY_LOGMSG_ATT_OK) {
-      Display_LogPushMessage(DISPLAY_LOGMSG_IMU_LEVEL_OK, t);
-      imu_level_done_logged = 1U;
-    }
-
-    Display_LogCommitInitial(&db_gps, boot_gps, now_ms);
-    Display_LogCommitInitial(&db_att, boot_att, now_ms);
-    Display_LogCommitInitial(&db_env, boot_env, now_ms);
-    Display_LogCommitInitial(&db_comm, boot_comm, now_ms);
-    Display_LogCommitInitial(&db_store, boot_store, now_ms);
-    Display_LogCommitInitial(&db_alarm, boot_alarm, now_ms);
-    boot_done = 1U;
-    return;
-  }
-
-  /* 启动批量日志之后，各类状态按真实变化继续去抖追加。 */
-  (void)Display_LogDebounce(&db_gps, now_gps, now_ms, t);
-  if ((Display_LogDebounce(&db_att, now_att, now_ms, t) != 0U) && (now_att == DISPLAY_LOGMSG_ATT_OK) && (imu_level_done_logged == 0U)) {
-    Display_LogPushMessage(DISPLAY_LOGMSG_IMU_LEVEL_OK, t);
-    imu_level_done_logged = 1U;
-  }
-  (void)Display_LogDebounce(&db_env, now_env, now_ms, t);
-  (void)Display_LogDebounce(&db_comm, now_comm, now_ms, t);
-  (void)Display_LogDebounce(&db_store, now_store, now_ms, t);
-  (void)Display_LogDebounce(&db_alarm, now_alarm, now_ms, t);
-}
-
 /*
  * 将系统状态快照字段写入 Display 缓存。
  */
 static void Display_LoadSystemSnapshot(const App_DisplaySnapshot_t *view)
 {
   uint32_t alarm_row;
+  uint16_t motor_state;
 
   if (view == 0) { return; }
 
   alarm_row = (view->highest_fault_code != 0U) ? (((uint32_t)view->highest_source_id << 16) | view->highest_fault_code) : 0U;
+  motor_state = Display_MapMotorStateValue(view);
 
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SYSTEM_STATUS, view->system_ready ? 2U : 1U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_VIEW_NODE_ID, view->view_node_id);
@@ -913,10 +733,10 @@ static void Display_LoadSystemSnapshot(const App_DisplaySnapshot_t *view)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, Display_MapStateValue(view->lora.state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, Display_MapStateValue(view->lora.state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue(view->storage.state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, Display_MapStateValue(view->control.state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, Display_MapStateValue(view->control.state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, Display_MapStateValue(view->control.state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, Display_MapStateValue(view->control.state));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, motor_state);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, motor_state);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, motor_state);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, motor_state);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, Display_MapStateValue(view->five_g.state));
   /* 自检页错误码表由 Display_LoadAlarmSnapshot 按激活故障列表整体刷新，
      此处不再用单个 highest_fault_code 驱动。 */
@@ -980,8 +800,8 @@ static void Display_LoadEnvironmentSnapshot(const App_DisplaySnapshot_t *view)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_PRESSURE, Display_FloatPaToU32(view->pressure_pa));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, (uint16_t)((view->voltage_mv + 5U) / 10U));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, view->battery_percent);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, (uint16_t)((view->voltage_mv + 5U) / 10U));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, view->battery_percent);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, (uint16_t)((view->voltage2_mv + 5U) / 10U));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, view->battery2_percent);
 }
 
 /*
@@ -1057,9 +877,6 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
 
   Display_LoadAlarmSnapshot(&s_display_snapshot);
 
-  /* 消息日志与自检灯/告警表同源，统一来自 App Display 视图。 */
-  Display_UpdateMessageLog(now_ms, &s_display_snapshot);
-
   if (s_display_snapshot.environment_valid != 0U) {
     Display_LoadEnvironmentSnapshot(&s_display_snapshot);
   } else {
@@ -1076,8 +893,8 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   /* LoRa 收发帧计数和丢包率为累计统计，独立于上面三个快照，每帧都刷新 */
   Display_LoadLoraStats(&s_display_snapshot);
 
-  /* 消息日志缓冲版本变化即触发日志区重绘 */
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, Display_LogGetVersion());
+  /* 消息日志缓冲版本变化即触发日志区重绘。 */
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, App_MessageLogGetVersion());
 
   return DISPLAY_OK;
 }
@@ -1132,39 +949,9 @@ Display_DataSource_t Display_GetDataSource(void)
   return s_data_source;
 }
 
-Display_Result_t Display_ToggleDataSource(void)
-{
-  return Display_SetDataSource((s_data_source == DISPLAY_DATA_SOURCE_LOCAL) ? DISPLAY_DATA_SOURCE_REMOTE : DISPLAY_DATA_SOURCE_LOCAL);
-}
-
 uint8_t Display_HasPendingRedraw(void)
 {
   return Display_LvglNeedsRefresh();
-}
-
-void Display_ShowBootCode(uint8_t code)
-{
-  (void)code;
-}
-
-/*
- * 兼容旧业务入口；LVGL 触摸输入由 lv_port_indev 在刷新周期内处理。
- */
-Display_Result_t Display_PollTouch(void)
-{
-  return (s_display_ready != 0U) ? DISPLAY_OK : DISPLAY_NOT_READY;
-}
-
-/*
- * 兼容旧坐标入口；当前页面交互由 LVGL widget 回调处理。
- */
-Display_Result_t Display_HandleTouch(uint16_t x, uint16_t y, Display_HmiVariableId_t *id, uint32_t *value)
-{
-  (void)x;
-  (void)y;
-  if (id != 0) { *id = DISPLAY_HMI_VAR_COUNT; }
-  if (value != 0) { *value = 0U; }
-  return (s_display_ready != 0U) ? DISPLAY_OK : DISPLAY_NOT_READY;
 }
 
 /*
