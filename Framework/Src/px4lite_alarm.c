@@ -16,6 +16,11 @@ static Px4Lite_AlarmSnapshot_t s_alarm_snapshot;
 static Px4Lite_AlarmSnapshot_t s_alarm_old_snapshot;
 static Px4Lite_AlarmSnapshot_t s_alarm_new_snapshot;
 static uint32_t s_alarm_sequence;
+static uint8_t s_alarm_debounce_active[PX4LITE_MODULE_COUNT];
+static uint16_t s_alarm_debounce_fault[PX4LITE_MODULE_COUNT];
+static uint8_t s_alarm_debounce_severity[PX4LITE_MODULE_COUNT];
+static uint8_t s_alarm_debounce_state[PX4LITE_MODULE_COUNT];
+static uint32_t s_alarm_debounce_since_ms[PX4LITE_MODULE_COUNT];
 
 /**
  * @brief 判断一个模块状态是否应产生活动告警。
@@ -41,6 +46,50 @@ static uint8_t Alarm_IsActiveStatus(const Px4Lite_ModuleStatus_t *status)
  *
  * @return 1 表示候选告警优先级更高，0 表示不替换。
  */
+static void Alarm_ResetDebounce(uint16_t source_id)
+{
+  if (source_id >= (uint16_t)PX4LITE_MODULE_COUNT) { return; }
+
+  s_alarm_debounce_active[source_id] = 0U;
+  s_alarm_debounce_fault[source_id] = PX4LITE_FAULT_NONE;
+  s_alarm_debounce_severity[source_id] = 0U;
+  s_alarm_debounce_state[source_id] = 0U;
+  s_alarm_debounce_since_ms[source_id] = 0U;
+}
+
+static uint8_t Alarm_DebouncePassed(const Px4Lite_ModuleStatus_t *status, const Px4Lite_AlarmRecord_t *old_record, uint32_t now_ms)
+{
+  uint16_t source_id;
+
+  if (status == 0) { return 0U; }
+
+  source_id = (uint16_t)status->module_id;
+  if (source_id >= (uint16_t)PX4LITE_MODULE_COUNT) { return 0U; }
+
+  if ((old_record != 0) && (old_record->active != 0U) && (old_record->fault_code == status->fault_code)) {
+    s_alarm_debounce_active[source_id] = 1U;
+    s_alarm_debounce_fault[source_id] = status->fault_code;
+    s_alarm_debounce_severity[source_id] = status->severity;
+    s_alarm_debounce_state[source_id] = (uint8_t)status->state;
+    s_alarm_debounce_since_ms[source_id] = old_record->raised_ms;
+    return 1U;
+  }
+
+  if ((s_alarm_debounce_active[source_id] == 0U) ||
+      (s_alarm_debounce_fault[source_id] != status->fault_code) ||
+      (s_alarm_debounce_severity[source_id] != status->severity) ||
+      (s_alarm_debounce_state[source_id] != (uint8_t)status->state)) {
+    s_alarm_debounce_active[source_id] = 1U;
+    s_alarm_debounce_fault[source_id] = status->fault_code;
+    s_alarm_debounce_severity[source_id] = status->severity;
+    s_alarm_debounce_state[source_id] = (uint8_t)status->state;
+    s_alarm_debounce_since_ms[source_id] = now_ms;
+    return (PX4LITE_ALARM_DEBOUNCE_MS == 0U) ? 1U : 0U;
+  }
+
+  return ((uint32_t)(now_ms - s_alarm_debounce_since_ms[source_id]) >= PX4LITE_ALARM_DEBOUNCE_MS) ? 1U : 0U;
+}
+
 static uint8_t Alarm_IsHigherSeverity(const Px4Lite_AlarmRecord_t *candidate, const Px4Lite_AlarmSnapshot_t *snapshot)
 {
   if (snapshot->highest_fault_code == PX4LITE_FAULT_NONE) { return 1U; }
@@ -117,7 +166,13 @@ static void Alarm_FillSnapshot(Px4Lite_AlarmSnapshot_t *snapshot, const Px4Lite_
     if ((uint32_t)module->module_id >= (uint32_t)PX4LITE_MODULE_COUNT) { continue; }
 
     old_record = &old_snapshot->records[(uint16_t)module->module_id];
-    if (Alarm_IsActiveStatus(module) != 0U) { Alarm_AddRecord(snapshot, module, old_record, now_ms); }
+    if (Alarm_IsActiveStatus(module) != 0U) {
+      if (Alarm_DebouncePassed(module, old_record, now_ms) != 0U) {
+        Alarm_AddRecord(snapshot, module, old_record, now_ms);
+      }
+    } else {
+      Alarm_ResetDebounce((uint16_t)module->module_id);
+    }
   }
 }
 
@@ -184,6 +239,11 @@ static void Alarm_PublishChanges(const Px4Lite_AlarmSnapshot_t *old_snapshot, co
 Px4Lite_Result_t Px4Lite_AlarmInit(uint32_t now_ms)
 {
   memset(&s_alarm_snapshot, 0, sizeof(s_alarm_snapshot));
+  memset(s_alarm_debounce_active, 0, sizeof(s_alarm_debounce_active));
+  memset(s_alarm_debounce_fault, 0, sizeof(s_alarm_debounce_fault));
+  memset(s_alarm_debounce_severity, 0, sizeof(s_alarm_debounce_severity));
+  memset(s_alarm_debounce_state, 0, sizeof(s_alarm_debounce_state));
+  memset(s_alarm_debounce_since_ms, 0, sizeof(s_alarm_debounce_since_ms));
   s_alarm_sequence                        = 0U;
   s_alarm_snapshot.header.sample_time_ms  = now_ms;
   s_alarm_snapshot.header.publish_time_ms = now_ms;

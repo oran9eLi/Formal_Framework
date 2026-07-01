@@ -11,6 +11,8 @@
 
 #include "bsp_config.h"
 
+#include "bsp_lora.h"
+#include "bsp_remoteid.h"
 #if BSP_ENABLE_I2C
 #include "bsp_i2c.h"
 #endif
@@ -122,4 +124,20 @@ void BSP_GetInitDebugInfo(BSP_InitDebugInfo_t *out)
   if (out == 0) { return; }
 
   *out = s_bsp_init_debug;
+}
+
+void BSP_EmergencyStopDma(void)
+{
+  UART_HandleTypeDef *lora_uart;
+
+#if BSP_ENABLE_GNSS
+  if ((s_bsp_init_debug.attempted_mask & BSP_INIT_GNSS_MASK) != 0U) { (void)BSP_GNSS_DeInit(); }
+#endif
+
+  lora_uart = BSP_LoRa_GetUartHandle();
+  if ((lora_uart != 0) && (lora_uart->Instance != 0)) {
+    (void)HAL_UART_DMAStop(lora_uart);
+    BSP_LoRa_AbortTx();
+  }
+  BSP_RemoteId_AbortTx();
 }

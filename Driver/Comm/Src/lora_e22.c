@@ -51,6 +51,8 @@ static uint32_t s_rx_sequence_lost_count;
 static uint32_t s_last_tx_ms;
 static uint32_t s_last_msg_id;
 static uint32_t s_last_aux_ready_ms;
+static uint32_t s_init_wait_start_ms;
+static uint32_t s_parse_last_byte_ms;
 static uint8_t s_initialized;
 static volatile uint8_t s_reinit_request;
 static uint8_t s_rx_sequence_seen[LORA_E22_MAVLINK_SYSID_MAX];
@@ -66,6 +68,9 @@ static uint8_t s_rx_sequence_last[LORA_E22_MAVLINK_SYSID_MAX];
 #define LORA_E22_AIR_TIMEOUT_MARGIN_MS  200U
 #define LORA_E22_UART_TIMEOUT_MARGIN_MS 100U
 #define LORA_E22_PRESENT_TIMEOUT_MS     2000U
+#define LORA_E22_LOSS_MIN_EXPECTED      32U
+#define LORA_E22_INIT_AUX_TIMEOUT_MS    500U
+#define LORA_E22_PARSE_IDLE_RESET_MS    200U
 
 typedef enum {
   LORA_TX_IDLE = 0,
@@ -90,6 +95,7 @@ static uint32_t Lora_E22_GetAirDoneTimeoutMs(uint16_t length_bytes);
 static void Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence);
 static void Lora_E22_RecordAuxReady(uint32_t now_ms);
 static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms, uint32_t timeout_ms);
+static void Lora_E22_ResetParser(void);
 static void Lora_E22_TxStep(uint32_t now_ms);
 
 static uint32_t Lora_E22_SaturatedAddU32(uint32_t a, uint32_t b)
@@ -103,11 +109,7 @@ static uint16_t Lora_E22_CalcLossRateX10(uint32_t lost_count, uint32_t expected_
   uint64_t scaled;
 
   if (expected_count == 0U) { return 0U; }
-#ifdef PX4LITE_MAVLINK_LOSS_MIN_EXPECTED
-  if (expected_count < PX4LITE_MAVLINK_LOSS_MIN_EXPECTED) { return 0U; }
-#else
-  if (expected_count < 32U) { return 0U; }
-#endif
+  if (expected_count < LORA_E22_LOSS_MIN_EXPECTED) { return 0U; }
 
   scaled = (((uint64_t)lost_count * 1000ULL) + ((uint64_t)expected_count / 2ULL)) / (uint64_t)expected_count;
   if (scaled > 1000ULL) { return 1000U; }
@@ -157,12 +159,8 @@ static void Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence)
   delta = (uint8_t)(sequence - s_rx_sequence_last[system_id]);
   if (delta == 0U) { return; }
 
-  if (delta < 128U) {
-    s_rx_sequence_lost_count += (uint32_t)(delta - 1U);
-    s_rx_sequence_last[system_id] = sequence;
-  } else {
-    s_rx_sequence_last[system_id] = sequence;
-  }
+  s_rx_sequence_lost_count += (uint32_t)(delta - 1U);
+  s_rx_sequence_last[system_id] = sequence;
 }
 
 /**
@@ -206,23 +204,32 @@ static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms, uint32_t timeout_ms)
   return ((uint32_t)(now_ms - s_last_aux_ready_ms) > timeout_ms) ? 1U : 0U;
 }
 
+static void Lora_E22_ResetParser(void)
+{
+  memset(&s_parse_status, 0, sizeof(s_parse_status));
+  memset(&s_parse_msg, 0, sizeof(s_parse_msg));
+  s_parse_last_byte_ms = 0U;
+}
+
 Lora_Result_t Lora_E22_Init(void)
 {
-  uint32_t start_ms;
+  uint32_t now_ms;
 
   s_initialized = 0U;
   BSP_LoRa_SetMode(0U); /* normal mode M0=0 M1=0 */
-  start_ms = BSP_Time_GetTickMs();
-  while (BSP_LoRa_IsReady() == 0U) {
-    if ((uint32_t)(BSP_Time_GetTickMs() - start_ms) > 500U) { return LORA_RESULT_BUSY; }
+  now_ms = BSP_Time_GetTickMs();
+  if (BSP_LoRa_IsReady() == 0U) {
+    if (s_init_wait_start_ms == 0U) { s_init_wait_start_ms = now_ms; }
+    if ((uint32_t)(now_ms - s_init_wait_start_ms) > LORA_E22_INIT_AUX_TIMEOUT_MS) { s_init_wait_start_ms = now_ms; }
+    return LORA_RESULT_BUSY;
   }
+  s_init_wait_start_ms = 0U;
 
   memset(s_rx_queue, 0, sizeof(s_rx_queue));
   s_rx_q_head = 0U;
   s_rx_q_tail = 0U;
   s_rx_q_count = 0U;
-  memset(&s_parse_status, 0, sizeof(s_parse_status));
-  memset(&s_parse_msg, 0, sizeof(s_parse_msg));
+  Lora_E22_ResetParser();
 
   s_last_rx_ms        = 0U;
   s_rx_frame_count    = 0U;
@@ -236,7 +243,7 @@ Lora_Result_t Lora_E22_Init(void)
   s_rx_sequence_lost_count = 0U;
   s_last_tx_ms        = 0U;
   s_last_msg_id       = 0U;
-  s_last_aux_ready_ms = BSP_Time_GetTickMs();
+  s_last_aux_ready_ms = now_ms;
   memset(s_rx_sequence_seen, 0, sizeof(s_rx_sequence_seen));
   memset(s_rx_sequence_last, 0, sizeof(s_rx_sequence_last));
   s_tx_state          = LORA_TX_IDLE;
@@ -259,11 +266,14 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
   uint16_t received;
   uint16_t rx_budget = LORA_E22_RX_SERVICE_BYTE_BUDGET;
   uint16_t i;
+  Lora_Result_t init_result;
 
   if (s_reinit_request != 0U) {
     s_reinit_request = 0U;
-    if (Lora_E22_Init() != LORA_RESULT_OK) {
-      return LORA_RESULT_IO_ERROR;
+    init_result = Lora_E22_Init();
+    if (init_result != LORA_RESULT_OK) {
+      s_reinit_request = 1U;
+      return init_result;
     }
   }
 
@@ -273,8 +283,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
 
   if (BSP_LoRa_ConsumeRecoverRxRequest() != 0U) {
     BSP_LoRa_RecoverRx();
-    memset(&s_parse_status, 0, sizeof(s_parse_status));
-    memset(&s_parse_msg, 0, sizeof(s_parse_msg));
+    Lora_E22_ResetParser();
   }
 
   while ((rx_budget != 0U) && ((available = BSP_LoRa_GetRxCount()) > 0U)) {
@@ -290,6 +299,11 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
     for (i = 0U; i < received; i++) {
       uint8_t parse_error_before = s_parse_status.parse_error;
       uint16_t drop_before       = s_parse_status.packet_rx_drop_count;
+
+      if ((s_parse_last_byte_ms != 0U) && ((uint32_t)(now_ms - s_parse_last_byte_ms) > LORA_E22_PARSE_IDLE_RESET_MS)) {
+        Lora_E22_ResetParser();
+      }
+      s_parse_last_byte_ms = now_ms;
 
       if (mavlink_parse_char(MAVLINK_COMM_0, temp[i], &s_parse_msg, &s_parse_status) != 0) {
         /* --- complete MAVLink frame received --- */

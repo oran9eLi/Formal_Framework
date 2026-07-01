@@ -36,11 +36,19 @@
 #define BME280_CTRL_HUM_X1          BME280_OSRS_X1
 #define BME280_CONFIG_STANDBY_0_5MS 0x00U
 
-#define BME280_I2C_TIMEOUT_MS       4U
+#define BME280_I2C_TIMEOUT_MS       20U
+#define BME280_PROBE_TIMEOUT_MS     4U
 #define BME280_INIT_RETRY_MS        1000U
 #define BME280_REINIT_FAIL_LIMIT    5U
 #define BME280_RESET_DELAY_MS       2U
 #define BME280_MAX_WAIT_POLLS       20U
+#define BME280_MEASURE_DELAY_MS     10U
+#define BME280_MEASURE_TIMEOUT_MS   30U
+
+typedef enum {
+  BME280_MEASURE_IDLE = 0,
+  BME280_MEASURE_WAITING
+} Bme280_MeasureState_t;
 
 typedef struct {
   uint16_t dig_T1;
@@ -71,6 +79,8 @@ static uint8_t s_initialized;
 static uint32_t s_next_init_ms;
 static uint8_t s_read_fail_count;
 static volatile uint8_t s_reinit_request;
+static Bme280_MeasureState_t s_measure_state;
+static uint32_t s_measure_start_ms;
 
 static uint16_t Bme280_ReadU16LE(const uint8_t *data, uint16_t offset)
 {
@@ -100,12 +110,12 @@ static BSP_Status_t Bme280_WriteReg(uint8_t reg, uint8_t value)
 
 static Bme280_Result_t Bme280_ProbeAddress(void)
 {
-  if (BSP_I2C_IsDeviceReady(BME280_I2C_ADDR_PRIMARY, BME280_I2C_TIMEOUT_MS) == BSP_STATUS_OK) {
+  if (BSP_I2C_IsDeviceReady(BME280_I2C_ADDR_PRIMARY, BME280_PROBE_TIMEOUT_MS) == BSP_STATUS_OK) {
     s_addr = BME280_I2C_ADDR_PRIMARY;
     return BME280_RESULT_OK;
   }
 
-  if (BSP_I2C_IsDeviceReady(BME280_I2C_ADDR_SECONDARY, BME280_I2C_TIMEOUT_MS) == BSP_STATUS_OK) {
+  if (BSP_I2C_IsDeviceReady(BME280_I2C_ADDR_SECONDARY, BME280_PROBE_TIMEOUT_MS) == BSP_STATUS_OK) {
     s_addr = BME280_I2C_ADDR_SECONDARY;
     return BME280_RESULT_OK;
   }
@@ -236,8 +246,10 @@ Bme280_Result_t Sensor_BME280_Init(void)
 
   memset(&s_snapshot, 0, sizeof(s_snapshot));
   memset(&s_calib, 0, sizeof(s_calib));
-  s_initialized = 0U;
-  s_addr        = BME280_I2C_ADDR_PRIMARY;
+  s_initialized       = 0U;
+  s_addr              = BME280_I2C_ADDR_PRIMARY;
+  s_measure_state     = BME280_MEASURE_IDLE;
+  s_measure_start_ms  = 0U;
 
   result = Bme280_ProbeAddress();
   if (result != BME280_RESULT_OK) { return result; }
@@ -256,7 +268,13 @@ Bme280_Result_t Sensor_BME280_Init(void)
   if (result != BME280_RESULT_OK) { return result; }
 
   result = Bme280_ConfigureForcedMode();
-  if (result == BME280_RESULT_OK) { s_initialized = 1U; }
+  if (result == BME280_RESULT_OK) {
+    s_initialized       = 1U;
+    s_next_init_ms      = 0U;
+    s_read_fail_count   = 0U;
+    s_measure_state     = BME280_MEASURE_IDLE;
+    s_measure_start_ms  = 0U;
+  }
   return result;
 }
 
@@ -268,6 +286,7 @@ Bme280_Result_t Sensor_BME280_Init(void)
 static void Bme280_NoteReadFailure(void)
 {
   s_snapshot.error_count++;
+  s_measure_state = BME280_MEASURE_IDLE;
   if (++s_read_fail_count >= BME280_REINIT_FAIL_LIMIT) {
     s_initialized     = 0U;
     s_read_fail_count = 0U;
@@ -286,11 +305,14 @@ Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
   int32_t adc_T;
   int32_t adc_H;
   Bme280_Result_t result;
+  uint8_t status;
+  uint32_t elapsed_ms;
 
   if (s_reinit_request != 0U) {
     s_reinit_request = 0U;
     s_initialized    = 0U; /* force the re-init path below */
     s_next_init_ms   = 0U; /* clear back-off so it re-inits now */
+    s_measure_state  = BME280_MEASURE_IDLE;
   }
 
   if (s_initialized == 0U) {
@@ -299,8 +321,9 @@ Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
      * stuck device is probed over blocking I2C every service period,
      * which starves lower-priority tasks (for example the display).
      */
-    if ((s_next_init_ms != 0U) && (now_ms < s_next_init_ms)) { return BME280_RESULT_NO_DATA; }
+    if ((s_next_init_ms != 0U) && ((int32_t)(now_ms - s_next_init_ms) < 0)) { return BME280_RESULT_NO_DATA; }
 
+    (void)BSP_I2C_Recover();
     result = Sensor_BME280_Init();
     if (result != BME280_RESULT_OK) {
       s_next_init_ms = now_ms + BME280_INIT_RETRY_MS;
@@ -309,17 +332,31 @@ Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
     }
   }
 
-  result = Bme280_ConfigureForcedMode();
-  if (result != BME280_RESULT_OK) {
-    Bme280_NoteReadFailure();
-    return result;
+  if (s_measure_state == BME280_MEASURE_IDLE) {
+    result = Bme280_ConfigureForcedMode();
+    if (result != BME280_RESULT_OK) {
+      Bme280_NoteReadFailure();
+      return result;
+    }
+
+    s_measure_start_ms = now_ms;
+    s_measure_state    = BME280_MEASURE_WAITING;
+    return BME280_RESULT_NO_DATA;
   }
 
-  BSP_Time_DelayMs(1U);
-  result = Bme280_WaitStatusClear(BME280_STATUS_MEASURING);
-  if (result != BME280_RESULT_OK) {
+  elapsed_ms = (uint32_t)(now_ms - s_measure_start_ms);
+  if (elapsed_ms < BME280_MEASURE_DELAY_MS) { return BME280_RESULT_NO_DATA; }
+
+  status = 0U;
+  if (Bme280_ReadReg(BME280_REG_STATUS, &status, 1U) != BSP_STATUS_OK) {
     Bme280_NoteReadFailure();
-    return result;
+    return BME280_RESULT_IO_ERROR;
+  }
+
+  if ((status & BME280_STATUS_MEASURING) != 0U) {
+    if (elapsed_ms < BME280_MEASURE_TIMEOUT_MS) { return BME280_RESULT_NO_DATA; }
+    Bme280_NoteReadFailure();
+    return BME280_RESULT_TIMEOUT;
   }
 
   if (Bme280_ReadReg(BME280_REG_DATA, data, sizeof(data)) != BSP_STATUS_OK) {
@@ -332,6 +369,7 @@ Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
   adc_H = (int32_t)((((uint32_t)data[6]) << 8) | data[7]);
 
   s_read_fail_count = 0U;
+  s_measure_state   = BME280_MEASURE_IDLE;
   s_snapshot.rx_sequence++;
   if (s_snapshot.rx_sequence == 0U) { s_snapshot.rx_sequence = 1U; }
   s_snapshot.sample_time_ms        = now_ms;

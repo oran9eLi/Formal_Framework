@@ -545,20 +545,38 @@ void Px4Lite_LoRaRequestReinit(void)
 
 Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms)
 {
-  return (Lora_E22_Service(now_ms) == LORA_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  Lora_Result_t result = Lora_E22_Service(now_ms);
+  if (result == LORA_RESULT_OK) { return PX4LITE_OK; }
+  if (result == LORA_RESULT_BUSY) { return PX4LITE_BUSY; }
+  return PX4LITE_IO_ERROR;
 }
 
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len)
 {
-  Lora_Result_t result = Lora_E22_Send(data, len);
+  Lora_Result_t result;
+
+  if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
+
+  result = Lora_E22_Send(data, len);
   if (result == LORA_RESULT_OK) return PX4LITE_OK;
   if (result == LORA_RESULT_BUSY) return PX4LITE_BUSY;
+  if (result == LORA_RESULT_INVALID_PARAM) return PX4LITE_INVALID_PARAM;
   return PX4LITE_IO_ERROR;
 }
 
 Px4Lite_Result_t Px4Lite_RemoteIdInit(void)
 {
   return (BSP_RemoteId_Init() == 0) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+}
+
+uint8_t Px4Lite_RemoteIdIsReady(void)
+{
+  return BSP_RemoteId_IsReady();
+}
+
+void Px4Lite_RemoteIdAbortTx(void)
+{
+  BSP_RemoteId_AbortTx();
 }
 
 Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len)

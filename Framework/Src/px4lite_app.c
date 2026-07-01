@@ -18,6 +18,8 @@
 #include "px4lite_time.h"
 #include "px4lite_work.h"
 #include "px4lite_storage.h"
+
+#include <stddef.h>
 #include "debug_console.h"
 #include "debug_service.h"
 #include "debug_task_monitor.h"
@@ -57,7 +59,7 @@ static const Px4Lite_ModuleDescriptor_t s_lora_descriptor = {PX4LITE_MODULE_LORA
 #endif
 
 #if PX4LITE_ENABLE_REMOTE_ID
-static const Px4Lite_ModuleDescriptor_t s_remoteid_descriptor = {PX4LITE_MODULE_REMOTE_ID, "remoteid", PX4LITE_ENABLE_REMOTE_ID, 0U, Px4Lite_RemoteIdModuleInit, NULL, NULL, NULL, NULL};
+static const Px4Lite_ModuleDescriptor_t s_remoteid_descriptor = {PX4LITE_MODULE_REMOTE_ID, "remoteid", PX4LITE_ENABLE_REMOTE_ID, 0U, Px4Lite_RemoteIdModuleInit, NULL, NULL, NULL, Px4Lite_RemoteIdRecover};
 #endif
 
 #if PX4LITE_ENABLE_STORAGE
@@ -161,6 +163,11 @@ BaseType_t Px4Lite_AppInit(void)
 #endif
 
   if (DebugService_CreateTask() != pdPASS) { return pdFAIL; }
+
+  if (xPortGetFreeHeapSize() < (size_t)PX4LITE_HEAP_MIN_FREE_BYTES) {
+    DBG_BOOT_PRINT("boot failed: heap_free=%lu bytes < %lu bytes", (unsigned long)xPortGetFreeHeapSize(), (unsigned long)PX4LITE_HEAP_MIN_FREE_BYTES);
+    return pdFAIL;
+  }
 
   DBG_BOOT_PRINT("Framework tasks ready, heap_free=%lu bytes", (unsigned long)xPortGetFreeHeapSize());
 

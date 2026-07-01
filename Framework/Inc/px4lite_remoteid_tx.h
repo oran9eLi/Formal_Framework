@@ -29,6 +29,9 @@ typedef struct {
   uint32_t error_count;         /**< 编码或底层提交失败次数。 */
   uint32_t last_message_id;     /**< 最近成功提交的 MAVLink message id。 */
   uint32_t last_location_seq;   /**< 最近发送位置对应的 Navigation sequence。 */
+  uint32_t last_success_ms;      /**< 最近一次成功提交到 UART4 DMA 的时间，单位 ms。 */
+  uint32_t last_busy_ms;         /**< 最近一次发现 UART4 DMA 忙的时间，单位 ms。 */
+  uint32_t last_error_ms;        /**< 最近一次编码或底层提交失败的时间，单位 ms。 */
 } Px4Lite_RemoteIdTxStats_t;
 
 /**

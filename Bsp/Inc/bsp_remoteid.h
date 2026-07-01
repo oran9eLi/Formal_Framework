@@ -43,6 +43,15 @@ int32_t BSP_RemoteId_StartSend(const uint8_t *data, uint16_t len);
 uint8_t BSP_RemoteId_IsTxBusy(void);
 
 /**
+ * @brief 查询 RemoteID UART4/DMA 通道是否已经完成本地初始化。
+ *
+ * @return 1 表示本地 UART4/DMA 发送通道可提交数据，0 表示尚未初始化或初始化失败。
+ *
+ * @note 该状态只证明 STM32 本地发送通道可用，不证明 ESP32-S3 已经收到或完成广播。
+ */
+uint8_t BSP_RemoteId_IsReady(void);
+
+/**
  * @brief 中止当前 RemoteID TX DMA 发送。
  */
 void BSP_RemoteId_AbortTx(void);

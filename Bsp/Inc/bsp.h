@@ -56,4 +56,11 @@ BSP_Status_t BSP_Init(void);
  */
 void BSP_GetInitDebugInfo(BSP_InitDebugInfo_t *out);
 
+/**
+ * @brief 在不可恢复错误路径中停止仍可能写内存的 DMA/异步发送。
+ *
+ * @note 仅供 `Error_Handler()` 等停机路径调用，不执行协议恢复或业务告警。
+ */
+void BSP_EmergencyStopDma(void);
+
 #endif

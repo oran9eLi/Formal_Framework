@@ -27,7 +27,7 @@
 #define APP_ALARM_MAX_AGE_MS       500U  /**< Alarm 快照最大可接受年龄，单位：ms。 */
 #define APP_MOTOR_MAX_AGE_MS       500U  /**< Motor 命令快照最大可接受年龄，单位：ms。 */
 #define APP_DATETIME_MAX_AGE_MS    2500U /**< DateTime 快照最大可接受年龄，单位：ms。 */
-#define APP_REMOTE_MAX_AGE_MS      3000U /**< 远端显示快照最大可接受年龄，单位：ms。 */
+#define APP_REMOTE_MAX_AGE_MS      12000U /**< 远端显示快照最大可接受年龄，单位：ms。 */
 #define APP_STATUS_COPY_RETRY_MAX  3U    /**< 状态版本一致性复制的最大重试次数。 */
 #define APP_DISPLAY_MOTOR_COUNT    4U    /**< Display 视图固定显示的电机数量。 */
 #define APP_DISPLAY_ALARM_MAX      16U   /**< Display 视图固定导出的告警记录容量。 */
@@ -215,7 +215,7 @@ typedef struct {
   uint8_t system_ready;                                  /**< 系统就绪标志，1 表示就绪。 */
   uint8_t view_node_id;                                  /**< 当前显示对象 node_id；Remote ID 接入前作为临时身份。 */
   uint8_t view_system_id;                                /**< 当前显示对象 MAVLink system id。 */
-  uint8_t view_remote_id_valid;                          /**< Remote ID 显示有效标志，当前预留为 0。 */
+  uint8_t view_remote_id_valid;                          /**< Remote ID 显示有效标志；当前使用板卡身份 DCDW-xxx。 */
   App_ModuleView_t gnss;                                 /**< GNSS 模块显示状态。 */
   App_ModuleView_t imu;                                  /**< IMU 模块显示状态。 */
   App_ModuleView_t baro;                                 /**< Baro 模块显示状态。 */
@@ -224,6 +224,7 @@ typedef struct {
   App_ModuleView_t storage;                              /**< Storage 模块显示状态。 */
   App_ModuleView_t control;                              /**< Control 模块显示状态。 */
   App_ModuleView_t five_g;                               /**< 5G-A 模块显示状态。 */
+  App_ModuleView_t remote_id;                            /**< Remote ID 本地发送通道模块显示状态。 */
   uint32_t gnss_utc_sec;                                 /**< GNSS UTC 当日秒数，单位：s。 */
   uint32_t gnss_utc_date;                                /**< RMC 日期，压缩格式 yymmdd。 */
   int32_t latitude_e7;                                   /**< 纬度，单位：degree * 1e7。 */
@@ -432,7 +433,49 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
  */
 uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
 
+/**
+ * @brief 清空本机固定环形消息日志。
+ *
+ * @note 这是 Business 层访问 Framework 本机消息日志的唯一 App API 包装入口。
+ */
+void App_ResetLocalMessageLog(void);
+
+/**
+ * @brief 向本机固定环形消息日志写入一条结构化消息。
+ *
+ * @param[in] message_id 业务消息编号。
+ * @param[in] time_hhmmss 显示侧压缩时间，格式 HHMMSS。
+ * @param[in] value0 预留数值 0。
+ * @param[in] value1 预留数值 1。
+ * @param[in] value2 预留数值 2。
+ * @param[in] severity 显示和远端转发使用的严重度。
+ */
+void App_PushLocalMessageLog(uint16_t message_id, uint32_t time_hhmmss, int32_t value0, int32_t value1, int32_t value2, uint8_t severity);
+
+/**
+ * @brief 复制本机固定环形消息日志。
+ *
+ * @param[out] entries 输出日志数组，可为 NULL。
+ * @param[in] capacity 输出数组容量。
+ * @param[out] version 日志版本号，可为 NULL。
+ * @param[out] last_seq 最新日志序号，可为 NULL。
+ *
+ * @return 已复制条目数量。
+ */
+uint16_t App_CopyLocalMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint32_t *version, uint16_t *last_seq);
+
 uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint16_t *last_seq, uint32_t now_ms);
+
+/**
+ * @brief 返回远端消息日志显示版本。
+ *
+ * @param[in] now_ms 当前系统毫秒时间，用于判断远端日志新鲜度。
+ *
+ * @return 远端日志最新序号；无新鲜远端日志时返回 0。
+ *
+ * @note Display 用该版本驱动 LVGL 日志区重绘，避免远端日志依赖本机日志版本。
+ */
+uint32_t App_GetRemoteMessageLogVersion(uint32_t now_ms);
 
 /**
  * @brief 开启或关闭当前选中远端节点的主数据查看租约。

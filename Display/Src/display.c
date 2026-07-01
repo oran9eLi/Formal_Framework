@@ -39,6 +39,7 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, DISPLAY_HMI_PAGE_SELF_CHECK, 0x1001U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 226U, 140U, 16U, 16U, "self_check_mpu", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_BME280, DISPLAY_HMI_PAGE_SELF_CHECK, 0x1002U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 382U, 140U, 16U, 16U, "self_check_bme", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_LORA, DISPLAY_HMI_PAGE_SELF_CHECK, 0x100AU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 70U, 252U, 16U, 16U, "self_check_lora", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, DISPLAY_HMI_PAGE_SELF_CHECK, 0x100FU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 226U, 364U, 16U, 16U, "self_check_remoteid", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_SD, DISPLAY_HMI_PAGE_SELF_CHECK, 0x1003U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 226U, 252U, 16U, 16U, "self_check_sd", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, DISPLAY_HMI_PAGE_SELF_CHECK, 0x1004U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 382U, 252U, 16U, 16U, "self_check_motor1", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, DISPLAY_HMI_PAGE_SELF_CHECK, 0x100CU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 70U, 364U, 16U, 16U, "self_check_motor2", "-", "App_Registry"},
@@ -295,6 +296,7 @@ static void Display_InitSelfCheckValues(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, 0U);
@@ -305,6 +307,8 @@ static void Display_InitSelfCheckValues(void)
 
 static Display_Result_t Display_EnsureInit(void)
 {
+  uint32_t now_ms;
+
   if (s_recover_requested != 0U) {
     s_recover_requested   = 0U;
     s_display_initialized = 0U;
@@ -313,6 +317,15 @@ static Display_Result_t Display_EnsureInit(void)
 
   if (s_display_initialized == 0U) {
     return Display_Init();
+  }
+
+  if (s_display_ready == 0U) {
+    now_ms = Px4Lite_PlatformGetMs();
+    if (Display_LvglProbeRecover(now_ms) == DISPLAY_OK) {
+      s_display_ready = 1U;
+      (void)Display_LvglSetPage(s_current_page);
+      return DISPLAY_OK;
+    }
   }
 
   return (s_display_ready != 0U) ? DISPLAY_OK : DISPLAY_NOT_READY;
@@ -357,6 +370,7 @@ static void Display_LoadMockValues(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_DEBUG, 2U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, 2U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, 1U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, 1U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE, 0U);
 
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATA_SELFCHECK_RESULT, 0x00000020U);
@@ -731,6 +745,7 @@ static void Display_LoadSystemSnapshot(const App_DisplaySnapshot_t *view)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, Display_MapStateValue(view->imu.state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, Display_MapStateValue(view->baro.state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, Display_MapStateValue(view->lora.state));
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, Display_MapStateValue(view->remote_id.state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, Display_MapStateValue(view->lora.state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue(view->storage.state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, motor_state);
@@ -852,8 +867,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   if (s_data_source == DISPLAY_DATA_SOURCE_REMOTE) {
     snapshot_ready = App_CopyRemoteDisplaySnapshot(&s_display_snapshot, now_ms);
     if (snapshot_ready == 0U) {
-      Display_ReturnToLocalView(now_ms);
-      snapshot_ready = App_CopyDisplaySnapshot(&s_display_snapshot, now_ms);
+      return DISPLAY_NOT_READY;
     }
   } else {
     snapshot_ready = App_CopyDisplaySnapshot(&s_display_snapshot, now_ms);
@@ -894,7 +908,11 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   Display_LoadLoraStats(&s_display_snapshot);
 
   /* 消息日志缓冲版本变化即触发日志区重绘。 */
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, App_MessageLogGetVersion());
+  if (s_data_source == DISPLAY_DATA_SOURCE_REMOTE) {
+    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, 0x80000000UL | App_GetRemoteMessageLogVersion(now_ms));
+  } else {
+    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, App_MessageLogGetVersion());
+  }
 
   return DISPLAY_OK;
 }
@@ -908,6 +926,8 @@ Display_Result_t Display_RefreshStep(uint32_t now_ms, uint32_t budget_us)
 
   if ((result == DISPLAY_NOT_READY) && (Display_LvglNeedsRefresh() == 0U)) {
     s_display_ready = 0U;
+  } else if (result == DISPLAY_OK) {
+    s_display_ready = 1U;
   }
 
   return result;

@@ -71,7 +71,7 @@ static void MavRx_UpdateSequenceStats(Px4Lite_RemoteTelemetry_t *remote, const P
     remote->last_packet_sequence = frame->sequence;
   } else {
     delta = (uint8_t)(frame->sequence - remote->last_packet_sequence);
-    if ((delta != 0U) && (delta < 128U)) { remote->rx_sequence_lost_count += (uint32_t)(delta - 1U); }
+    if (delta != 0U) { remote->rx_sequence_lost_count += (uint32_t)(delta - 1U); }
     if (delta != 0U) { remote->last_packet_sequence = frame->sequence; }
   }
 

@@ -72,7 +72,7 @@ static uint32_t AppMsgLog_Hhmmss(uint32_t now_ms)
 static void AppMsgLog_Push(App_LogMessageId_t msg, uint32_t now_ms)
 {
   if (msg >= APP_LOGMSG_COUNT) { return; }
-  Px4Lite_LocalMsgLogPush((uint16_t)msg, AppMsgLog_Hhmmss(now_ms), 0U, 0U, 0U, (uint8_t)((msg == APP_LOGMSG_ALARM_ACTIVE) ? 1U : 0U));
+  App_PushLocalMessageLog((uint16_t)msg, AppMsgLog_Hhmmss(now_ms), 0, 0, 0, (uint8_t)((msg == APP_LOGMSG_ALARM_ACTIVE) ? 1U : 0U));
 }
 
 static void AppMsgLog_ResetDebounce(AppMsgLog_Debounce_t *db, uint32_t now_ms)
@@ -175,7 +175,7 @@ static App_LogMessageId_t AppMsgLog_MainMsg(void)
 
 void App_MessageLogInit(uint32_t now_ms)
 {
-  Px4Lite_LocalMsgLogReset();
+  App_ResetLocalMessageLog();
   memset(&s_view, 0, sizeof(s_view));
   s_boot_self = APP_LOGMSG_COUNT;
   s_boot_gps = APP_LOGMSG_COUNT;
@@ -295,13 +295,13 @@ void App_MessageLogUpdate(uint32_t now_ms)
 uint16_t App_MessageLogCopy(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint32_t *version, uint16_t *last_seq)
 {
   if ((entries == 0) || (capacity == 0U)) { return 0U; }
-  return Px4Lite_LocalMsgLogCopy(entries, capacity, version, last_seq);
+  return App_CopyLocalMessageLog(entries, capacity, version, last_seq);
 }
 
 uint32_t App_MessageLogGetVersion(void)
 {
   uint32_t version = 0U;
 
-  (void)Px4Lite_LocalMsgLogCopy(0, 0U, &version, 0);
+  (void)App_CopyLocalMessageLog(0, 0U, &version, 0);
   return version;
 }

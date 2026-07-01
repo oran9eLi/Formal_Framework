@@ -17,6 +17,8 @@
 
 static Nmea_GeoData_t s_geo;
 static Gnss_Snapshot_t s_snapshot;
+static uint8_t s_line_buf[NMEA_SENTENCE_MAX_LEN];
+static uint16_t s_line_pos;
 
 static uint8_t s_geo_seen;
 static uint8_t s_recover_rx_pending;
@@ -177,8 +179,10 @@ Gnss_Result_t Sensor_GNSS_Init(void)
 {
   memset(&s_geo, 0, sizeof(s_geo));
   memset(&s_snapshot, 0, sizeof(s_snapshot));
+  memset(s_line_buf, 0, sizeof(s_line_buf));
 
   s_geo_seen            = 0U;
+  s_line_pos            = 0U;
   s_snapshot.data_state = GNSS_DATA_NONE;
   s_recover_rx_pending  = 0U;
   s_recover_rx_last_ms  = 0U;
@@ -268,9 +272,6 @@ static void Gnss_RecordValidSentence(uint32_t now)
  */
 static void Gnss_FeedAndParse(uint32_t now)
 {
-  static uint8_t line_buf[NMEA_SENTENCE_MAX_LEN];
-  static uint16_t line_pos = 0U;
-
   uint8_t temp[128];
   uint16_t available;
   uint16_t received;
@@ -285,18 +286,18 @@ static void Gnss_FeedAndParse(uint32_t now)
       uint8_t ch = temp[i];
 
       if (ch == '$') {
-        line_pos             = 0U;
-        line_buf[line_pos++] = ch;
-      } else if ((line_pos > 0U) && (line_pos < (NMEA_SENTENCE_MAX_LEN - 1U))) {
-        line_buf[line_pos++] = ch;
+        s_line_pos               = 0U;
+        s_line_buf[s_line_pos++] = ch;
+      } else if ((s_line_pos > 0U) && (s_line_pos < (NMEA_SENTENCE_MAX_LEN - 1U))) {
+        s_line_buf[s_line_pos++] = ch;
 
         if (ch == '\n') {
           Nmea_Sentence_t sentence;
           uint16_t cursor = 0U;
 
-          line_buf[line_pos] = '\0';
+          s_line_buf[s_line_pos] = '\0';
 
-          if ((Nmea_ExtractSentence(line_buf, line_pos, &cursor, &sentence) != 0U) && (sentence.checksum_ok != 0U)) {
+          if ((Nmea_ExtractSentence(s_line_buf, s_line_pos, &cursor, &sentence) != 0U) && (sentence.checksum_ok != 0U)) {
             Gnss_RecordValidSentence(now);
 
             switch (sentence.type) {
@@ -336,10 +337,10 @@ static void Gnss_FeedAndParse(uint32_t now)
             }
           }
 
-          line_pos = 0U;
+          s_line_pos = 0U;
         }
       } else {
-        line_pos = 0U;
+        s_line_pos = 0U;
       }
     }
   }

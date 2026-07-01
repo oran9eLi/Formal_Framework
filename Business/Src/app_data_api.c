@@ -14,6 +14,7 @@
 #include "px4lite_config.h"
 #include "px4lite_control.h"
 #include "px4lite_faults.h"
+#include "px4lite_local_msglog.h"
 #include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
 #include "px4lite_modules.h"
@@ -377,6 +378,7 @@ static uint8_t App_FillDisplayModuleViews(App_DisplaySnapshot_t *out, const App_
     App_FillModuleViewFromStatus(&out->storage, &system->modules[PX4LITE_MODULE_STORAGE]);
     App_FillModuleViewFromStatus(&out->control, &system->modules[PX4LITE_MODULE_CONTROL]);
     App_FillModuleViewFromStatus(&out->five_g, &system->modules[PX4LITE_MODULE_5G]);
+    App_FillModuleViewFromStatus(&out->remote_id, &system->modules[PX4LITE_MODULE_REMOTE_ID]);
     return 1U;
   }
 
@@ -388,6 +390,7 @@ static uint8_t App_FillDisplayModuleViews(App_DisplaySnapshot_t *out, const App_
   loaded |= App_CopyModuleView(PX4LITE_MODULE_STORAGE, &out->storage);
   loaded |= App_CopyModuleView(PX4LITE_MODULE_CONTROL, &out->control);
   loaded |= App_CopyModuleView(PX4LITE_MODULE_5G, &out->five_g);
+  loaded |= App_CopyModuleView(PX4LITE_MODULE_REMOTE_ID, &out->remote_id);
 
   return loaded;
 }
@@ -424,6 +427,7 @@ static uint8_t App_FillRemoteModuleViews(App_DisplaySnapshot_t *out, const Px4Li
   loaded |= App_FillRemoteModuleView(remote, PX4LITE_MODULE_STORAGE, &out->storage);
   loaded |= App_FillRemoteModuleView(remote, PX4LITE_MODULE_CONTROL, &out->control);
   loaded |= App_FillRemoteModuleView(remote, PX4LITE_MODULE_5G, &out->five_g);
+  loaded |= App_FillRemoteModuleView(remote, PX4LITE_MODULE_REMOTE_ID, &out->remote_id);
   return loaded;
 }
 
@@ -484,6 +488,7 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
   memset(out, 0, sizeof(*out));
   out->view_node_id = (uint8_t)PX4LITE_NODE_ID;
   out->view_system_id = (uint8_t)PX4LITE_MAVLINK_SYSTEM_ID;
+  out->view_remote_id_valid = 1U;
 
   if (App_CopyNavigation(&s_display_navigation_scratch, now_ms) == PX4LITE_OK) {
     out->navigation_valid   = 1U;
@@ -572,12 +577,13 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
 
   if (out == 0) { return 0U; }
 
-  memset(out, 0, sizeof(*out));
   if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
   if (Px4Lite_IsFresh(&s_display_remote_scratch.header, now_ms, APP_REMOTE_MAX_AGE_MS) == 0U) { return 0U; }
 
+  memset(out, 0, sizeof(*out));
   out->view_system_id = s_display_remote_scratch.system_id;
   out->view_node_id = s_display_remote_scratch.system_id;
+  out->view_remote_id_valid = 1U;
   out->lora_active_viewer_node_id = s_display_remote_scratch.lora_active_viewer_node_id;
   out->lora_view_remaining_s = s_display_remote_scratch.lora_view_remaining_s;
   out->lora_view_preempted = ((s_display_remote_scratch.lora_active_viewer_node_id != 0U) &&
@@ -689,6 +695,21 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   return out->any_valid;
 }
 
+void App_ResetLocalMessageLog(void)
+{
+  Px4Lite_LocalMsgLogReset();
+}
+
+void App_PushLocalMessageLog(uint16_t message_id, uint32_t time_hhmmss, int32_t value0, int32_t value1, int32_t value2, uint8_t severity)
+{
+  Px4Lite_LocalMsgLogPush(message_id, time_hhmmss, value0, value1, value2, severity);
+}
+
+uint16_t App_CopyLocalMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint32_t *version, uint16_t *last_seq)
+{
+  return Px4Lite_LocalMsgLogCopy(entries, capacity, version, last_seq);
+}
+
 uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint16_t *last_seq, uint32_t now_ms)
 {
   uint16_t count;
@@ -711,6 +732,17 @@ uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity
   }
   if (last_seq != 0) { *last_seq = s_display_remote_scratch.log_latest_seq; }
   return count;
+}
+
+uint32_t App_GetRemoteMessageLogVersion(uint32_t now_ms)
+{
+  if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
+  if (Px4Lite_IsFresh(&s_display_remote_scratch.header, now_ms, APP_REMOTE_MAX_AGE_MS) == 0U) { return 0U; }
+  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) ||
+      ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_LOG) != 0U)) {
+    return 0U;
+  }
+  return (uint32_t)s_display_remote_scratch.log_latest_seq;
 }
 
 uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms)

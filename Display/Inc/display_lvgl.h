@@ -21,6 +21,7 @@ extern "C" {
 Display_Result_t Display_LvglInit(uint32_t now_ms);
 Display_Result_t Display_LvglSelfCheck(uint16_t *error_code);
 void Display_LvglRequestRecover(void);
+Display_Result_t Display_LvglProbeRecover(uint32_t now_ms);
 uint8_t Display_LvglNeedsRefresh(void);
 Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us);
 Display_Result_t Display_LvglSetValue(Display_HmiVariableId_t id, uint32_t value);

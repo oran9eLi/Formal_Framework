@@ -39,13 +39,14 @@
 #define DISPLAY_LVGL_FOOTER_H        56U
 #define DISPLAY_LVGL_CARD_RADIUS     6U
 #define DISPLAY_LVGL_VALUE_TEXT_LEN  32U
-#define DISPLAY_LVGL_STATUS_COUNT    9U
+#define DISPLAY_LVGL_STATUS_COUNT    10U
 #define DISPLAY_LVGL_TAB_COUNT       6U
 #define DISPLAY_LVGL_MOTOR_COUNT     4U
 #define DISPLAY_LVGL_LOG_ROWS        9U
 #define DISPLAY_LVGL_ALARM_ROWS      5U
 #define DISPLAY_LVGL_REMOTE_ROWS     16U
 #define DISPLAY_LVGL_LCD_PROBE_MS    1000U
+#define DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS 1000U
 
 /*
  * 自检汇总告警列表的中文字体。窄卡片要放下"代码+模块+原因"三项，
@@ -91,6 +92,7 @@ static const Display_LvglStatusItem_t s_status_items[DISPLAY_LVGL_STATUS_COUNT] 
     {DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, "\xE5""\xA7""\xBF""\xE6""\x80""\x81""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
     {DISPLAY_HMI_VAR_SELF_CHECK_BME280, "\xE7""\x8E""\xAF""\xE5""\xA2""\x83""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
     {DISPLAY_HMI_VAR_SELF_CHECK_LORA, "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, "RemoteID"},
     {DISPLAY_HMI_VAR_SELF_CHECK_SD, "\xE5""\xAD""\x98""\xE5""\x82""\xA8""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xB8""\x80"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xBA""\x8C"},
@@ -141,6 +143,7 @@ static uint8_t s_lvgl_display_ready;
 static uint8_t s_control_update_active;
 static uint32_t s_last_tick_ms;
 static uint32_t s_next_lcd_probe_ms;
+static uint32_t s_next_remote_list_rebuild_ms;
 static Display_DebugStats_t s_debug_stats;
 
 static void Display_LvglTouchActivity(void)
@@ -392,7 +395,7 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%04lu-%02lu-%02lu", (unsigned long)(value / 10000U), (unsigned long)((value / 100U) % 100U), (unsigned long)(value % 100U));
       break;
     case DISPLAY_HMI_VAR_VIEW_NODE_ID:
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "ID:%lu", (unsigned long)value);
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "DCDW-%03lu", (unsigned long)value);
       break;
     case DISPLAY_HMI_VAR_UPTIME_MS:
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lus", (unsigned long)(value / 1000U));
@@ -421,7 +424,9 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
     case DISPLAY_HMI_VAR_SELF_CHECK_MPU6050:
     case DISPLAY_HMI_VAR_SELF_CHECK_BME280:
     case DISPLAY_HMI_VAR_SELF_CHECK_LORA:
+    case DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID:
     case DISPLAY_HMI_VAR_SELF_CHECK_SD:
+    case DISPLAY_HMI_VAR_SELF_CHECK_5GA:
     case DISPLAY_HMI_VAR_SELF_CHECK_MOTOR:
     case DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2:
     case DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3:
@@ -890,6 +895,7 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
   Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 208, 36, 82, &lv_font_montserrat_14);
   (void)Display_LvglCreateCenteredLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 298, 9, 268, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
   (void)Display_LvglCreateCenteredLabel(bar, Display_LvglPageTitle(page), 298, 35, 268, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_VIEW_NODE_ID, 568, 1, 96, &lv_font_montserrat_14);
   /* 本地/远端按钮：放在"系统"左侧，点按切换本地常规页 / 远端通信连接页；
      标题随当前页显示"本地"或"远端"，按在远端页时高亮。 */
   {
@@ -1728,6 +1734,9 @@ static Display_Result_t Display_LvglCreatePage(Display_HmiPage_t page)
 
   if (page != DISPLAY_HMI_PAGE_HIDDEN) {
     Display_LvglCreateFooter(s_screen, page);
+    s_next_remote_list_rebuild_ms = 0U;
+  } else {
+    s_next_remote_list_rebuild_ms = s_last_tick_ms + DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS;
   }
 
   Display_LvglApplyCachedValues();
@@ -1790,6 +1799,28 @@ void Display_LvglRequestRecover(void)
 }
 
 /**
+ * @brief Probe and rebuild the LCD/LVGL backend after a previous NOT_READY state.
+ */
+Display_Result_t Display_LvglProbeRecover(uint32_t now_ms)
+{
+  Display_Result_t result;
+
+  if (s_lvgl_display_ready != 0U) { return DISPLAY_OK; }
+
+  if ((int32_t)(now_ms - s_next_lcd_probe_ms) < 0) { return DISPLAY_NOT_READY; }
+
+  result = Display_LvglInit(now_ms);
+  if (result != DISPLAY_OK) {
+    s_lvgl_display_ready = 0U;
+    s_next_lcd_probe_ms  = now_ms + DISPLAY_LVGL_LCD_PROBE_MS;
+    return DISPLAY_NOT_READY;
+  }
+
+  s_next_lcd_probe_ms = now_ms + DISPLAY_LVGL_LCD_PROBE_MS;
+  return DISPLAY_OK;
+}
+
+/**
  * @brief LVGL needs the task to service timers regularly.
  */
 uint8_t Display_LvglNeedsRefresh(void)
@@ -1807,7 +1838,7 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
   uint32_t elapsed_us;
 
   if (s_lvgl_display_ready == 0U) {
-    return DISPLAY_NOT_READY;
+    if (Display_LvglProbeRecover(now_ms) != DISPLAY_OK) { return DISPLAY_NOT_READY; }
   }
 
   if ((int32_t)(now_ms - s_next_lcd_probe_ms) >= 0) {
@@ -1819,6 +1850,16 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
   }
 
   start_us = (budget_us != 0U) ? Px4Lite_PlatformGetUs() : 0U;
+
+  if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) &&
+      (s_page_change_requested == 0U) &&
+      (s_next_remote_list_rebuild_ms != 0U) &&
+      ((int32_t)(now_ms - s_next_remote_list_rebuild_ms) >= 0)) {
+    s_requested_page = DISPLAY_HMI_PAGE_HIDDEN;
+    s_page_change_requested = 1U;
+    s_page_rebuild_requested = 1U;
+    s_next_remote_list_rebuild_ms = now_ms + DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS;
+  }
 
   if (s_page_change_requested != 0U) {
     s_page_change_requested = 0U;

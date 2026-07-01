@@ -3,17 +3,16 @@
  * @brief Business层结构化消息日志生产器接口。
  *
  * @details
- * 本模块按业务状态变化生成稳定的消息编号，并写入 Framework 的固定环形日志
- * `px4lite_local_msglog`。Display 层可以保留自己的屏幕显示缓存，但远程日志、Tunnel
- * 中继和后续 5G/RemoteID 业务日志统一以本模块生成的消息为准。
+ * 本模块按业务状态变化生成稳定的消息编号，并通过 `app_data_api.h` 写入本机固定环形日志。
+ * Display 层可以保留自己的屏幕显示缓存，但远程日志、Tunnel 中继和后续 5G/RemoteID
+ * 业务日志统一以本模块生成的消息为准。
  */
 
 #ifndef APP_MESSAGE_LOG_H
 #define APP_MESSAGE_LOG_H
 
 #include <stdint.h>
-#include "px4lite_local_msglog.h"
-#include "px4lite_types.h"
+#include "app_data_api.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -90,6 +90,7 @@ static mavlink_message_t s_message;
 static uint8_t s_frame[MAVLINK_MAX_PACKET_LEN];
 static Px4Lite_MavlinkTxStats_t s_stats;
 static uint32_t s_lora_summary_count;
+static uint32_t s_env_humidity_count;
 
 static uint32_t s_next_heartbeat_ms;
 static uint32_t s_next_gps_raw_ms;
@@ -137,6 +138,8 @@ static uint8_t s_tunnel_payload[MAVLINK_MSG_TUNNEL_FIELD_PAYLOAD_LEN];
 static Px4Lite_AlarmSnapshot_t s_alarm_tx_snapshot;
 static Px4Lite_LogEntry_t s_log_tx_entries[PX4LITE_LOCAL_LOG_CAP];
 static uint16_t s_log_tx_after_seq;
+static uint32_t s_last_alarm_event_sequence;
+static uint16_t s_last_log_event_sequence;
 static Px4Lite_MotorOutputs_t s_remote_motor_current;
 static Px4Lite_MotorOutputs_t s_remote_motor_last;
 static uint8_t s_remote_motor_last_valid;
@@ -499,6 +502,40 @@ static void MavTx_UpdateNodePoll(uint32_t now_ms)
 #else
   (void)now_ms;
 #endif
+}
+
+static void MavTx_PullDueNow(uint32_t now_ms, uint32_t *next_ms)
+{
+  if (next_ms == 0) { return; }
+  if (MavTx_TimeReached(now_ms, *next_ms) == 0U) { *next_ms = now_ms; }
+}
+
+static void MavTx_UpdateEventDeadlines(uint32_t now_ms)
+{
+  uint32_t alarm_publish_ms = 0U;
+  uint32_t alarm_sequence = 0U;
+  uint16_t active_count = 0U;
+  uint16_t highest_fault_code = 0U;
+  uint16_t highest_source_id = 0U;
+  Px4Lite_AlarmSeverity_t highest_severity = PX4LITE_ALARM_INFO;
+  uint16_t latest_log_seq = 0U;
+
+  if (Px4Lite_CopyAlarmSummary(&alarm_publish_ms, &alarm_sequence, &active_count, &highest_fault_code, &highest_source_id, &highest_severity) == PX4LITE_OK) {
+    if ((Px4Lite_ElapsedMs(now_ms, alarm_publish_ms) <= (PX4LITE_HEALTH_PERIOD_MS * 10U)) && (alarm_sequence != s_last_alarm_event_sequence)) {
+      s_last_alarm_event_sequence = alarm_sequence;
+      if ((PX4LITE_MAVLINK_ENABLE_STATUSTEXT != 0U) && (active_count != 0U)) { MavTx_PullDueNow(now_ms, &s_next_statustext_ms); }
+      if (PX4LITE_MAVLINK_ENABLE_REMOTE_ALARM != 0U) { MavTx_PullDueNow(now_ms, &s_next_remote_alarm_ms); }
+    }
+  }
+
+  (void)highest_fault_code;
+  (void)highest_source_id;
+  (void)highest_severity;
+  (void)Px4Lite_LocalMsgLogCopy(0, 0U, 0, &latest_log_seq);
+  if ((latest_log_seq != 0U) && (latest_log_seq != s_last_log_event_sequence)) {
+    s_last_log_event_sequence = latest_log_seq;
+    if (PX4LITE_MAVLINK_ENABLE_REMOTE_LOG != 0U) { MavTx_PullDueNow(now_ms, &s_next_remote_log_ms); }
+  }
 }
 
 /**
@@ -1190,7 +1227,7 @@ static const MavTx_Item_t s_mav_tx_catalog[] = {
     {"MODULE_STATE", PX4LITE_MAVLINK_ENABLE_MODULE_STATE, PX4LITE_MAVLINK_MODULE_STATE_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_module_state_ms, &s_stats.module_state_count, MavTx_SendModuleState, MavTx_ModuleStateSuccess, MAV_TX_SCOPE_EXTENSION},
     {"BATTERY", PX4LITE_MAVLINK_ENABLE_BATTERY_STATUS, PX4LITE_MAVLINK_BATTERY_PERIOD_MS, MAVLINK_MSG_ID_BATTERY_STATUS, &s_next_battery_ms, &s_stats.battery_status_count, MavTx_SendBatteryStatus, 0, MAV_TX_SCOPE_STANDARD},
     {"PRESSURE", PX4LITE_MAVLINK_ENABLE_SCALED_PRESSURE, PX4LITE_MAVLINK_PRESSURE_PERIOD_MS, MAVLINK_MSG_ID_SCALED_PRESSURE, &s_next_pressure_ms, &s_stats.scaled_pressure_count, MavTx_SendScaledPressure, 0, MAV_TX_SCOPE_STANDARD},
-    {"ENV_HUM", PX4LITE_MAVLINK_ENABLE_ENV_HUMIDITY, PX4LITE_MAVLINK_ENV_HUMIDITY_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_env_humidity_ms, &s_stats.scaled_pressure_count, MavTx_SendEnvHumidity, 0, MAV_TX_SCOPE_EXTENSION},
+    {"ENV_HUM", PX4LITE_MAVLINK_ENABLE_ENV_HUMIDITY, PX4LITE_MAVLINK_ENV_HUMIDITY_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_env_humidity_ms, &s_env_humidity_count, MavTx_SendEnvHumidity, 0, MAV_TX_SCOPE_EXTENSION},
     {"STATUSTEXT", PX4LITE_MAVLINK_ENABLE_STATUSTEXT, PX4LITE_MAVLINK_STATUSTEXT_PERIOD_MS, MAVLINK_MSG_ID_STATUSTEXT, &s_next_statustext_ms, &s_stats.statustext_count, MavTx_SendStatusText, 0, MAV_TX_SCOPE_STANDARD},
     {"REMOTE_STATUS", PX4LITE_MAVLINK_ENABLE_REMOTE_STATUS, PX4LITE_MAVLINK_REMOTE_STATUS_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_remote_status_ms, &s_stats.remote_status_count, MavTx_SendRemoteStatus, 0, MAV_TX_SCOPE_EXTENSION},
     {"REMOTE_MOTOR", PX4LITE_MAVLINK_ENABLE_REMOTE_MOTOR, PX4LITE_MAVLINK_REMOTE_MOTOR_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_remote_motor_ms, &s_stats.remote_motor_count, MavTx_SendRemoteMotor, 0, MAV_TX_SCOPE_EXTENSION},
@@ -1206,6 +1243,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   memset(s_frame, 0, sizeof(s_frame));
   memset(&s_stats, 0, sizeof(s_stats));
   s_lora_summary_count = 0U;
+  s_env_humidity_count = 0U;
 
   s_next_heartbeat_ms   = now_ms + ((uint32_t)PX4LITE_NODE_ID * PX4LITE_MAVLINK_HEARTBEAT_SLOT_MS);
   s_next_lora_summary_ms = now_ms + 80U + ((uint32_t)PX4LITE_NODE_ID * PX4LITE_MAVLINK_HEARTBEAT_SLOT_MS);
@@ -1253,6 +1291,8 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   memset(&s_alarm_tx_snapshot, 0, sizeof(s_alarm_tx_snapshot));
   memset(s_log_tx_entries, 0, sizeof(s_log_tx_entries));
   s_log_tx_after_seq = 0U;
+  s_last_alarm_event_sequence = 0U;
+  s_last_log_event_sequence = 0U;
   memset(&s_remote_motor_current, 0, sizeof(s_remote_motor_current));
   memset(&s_remote_motor_last, 0, sizeof(s_remote_motor_last));
   s_remote_motor_last_valid = 0U;
@@ -1269,6 +1309,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
 
   MavTx_UpdateStreamRequest(now_ms);
   MavTx_UpdateNodePoll(now_ms);
+  MavTx_UpdateEventDeadlines(now_ms);
 
   result = MavTx_SendPendingAck(now_ms);
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
@@ -1355,12 +1396,6 @@ uint8_t Px4Lite_MavlinkShouldAcceptFullFrom(uint8_t source_node_id, uint32_t now
 #if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_SLAVE
   if ((source_node_id == (uint8_t)PX4LITE_MASTER_NODE_ID) &&
       (Px4Lite_ElapsedMs(now_ms, s_remote_view_start_ms) >= PX4LITE_REMOTE_VIEW_TIMEOUT_MS)) {
-    return 0U;
-  }
-  if ((source_node_id == (uint8_t)PX4LITE_MASTER_NODE_ID) &&
-      (Px4Lite_ElapsedMs(now_ms, s_master_summary_update_ms) <= PX4LITE_REMOTE_HEARTBEAT_STALE_MS) &&
-      (s_master_summary_active_viewer_node_id != 0U) &&
-      (s_master_summary_active_viewer_node_id != (uint8_t)PX4LITE_NODE_ID)) {
     return 0U;
   }
 #endif

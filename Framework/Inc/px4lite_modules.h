@@ -132,6 +132,15 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void);
 Px4Lite_Result_t Px4Lite_RemoteIdModuleInit(void);
 
 /**
+ * @brief 请求 RemoteID 模块在 comm task 中重新初始化本地 UART4/DMA 发送通道。
+ *
+ * @return 请求提交结果。
+ *
+ * @note 该函数供 registry recovery 调用，只置位请求标志，不在 Health task 中执行 HAL I/O。
+ */
+Px4Lite_Result_t Px4Lite_RemoteIdRecover(void);
+
+/**
  * @brief 执行一次非阻塞通信周期。
  *
  * @param[in] now_ms 当前 comm 周期时间，单位：ms。

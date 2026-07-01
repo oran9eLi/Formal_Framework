@@ -92,6 +92,7 @@ static void SystemClock_Config(void)
  */
 void Error_Handler(void)
 {
+  BSP_EmergencyStopDma();
   __disable_irq();
   for (;;) {}
 }

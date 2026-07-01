@@ -169,6 +169,7 @@ static void RemoteId_RecordResult(Px4Lite_Result_t result, uint32_t now_ms, cons
     *item->next_ms       = now_ms + item->period_ms;
     *item->success_count = *item->success_count + 1U;
     s_remoteid_stats.last_message_id = item->message_id;
+    s_remoteid_stats.last_success_ms = now_ms;
   } else {
     *item->next_ms = now_ms + PX4LITE_REMOTEID_RETRY_PERIOD_MS;
     if ((result == PX4LITE_NOT_READY) || (result == PX4LITE_IDLE)) {
@@ -177,8 +178,10 @@ static void RemoteId_RecordResult(Px4Lite_Result_t result, uint32_t now_ms, cons
       s_remoteid_stats.stale_count++;
     } else if (result == PX4LITE_BUSY) {
       s_remoteid_stats.busy_count++;
+      s_remoteid_stats.last_busy_ms = now_ms;
     } else {
       s_remoteid_stats.error_count++;
+      s_remoteid_stats.last_error_ms = now_ms;
     }
   }
 }

@@ -17,6 +17,7 @@ static UART_HandleTypeDef s_remoteid_uart;
 static DMA_HandleTypeDef s_remoteid_tx_dma;
 static uint8_t s_remoteid_tx_buf[BSP_REMOTEID_TX_BUF_SIZE];
 static volatile uint8_t s_remoteid_tx_busy;
+static volatile uint8_t s_remoteid_initialized;
 
 /**
  * @brief 返回 RemoteID UART4 句柄。
@@ -31,6 +32,13 @@ UART_HandleTypeDef *BSP_RemoteId_GetUartHandle(void)
  */
 int32_t BSP_RemoteId_Init(void)
 {
+  if (s_remoteid_initialized != 0U) {
+    BSP_RemoteId_AbortTx();
+    (void)HAL_UART_DeInit(&s_remoteid_uart);
+    (void)HAL_DMA_DeInit(&s_remoteid_tx_dma);
+    s_remoteid_initialized = 0U;
+  }
+
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_UART4_CLK_ENABLE();
   __HAL_RCC_DMA1_CLK_ENABLE();
@@ -43,7 +51,10 @@ int32_t BSP_RemoteId_Init(void)
   s_remoteid_uart.Init.Mode         = BSP_REMOTEID_UART_MODE;
   s_remoteid_uart.Init.HwFlowCtl    = BSP_REMOTEID_UART_HWCTL;
   s_remoteid_uart.Init.OverSampling = BSP_REMOTEID_UART_OVERSAMP;
-  if (HAL_UART_Init(&s_remoteid_uart) != HAL_OK) { return -1; }
+  if (HAL_UART_Init(&s_remoteid_uart) != HAL_OK) {
+    s_remoteid_tx_busy = 0U;
+    return -1;
+  }
 
   s_remoteid_tx_dma.Instance                 = BSP_REMOTEID_TX_DMA_STREAM;
   s_remoteid_tx_dma.Init.Channel             = BSP_REMOTEID_TX_DMA_CHANNEL;
@@ -55,10 +66,15 @@ int32_t BSP_RemoteId_Init(void)
   s_remoteid_tx_dma.Init.Mode                = DMA_NORMAL;
   s_remoteid_tx_dma.Init.Priority            = DMA_PRIORITY_MEDIUM;
   s_remoteid_tx_dma.Init.FIFOMode            = DMA_FIFOMODE_DISABLE;
-  if (HAL_DMA_Init(&s_remoteid_tx_dma) != HAL_OK) { return -1; }
+  if (HAL_DMA_Init(&s_remoteid_tx_dma) != HAL_OK) {
+    (void)HAL_UART_DeInit(&s_remoteid_uart);
+    s_remoteid_tx_busy = 0U;
+    return -1;
+  }
 
   __HAL_LINKDMA(&s_remoteid_uart, hdmatx, s_remoteid_tx_dma);
   s_remoteid_tx_busy = 0U;
+  s_remoteid_initialized = 1U;
   return 0;
 }
 
@@ -68,6 +84,7 @@ int32_t BSP_RemoteId_Init(void)
 int32_t BSP_RemoteId_StartSend(const uint8_t *data, uint16_t len)
 {
   if ((data == 0) || (len == 0U) || (len > BSP_REMOTEID_TX_BUF_SIZE)) { return -1; }
+  if (s_remoteid_initialized == 0U) { return -1; }
   if (s_remoteid_tx_busy != 0U) { return 1; }
 
   memcpy(s_remoteid_tx_buf, data, len);
@@ -87,12 +104,17 @@ uint8_t BSP_RemoteId_IsTxBusy(void)
   return s_remoteid_tx_busy;
 }
 
+uint8_t BSP_RemoteId_IsReady(void)
+{
+  return s_remoteid_initialized;
+}
+
 /**
  * @brief 中止当前 RemoteID TX DMA。
  */
 void BSP_RemoteId_AbortTx(void)
 {
-  (void)HAL_UART_AbortTransmit(&s_remoteid_uart);
+  if (s_remoteid_initialized != 0U) { (void)HAL_UART_AbortTransmit(&s_remoteid_uart); }
   s_remoteid_tx_busy = 0U;
 }
 
@@ -118,6 +140,7 @@ UART_HandleTypeDef *BSP_RemoteId_GetUartHandle(void) { return 0; }
 int32_t BSP_RemoteId_Init(void) { return 0; }
 int32_t BSP_RemoteId_StartSend(const uint8_t *data, uint16_t len) { (void)data; (void)len; return -1; }
 uint8_t BSP_RemoteId_IsTxBusy(void) { return 0U; }
+uint8_t BSP_RemoteId_IsReady(void) { return 0U; }
 void BSP_RemoteId_AbortTx(void) {}
 void BSP_RemoteId_TxDmaIrqHandler(void) {}
 void BSP_RemoteId_TxCompleteCallback(UART_HandleTypeDef *huart) { (void)huart; }

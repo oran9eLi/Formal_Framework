@@ -59,6 +59,8 @@ static uint32_t s_battery2_sequence;
 static uint32_t s_navigation_sequence;
 static uint32_t s_health_sequence;
 static uint32_t s_start_ms;
+static uint32_t s_remoteid_busy_since_ms;
+static volatile uint8_t s_remoteid_reinit_requested;
 static uint32_t s_last_imu_work_ms;
 static uint32_t s_last_baro_work_ms;
 static uint32_t s_last_battery_work_ms;
@@ -503,6 +505,8 @@ Px4Lite_Result_t Px4Lite_ModulesInit(void)
   s_battery2_sequence    = 0U;
   s_navigation_sequence  = 0U;
   s_health_sequence      = 0U;
+  s_remoteid_busy_since_ms = 0U;
+  s_remoteid_reinit_requested = 0U;
   s_last_imu_work_ms     = 0U;
   s_last_baro_work_ms    = 0U;
   s_last_battery_work_ms = 0U;
@@ -631,6 +635,14 @@ Px4Lite_Result_t Px4Lite_LoraRecover(void)
 {
 #if PX4LITE_ENABLE_LORA && PX4LITE_LORA_RECOVERY_ENABLE
   Px4Lite_LoRaRequestReinit();
+#endif
+  return PX4LITE_OK;
+}
+
+Px4Lite_Result_t Px4Lite_RemoteIdRecover(void)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  s_remoteid_reinit_requested = 1U;
 #endif
   return PX4LITE_OK;
 }
@@ -1171,10 +1183,33 @@ Px4Lite_Result_t Px4Lite_RemoteIdModuleInit(void)
   Px4Lite_Result_t result = Px4Lite_RemoteIdInit();
 
   if (result == PX4LITE_OK) { result = Px4Lite_RemoteIdTxInit(now_ms); }
+  s_remoteid_busy_since_ms = 0U;
+  s_remoteid_reinit_requested = 0U;
 
   Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   return result;
 #else
+  return PX4LITE_OK;
+#endif
+}
+
+static Px4Lite_Result_t Px4Lite_RemoteIdRunReinitIfRequested(uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  Px4Lite_Result_t result;
+
+  if (s_remoteid_reinit_requested == 0U) { return PX4LITE_OK; }
+
+  s_remoteid_reinit_requested = 0U;
+  Px4Lite_RemoteIdAbortTx();
+  result = Px4Lite_RemoteIdInit();
+  if (result == PX4LITE_OK) { result = Px4Lite_RemoteIdTxInit(now_ms); }
+
+  s_remoteid_busy_since_ms = 0U;
+  Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  return result;
+#else
+  (void)now_ms;
   return PX4LITE_OK;
 #endif
 }
@@ -1224,19 +1259,52 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 
 #if PX4LITE_ENABLE_REMOTE_ID
   {
-    Px4Lite_Result_t remoteid_result = Px4Lite_RemoteIdTxRun(now_ms);
+    Px4Lite_RemoteIdTxStats_t remoteid_stats;
+    Px4Lite_Result_t remoteid_result;
+
+    if (Px4Lite_RemoteIdRunReinitIfRequested(now_ms) != PX4LITE_OK) { return; }
+    if (Px4Lite_RemoteIdIsReady() == 0U) {
+      Px4Lite_RecordSensorIoError(PX4LITE_MODULE_REMOTE_ID, now_ms);
+      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+      return;
+    }
+
+    remoteid_result = Px4Lite_RemoteIdTxRun(now_ms);
+    memset(&remoteid_stats, 0, sizeof(remoteid_stats));
+    Px4Lite_RemoteIdTxGetStats(&remoteid_stats);
 
     if (remoteid_result == PX4LITE_OK) {
       taskENTER_CRITICAL();
-      s_status[PX4LITE_MODULE_REMOTE_ID].last_rx_ms = now_ms;
-      s_status[PX4LITE_MODULE_REMOTE_ID].last_valid_ms = now_ms;
+      s_status[PX4LITE_MODULE_REMOTE_ID].last_rx_ms = remoteid_stats.last_success_ms;
+      s_status[PX4LITE_MODULE_REMOTE_ID].last_valid_ms = remoteid_stats.last_success_ms;
+      s_status[PX4LITE_MODULE_REMOTE_ID].error_count = remoteid_stats.error_count;
+      s_status[PX4LITE_MODULE_REMOTE_ID].drop_count = remoteid_stats.busy_count;
       s_status[PX4LITE_MODULE_REMOTE_ID].consecutive_errors = 0U;
       if (s_status[PX4LITE_MODULE_REMOTE_ID].consecutive_valid < 65535U) { s_status[PX4LITE_MODULE_REMOTE_ID].consecutive_valid++; }
       taskEXIT_CRITICAL();
+      s_remoteid_busy_since_ms = 0U;
       Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
+    } else if (remoteid_result == PX4LITE_BUSY) {
+      if (s_remoteid_busy_since_ms == 0U) { s_remoteid_busy_since_ms = now_ms; }
+      if (Px4Lite_ElapsedMs(now_ms, s_remoteid_busy_since_ms) > PX4LITE_REMOTEID_TX_BUSY_TIMEOUT_MS) {
+        Px4Lite_RemoteIdAbortTx();
+        s_remoteid_reinit_requested = 1U;
+        Px4Lite_RecordSensorIoError(PX4LITE_MODULE_REMOTE_ID, now_ms);
+        Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+      }
     } else if (remoteid_result == PX4LITE_IO_ERROR) {
+      s_remoteid_busy_since_ms = 0U;
+      s_remoteid_reinit_requested = 1U;
       Px4Lite_RecordSensorIoError(PX4LITE_MODULE_REMOTE_ID, now_ms);
-      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+    } else {
+      s_remoteid_busy_since_ms = 0U;
+      if ((remoteid_stats.last_success_ms == 0U) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_REMOTEID_STARTUP_GRACE_MS)) {
+        Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+      } else if ((remoteid_stats.last_success_ms != 0U) && (Px4Lite_ElapsedMs(now_ms, remoteid_stats.last_success_ms) > PX4LITE_REMOTEID_OFFLINE_MS)) {
+        Px4Lite_RecordSensorIoError(PX4LITE_MODULE_REMOTE_ID, now_ms);
+        Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+      }
     }
   }
 #endif

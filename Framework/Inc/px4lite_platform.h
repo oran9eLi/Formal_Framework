@@ -268,6 +268,22 @@ Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
 Px4Lite_Result_t Px4Lite_RemoteIdInit(void);
 
 /**
+ * @brief 查询 RemoteID 本地 UART4/DMA 发送通道是否已初始化。
+ *
+ * @return 1 表示 STM32 本地发送通道可用，0 表示尚未初始化或初始化失败。
+ *
+ * @note 本函数不证明 ESP32-S3 已经接收数据或完成 BLE/Wi-Fi 广播。
+ */
+uint8_t Px4Lite_RemoteIdIsReady(void);
+
+/**
+ * @brief 中止当前 RemoteID UART4 DMA 发送。
+ *
+ * @note 仅用于发送超时或恢复路径，调用者必须在 comm task 或初始化路径中使用。
+ */
+void Px4Lite_RemoteIdAbortTx(void);
+
+/**
  * @brief 通过平台适配层发送一帧 RemoteID MAVLink 数据。
  *
  * @param[in] data 待发送字节缓冲区，不能为 NULL。
