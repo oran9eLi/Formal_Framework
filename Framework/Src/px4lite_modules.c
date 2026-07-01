@@ -20,6 +20,7 @@
 #include "px4lite_topics.h"
 #include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
+#include "px4lite_remoteid_tx.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <math.h>
@@ -1163,6 +1164,21 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
 #endif
 }
 
+Px4Lite_Result_t Px4Lite_RemoteIdModuleInit(void)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  uint32_t now_ms         = Px4Lite_PlatformGetMs();
+  Px4Lite_Result_t result = Px4Lite_RemoteIdInit();
+
+  if (result == PX4LITE_OK) { result = Px4Lite_RemoteIdTxInit(now_ms); }
+
+  Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  return result;
+#else
+  return PX4LITE_OK;
+#endif
+}
+
 void Px4Lite_CommWorkRun(uint32_t now_ms)
 {
 #if PX4LITE_ENABLE_LORA
@@ -1204,7 +1220,28 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   } else if ((state == PX4LITE_STATE_DEGRADED) || ((state == PX4LITE_STATE_STARTING) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_LORA_STARTUP_GRACE_MS))) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
   }
-#else
+#endif
+
+#if PX4LITE_ENABLE_REMOTE_ID
+  {
+    Px4Lite_Result_t remoteid_result = Px4Lite_RemoteIdTxRun(now_ms);
+
+    if (remoteid_result == PX4LITE_OK) {
+      taskENTER_CRITICAL();
+      s_status[PX4LITE_MODULE_REMOTE_ID].last_rx_ms = now_ms;
+      s_status[PX4LITE_MODULE_REMOTE_ID].last_valid_ms = now_ms;
+      s_status[PX4LITE_MODULE_REMOTE_ID].consecutive_errors = 0U;
+      if (s_status[PX4LITE_MODULE_REMOTE_ID].consecutive_valid < 65535U) { s_status[PX4LITE_MODULE_REMOTE_ID].consecutive_valid++; }
+      taskEXIT_CRITICAL();
+      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
+    } else if (remoteid_result == PX4LITE_IO_ERROR) {
+      Px4Lite_RecordSensorIoError(PX4LITE_MODULE_REMOTE_ID, now_ms);
+      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+    }
+  }
+#endif
+
+#if !PX4LITE_ENABLE_LORA && !PX4LITE_ENABLE_REMOTE_ID
   (void)now_ms;
 #endif
 }

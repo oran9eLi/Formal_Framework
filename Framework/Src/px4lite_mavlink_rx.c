@@ -14,6 +14,7 @@
 
 #include "px4lite_config.h"
 #include "px4lite_command.h"
+#include "px4lite_mavlink_tx.h"
 #include "px4lite_modules.h"
 #include "px4lite_remote_telemetry.h"
 #include "px4lite_remote_tunnel.h"
@@ -33,6 +34,8 @@
 #define MAV_RX_RAD_TO_DEG100 5729.57795f
 #define PX4LITE_RX_STREAM_COMMAND ((uint16_t)MAV_CMD_USER_1)
 #define PX4LITE_RX_NODE_POLL_COMMAND ((uint16_t)MAV_CMD_USER_2)
+
+static uint8_t MavRx_NameEquals(const char name[10], const char *literal);
 
 static Px4Lite_CommRxFrame_t s_rx_frame_scratch;
 static mavlink_message_t s_rx_message_scratch;
@@ -81,11 +84,35 @@ static uint8_t MavRx_FrameToRemoteNode(const Px4Lite_CommRxFrame_t *frame, uint8
   uint8_t node_id;
 
   if ((frame == 0) || (node_id_out == 0) || (frame->system_id == 0U)) { return 0U; }
-  node_id = (uint8_t)(frame->system_id - 1U);
+  node_id = frame->system_id;
   if (node_id == (uint8_t)PX4LITE_NODE_ID) { return 0U; }
   if (node_id >= PX4LITE_REMOTE_NODE_MAX) { return 0U; }
   *node_id_out = node_id;
   return 1U;
+}
+
+static uint8_t MavRx_IsLoRaSummaryMessage(const mavlink_message_t *message)
+{
+  mavlink_named_value_int_t packet;
+
+  if ((message == 0) || (message->msgid != MAVLINK_MSG_ID_NAMED_VALUE_INT)) { return 0U; }
+  mavlink_msg_named_value_int_decode(message, &packet);
+  return MavRx_NameEquals(packet.name, "LORASUM");
+}
+
+static uint8_t MavRx_IsFullDataMessage(const mavlink_message_t *message)
+{
+  if (message == 0) { return 0U; }
+  switch (message->msgid) {
+    case MAVLINK_MSG_ID_HEARTBEAT:
+    case MAVLINK_MSG_ID_COMMAND_LONG:
+    case MAVLINK_MSG_ID_COMMAND_ACK:
+      return 0U;
+    case MAVLINK_MSG_ID_NAMED_VALUE_INT:
+      return (MavRx_IsLoRaSummaryMessage(message) == 0U) ? 1U : 0U;
+    default:
+      return 1U;
+  }
 }
 
 static uint8_t MavRx_NameEquals(const char name[10], const char *literal)
@@ -277,7 +304,7 @@ static void MavRx_ApplyModuleStatePart(Px4Lite_RemoteTelemetry_t *remote, uint8_
   remote->modules_update_ms = remote->last_rx_ms;
 }
 
-static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message, uint32_t now_ms)
 {
   mavlink_named_value_int_t packet;
   uint32_t value;
@@ -287,6 +314,16 @@ static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, cons
 
   mavlink_msg_named_value_int_decode(message, &packet);
   value = (uint32_t)packet.value;
+
+  if (MavRx_NameEquals(packet.name, "LORASUM") != 0U) {
+    remote->lora_active_viewer_node_id = (uint8_t)(value & 0xFFU);
+    remote->lora_view_lease_id = (uint8_t)((value >> 8U) & 0xFFU);
+    remote->lora_view_remaining_s = (uint16_t)((value >> 16U) & 0xFFFFU);
+    remote->lora_summary_update_ms = remote->last_rx_ms;
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_LORA_SUMMARY;
+    Px4Lite_MavlinkHandleLoRaSummary((uint8_t)message->sysid, remote->lora_active_viewer_node_id, remote->lora_view_lease_id, remote->lora_view_remaining_s, now_ms);
+    return 1U;
+  }
 
   if (MavRx_NameEquals(packet.name, "GNSS_SAT") != 0U) {
     gps_used = (uint8_t)((value >> 16U) & 0xFFU);
@@ -442,7 +479,7 @@ static uint8_t MavRx_DecodeMessage(Px4Lite_RemoteTelemetry_t *remote, const mavl
     case MAVLINK_MSG_ID_SCALED_PRESSURE:
       return MavRx_DecodePressure(remote, message);
     case MAVLINK_MSG_ID_NAMED_VALUE_INT:
-      return MavRx_DecodeNamedValueInt(remote, message);
+      return MavRx_DecodeNamedValueInt(remote, message, now_ms);
     case MAVLINK_MSG_ID_STATUSTEXT:
       return MavRx_DecodeStatusText(remote, message);
     case MAVLINK_MSG_ID_TUNNEL:
@@ -467,6 +504,9 @@ Px4Lite_Result_t Px4Lite_MavlinkRxRun(uint32_t now_ms)
   if (MavRx_FrameToRemoteNode(&s_rx_frame_scratch, &remote_node_id) == 0U) { return PX4LITE_IDLE; }
 
   MavRx_MessageFromFrame(&s_rx_frame_scratch, &s_rx_message_scratch);
+  if ((MavRx_IsFullDataMessage(&s_rx_message_scratch) != 0U) && (Px4Lite_MavlinkShouldAcceptFullFrom(remote_node_id, now_ms) == 0U)) {
+    return PX4LITE_IDLE;
+  }
 
   copy_result = Px4Lite_RemoteTelemetryCopyNode(remote_node_id, &s_rx_remote_scratch);
   if (copy_result == PX4LITE_NOT_READY) {

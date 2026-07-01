@@ -439,6 +439,16 @@
               <FilePath>..\Framework\Src\px4lite_mavlink_tx.c</FilePath>
             </File>
             <File>
+              <FileName>px4lite_remoteid_tx.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_remoteid_tx.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_identity.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_identity.c</FilePath>
+            </File>
+            <File>
               <FileName>px4lite_mavlink_rx.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_mavlink_rx.c</FilePath>
@@ -617,6 +627,11 @@
               <FileName>bsp_lora.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\bsp_lora.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_remoteid.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_remoteid.c</FilePath>
             </File>
             <File>
               <FileName>bsp_lcd_fsmc.c</FileName>

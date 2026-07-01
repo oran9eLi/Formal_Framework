@@ -577,7 +577,11 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   if (Px4Lite_IsFresh(&s_display_remote_scratch.header, now_ms, APP_REMOTE_MAX_AGE_MS) == 0U) { return 0U; }
 
   out->view_system_id = s_display_remote_scratch.system_id;
-  out->view_node_id = (s_display_remote_scratch.system_id != 0U) ? (uint8_t)(s_display_remote_scratch.system_id - 1U) : 0U;
+  out->view_node_id = s_display_remote_scratch.system_id;
+  out->lora_active_viewer_node_id = s_display_remote_scratch.lora_active_viewer_node_id;
+  out->lora_view_remaining_s = s_display_remote_scratch.lora_view_remaining_s;
+  out->lora_view_preempted = ((s_display_remote_scratch.lora_active_viewer_node_id != 0U) &&
+                              (s_display_remote_scratch.lora_active_viewer_node_id != (uint8_t)PX4LITE_NODE_ID)) ? 1U : 0U;
 
   module_loaded = App_FillRemoteModuleViews(out, &s_display_remote_scratch);
   if (module_loaded != 0U) {
@@ -720,9 +724,9 @@ uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms)
 uint8_t App_SelectRemoteNode(uint8_t node_id, uint32_t now_ms)
 {
 #if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
-  if (node_id == 0U) { return 0U; }
+  if ((node_id == (uint8_t)PX4LITE_NODE_ID) || (node_id == (uint8_t)PX4LITE_MASTER_NODE_ID)) { return 0U; }
 #else
-  if (node_id != 0U) { return 0U; }
+  if (node_id != (uint8_t)PX4LITE_MASTER_NODE_ID) { return 0U; }
 #endif
   if (Px4Lite_SelectRemoteNode(node_id) != PX4LITE_OK) { return 0U; }
   return App_SetRemoteViewEnabled(1U, now_ms);
@@ -769,9 +773,9 @@ Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t c
 
   for (i = 0U; (i < raw_count) && (written < capacity); i++) {
 #if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
-    if (s_remote_node_status_scratch[i].node_id == 0U) { continue; }
+    if ((s_remote_node_status_scratch[i].node_id == (uint8_t)PX4LITE_NODE_ID) || (s_remote_node_status_scratch[i].node_id == (uint8_t)PX4LITE_MASTER_NODE_ID)) { continue; }
 #else
-    if (s_remote_node_status_scratch[i].node_id != 0U) { continue; }
+    if (s_remote_node_status_scratch[i].node_id != (uint8_t)PX4LITE_MASTER_NODE_ID) { continue; }
 #endif
     out[written].node_id = s_remote_node_status_scratch[i].node_id;
     out[written].system_id = s_remote_node_status_scratch[i].system_id;
@@ -783,6 +787,8 @@ Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t c
     out[written].rx_frame_count = s_remote_node_status_scratch[i].rx_frame_count;
     out[written].rx_sequence_lost_count = s_remote_node_status_scratch[i].rx_sequence_lost_count;
     out[written].rx_loss_rate_x10 = s_remote_node_status_scratch[i].rx_loss_rate_x10;
+    out[written].active_viewer_node_id = s_remote_node_status_scratch[i].active_viewer_node_id;
+    out[written].active_viewer_remaining_s = s_remote_node_status_scratch[i].active_viewer_remaining_s;
     out[written].reserved = 0U;
     written++;
   }

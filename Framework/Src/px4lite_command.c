@@ -43,7 +43,7 @@ static uint8_t Command_IsForThisSystem(uint8_t target_system, uint8_t target_com
 static uint8_t Command_SourceSystemToNode(uint8_t source_system, uint8_t *node_id)
 {
   if ((node_id == 0) || (source_system == 0U)) { return 0U; }
-  *node_id = (uint8_t)(source_system - 1U);
+  *node_id = source_system;
   return (*node_id < PX4LITE_REMOTE_NODE_MAX) ? 1U : 0U;
 }
 
@@ -53,7 +53,7 @@ static uint8_t Command_StreamControlAllowed(uint8_t source_system)
 
   if (Command_SourceSystemToNode(source_system, &source_node) == 0U) { return 0U; }
 #if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_SLAVE
-  return (source_node == 0U) ? 1U : 0U;
+  return (source_node == (uint8_t)PX4LITE_MASTER_NODE_ID) ? 1U : 0U;
 #else
   return (source_node != (uint8_t)PX4LITE_NODE_ID) ? 1U : 0U;
 #endif
@@ -65,7 +65,7 @@ static uint8_t Command_NodePollAllowed(uint8_t source_system)
 
   if (Command_SourceSystemToNode(source_system, &source_node) == 0U) { return 0U; }
 #if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_SLAVE
-  return (source_node == 0U) ? 1U : 0U;
+  return (source_node == (uint8_t)PX4LITE_MASTER_NODE_ID) ? 1U : 0U;
 #else
   return 0U;
 #endif
@@ -74,24 +74,27 @@ static uint8_t Command_NodePollAllowed(uint8_t source_system)
 /**
  * @brief 执行 LoRa/MAVLink 遥测流控命令。
  */
-static Px4Lite_Result_t Command_HandleStreamControl(uint8_t action, uint32_t stream_mask, uint32_t lease_ms, uint32_t now_ms)
+static Px4Lite_Result_t Command_HandleStreamControl(uint8_t requester_node_id, uint8_t action, uint32_t stream_mask, uint32_t lease_ms, uint32_t now_ms)
 {
   if (lease_ms == 0U) { lease_ms = PX4LITE_MAVLINK_STREAM_LEASE_MS; }
   if ((action != COMMAND_STREAM_ACTION_START) && (action != COMMAND_STREAM_ACTION_STOP)) { return PX4LITE_INVALID_PARAM; }
 
-  return Px4Lite_MavlinkApplyStreamControl(action, stream_mask, lease_ms, now_ms);
+  return Px4Lite_MavlinkApplyStreamControl(requester_node_id, action, stream_mask, lease_ms, now_ms);
 }
 
 Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, uint32_t now_ms)
 {
   Px4Lite_Result_t result;
 
-  (void)param2;
+  uint8_t requester_node_id = 0U;
+
   if (Command_IsForThisSystem(target_system, target_component) == 0U) { return PX4LITE_IDLE; }
+  (void)Command_SourceSystemToNode(source_system, &requester_node_id);
+  if ((requester_node_id == 0U) && (param2 >= 1.0f) && (param2 < (float)PX4LITE_REMOTE_NODE_MAX)) { requester_node_id = (uint8_t)param2; }
 
   switch (command) {
     case PX4LITE_COMMAND_MAVLINK_STREAM:
-      result = (Command_StreamControlAllowed(source_system) != 0U) ? Command_HandleStreamControl((uint8_t)param1, (uint32_t)param3, (uint32_t)param4, now_ms) : PX4LITE_INVALID_PARAM;
+      result = (Command_StreamControlAllowed(source_system) != 0U) ? Command_HandleStreamControl(requester_node_id, (uint8_t)param1, (uint32_t)param3, (uint32_t)param4, now_ms) : PX4LITE_INVALID_PARAM;
       Px4Lite_MavlinkQueueCommandAck(command, (result == PX4LITE_OK) ? (uint8_t)MAV_RESULT_ACCEPTED : (uint8_t)MAV_RESULT_DENIED, source_system, source_component);
       return PX4LITE_OK;
 

@@ -258,6 +258,9 @@ typedef struct {
   uint16_t alarm_active_count;                           /**< 活动告警数量。 */
   uint16_t alarm_highest_fault_code;                     /**< 告警表最高故障码。 */
   App_AlarmRecord_t alarms[APP_DISPLAY_ALARM_MAX];       /**< Display 使用的活动告警记录表。 */
+  uint8_t lora_active_viewer_node_id;                    /**< LoRa full-stream active viewer node id, 0 means none. */
+  uint16_t lora_view_remaining_s;                        /**< LoRa full-stream view countdown, s. */
+  uint8_t lora_view_preempted;                           /**< Current remote view has been taken by another node. */
 } App_DisplaySnapshot_t;
 
 /**
@@ -294,6 +297,9 @@ typedef struct {
   uint32_t rx_sequence_lost_count;                       /**< 当前节点按 MAVLink seq 估算的丢帧数。 */
   uint16_t rx_loss_rate_x10;                             /**< 当前节点接收侧丢包率，单位 0.1%。 */
   uint16_t reserved;                                     /**< 保留字段，保持结构体对齐。 */
+  uint8_t active_viewer_node_id;                         /**< Active full-stream viewer node id from summary. */
+  uint8_t reserved2;                                     /**< Reserved for alignment. */
+  uint16_t active_viewer_remaining_s;                    /**< Active full-stream viewer countdown, s. */
 } App_RemoteNodeView_t;
 
 /**

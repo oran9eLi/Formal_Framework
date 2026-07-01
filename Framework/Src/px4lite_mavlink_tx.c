@@ -89,6 +89,7 @@ static mavlink_message_t s_message;
 /* 所有者：仅 CommTask。LoRa 驱动会先复制该缓冲区，再允许调用者复用。 */
 static uint8_t s_frame[MAVLINK_MAX_PACKET_LEN];
 static Px4Lite_MavlinkTxStats_t s_stats;
+static uint32_t s_lora_summary_count;
 
 static uint32_t s_next_heartbeat_ms;
 static uint32_t s_next_gps_raw_ms;
@@ -106,6 +107,7 @@ static uint32_t s_next_remote_motor_ms;
 static uint32_t s_next_remote_alarm_ms;
 static uint32_t s_next_remote_log_ms;
 static uint32_t s_next_remote_log_full_ms;
+static uint32_t s_next_lora_summary_ms;
 static uint8_t s_catalog_index;
 static uint8_t s_module_state_part;
 static uint8_t s_remote_view_enabled;
@@ -120,6 +122,15 @@ static uint8_t s_next_poll_node_id;
 #endif
 static uint32_t s_stream_until_ms;
 static uint32_t s_stream_mask;
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+static uint8_t s_active_viewer_node_id;
+static uint8_t s_active_viewer_lease_id;
+static uint32_t s_active_viewer_until_ms;
+#else
+static uint8_t s_master_summary_active_viewer_node_id;
+static uint16_t s_master_summary_remaining_s;
+static uint32_t s_master_summary_update_ms;
+#endif
 static MavTx_PendingCommand_t s_pending_command;
 static MavTx_PendingAck_t s_pending_ack;
 static uint8_t s_tunnel_payload[MAVLINK_MSG_TUNNEL_FIELD_PAYLOAD_LEN];
@@ -143,11 +154,37 @@ static uint8_t MavTx_TimeReached(uint32_t now_ms, uint32_t deadline_ms)
 
 static uint8_t MavTx_NodeIdToSystemId(uint8_t node_id)
 {
-  return (uint8_t)(node_id + 1U);
+  return node_id;
+}
+
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+static uint16_t MavTx_RemainingSeconds(uint32_t now_ms, uint32_t until_ms)
+{
+  uint32_t remaining_ms;
+
+  if (MavTx_TimeReached(now_ms, until_ms) != 0U) { return 0U; }
+  remaining_ms = until_ms - now_ms;
+  remaining_ms = (remaining_ms + 999U) / 1000U;
+  return (remaining_ms > 65535U) ? 65535U : (uint16_t)remaining_ms;
+}
+#endif
+
+static void MavTx_UpdateActiveViewer(uint32_t now_ms)
+{
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+  if ((s_active_viewer_node_id != 0U) && (MavTx_TimeReached(now_ms, s_active_viewer_until_ms) != 0U)) {
+    s_active_viewer_node_id = 0U;
+    s_stream_mask = 0U;
+    s_stream_until_ms = 0U;
+  }
+#else
+  (void)now_ms;
+#endif
 }
 
 static uint8_t MavTx_MainStreamActive(uint32_t now_ms)
 {
+  MavTx_UpdateActiveViewer(now_ms);
   return ((s_stream_mask != 0U) && (MavTx_TimeReached(now_ms, s_stream_until_ms) == 0U)) ? 1U : 0U;
 }
 
@@ -454,10 +491,10 @@ static void MavTx_UpdateNodePoll(uint32_t now_ms)
   if (MavTx_TimeReached(now_ms, s_next_node_poll_ms) == 0U) { return; }
   if (s_pending_command.valid != 0U) { return; }
 
-  if ((s_next_poll_node_id == 0U) || (s_next_poll_node_id >= PX4LITE_REMOTE_NODE_MAX)) { s_next_poll_node_id = 1U; }
+  if ((s_next_poll_node_id <= (uint8_t)PX4LITE_MASTER_NODE_ID) || (s_next_poll_node_id >= PX4LITE_REMOTE_NODE_MAX)) { s_next_poll_node_id = (uint8_t)(PX4LITE_MASTER_NODE_ID + 1U); }
   MavTx_QueueNodePollCommand(s_next_poll_node_id, now_ms);
   s_next_poll_node_id++;
-  if (s_next_poll_node_id >= PX4LITE_REMOTE_NODE_MAX) { s_next_poll_node_id = 1U; }
+  if (s_next_poll_node_id >= PX4LITE_REMOTE_NODE_MAX) { s_next_poll_node_id = (uint8_t)(PX4LITE_MASTER_NODE_ID + 1U); }
   s_next_node_poll_ms = now_ms + PX4LITE_MAVLINK_NODE_POLL_PERIOD_MS;
 #else
   (void)now_ms;
@@ -472,6 +509,34 @@ static Px4Lite_Result_t MavTx_SendHeartbeat(uint32_t now_ms)
   (void)now_ms;
   (void)mavlink_msg_heartbeat_pack_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, MAV_TYPE_ONBOARD_CONTROLLER, MAV_AUTOPILOT_INVALID, 0U, 0U, MAV_STATE_ACTIVE);
 
+  return MavTx_SendPrepared();
+}
+
+static Px4Lite_Result_t MavTx_SendLoRaSummary(uint32_t now_ms)
+{
+  mavlink_named_value_int_t packet;
+  uint32_t packed = 0U;
+  uint8_t active_viewer = 0U;
+  uint8_t lease_id = 0U;
+  uint16_t remaining_s = 0U;
+
+  memset(&packet, 0, sizeof(packet));
+  memcpy(packet.name, "LORASUM", 7U);
+  packet.time_boot_ms = now_ms;
+
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+  MavTx_UpdateActiveViewer(now_ms);
+  active_viewer = s_active_viewer_node_id;
+  lease_id = s_active_viewer_lease_id;
+  remaining_s = (active_viewer != 0U) ? MavTx_RemainingSeconds(now_ms, s_active_viewer_until_ms) : 0U;
+#else
+  (void)lease_id;
+  (void)remaining_s;
+#endif
+
+  packed = ((uint32_t)active_viewer) | (((uint32_t)lease_id) << 8U) | (((uint32_t)remaining_s) << 16U);
+  packet.value = (int32_t)packed;
+  (void)mavlink_msg_named_value_int_encode_chan(PX4LITE_MAVLINK_SYSTEM_ID, PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
   return MavTx_SendPrepared();
 }
 
@@ -1116,6 +1181,7 @@ static void MavTx_RecordResult(Px4Lite_Result_t result, uint32_t now_ms, uint32_
 
 static const MavTx_Item_t s_mav_tx_catalog[] = {
     {"HEARTBEAT", PX4LITE_MAVLINK_ENABLE_HEARTBEAT, PX4LITE_MAVLINK_HEARTBEAT_PERIOD_MS, MAVLINK_MSG_ID_HEARTBEAT, &s_next_heartbeat_ms, &s_stats.heartbeat_count, MavTx_SendHeartbeat, 0, MAV_TX_SCOPE_ALWAYS},
+    {"LORA_SUMMARY", 1U, PX4LITE_MAVLINK_LORA_SUMMARY_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_lora_summary_ms, &s_lora_summary_count, MavTx_SendLoRaSummary, 0, MAV_TX_SCOPE_ALWAYS},
     {"GPS_RAW", PX4LITE_MAVLINK_ENABLE_GPS_RAW, PX4LITE_MAVLINK_GPS_RAW_PERIOD_MS, MAVLINK_MSG_ID_GPS_RAW_INT, &s_next_gps_raw_ms, &s_stats.gps_raw_count, MavTx_SendGpsRaw, 0, MAV_TX_SCOPE_STANDARD},
     {"GNSS_DETAIL", PX4LITE_MAVLINK_ENABLE_GNSS_DETAIL, PX4LITE_MAVLINK_GNSS_DETAIL_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_gnss_detail_ms, &s_stats.gnss_detail_count, MavTx_SendGnssDetail, 0, MAV_TX_SCOPE_EXTENSION},
     {"ATTITUDE", PX4LITE_MAVLINK_ENABLE_ATTITUDE, PX4LITE_MAVLINK_ATTITUDE_PERIOD_MS, MAVLINK_MSG_ID_ATTITUDE, &s_next_attitude_ms, &s_stats.attitude_count, MavTx_SendAttitude, 0, MAV_TX_SCOPE_STANDARD},
@@ -1139,8 +1205,10 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   memset(&s_message, 0, sizeof(s_message));
   memset(s_frame, 0, sizeof(s_frame));
   memset(&s_stats, 0, sizeof(s_stats));
+  s_lora_summary_count = 0U;
 
   s_next_heartbeat_ms   = now_ms + ((uint32_t)PX4LITE_NODE_ID * PX4LITE_MAVLINK_HEARTBEAT_SLOT_MS);
+  s_next_lora_summary_ms = now_ms + 80U + ((uint32_t)PX4LITE_NODE_ID * PX4LITE_MAVLINK_HEARTBEAT_SLOT_MS);
   s_next_gps_raw_ms     = now_ms + 100U;
   s_next_gnss_detail_ms = now_ms + 150U;
   s_next_attitude_ms    = now_ms + 50U;
@@ -1159,17 +1227,26 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_catalog_index       = 0U;
   s_module_state_part   = 0U;
   s_remote_view_enabled = 0U;
-  s_remote_view_target_node = (PX4LITE_NODE_ID == 0U) ? 1U : 0U;
+  s_remote_view_target_node = ((uint8_t)PX4LITE_NODE_ID == (uint8_t)PX4LITE_MASTER_NODE_ID) ? (uint8_t)(PX4LITE_MASTER_NODE_ID + 1U) : (uint8_t)PX4LITE_MASTER_NODE_ID;
 #if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_SLAVE
   s_remote_view_start_ms = 0U;
 #endif
   s_next_stream_request_ms = now_ms;
 #if (PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_PRODUCT) && (PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER) && (PX4LITE_MAVLINK_NODE_POLL_ENABLE != 0U)
   s_next_node_poll_ms      = now_ms + PX4LITE_MAVLINK_NODE_POLL_PERIOD_MS;
-  s_next_poll_node_id      = 1U;
+  s_next_poll_node_id      = (uint8_t)(PX4LITE_MASTER_NODE_ID + 1U);
 #endif
   s_stream_until_ms        = 0U;
   s_stream_mask            = 0U;
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+  s_active_viewer_node_id  = 0U;
+  s_active_viewer_lease_id = 0U;
+  s_active_viewer_until_ms = 0U;
+#else
+  s_master_summary_active_viewer_node_id = 0U;
+  s_master_summary_remaining_s = 0U;
+  s_master_summary_update_ms = 0U;
+#endif
   memset(&s_pending_command, 0, sizeof(s_pending_command));
   memset(&s_pending_ack, 0, sizeof(s_pending_ack));
   memset(s_tunnel_payload, 0, sizeof(s_tunnel_payload));
@@ -1248,17 +1325,79 @@ Px4Lite_Result_t Px4Lite_MavlinkSetRemoteView(uint8_t enabled, uint8_t target_no
 uint8_t Px4Lite_MavlinkRemoteViewExpired(uint32_t now_ms)
 {
 #if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_SLAVE
-  return ((s_remote_view_enabled != 0U) && (Px4Lite_ElapsedMs(now_ms, s_remote_view_start_ms) >= PX4LITE_REMOTE_VIEW_TIMEOUT_MS)) ? 1U : 0U;
+  if ((s_remote_view_enabled != 0U) && (Px4Lite_ElapsedMs(now_ms, s_remote_view_start_ms) >= PX4LITE_REMOTE_VIEW_TIMEOUT_MS)) { return 1U; }
+  if ((s_remote_view_enabled != 0U) && (s_remote_view_target_node == (uint8_t)PX4LITE_MASTER_NODE_ID) &&
+      (Px4Lite_ElapsedMs(now_ms, s_master_summary_update_ms) <= PX4LITE_REMOTE_HEARTBEAT_STALE_MS) &&
+      (((s_master_summary_active_viewer_node_id != 0U) &&
+        (s_master_summary_active_viewer_node_id != (uint8_t)PX4LITE_NODE_ID)) ||
+       ((s_master_summary_active_viewer_node_id == (uint8_t)PX4LITE_NODE_ID) &&
+        (s_master_summary_remaining_s == 0U)))) {
+    return 1U;
+  }
+  return 0U;
 #else
   (void)now_ms;
   return 0U;
 #endif
 }
 
-Px4Lite_Result_t Px4Lite_MavlinkApplyStreamControl(uint8_t action, uint32_t stream_mask, uint32_t lease_ms, uint32_t now_ms)
+uint8_t Px4Lite_MavlinkShouldAcceptFullFrom(uint8_t source_node_id, uint32_t now_ms)
 {
+#if PX4LITE_MAVLINK_LINK_MODE == PX4LITE_MAVLINK_LINK_MODE_GCS
+  (void)source_node_id;
+  (void)now_ms;
+  return 1U;
+#else
+  if (source_node_id >= PX4LITE_REMOTE_NODE_MAX) { return 0U; }
+  if (source_node_id == (uint8_t)PX4LITE_NODE_ID) { return 0U; }
+  if (s_remote_view_enabled == 0U) { return 0U; }
+  if (s_remote_view_target_node != source_node_id) { return 0U; }
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_SLAVE
+  if ((source_node_id == (uint8_t)PX4LITE_MASTER_NODE_ID) &&
+      (Px4Lite_ElapsedMs(now_ms, s_remote_view_start_ms) >= PX4LITE_REMOTE_VIEW_TIMEOUT_MS)) {
+    return 0U;
+  }
+  if ((source_node_id == (uint8_t)PX4LITE_MASTER_NODE_ID) &&
+      (Px4Lite_ElapsedMs(now_ms, s_master_summary_update_ms) <= PX4LITE_REMOTE_HEARTBEAT_STALE_MS) &&
+      (s_master_summary_active_viewer_node_id != 0U) &&
+      (s_master_summary_active_viewer_node_id != (uint8_t)PX4LITE_NODE_ID)) {
+    return 0U;
+  }
+#endif
+  return 1U;
+#endif
+}
+
+void Px4Lite_MavlinkHandleLoRaSummary(uint8_t source_node_id, uint8_t active_viewer_node_id, uint8_t lease_id, uint16_t remaining_s, uint32_t now_ms)
+{
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_SLAVE
+  if (source_node_id != (uint8_t)PX4LITE_MASTER_NODE_ID) { return; }
+  s_master_summary_active_viewer_node_id = active_viewer_node_id;
+  s_master_summary_remaining_s = remaining_s;
+  s_master_summary_update_ms = now_ms;
+#else
+  (void)source_node_id;
+  (void)active_viewer_node_id;
+  (void)lease_id;
+  (void)remaining_s;
+  (void)now_ms;
+#endif
+}
+
+Px4Lite_Result_t Px4Lite_MavlinkApplyStreamControl(uint8_t requester_node_id, uint8_t action, uint32_t stream_mask, uint32_t lease_ms, uint32_t now_ms)
+{
+  if ((requester_node_id == 0U) || (requester_node_id >= PX4LITE_REMOTE_NODE_MAX) || (requester_node_id == (uint8_t)PX4LITE_NODE_ID)) { return PX4LITE_INVALID_PARAM; }
+
   if (action == MAV_TX_STREAM_ACTION_START) {
     if (lease_ms == 0U) { lease_ms = PX4LITE_MAVLINK_STREAM_LEASE_MS; }
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+    if (requester_node_id != s_active_viewer_node_id) {
+      s_active_viewer_node_id = requester_node_id;
+      s_active_viewer_lease_id++;
+      if (s_active_viewer_lease_id == 0U) { s_active_viewer_lease_id = 1U; }
+      s_active_viewer_until_ms = now_ms + PX4LITE_REMOTE_VIEW_TIMEOUT_MS;
+    }
+#endif
     s_stream_mask = stream_mask;
     if (s_stream_mask == 0U) { s_stream_mask = PX4LITE_MAVLINK_STREAM_MASK_ALL; }
     s_stream_until_ms = now_ms + lease_ms;
@@ -1266,6 +1405,12 @@ Px4Lite_Result_t Px4Lite_MavlinkApplyStreamControl(uint8_t action, uint32_t stre
   }
 
   if (action != MAV_TX_STREAM_ACTION_STOP) { return PX4LITE_INVALID_PARAM; }
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+  if (requester_node_id == s_active_viewer_node_id) {
+    s_active_viewer_node_id = 0U;
+    s_active_viewer_until_ms = 0U;
+  }
+#endif
   s_stream_mask = 0U;
   s_stream_until_ms = 0U;
   return PX4LITE_OK;

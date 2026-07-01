@@ -84,8 +84,10 @@ void Px4Lite_MavlinkTxGetStats(Px4Lite_MavlinkTxStats_t *out);
 
 Px4Lite_Result_t Px4Lite_MavlinkSetRemoteView(uint8_t enabled, uint8_t target_node_id, uint32_t now_ms);
 uint8_t Px4Lite_MavlinkRemoteViewExpired(uint32_t now_ms);
+uint8_t Px4Lite_MavlinkShouldAcceptFullFrom(uint8_t source_node_id, uint32_t now_ms);
+void Px4Lite_MavlinkHandleLoRaSummary(uint8_t source_node_id, uint8_t active_viewer_node_id, uint8_t lease_id, uint16_t remaining_s, uint32_t now_ms);
 void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component);
 void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result);
-Px4Lite_Result_t Px4Lite_MavlinkApplyStreamControl(uint8_t action, uint32_t stream_mask, uint32_t lease_ms, uint32_t now_ms);
+Px4Lite_Result_t Px4Lite_MavlinkApplyStreamControl(uint8_t requester_node_id, uint8_t action, uint32_t stream_mask, uint32_t lease_ms, uint32_t now_ms);
 
 #endif

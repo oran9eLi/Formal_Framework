@@ -5,6 +5,7 @@
 
 #include "bsp_lora.h"
 #include "bsp_config.h"
+#include "bsp_remoteid.h"
 #include "stm32f4xx_hal.h"
 #include <string.h>
 
@@ -282,6 +283,7 @@ void BSP_LoRa_TxDmaIrqHandler(void)
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == BSP_LORA_UART) { s_tx_busy = 0U; }
+  BSP_RemoteId_TxCompleteCallback(huart);
 }
 
 /**

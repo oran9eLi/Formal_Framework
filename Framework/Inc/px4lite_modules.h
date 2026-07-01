@@ -125,6 +125,13 @@ void Px4Lite_EstimatorRun(uint32_t now_ms);
 Px4Lite_Result_t Px4Lite_CommModulesInit(void);
 
 /**
+ * @brief 初始化 ESP32-S3 RemoteID 模块和 MAVLink/OpenDroneID 发送器。
+ *
+ * @return 初始化结果。
+ */
+Px4Lite_Result_t Px4Lite_RemoteIdModuleInit(void);
+
+/**
  * @brief 执行一次非阻塞通信周期。
  *
  * @param[in] now_ms 当前 comm 周期时间，单位：ms。

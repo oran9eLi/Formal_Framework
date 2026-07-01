@@ -31,7 +31,11 @@ static uint8_t RemoteTelemetry_NodeIdToIndex(uint8_t node_id, uint8_t *index)
 
 static uint8_t RemoteTelemetry_DefaultNode(void)
 {
-  return (PX4LITE_NODE_ID == 0U) ? 1U : 0U;
+#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
+  return ((uint8_t)PX4LITE_NODE_ID == (uint8_t)PX4LITE_MASTER_NODE_ID) ? (uint8_t)(PX4LITE_MASTER_NODE_ID + 1U) : (uint8_t)PX4LITE_MASTER_NODE_ID;
+#else
+  return (uint8_t)PX4LITE_MASTER_NODE_ID;
+#endif
 }
 
 static uint32_t RemoteTelemetry_MaxU32(uint32_t a, uint32_t b)
@@ -219,6 +223,8 @@ Px4Lite_Result_t Px4Lite_CopyRemoteNodeStatuses(Px4Lite_RemoteNodeStatus_t *out,
     out[written].rx_frame_count = local.rx_frame_count;
     out[written].rx_sequence_lost_count = local.rx_sequence_lost_count;
     out[written].rx_loss_rate_x10 = local.rx_loss_rate_x10;
+    out[written].active_viewer_node_id = local.lora_active_viewer_node_id;
+    out[written].active_viewer_remaining_s = local.lora_view_remaining_s;
     if (Px4Lite_ElapsedMs(now_ms, local.heartbeat_update_ms) > PX4LITE_REMOTE_HEARTBEAT_STALE_MS) {
       out[written].state = PX4LITE_REMOTE_NODE_STALE;
     } else if ((out[written].last_data_ms != 0U) && (Px4Lite_ElapsedMs(now_ms, out[written].last_data_ms) <= PX4LITE_REMOTE_DATA_STALE_MS)) {

@@ -259,6 +259,29 @@ Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms);
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
 
 /**
+ * @brief 初始化 ESP32-S3 RemoteID UART4 发送通道。
+ *
+ * @return 初始化结果。
+ * @retval PX4LITE_OK 初始化成功。
+ * @retval PX4LITE_IO_ERROR BSP 初始化失败。
+ */
+Px4Lite_Result_t Px4Lite_RemoteIdInit(void);
+
+/**
+ * @brief 通过平台适配层发送一帧 RemoteID MAVLink 数据。
+ *
+ * @param[in] data 待发送字节缓冲区，不能为 NULL。
+ * @param[in] len 待发送长度，单位 byte。
+ *
+ * @return 发送提交结果。
+ * @retval PX4LITE_OK 数据已被底层异步复制并进入发送流程。
+ * @retval PX4LITE_BUSY 上一帧仍在发送。
+ * @retval PX4LITE_INVALID_PARAM 参数非法。
+ * @retval PX4LITE_IO_ERROR 底层发送提交失败。
+ */
+Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len);
+
+/**
  * @brief 获取 LoRa 模块当前公开状态。
  *
  * @param[in] now_ms 当前系统毫秒时间，用于超时判断。

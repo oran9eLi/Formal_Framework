@@ -23,6 +23,8 @@
 /**
  * @brief Framework 通用返回值。
  */
+#define PX4LITE_REMOTE_VALID_LORA_SUMMARY (1UL << 9) /**< LoRa view lease summary is available. */
+
 typedef enum {
   PX4LITE_OK = 0,        /**< 操作成功。 */
   PX4LITE_IDLE,          /**< 当前无待处理工作。 */
@@ -64,7 +66,7 @@ typedef enum {
   PX4LITE_MODULE_LORA,      /**< LoRa 通信模块。 */
   PX4LITE_MODULE_5G,        /**< 5G-A 连接管理模块，可发送 AT 指令查询/配置连接，不承载业务数据。 */
   PX4LITE_MODULE_STORAGE,   /**< SD/FatFs 存储模块。 */
-  PX4LITE_MODULE_REMOTE_ID, /**< Remote ID 边界状态模块，真实数据链路不从本 STM32 板直通。 */
+  PX4LITE_MODULE_REMOTE_ID, /**< Remote ID 模块，通过 UART4 向 ESP32-S3 提交 MAVLink/OpenDroneID 数据。 */
   PX4LITE_MODULE_DISPLAY,   /**< 显示模块。 */
   PX4LITE_MODULE_CONTROL,   /**< 控制命令预留模块。 */
   PX4LITE_MODULE_ALARM,     /**< 告警模块。 */
@@ -413,7 +415,8 @@ typedef struct {
   uint32_t rx_sequence_lost_count;
   uint16_t rx_loss_rate_x10;
   uint8_t heartbeat_system_status;
-  uint8_t reserved1;
+  uint8_t active_viewer_node_id;
+  uint16_t active_viewer_remaining_s;
 } Px4Lite_RemoteNodeStatus_t;
 
 /**
@@ -495,6 +498,10 @@ typedef struct {
   uint8_t system_id;                                  /**< 远端 MAVLink system id。 */
   uint8_t component_id;                               /**< 远端 MAVLink component id。 */
   Px4Lite_LogEntry_t log_entries[PX4LITE_REMOTE_LOG_ENTRY_MAX]; /**< 远端结构化消息日志缓存，旧到新排列。 */
+  uint32_t lora_summary_update_ms;                    /**< Last LoRa view lease summary time, ms. */
+  uint8_t lora_active_viewer_node_id;                 /**< Active full-stream viewer node id, 0 means none. */
+  uint8_t lora_view_lease_id;                         /**< LoRa view lease sequence. */
+  uint16_t lora_view_remaining_s;                     /**< Active full-stream lease remaining time, s. */
 } Px4Lite_RemoteTelemetry_t;
 
 /**

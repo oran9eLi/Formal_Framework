@@ -25,6 +25,7 @@
 #include "bsp_config.h"
 #include "debug_config.h"
 #include "bsp_lora.h"
+#include "bsp_remoteid.h"
 
 /** @addtogroup STM32F4xx_HAL_Examples
  * @{
@@ -268,6 +269,11 @@ void DMA1_Stream3_IRQHandler(void)
   BSP_LoRa_TxDmaIrqHandler();
 }
 
+void DMA1_Stream4_IRQHandler(void)
+{
+  BSP_RemoteId_TxDmaIrqHandler();
+}
+
 void USART3_IRQHandler(void)
 {
   UART_HandleTypeDef *huart = BSP_LoRa_GetUartHandle();
@@ -285,6 +291,13 @@ void USART3_IRQHandler(void)
   }
 
   HAL_UART_IRQHandler(huart);
+}
+
+void UART4_IRQHandler(void)
+{
+  UART_HandleTypeDef *huart = BSP_RemoteId_GetUartHandle();
+
+  if (huart != 0) { HAL_UART_IRQHandler(huart); }
 }
 
 /**

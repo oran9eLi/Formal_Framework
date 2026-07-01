@@ -56,6 +56,10 @@ static const Px4Lite_ModuleDescriptor_t s_alarm_descriptor = {PX4LITE_MODULE_ALA
 static const Px4Lite_ModuleDescriptor_t s_lora_descriptor = {PX4LITE_MODULE_LORA, "lora", PX4LITE_ENABLE_LORA, 0U, Px4Lite_CommModulesInit, NULL, NULL, NULL, Px4Lite_LoraRecover};
 #endif
 
+#if PX4LITE_ENABLE_REMOTE_ID
+static const Px4Lite_ModuleDescriptor_t s_remoteid_descriptor = {PX4LITE_MODULE_REMOTE_ID, "remoteid", PX4LITE_ENABLE_REMOTE_ID, 0U, Px4Lite_RemoteIdModuleInit, NULL, NULL, NULL, NULL};
+#endif
+
 #if PX4LITE_ENABLE_STORAGE
 static const Px4Lite_ModuleDescriptor_t s_storage_descriptor = {PX4LITE_MODULE_STORAGE, "storage", PX4LITE_ENABLE_STORAGE, 0U, Px4Lite_StorageModuleInit, NULL, NULL, NULL, Px4Lite_StorageRecover};
 #endif
@@ -81,6 +85,9 @@ static BaseType_t Px4Lite_RegisterCoreModules(void)
 #endif
 #if PX4LITE_ENABLE_LORA
   if (Px4Lite_RegistryRegister(&s_lora_descriptor) != PX4LITE_OK) { return pdFAIL; }
+#endif
+#if PX4LITE_ENABLE_REMOTE_ID
+  if (Px4Lite_RegistryRegister(&s_remoteid_descriptor) != PX4LITE_OK) { return pdFAIL; }
 #endif
 #if PX4LITE_ENABLE_ALARM
   if (Px4Lite_RegistryRegister(&s_alarm_descriptor) != PX4LITE_OK) { return pdFAIL; }
@@ -135,7 +142,7 @@ BaseType_t Px4Lite_AppInit(void)
   if (xTaskCreate(Px4Lite_HealthTask, "health", PX4LITE_STACK_HEALTH, 0, PX4LITE_PRIORITY_HEALTH, &task_handle) != pdPASS) { return pdFAIL; }
   (void)DebugTaskMonitor_Register(task_handle, "health", PX4LITE_STACK_HEALTH);
 
-#if PX4LITE_ENABLE_LORA
+#if PX4LITE_ENABLE_LORA || PX4LITE_ENABLE_REMOTE_ID
   task_handle = 0;
   if (xTaskCreate(Px4Lite_CommTask, "comm", PX4LITE_STACK_COMM, 0, PX4LITE_PRIORITY_COMM, &task_handle) != pdPASS) { return pdFAIL; }
   (void)DebugTaskMonitor_Register(task_handle, "comm", PX4LITE_STACK_COMM);
@@ -191,14 +198,19 @@ static void Px4Lite_ControlTask(void *argument)
  */
 static void Px4Lite_CommTask(void *argument)
 {
-#if PX4LITE_ENABLE_LORA
+#if PX4LITE_ENABLE_LORA || PX4LITE_ENABLE_REMOTE_ID
   TickType_t last_wake;
   Px4Lite_WorkItem_t work;
   uint32_t now_ms;
 
   (void)argument;
   now_ms = Px4Lite_PlatformGetMs();
+#if PX4LITE_ENABLE_LORA
   (void)Px4Lite_RegistryStart(PX4LITE_MODULE_LORA, now_ms);
+#endif
+#if PX4LITE_ENABLE_REMOTE_ID
+  (void)Px4Lite_RegistryStart(PX4LITE_MODULE_REMOTE_ID, now_ms);
+#endif
   (void)Px4Lite_WorkInit(&work, "comm_work", PX4LITE_COMM_PERIOD_MS, now_ms, Px4Lite_CommWorkRun);
   last_wake = xTaskGetTickCount();
 

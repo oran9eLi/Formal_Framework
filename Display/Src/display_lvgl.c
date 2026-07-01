@@ -120,7 +120,7 @@ static const lv_img_dsc_t s_logo_img_dsc = {
     .data = display_logo_rgb565_data,
 };
 static App_RemoteNodeView_t s_remote_node_views[DISPLAY_LVGL_REMOTE_ROWS];
-static char s_remote_node_texts[DISPLAY_LVGL_REMOTE_ROWS][48];
+static char s_remote_node_texts[DISPLAY_LVGL_REMOTE_ROWS][64];
 static lv_obj_t *s_screen;
 static lv_obj_t *s_status_leds[DISPLAY_LVGL_STATUS_COUNT];
 static lv_obj_t *s_motor_pwm_bars[DISPLAY_LVGL_MOTOR_COUNT];
@@ -1625,11 +1625,18 @@ static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
         dot_color = lv_palette_main(LV_PALETTE_AMBER);
       }
 
-      (void)snprintf(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), "Node %u  RX %lu  Loss %u.%u%%",
-                     (unsigned int)s_remote_node_views[i].node_id,
-                     (unsigned long)s_remote_node_views[i].rx_frame_count,
-                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 / 10U),
-                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 % 10U));
+      if (s_remote_node_views[i].active_viewer_node_id != 0U) {
+        (void)snprintf(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), "DCDW-%03u  View %03u  %us",
+                       (unsigned int)s_remote_node_views[i].node_id,
+                       (unsigned int)s_remote_node_views[i].active_viewer_node_id,
+                       (unsigned int)s_remote_node_views[i].active_viewer_remaining_s);
+      } else {
+        (void)snprintf(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), "DCDW-%03u  RX %lu  Loss %u.%u%%",
+                       (unsigned int)s_remote_node_views[i].node_id,
+                       (unsigned long)s_remote_node_views[i].rx_frame_count,
+                       (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 / 10U),
+                       (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 % 10U));
+      }
       btn = lv_obj_create(list);
       lv_obj_set_size(btn, 300, 30);
       lv_obj_set_pos(btn, 0, (lv_coord_t)(i * 36U));
