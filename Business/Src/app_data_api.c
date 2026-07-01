@@ -198,6 +198,8 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
   if ((Px4Lite_CopyBattery(&battery) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
     if (copied == 0U) { out->header = battery.header; }
     out->voltage_mv      = battery.voltage_mv;
+    out->current_ma      = battery.current_ma;
+    out->power_mw        = (battery.current_ma > 0) ? (uint32_t)((((uint64_t)battery.voltage_mv) * (uint32_t)battery.current_ma) / 1000ULL) : 0U;
     out->battery_percent = battery.percent;
     out->low_voltage     = battery.low_voltage;
     copied               = 1U;
@@ -206,6 +208,8 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
   if ((Px4Lite_CopyBattery2(&battery2) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery2.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
     if (copied == 0U) { out->header = battery2.header; }
     out->voltage2_mv      = battery2.voltage_mv;
+    out->current2_ma      = battery2.current_ma;
+    out->power2_mw        = (battery2.current_ma > 0) ? (uint32_t)((((uint64_t)battery2.voltage_mv) * (uint32_t)battery2.current_ma) / 1000ULL) : 0U;
     out->battery2_percent = battery2.percent;
     out->low_voltage2     = battery2.low_voltage;
     copied                = 1U;

@@ -614,6 +614,11 @@
               <FilePath>..\Bsp\Src\bsp_adc2.c</FilePath>
             </File>
             <File>
+              <FileName>bsp_adc_current.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_adc_current.c</FilePath>
+            </File>
+            <File>
               <FileName>bsp_time.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\bsp_time.c</FilePath>

@@ -385,6 +385,7 @@ Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement)
   memset(measurement, 0, sizeof(*measurement));
   measurement->header.sample_time_ms = snapshot.sample_time_ms;
   measurement->voltage_mv            = (uint32_t)((snapshot.voltage_v * 1000.0f) + 0.5f);
+  measurement->current_ma            = snapshot.current_ma;
   measurement->percent               = snapshot.percent;
   measurement->low_voltage           = snapshot.low_voltage;
 
@@ -413,6 +414,7 @@ Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement)
   memset(measurement, 0, sizeof(*measurement));
   measurement->header.sample_time_ms = snapshot.sample_time_ms;
   measurement->voltage_mv            = (uint32_t)((snapshot.voltage_v * 1000.0f) + 0.5f);
+  measurement->current_ma            = snapshot.current_ma;
   measurement->percent               = snapshot.percent;
   measurement->low_voltage           = snapshot.low_voltage;
 

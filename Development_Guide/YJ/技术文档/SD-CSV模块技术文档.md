@@ -50,7 +50,7 @@ PB3、PB4、PA15 与 JTAG 复用，调试时应使用 SWD，避免 JTAG 占用 S
 `YYMMDD_D.CSV` 表头：
 
 ```csv
-time_ms,local_date,local_time,time_sync_state,gnss_valid,lat_e7,lon_e7,roll_deg,pitch_deg,yaw_deg,temp_c,pressure_hpa,humidity_pct,voltage_v,battery_pct,low_voltage,voltage2_v,battery2_pct,low_voltage2,motor1_pct,motor2_pct,motor3_pct,motor4_pct,motor_run_state,active_alarm_count,highest_fault_code,lora_rx_count,lora_tx_count,lora_parse_error_count,lora_send_error_count,storage_queue_count,storage_drop_count
+time_ms,local_date,local_time,time_sync_state,gnss_valid,lat_e7,lon_e7,roll_deg,pitch_deg,yaw_deg,temp_c,pressure_hpa,humidity_pct,voltage_v,current_a,power_w,battery_pct,low_voltage,voltage2_v,current2_a,power2_w,battery2_pct,low_voltage2,motor1_pct,motor2_pct,motor3_pct,motor4_pct,motor_run_state,active_alarm_count,highest_fault_code,lora_rx_count,lora_tx_count,lora_parse_error_count,lora_send_error_count,storage_queue_count,storage_drop_count
 ```
 
 `YYMMDD_E.CSV` 表头：
@@ -63,7 +63,7 @@ time_ms,local_date,local_time,event_type,source,state,fault,severity,active,coun
 
 - 不使用浮点 `printf`。
 - 姿态、温度、气压、湿度、电压使用固定小数格式输出。
-- 单行最大长度由 `STORAGE_CSV_LINE_MAX` 限制，当前为 384 字节。
+- 单行最大长度由 `STORAGE_CSV_LINE_MAX` 限制，当前为 512 字节。
 - 格式化溢出返回 `PX4LITE_OVERFLOW`，不能写越界。
 
 ## 5. 队列策略
@@ -99,8 +99,8 @@ Storage 使用固定长度静态队列，当前长度为 8。
 | GNSS 有效、经纬度 | Navigation Topic |
 | roll/pitch | Navigation Topic |
 | 温度、气压、湿度 | Baro Topic |
-| 第一电池电压、电量、低电压标志 | Battery Topic |
-| 第二电池电压、电量、低电压标志 | Battery2 Topic |
+| 第一电池电压、电流、功率、电量、低电压标志 | Battery Topic |
+| 第二电池电压、电流、功率、电量、低电压标志 | Battery2 Topic |
 
 第二电池用于四个无刷电机供电，电量百分比使用独立动力电池曲线：`10.50V` 为 0%，`12.60V` 为 100%。`low_voltage2` 使用滤波电压和连续确认防抖，低于 `10.80V` 后进入低压预警，高于 `11.00V` 后解除预警。
 

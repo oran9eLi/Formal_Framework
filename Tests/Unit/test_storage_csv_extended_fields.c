@@ -24,7 +24,7 @@ static int TestExtendedHeader(void)
 
   failures += ExpectContains("header local date", header, "local_date");
   failures += ExpectContains("header yaw", header, "roll_deg,pitch_deg,yaw_deg");
-  failures += ExpectContains("header battery2", header, "voltage_v,battery_pct,low_voltage,voltage2_v,battery2_pct,low_voltage2");
+  failures += ExpectContains("header battery2", header, "voltage_v,current_a,power_w,battery_pct,low_voltage,voltage2_v,current2_a,power2_w,battery2_pct,low_voltage2");
   failures += ExpectContains("header motor", header, "motor1_pct");
   failures += ExpectContains("header alarm", header, "active_alarm_count");
   failures += ExpectContains("header lora", header, "lora_parse_error_count");
@@ -35,7 +35,7 @@ static int TestExtendedHeader(void)
 static int TestExtendedDataLine(void)
 {
   Storage_CsvData_t data;
-  char line[384];
+  char line[512];
   int failures = 0;
 
   memset(&data, 0, sizeof(data));
@@ -53,9 +53,13 @@ static int TestExtendedDataLine(void)
   data.pressure_hpa100        = 101325U;
   data.humidity_pct100        = 5566U;
   data.voltage_mv             = 11890U;
+  data.current_ma             = 1234;
+  data.power_mw               = 14676U;
   data.battery_pct            = 87U;
   data.low_voltage            = 0U;
   data.voltage2_mv            = 12123U;
+  data.current2_ma            = 5678;
+  data.power2_mw              = 68826U;
   data.battery2_pct           = 75U;
   data.low_voltage2           = 1U;
   data.motor_pct[0]           = 10U;
@@ -79,7 +83,7 @@ static int TestExtendedDataLine(void)
 
   failures += ExpectContains("line date time sync", line, "20260622,153045,2");
   failures += ExpectContains("line attitude", line, ",+1.23,-4.56,+78.90,");
-  failures += ExpectContains("line battery2", line, ",11.890,87,0,12.123,75,1,");
+  failures += ExpectContains("line battery2", line, ",11.890,+1.234,14.676,87,0,12.123,+5.678,68.826,75,1,");
   failures += ExpectContains("line motors", line, ",10,20,30,40,1,");
   failures += ExpectContains("line alarm", line, ",2,8961,");
   failures += ExpectContains("line lora storage", line, ",11,12,3,4,5,6");

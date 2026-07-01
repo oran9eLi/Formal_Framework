@@ -10,6 +10,7 @@
 #include "sensor_power.h"
 
 #include "bsp_adc.h"
+#include "bsp_adc_current.h"
 #include "sensor_power_config.h"
 
 #include <string.h>
@@ -43,10 +44,12 @@ static const Power_PercentPoint_t s_percent_curve[] = {
 
 static Power_Snapshot_t s_snapshot;
 static uint32_t s_filtered_voltage_mv;
+static int32_t s_filtered_current_ma;
 static uint8_t s_pending_percent_count;
 static uint8_t s_pending_low_voltage_count;
 static uint8_t s_initialized;
 static uint8_t s_filter_valid;
+static uint8_t s_current_filter_valid;
 static volatile uint8_t s_reinit_request;
 
 /**
@@ -78,6 +81,70 @@ static uint32_t Power_ApplyCalibration(uint32_t measured_mv)
 #endif
 
   return (calibrated_mv > 0) ? (uint32_t)calibrated_mv : 0U;
+}
+
+/**
+ * @brief 取有符号整数绝对值并返回无符号幅值。
+ * @param[in] value 输入值。
+ * @return 输入值的绝对值。
+ */
+static uint32_t Power_AbsI32(int32_t value)
+{
+  return (value < 0) ? (uint32_t)(-value) : (uint32_t)value;
+}
+
+/**
+ * @brief 将第一电池电流计 ADC 引脚电压换算为电流。
+ * @param[in] adc_mv 电流计输出到 MCU ADC 的引脚电压，单位 mV。
+ * @return 校准并应用零点死区后的电流，单位 mA。
+ */
+static int32_t Power_CalcCurrentMa(uint32_t adc_mv)
+{
+  int32_t delta_mv;
+  int32_t current_ma;
+
+#if POWER_CURRENT_MV_PER_A == 0
+#error "POWER_CURRENT_MV_PER_A must not be zero"
+#endif
+
+  delta_mv   = (int32_t)adc_mv - (int32_t)POWER_CURRENT_ZERO_MV;
+  current_ma = (int32_t)(((int64_t)delta_mv * 1000LL) / (int64_t)POWER_CURRENT_MV_PER_A);
+  current_ma += (int32_t)POWER_CURRENT_OFFSET_MA;
+
+  return (Power_AbsI32(current_ma) <= POWER_CURRENT_DEADBAND_MA) ? 0 : current_ma;
+}
+
+/**
+ * @brief 对第一电池电流做一阶低通滤波。
+ * @param[in] current_ma 新电流样本，单位 mA。
+ * @return 滤波后的电流，单位 mA。
+ */
+static int32_t Power_FilterCurrent(int32_t current_ma)
+{
+#if POWER_CURRENT_FILTER_TOTAL == 0
+#error "POWER_CURRENT_FILTER_TOTAL must not be zero"
+#endif
+
+  if (s_current_filter_valid == 0U) {
+    s_filtered_current_ma    = current_ma;
+    s_current_filter_valid   = 1U;
+  } else {
+    s_filtered_current_ma = (int32_t)((((int64_t)s_filtered_current_ma * POWER_CURRENT_FILTER_OLD_WEIGHT) + current_ma + (POWER_CURRENT_FILTER_TOTAL / 2U)) / POWER_CURRENT_FILTER_TOTAL);
+  }
+
+  return s_filtered_current_ma;
+}
+
+/**
+ * @brief 计算电池输出功率。
+ * @param[in] voltage_mv 电压，单位 mV。
+ * @param[in] current_ma 电流，单位 mA。
+ * @return 功率，单位 mW；负电流按 0 处理。
+ */
+static uint32_t Power_CalcPowerMw(uint32_t voltage_mv, int32_t current_ma)
+{
+  if (current_ma <= 0) { return 0U; }
+  return (uint32_t)((((uint64_t)voltage_mv) * (uint32_t)current_ma) / 1000ULL);
 }
 
 /**
@@ -257,9 +324,11 @@ Power_Result_t Sensor_Power_Init(void)
 {
   memset(&s_snapshot, 0, sizeof(s_snapshot));
   s_filtered_voltage_mv       = 0U;
+  s_filtered_current_ma       = 0;
   s_pending_percent_count     = 0U;
   s_pending_low_voltage_count = 0U;
   s_filter_valid              = 0U;
+  s_current_filter_valid      = 0U;
   s_initialized               = 1U;
   return POWER_RESULT_OK;
 }
@@ -272,8 +341,10 @@ void Sensor_Power_RequestReinit(void)
 Power_Result_t Sensor_Power_Service(uint32_t now_ms)
 {
   uint32_t measured_voltage_mv = 0U;
+  uint32_t current_adc_mv      = 0U;
   uint32_t voltage_mv;
   uint32_t filtered_voltage_mv;
+  int32_t current_ma;
   uint8_t candidate_percent;
 
   if (s_reinit_request != 0U) {
@@ -297,6 +368,16 @@ Power_Result_t Sensor_Power_Service(uint32_t now_ms)
   s_snapshot.percent        = (s_snapshot.rx_sequence == 1U) ? candidate_percent : Power_ApplyPercentConfirm(s_snapshot.percent, candidate_percent, filtered_voltage_mv);
   s_snapshot.low_voltage    = Power_ApplyLowVoltageConfirm(s_snapshot.low_voltage, filtered_voltage_mv);
 
+  if (BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CURRENT_BATTERY1, &current_adc_mv) == BSP_STATUS_OK) {
+    current_ma            = Power_FilterCurrent(Power_CalcCurrentMa(current_adc_mv));
+    s_snapshot.current_ma = current_ma;
+    s_snapshot.power_mw   = Power_CalcPowerMw(voltage_mv, current_ma);
+  } else {
+    s_snapshot.error_count++;
+    s_snapshot.current_ma = 0;
+    s_snapshot.power_mw   = 0U;
+  }
+
   return POWER_RESULT_OK;
 }
 
@@ -315,6 +396,8 @@ Power_Result_t Sensor_Power_GetStatus(Power_Status_t *out)
   out->rx_sequence    = s_snapshot.rx_sequence;
   out->sample_time_ms = s_snapshot.sample_time_ms;
   out->error_count    = s_snapshot.error_count;
+  out->current_ma     = s_snapshot.current_ma;
+  out->power_mw       = s_snapshot.power_mw;
   out->percent        = s_snapshot.percent;
   out->low_voltage    = s_snapshot.low_voltage;
   out->reserved       = 0U;

@@ -3,8 +3,9 @@
  * @brief 第二块电池电源检测强类型驱动接口。
  *
  * @details
- * 本驱动通过 BSP_ADC2(PA4/ADC2_IN4) 获取电压，并复用第一块电池的电量曲线、滤波和低电压
- * 判定配置。驱动层只记录硬件事实，不直接发布 Framework topic，也不负责系统级告警策略。
+ * 本驱动通过 BSP_ADC2(PA4/ADC2_IN4) 获取第二电池电压，通过 ADC3 的 PC1/ADC3_IN11
+ * 获取第二电池电流，并使用 POWER2_* 独立电量曲线、滤波、电流换算和低电压确认配置。
+ * 驱动层只记录硬件事实，不直接发布 Framework topic，也不负责系统级告警策略。
  */
 
 #ifndef SENSOR_POWER2_H

@@ -33,9 +33,13 @@ typedef struct {
   uint32_t pressure_hpa100;        /**< 气压，单位：hPa * 100。 */
   uint32_t humidity_pct100;        /**< 相对湿度，单位：% * 100。 */
   uint32_t voltage_mv;             /**< 电压，单位：mV。 */
+  int32_t current_ma;              /**< 第一电池电流，单位：mA。 */
+  uint32_t power_mw;               /**< 第一电池功率，单位：mW。 */
   uint8_t battery_pct;             /**< 电量百分比，范围：0 到 100。 */
   uint8_t low_voltage;             /**< 第一电池低电压标志，0 表示正常，1 表示低电压。 */
   uint32_t voltage2_mv;            /**< 第二电池电压，单位：mV。 */
+  int32_t current2_ma;             /**< 第二电池电流，单位：mA。 */
+  uint32_t power2_mw;              /**< 第二电池功率，单位：mW。 */
   uint8_t battery2_pct;            /**< 第二电池电量百分比，范围：0 到 100。 */
   uint8_t low_voltage2;            /**< 第二电池低电压标志，0 表示正常，1 表示低电压。 */
   uint8_t motor_pct[PX4LITE_MOTOR_COUNT];            /**< 四路电机目标油门百分比，范围：0 到 100。 */

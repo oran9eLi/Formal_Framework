@@ -16,6 +16,9 @@
 #if BSP_ENABLE_ADC2
 #include "bsp_adc2.h"
 #endif
+#if BSP_ENABLE_ADC_CURRENT
+#include "bsp_adc_current.h"
+#endif
 #if BSP_ENABLE_GNSS
 #include "bsp_gnss.h"
 #endif
@@ -47,6 +50,9 @@ BSP_Status_t BSP_Init(void)
 
 #if BSP_ENABLE_ADC2
   if (BSP_ADC2_Init() != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
+#endif
+#if BSP_ENABLE_ADC_CURRENT
+  if (BSP_ADC_Current_Init() != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
 #endif
 
 #if BSP_ENABLE_GNSS

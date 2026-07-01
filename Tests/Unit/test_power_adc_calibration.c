@@ -3,12 +3,16 @@
 
 #include "bsp_config.h"
 #include "bsp_status.h"
+#include "bsp_adc_current.h"
 #include "sensor_power_config.h"
 #include "sensor_power.h"
 
 static const uint32_t *s_voltage_sequence;
 static uint32_t s_voltage_count;
 static uint32_t s_voltage_index;
+static const uint32_t *s_current_sequence;
+static uint32_t s_current_count;
+static uint32_t s_current_index;
 
 BSP_Status_t BSP_ADC_ReadVoltageMv(uint32_t *voltage_mv)
 {
@@ -23,11 +27,32 @@ BSP_Status_t BSP_ADC_ReadVoltageMv(uint32_t *voltage_mv)
   return BSP_STATUS_OK;
 }
 
+BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uint32_t *voltage_mv)
+{
+  (void)channel;
+  if ((voltage_mv == 0) || (s_current_sequence == 0) || (s_current_count == 0U)) { return BSP_STATUS_ERROR; }
+
+  if (s_current_index >= s_current_count) {
+    *voltage_mv = s_current_sequence[s_current_count - 1U];
+  } else {
+    *voltage_mv = s_current_sequence[s_current_index];
+    s_current_index++;
+  }
+  return BSP_STATUS_OK;
+}
+
 static void LoadVoltageSequence(const uint32_t *sequence, uint32_t count)
 {
   s_voltage_sequence = sequence;
   s_voltage_count    = count;
   s_voltage_index    = 0U;
+}
+
+static void LoadCurrentSequence(const uint32_t *sequence, uint32_t count)
+{
+  s_current_sequence = sequence;
+  s_current_count    = count;
+  s_current_index    = 0U;
 }
 
 static uint32_t SnapshotVoltageMv(void)
@@ -54,10 +79,35 @@ static uint8_t SnapshotLowVoltage(void)
   return snapshot.low_voltage;
 }
 
+static int32_t SnapshotCurrentMa(void)
+{
+  Power_Snapshot_t snapshot;
+
+  if (Sensor_Power_CopySnapshot(&snapshot) != POWER_RESULT_OK) { return -1; }
+  return snapshot.current_ma;
+}
+
+static uint32_t SnapshotPowerMw(void)
+{
+  Power_Snapshot_t snapshot;
+
+  if (Sensor_Power_CopySnapshot(&snapshot) != POWER_RESULT_OK) { return 0U; }
+  return snapshot.power_mw;
+}
+
 static int ExpectUint32(const char *label, uint32_t actual, uint32_t expected)
 {
   if (actual != expected) {
     printf("%s: expected %lu, got %lu\n", label, (unsigned long)expected, (unsigned long)actual);
+    return 0;
+  }
+  return 1;
+}
+
+static int ExpectInt32(const char *label, int32_t actual, int32_t expected)
+{
+  if (actual != expected) {
+    printf("%s: expected %ld, got %ld\n", label, (long)expected, (long)actual);
     return 0;
   }
   return 1;
@@ -88,6 +138,26 @@ static int TestPublishedVoltageKeepsMillivoltPrecision(void)
     }
     ok &= ExpectUint32("millivolt voltage output", SnapshotVoltageMv(), voltages_mv[i]);
   }
+  return ok;
+}
+
+static int TestBatteryCurrentAndPowerUseCurrentAdcMv(void)
+{
+  static const uint32_t voltage_mv = 12000U;
+  static const uint32_t current_mv = POWER_CURRENT_ZERO_MV + POWER_CURRENT_MV_PER_A;
+  int ok = 1;
+
+  LoadVoltageSequence(&voltage_mv, 1U);
+  LoadCurrentSequence(&current_mv, 1U);
+  (void)Sensor_Power_Init();
+
+  if (Sensor_Power_Service(1000U) != POWER_RESULT_OK) {
+    printf("service failed for current conversion test\n");
+    return 0;
+  }
+
+  ok &= ExpectInt32("current output", SnapshotCurrentMa(), 1000);
+  ok &= ExpectUint32("power output", SnapshotPowerMw(), 12000U);
   return ok;
 }
 
@@ -255,6 +325,7 @@ int main(void)
 
   ok &= TestDividerMatchesMeasuredCalibration();
   ok &= TestPublishedVoltageKeepsMillivoltPrecision();
+  ok &= TestBatteryCurrentAndPowerUseCurrentAdcMv();
   ok &= TestBatteryPercentClampsAndUsesFivePercentSteps();
   ok &= TestBatteryLowVoltageRequiresConsecutiveWarningSamples();
   ok &= TestBatteryLowVoltageUsesRecoverHysteresis();

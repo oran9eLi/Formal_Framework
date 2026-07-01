@@ -64,6 +64,7 @@ virtualFolder:
         - path: Bsp/Src/bsp_i2c.c
         - path: Bsp/Src/bsp_adc.c
         - path: Bsp/Src/bsp_adc2.c
+        - path: Bsp/Src/bsp_adc_current.c
         - path: Bsp/Src/bsp_time.c
         - path: Bsp/Src/bsp_spi.c
         - path: Bsp/Src/bsp_pwm.c

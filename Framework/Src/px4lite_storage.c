@@ -206,6 +206,8 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
 
   if (Px4Lite_CopyBattery(&battery) == PX4LITE_OK) {
     data.voltage_mv  = battery.voltage_mv;
+    data.current_ma  = battery.current_ma;
+    data.power_mw    = (battery.current_ma > 0) ? (uint32_t)((((uint64_t)battery.voltage_mv) * (uint32_t)battery.current_ma) / 1000ULL) : 0U;
     data.battery_pct = battery.percent;
     data.low_voltage = battery.low_voltage;
     Storage_ReportEventState(now_ms, "BATTERY", PX4LITE_STATE_ONLINE, PX4LITE_FAULT_SENSOR_INVALID, 0U, 0U, "battery_not_ready");
@@ -216,6 +218,8 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
 
   if (Px4Lite_CopyBattery2(&battery2) == PX4LITE_OK) {
     data.voltage2_mv  = battery2.voltage_mv;
+    data.current2_ma  = battery2.current_ma;
+    data.power2_mw    = (battery2.current_ma > 0) ? (uint32_t)((((uint64_t)battery2.voltage_mv) * (uint32_t)battery2.current_ma) / 1000ULL) : 0U;
     data.battery2_pct = battery2.percent;
     data.low_voltage2 = battery2.low_voltage;
     Storage_ReportEventState(now_ms, "BATTERY2", PX4LITE_STATE_ONLINE, PX4LITE_FAULT_SENSOR_INVALID, 0U, 0U, "battery2_not_ready");

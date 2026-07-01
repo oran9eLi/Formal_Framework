@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "bsp_status.h"
+#include "bsp_adc_current.h"
 #include "sensor_power.h"
 
 static uint32_t s_voltage_mv;
@@ -10,6 +11,14 @@ BSP_Status_t BSP_ADC_ReadVoltageMv(uint32_t *voltage_mv)
 {
   if (voltage_mv == 0) { return BSP_STATUS_ERROR; }
   *voltage_mv = s_voltage_mv;
+  return BSP_STATUS_OK;
+}
+
+BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uint32_t *voltage_mv)
+{
+  (void)channel;
+  if (voltage_mv == 0) { return BSP_STATUS_ERROR; }
+  *voltage_mv = 0U;
   return BSP_STATUS_OK;
 }
 
