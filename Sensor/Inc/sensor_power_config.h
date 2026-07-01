@@ -38,7 +38,7 @@
 
 #ifndef POWER_CURRENT_ZERO_MV
 /** @brief 第一电池电流计 0A 输出电压，单位：mV，需按实物标定。 */
-#define POWER_CURRENT_ZERO_MV 0U
+#define POWER_CURRENT_ZERO_MV 29U
 #endif
 
 #ifndef POWER_CURRENT_MV_PER_A
@@ -68,7 +68,7 @@
 
 #ifndef POWER2_CURRENT_ZERO_MV
 /** @brief 第二电池电流计 0A 输出电压，单位：mV，需按实物标定。 */
-#define POWER2_CURRENT_ZERO_MV 0U
+#define POWER2_CURRENT_ZERO_MV 240U
 #endif
 
 #ifndef POWER2_CURRENT_MV_PER_A
