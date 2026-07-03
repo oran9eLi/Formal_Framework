@@ -62,6 +62,7 @@ typedef enum {
   DISPLAY_HMI_VAR_SELF_CHECK_DEBUG,      /* 调试接口自检状态*/
   DISPLAY_HMI_VAR_SELF_CHECK_GNSS,       /* GNSS 自检状态*/
   DISPLAY_HMI_VAR_SELF_CHECK_LORA,       /* LoRa 自检状态*/
+  DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID,   /* RemoteID(UART4→ESP32-S3)本地发送通道自检状态*/
   DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE, /* 上电自检故障码*/
   DISPLAY_HMI_VAR_DATA_SELFCHECK_RESULT, /* 自检结果位图 (uint32) */
   DISPLAY_HMI_VAR_SYSTEM_STATUS,         /* 系统总状态，来源 CNS_State.system */

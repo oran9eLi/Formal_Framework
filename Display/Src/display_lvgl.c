@@ -48,9 +48,11 @@
 #define DISPLAY_LVGL_FOOTER_H        56U
 #define DISPLAY_LVGL_CARD_RADIUS     6U
 #define DISPLAY_LVGL_VALUE_TEXT_LEN  32U
-#define DISPLAY_LVGL_STATUS_COUNT    9U
+#define DISPLAY_LVGL_STATUS_COUNT    10U
 #define DISPLAY_LVGL_TAB_COUNT       6U
 #define DISPLAY_LVGL_MOTOR_COUNT     4U
+#define DISPLAY_LVGL_REMOTE_ROWS     16U   /* 通信连接页远端节点列表最大行数 */
+#define DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS 1000U /* 通信连接页节点列表周期重建间隔 */
 #define DISPLAY_LVGL_LOG_ROWS        9U
 #define DISPLAY_LVGL_ALARM_ROWS      5U
 
@@ -98,6 +100,7 @@ static const Display_LvglStatusItem_t s_status_items[DISPLAY_LVGL_STATUS_COUNT] 
     {DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, "\xE5""\xA7""\xBF""\xE6""\x80""\x81""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
     {DISPLAY_HMI_VAR_SELF_CHECK_BME280, "\xE7""\x8E""\xAF""\xE5""\xA2""\x83""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
     {DISPLAY_HMI_VAR_SELF_CHECK_LORA, "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, "RemoteID"},
     {DISPLAY_HMI_VAR_SELF_CHECK_SD, "\xE5""\xAD""\x98""\xE5""\x82""\xA8""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xB8""\x80"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xBA""\x8C"},
@@ -137,11 +140,37 @@ static Display_LvglAlarmRow_t s_alarm_rows[DISPLAY_LVGL_ALARM_ROWS];
 static uint8_t s_log_visible_rows;
 static Display_HmiPage_t s_current_lvgl_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static Display_HmiPage_t s_requested_page    = DISPLAY_HMI_PAGE_SELF_CHECK;
+static Display_HmiPage_t s_page_before_hidden = DISPLAY_HMI_PAGE_SELF_CHECK;
 static uint8_t s_page_change_requested;
+static uint8_t s_page_rebuild_requested;
 static uint8_t s_lvgl_core_ready;
 static uint8_t s_lvgl_display_ready;
 static uint8_t s_control_update_active;
 static uint32_t s_last_tick_ms;
+static uint32_t s_next_remote_list_rebuild_ms;
+static App_RemoteNodeView_t s_remote_node_views[DISPLAY_LVGL_REMOTE_ROWS];
+static char s_remote_node_texts[DISPLAY_LVGL_REMOTE_ROWS][64];
+
+/**
+ * @brief 远端视图下的触摸活动保活：任何点按都刷新远端视图有效期。
+ */
+static void Display_LvglTouchActivity(void)
+{
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+    (void)App_SetRemoteViewEnabled(1U, s_last_tick_ms);
+  }
+}
+
+/**
+ * @brief 延迟切回本机数据源，并在需要时重建当前页。
+ */
+static void Display_LvglRequestLocalView(Display_HmiPage_t target_page, uint8_t force_rebuild)
+{
+  (void)App_SetRemoteViewEnabled(0U, s_last_tick_ms);
+  s_requested_page          = target_page;
+  s_page_change_requested   = 1U;
+  s_page_rebuild_requested |= force_rebuild;
+}
 
 /**
  * @brief Return the formal page title used by the LVGL header.
@@ -936,21 +965,48 @@ static void Display_LvglTabEventCb(lv_event_t *event)
 }
 
 /**
- * @brief 本地/远端按钮：在常规页(本地)与隐藏的通信连接页(远端)之间切换。
- * @note  取代 LVGL 后端下已停用的 KEY0；与切页一样延迟到刷新步执行。
+ * @brief 通信连接页节点行点击：选中该远端节点并回到进入前的页面显示远端数据。
  */
-static void Display_LvglLocalRemoteEventCb(lv_event_t *event)
+static void Display_LvglRemoteNodeEventCb(lv_event_t *event)
 {
-  Px4Lite_RemoteMode_t mode;
+  uint8_t node_id;
 
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
     return;
   }
+  Display_LvglTouchActivity();
 
-  mode = Px4Lite_RemoteTelemetryToggleMode(Px4Lite_PlatformGetMs());
-  (void)mode;
-  s_requested_page         = s_current_lvgl_page;
-  s_page_change_requested = 1U;
+  node_id = (uint8_t)(uintptr_t)lv_event_get_user_data(event);
+  if (App_SelectRemoteNode(node_id, s_last_tick_ms) != 0U) {
+    (void)App_SetRemoteViewEnabled(1U, s_last_tick_ms);
+    s_requested_page         = s_page_before_hidden;
+    s_page_change_requested  = 1U;
+    s_page_rebuild_requested = 0U;
+  }
+}
+
+/**
+ * @brief 本地/远端按钮：在常规页(本地)与隐藏的通信连接页(远端节点选择)之间切换。
+ * @note  fj-lora 语义：远端页/远端模式下点按回本地；本地模式下点按进入节点选择页。
+ */
+static void Display_LvglLocalRemoteEventCb(lv_event_t *event)
+{
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
+    return;
+  }
+  Display_LvglTouchActivity();
+
+  if (s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) {
+    Display_LvglRequestLocalView(s_page_before_hidden, 0U);
+  } else if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+    Display_LvglRequestLocalView(s_current_lvgl_page, 1U);
+  } else {
+    (void)App_SetRemoteViewEnabled(1U, s_last_tick_ms);
+    s_page_before_hidden     = s_current_lvgl_page;
+    s_requested_page         = DISPLAY_HMI_PAGE_HIDDEN;
+    s_page_change_requested  = 1U;
+    s_page_rebuild_requested = 0U;
+  }
 }
 
 /**
@@ -1751,9 +1807,93 @@ static void Display_LvglCreateAlarmPage(lv_obj_t *parent)
 static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
 {
   lv_obj_t *card;
+  lv_obj_t *back_btn;
+  lv_obj_t *back_label;
+  lv_obj_t *list;
+  uint8_t count = 0U;
+  uint8_t i;
+  uint8_t selected_node = 0xFFU;
 
   card = Display_LvglCreateCard(parent, 70, 96, 660, 292, "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE8""\xBF""\x9E""\xE6""\x8E""\xA5");
-  (void)Display_LvglCreateLabel(card, "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE8""\x8A""\x82""\xE7""\x82""\xB9""\xE9""\x80""\x89""\xE6""\x8B""\xA9""\xE5""\x90""\x8E""\xE7""\xBB""\xAD""\xE8""\xBF""\x81""\xE7""\xA7""\xBB", 32, 82, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
+
+  /* 返回本地按钮 */
+  back_btn = lv_obj_create(card);
+  lv_obj_set_size(back_btn, 120, 32);
+  lv_obj_set_pos(back_btn, 32, 34);
+  lv_obj_set_style_radius(back_btn, 4, 0);
+  lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x25384A), 0);
+  lv_obj_set_style_bg_opa(back_btn, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(back_btn, 1, 0);
+  lv_obj_set_style_border_color(back_btn, lv_color_hex(0x1DB7C9), 0);
+  lv_obj_set_style_pad_all(back_btn, 0, 0);
+  lv_obj_add_flag(back_btn, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(back_btn, Display_LvglLocalRemoteEventCb, LV_EVENT_CLICKED, 0);
+  back_label = Display_LvglCreateLabel(back_btn, "\xE8""\xBF""\x94""\xE5""\x9B""\x9E""\xE6""\x9C""\xAC""\xE5""\x9C""\xB0", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  lv_obj_center(back_label);
+
+  (void)Display_LvglCreateLabel(card, "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE8""\x8A""\x82""\xE7""\x82""\xB9""\xE9""\x80""\x89""\xE6""\x8B""\xA9", 32, 82, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
+  (void)App_GetSelectedRemoteNode(&selected_node);
+
+  /* 远端节点列表：每行一个节点，含状态灯、身份、接收计数与丢包率 */
+  list = lv_obj_create(card);
+  lv_obj_set_size(list, 318, 188);
+  lv_obj_set_pos(list, 306, 66);
+  lv_obj_set_style_radius(list, 4, 0);
+  lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(list, 0, 0);
+  lv_obj_set_style_pad_all(list, 0, 0);
+  lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
+
+  if ((App_CopyRemoteNodeStatuses(s_remote_node_views, DISPLAY_LVGL_REMOTE_ROWS, &count, s_last_tick_ms) == PX4LITE_OK) && (count != 0U)) {
+    for (i = 0U; (i < count) && (i < DISPLAY_LVGL_REMOTE_ROWS); i++) {
+      lv_obj_t *btn;
+      lv_obj_t *label;
+      lv_obj_t *dot;
+      lv_color_t dot_color;
+      uint8_t selected = (uint8_t)(s_remote_node_views[i].node_id == selected_node);
+
+      if ((s_remote_node_views[i].state == APP_REMOTE_NODE_ACTIVE) || (s_remote_node_views[i].state == APP_REMOTE_NODE_DISCOVERED)) {
+        dot_color = lv_palette_main(LV_PALETTE_GREEN);
+      } else {
+        dot_color = lv_palette_main(LV_PALETTE_AMBER);
+      }
+
+      (void)snprintf(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), "DCDW-%03u  RX %lu  Loss %u.%u%%",
+                     (unsigned int)s_remote_node_views[i].node_id,
+                     (unsigned long)s_remote_node_views[i].rx_frame_count,
+                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 / 10U),
+                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 % 10U));
+      btn = lv_obj_create(list);
+      lv_obj_set_size(btn, 300, 30);
+      lv_obj_set_pos(btn, 0, (lv_coord_t)(i * 36U));
+      lv_obj_set_style_radius(btn, 4, 0);
+      lv_obj_set_style_bg_color(btn, selected ? lv_color_hex(0x143747) : lv_color_hex(0x25384A), 0);
+      lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+      lv_obj_set_style_border_width(btn, 1, 0);
+      lv_obj_set_style_border_color(btn, selected ? lv_color_hex(0x1DB7C9) : lv_color_hex(0x2F4A60), 0);
+      lv_obj_set_style_pad_all(btn, 0, 0);
+      lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_add_event_cb(btn, Display_LvglRemoteNodeEventCb, LV_EVENT_CLICKED, (void *)(uintptr_t)s_remote_node_views[i].node_id);
+      dot = lv_obj_create(btn);
+      lv_obj_set_size(dot, 12, 12);
+      lv_obj_set_pos(dot, 10, 9);
+      lv_obj_set_style_radius(dot, 6, 0);
+      lv_obj_set_style_bg_color(dot, dot_color, 0);
+      lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+      lv_obj_set_style_border_width(dot, 0, 0);
+      lv_obj_set_style_pad_all(dot, 0, 0);
+      lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+      label = Display_LvglCreateLabel(btn, s_remote_node_texts[i], 30, 6, &lv_font_montserrat_14, lv_color_hex(0xFFFFFF));
+      (void)label;
+    }
+  } else {
+    (void)Display_LvglCreateLabel(list, "No remote heartbeat", 16, 30, &lv_font_montserrat_14, lv_color_hex(0x7D91A6));
+  }
+
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_TX_COUNT, "\xE5""\x8F""\x91""\xE9""\x80""\x81""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 32, 148, 180);
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_RX_COUNT, "\xE6""\x8E""\xA5""\xE6""\x94""\xB6""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 32, 188, 180);
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_LOSS_RATE, "\xE4""\xB8""\xA2""\xE5""\x8C""\x85""\xE7""\x8E""\x87", 32, 228, 180);
@@ -1817,6 +1957,9 @@ static Display_Result_t Display_LvglCreatePage(Display_HmiPage_t page)
 
   if (page != DISPLAY_HMI_PAGE_HIDDEN) {
     Display_LvglCreateFooter(s_screen, page);
+    s_next_remote_list_rebuild_ms = 0U;
+  } else {
+    s_next_remote_list_rebuild_ms = s_last_tick_ms + DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS;
   }
 
   Display_LvglApplyCachedValues();
@@ -1896,9 +2039,30 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
     return DISPLAY_NOT_READY;
   }
 
+  /* 远端视图过期(断链/超时)自动回本地，避免长期停留在过期远端页面。 */
+  if ((App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) &&
+      (s_current_lvgl_page != DISPLAY_HMI_PAGE_HIDDEN) &&
+      (App_RemoteViewExpired(now_ms) != 0U)) {
+    Display_LvglRequestLocalView(s_current_lvgl_page, 1U);
+  }
+
+  /* 通信连接页周期重建节点列表，反映在线状态与丢包率变化。 */
+  if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) &&
+      (s_page_change_requested == 0U) &&
+      (s_next_remote_list_rebuild_ms != 0U) &&
+      ((int32_t)(now_ms - s_next_remote_list_rebuild_ms) >= 0)) {
+    s_requested_page              = DISPLAY_HMI_PAGE_HIDDEN;
+    s_page_change_requested       = 1U;
+    s_page_rebuild_requested      = 1U;
+    s_next_remote_list_rebuild_ms = now_ms + DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS;
+  }
+
   if (s_page_change_requested != 0U) {
     s_page_change_requested = 0U;
-    (void)Display_SetHmiPage(s_requested_page);
+    if ((s_requested_page != s_current_lvgl_page) || (s_page_rebuild_requested != 0U)) {
+      s_page_rebuild_requested = 0U;
+      (void)Display_SetHmiPage(s_requested_page);
+    }
   }
 
   elapsed_ms = now_ms - s_last_tick_ms;

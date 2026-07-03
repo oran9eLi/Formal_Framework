@@ -610,6 +610,8 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
     for (i = 0U; (i < APP_DISPLAY_MOTOR_COUNT) && (i < PX4LITE_MOTOR_COUNT); i++) {
       out->motor_duty_percent[i] = s_display_motor_scratch.duty_percent[i];
     }
+    out->motor_run_state   = s_display_motor_scratch.run_state;
+    out->motor_speed_level = s_display_motor_scratch.speed_level;
   }
 
   App_GetCommStats(&comm);
@@ -730,6 +732,8 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
     for (i = 0U; (i < APP_DISPLAY_MOTOR_COUNT) && (i < PX4LITE_MOTOR_COUNT); i++) {
       out->motor_duty_percent[i] = s_display_remote_scratch.motor_duty_percent[i];
     }
+    out->motor_run_state   = s_display_remote_scratch.motor_run_state;
+    out->motor_speed_level = s_display_remote_scratch.motor_speed_level;
   }
 
   App_GetCommStats(&comm);
@@ -1056,4 +1060,9 @@ Px4Lite_Result_t App_RequestAttitudeLevelCalibration(void)
 {
   Px4Lite_RequestAttitudeLevelCalibration();
   return PX4LITE_OK;
+}
+
+Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void)
+{
+  return Px4Lite_RemoteTelemetryGetMode();
 }

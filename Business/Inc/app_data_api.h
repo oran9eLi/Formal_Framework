@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include "px4lite_time.h"
 #include "px4lite_types.h"
+#include "px4lite_remote_telemetry.h"
 
 /*
  * 后续任意外设必须先通过模块状态进入 App API；只有存在明确业务数据消费需求时，
@@ -250,6 +251,8 @@ typedef struct {
   uint8_t low_voltage;                                   /**< 主电池低电压标志，1 表示低电压。 */
   uint8_t low_voltage2;                                  /**< 第二电池低电压标志，1 表示低电压。 */
   uint8_t motor_duty_percent[APP_DISPLAY_MOTOR_COUNT];   /**< 每路电机目标油门百分比。 */
+  uint8_t motor_run_state;                               /**< 电机运行状态，1 表示允许输出目标油门。 */
+  uint8_t motor_speed_level;                             /**< 四路目标油门最大值，范围 0 到 100。 */
   uint32_t lora_tx_count;                                /**< LoRa 本机发送完成帧计数。 */
   uint32_t lora_rx_count;                                /**< LoRa 接收合法帧计数。 */
   uint32_t lora_lost_count;                              /**< LoRa 接收侧按 MAVLink 序号估算的丢帧数量。 */
@@ -580,5 +583,12 @@ const char *App_GetFaultReasonText(uint16_t fault_code);
  * @return 请求结果。
  */
 Px4Lite_Result_t App_RequestAttitudeLevelCalibration(void);
+
+/**
+ * @brief 获取当前远程显示模式（LOCAL/REMOTE），供显示取数层选源。
+ *
+ * @return 当前模式，见 `Px4Lite_RemoteMode_t`。
+ */
+Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void);
 
 #endif
