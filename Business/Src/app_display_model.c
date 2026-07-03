@@ -15,6 +15,8 @@
 
 #include <string.h>
 
+#include "app_message_log.h"
+
 /**
  * @brief 把远端某显示域的字段有效/过期位映射为统一新鲜度返回值。
  *
@@ -145,12 +147,27 @@ Px4Lite_Result_t App_GetDisplayAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms)
   fresh = AppDisplay_RemoteDomain(&remote, PX4LITE_REMOTE_VALID_ALARM, now_ms);
   if (fresh == PX4LITE_NOT_READY) { return PX4LITE_NOT_READY; }
 
-  /* 阶段 A：远端只有告警摘要，最高项作为单行；完整告警表依赖第二件事(doc 18 同步)。 */
   out->header             = remote.header;
   out->highest_fault_code = remote.highest_fault_code;
   out->highest_source_id  = remote.highest_source_id;
   out->highest_severity   = remote.highest_severity;
-  if (remote.highest_fault_code != 0U) {
+  if (remote.alarm_table_count > 0U) {
+    /* 完整告警表：用远端逐行填满 records(TUNNEL 同步)。 */
+    uint8_t i;
+    uint8_t n = remote.alarm_table_count;
+    if (n > (uint8_t)PX4LITE_MODULE_COUNT) { n = (uint8_t)PX4LITE_MODULE_COUNT; }
+    out->active_count = n;
+    for (i = 0U; i < n; ++i) {
+      out->records[i].source_id  = remote.alarm_records[i].source_id;
+      out->records[i].fault_code = remote.alarm_records[i].fault_code;
+      out->records[i].severity   = (uint8_t)remote.alarm_records[i].severity;
+      out->records[i].active     = remote.alarm_records[i].active;
+      out->records[i].raised_ms  = remote.alarm_records[i].raised_ms;
+      out->records[i].updated_ms = now_ms;
+      out->records[i].detail     = remote.alarm_records[i].detail;
+    }
+  } else if (remote.highest_fault_code != 0U) {
+    /* 仅收到摘要(整表未到/无活动行)：退回最高项单行。 */
     out->active_count          = 1U;
     out->records[0].source_id  = remote.highest_source_id;
     out->records[0].fault_code = remote.highest_fault_code;
@@ -201,13 +218,36 @@ Px4Lite_Result_t App_GetDisplayDateTime(App_DateTimeSnapshot_t *out, uint32_t no
 
 Px4Lite_Result_t App_GetDisplayMessageLog(App_DisplayLogSnapshot_t *out, uint32_t now_ms)
 {
-  (void)now_ms;
+  Px4Lite_RemoteTelemetrySnapshot_t remote;
+  Px4Lite_Result_t fresh;
+  uint16_t i, n;
+
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
 
-  /* 阶段 A：消息日志尚未上提到业务层(仍由老显示内部生成)。返回 NOT_READY，
-     待第二件事抽取结构化日志后在此 surface(LOCAL 本机日志 / REMOTE 远端同步日志)。 */
+  /* LOCAL：返回本机业务日志缓冲(app_message_log 生产，与旧显示内部日志同源同算)。 */
+  if (App_GetRemoteDisplayMode() != PX4LITE_REMOTE_MODE_REMOTE) {
+    return App_MessageLogCopy(out);
+  }
+
+  /* REMOTE：返回远端同步日志(version 取 log_last_seq)；断链由新鲜度判 STALE 保留旧值。 */
   memset(out, 0, sizeof(*out));
-  return PX4LITE_NOT_READY;
+  fresh = AppDisplay_RemoteDomain(&remote, PX4LITE_REMOTE_VALID_LOG, now_ms);
+  if (fresh == PX4LITE_NOT_READY) { return PX4LITE_NOT_READY; }
+
+  n = remote.log_count;
+  if (n > (uint16_t)APP_DISPLAY_LOG_CAP) { n = (uint16_t)APP_DISPLAY_LOG_CAP; }
+  out->version = remote.log_last_seq;
+  out->count   = n;
+  for (i = 0U; i < n; ++i) {
+    out->entries[i].sequence    = remote.log_entries[i].sequence;
+    out->entries[i].message_id  = remote.log_entries[i].message_id;
+    out->entries[i].time_hhmmss = remote.log_entries[i].time_hhmmss;
+    out->entries[i].fault_code  = remote.log_entries[i].fault_code;
+    out->entries[i].severity    = remote.log_entries[i].severity;
+    out->entries[i].source_id   = remote.log_entries[i].source_id;
+    out->entries[i].active      = remote.log_entries[i].active;
+  }
+  return fresh;
 }
 
 void App_GetDisplayLinkStatus(App_DisplayLinkStatus_t *out, uint32_t now_ms)

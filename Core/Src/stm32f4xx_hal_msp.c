@@ -61,7 +61,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     HAL_GPIO_Init(BSP_LORA_TX_PORT, &gpio);
 
     gpio.Pin       = BSP_LORA_RX_PIN;
-    gpio.Pull      = GPIO_PULLUP;
+    gpio.Pull      = GPIO_PULLUP; /* UART RX 空闲为高，须上拉；不能用下拉(会被当作起始位/break，收不到) */
     gpio.Alternate = BSP_LORA_RX_AF;
     HAL_GPIO_Init(BSP_LORA_RX_PORT, &gpio);
 
@@ -196,6 +196,15 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef *hadc)
 
     gpio.Pin = BSP_ADC2_PIN;
     HAL_GPIO_Init(BSP_ADC2_PORT, &gpio);
+  } else if (hadc->Instance == BSP_ADC_CURRENT_INS) {
+    /* 两路电流计 PC0/PC1 走 ADC3，模拟输入。 */
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_ADC3_CLK_ENABLE();
+
+    gpio.Pin = BSP_ADC_CURRENT1_PIN;
+    HAL_GPIO_Init(BSP_ADC_CURRENT1_PORT, &gpio);
+    gpio.Pin = BSP_ADC_CURRENT2_PIN;
+    HAL_GPIO_Init(BSP_ADC_CURRENT2_PORT, &gpio);
   }
 }
 
@@ -207,6 +216,10 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef *hadc)
   } else if (hadc->Instance == BSP_ADC2_INS) {
     __HAL_RCC_ADC2_CLK_DISABLE();
     HAL_GPIO_DeInit(BSP_ADC2_PORT, BSP_ADC2_PIN);
+  } else if (hadc->Instance == BSP_ADC_CURRENT_INS) {
+    __HAL_RCC_ADC3_CLK_DISABLE();
+    HAL_GPIO_DeInit(BSP_ADC_CURRENT1_PORT, BSP_ADC_CURRENT1_PIN);
+    HAL_GPIO_DeInit(BSP_ADC_CURRENT2_PORT, BSP_ADC_CURRENT2_PIN);
   }
 }
 

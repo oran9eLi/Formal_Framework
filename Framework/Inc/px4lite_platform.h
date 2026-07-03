@@ -38,6 +38,14 @@ typedef enum {
 uint32_t Px4Lite_PlatformGetMs(void);
 
 /**
+ * @brief 返回本机 MAVLink 系统号，由芯片唯一 UID 运行时派生。
+ *
+ * @details 同一套固件烧到多台设备时，各芯片 UID 不同 → 系统号自动不同，
+ * 避免两端 sysid 相同互相当作“自己”而拒收对端遥测。范围 [1,250]。
+ */
+uint8_t Px4Lite_PlatformMavlinkSystemId(void);
+
+/**
  * @brief 获取平台微秒时间戳。
  *
  * @return 当前平台微秒时间，单位：us。

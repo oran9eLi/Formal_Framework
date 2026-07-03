@@ -36,6 +36,66 @@
 #define POWER_LOAD_COMPENSATION_MV 200U
 #endif
 
+#ifndef POWER_CURRENT_ZERO_MV
+/** @brief 第一电池电流计 0A 输出电压，单位：mV，需按实物标定。 */
+#define POWER_CURRENT_ZERO_MV 29U
+#endif
+
+#ifndef POWER_CURRENT_MV_PER_A
+/** @brief 第一电池电流计每 1A 对应的输出电压变化，单位：mV/A，需按实物标定。 */
+#define POWER_CURRENT_MV_PER_A 100U
+#endif
+
+#ifndef POWER_CURRENT_OFFSET_MA
+/** @brief 第一电池电流二次校准固定偏移，单位：mA，可为负值。 */
+#define POWER_CURRENT_OFFSET_MA 0
+#endif
+
+#ifndef POWER_CURRENT_DEADBAND_MA
+/** @brief 第一电池电流零点死区，单位：mA，小于该值时按 0A 处理。 */
+#define POWER_CURRENT_DEADBAND_MA 50U
+#endif
+
+#ifndef POWER_CURRENT_FILTER_OLD_WEIGHT
+/** @brief 第一电池电流滤波旧值权重。 */
+#define POWER_CURRENT_FILTER_OLD_WEIGHT 3U
+#endif
+
+#ifndef POWER_CURRENT_FILTER_TOTAL
+/** @brief 第一电池电流滤波总权重，必须非 0。 */
+#define POWER_CURRENT_FILTER_TOTAL 4U
+#endif
+
+#ifndef POWER2_CURRENT_ZERO_MV
+/** @brief 第二电池电流计 0A 输出电压，单位：mV，需按实物标定。 */
+#define POWER2_CURRENT_ZERO_MV 240U
+#endif
+
+#ifndef POWER2_CURRENT_MV_PER_A
+/** @brief 第二电池电流计每 1A 对应的输出电压变化，单位：mV/A，需按实物标定。 */
+#define POWER2_CURRENT_MV_PER_A 100U
+#endif
+
+#ifndef POWER2_CURRENT_OFFSET_MA
+/** @brief 第二电池电流二次校准固定偏移，单位：mA，可为负值。 */
+#define POWER2_CURRENT_OFFSET_MA 0
+#endif
+
+#ifndef POWER2_CURRENT_DEADBAND_MA
+/** @brief 第二电池电流零点死区，单位：mA，小于该值时按 0A 处理。 */
+#define POWER2_CURRENT_DEADBAND_MA 200U
+#endif
+
+#ifndef POWER2_CURRENT_FILTER_OLD_WEIGHT
+/** @brief 第二电池电流滤波旧值权重。 */
+#define POWER2_CURRENT_FILTER_OLD_WEIGHT 3U
+#endif
+
+#ifndef POWER2_CURRENT_FILTER_TOTAL
+/** @brief 第二电池电流滤波总权重，必须非 0。 */
+#define POWER2_CURRENT_FILTER_TOTAL 4U
+#endif
+
 #ifndef POWER_PERCENT_TABLE_EMPTY_MV
 /** @brief 0% 电量曲线点电压，单位：mV。 */
 #define POWER_PERCENT_TABLE_EMPTY_MV 9900U

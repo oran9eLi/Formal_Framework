@@ -67,8 +67,10 @@ typedef enum {
   DISPLAY_HMI_VAR_SYSTEM_STATUS,         /* 系统总状态，来源 CNS_State.system */
   DISPLAY_HMI_VAR_UPTIME_MS,             /* 系统运行时间，单位 ms */
   DISPLAY_HMI_VAR_BATTERY_VOLTAGE,       /* 主控电池电压(ADC1)，单位 0.01V */
+  DISPLAY_HMI_VAR_BATTERY_CURRENT,       /* 主控电流(ADC)，单位 0.1A */
   DISPLAY_HMI_VAR_BATTERY_PERCENT,       /* 主控电池电量(ADC1)，单位 % */
   DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE,     /* 电机电池电压(ADC2)，单位 0.01V */
+  DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT,     /* 电机电流(ADC)，单位 0.1A */
   DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT,     /* 电机电池电量(ADC2)，单位 % */
   DISPLAY_HMI_VAR_GNSS_FIX,              /* GNSS 信号状态：0=断开，非0=正常 */
   DISPLAY_HMI_VAR_GNSS_SAT_COUNT,        /* GNSS 使用卫星数量 */
@@ -288,6 +290,8 @@ Display_Result_t Display_HandleTouch(uint16_t x, uint16_t y, Display_HmiVariable
 Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16_t throttle_percent);
 
 Display_Result_t Display_RequestMotorEmergencyStop(void);
+
+Display_Result_t Display_RequestAttitudeLevelCalibration(void);
 
 /**
  * @brief       获取页面配置表数量

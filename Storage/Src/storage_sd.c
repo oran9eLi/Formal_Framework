@@ -10,11 +10,16 @@
 #include "ff.h"
 #include "storage_config.h"
 #include "storage_csv.h"
+#include "storage_file.h"
 
 static FATFS s_fatfs;
 static FIL s_data_file;
-static FIL s_error_file;
+static FIL s_event_file;
 static Storage_SdStatus_t s_status;
+static uint32_t s_data_file_date;
+static uint32_t s_event_file_date;
+static uint8_t s_data_file_open;
+static uint8_t s_event_file_open;
 
 typedef enum {
   STORAGE_OPEN_PHASE_NONE         = 0,
@@ -48,10 +53,16 @@ static void Storage_SD_UpdateDiskDiag(FRESULT mount_result)
 
 static void Storage_SD_CloseFiles(void)
 {
-  if (s_status.files_open != 0U) {
+  if (s_data_file_open != 0U) {
     (void)f_close(&s_data_file);
-    (void)f_close(&s_error_file);
   }
+  if (s_event_file_open != 0U) {
+    (void)f_close(&s_event_file);
+  }
+  s_data_file_open  = 0U;
+  s_event_file_open = 0U;
+  s_data_file_date  = 0U;
+  s_event_file_date = 0U;
   s_status.files_open = 0U;
 }
 
@@ -102,17 +113,50 @@ static Px4Lite_Result_t Storage_SD_OpenFile(FIL *file, const char *path, const c
 
 static Px4Lite_Result_t Storage_SD_OpenFiles(void)
 {
-  s_status.open_phase  = STORAGE_OPEN_PHASE_NONE;
-  s_status.open_result = (uint8_t)FR_OK;
+  return PX4LITE_OK;
+}
 
-  if (Storage_SD_OpenFile(&s_data_file, "0:/" STORAGE_SENSOR_DATA_FILE, StorageCsv_DataHeader(), STORAGE_OPEN_PHASE_DATA_OPEN, STORAGE_OPEN_PHASE_DATA_HEADER, STORAGE_OPEN_PHASE_DATA_SEEK) != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
+static Px4Lite_Result_t Storage_SD_EnsureFileForDate(FIL *file,
+                                                     uint8_t *is_open,
+                                                     uint32_t *open_date,
+                                                     Storage_RecordType_t type,
+                                                     uint32_t target_date_ymd)
+{
+  char path[24];
+  const char *header;
+  Storage_OpenPhase_t open_phase;
+  Storage_OpenPhase_t header_phase;
+  Storage_OpenPhase_t seek_phase;
 
-  if (Storage_SD_OpenFile(&s_error_file, "0:/" STORAGE_SYSTEM_ERROR_FILE, StorageCsv_ErrorHeader(), STORAGE_OPEN_PHASE_ERROR_OPEN, STORAGE_OPEN_PHASE_ERROR_HEADER, STORAGE_OPEN_PHASE_ERROR_SEEK) != PX4LITE_OK) {
-    (void)f_close(&s_data_file);
-    return PX4LITE_IO_ERROR;
+  if ((file == 0) || (is_open == 0) || (open_date == 0)) { return PX4LITE_INVALID_PARAM; }
+  if ((*is_open != 0U) && (*open_date == target_date_ymd)) { return PX4LITE_OK; }
+
+  if (*is_open != 0U) {
+    (void)f_sync(file);
+    (void)f_close(file);
+    *is_open = 0U;
+    *open_date = 0U;
   }
 
-  s_status.files_open = 1U;
+  if (StorageFile_FormatPath(type, target_date_ymd, path, sizeof(path)) != PX4LITE_OK) { return PX4LITE_INVALID_PARAM; }
+
+  if (type == STORAGE_RECORD_EVENT) {
+    header       = StorageCsv_EventHeader();
+    open_phase   = STORAGE_OPEN_PHASE_ERROR_OPEN;
+    header_phase = STORAGE_OPEN_PHASE_ERROR_HEADER;
+    seek_phase   = STORAGE_OPEN_PHASE_ERROR_SEEK;
+  } else {
+    header       = StorageCsv_DataHeader();
+    open_phase   = STORAGE_OPEN_PHASE_DATA_OPEN;
+    header_phase = STORAGE_OPEN_PHASE_DATA_HEADER;
+    seek_phase   = STORAGE_OPEN_PHASE_DATA_SEEK;
+  }
+
+  if (Storage_SD_OpenFile(file, path, header, open_phase, header_phase, seek_phase) != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
+
+  *is_open = 1U;
+  *open_date = target_date_ymd;
+  s_status.files_open = (uint8_t)((s_data_file_open != 0U) || (s_event_file_open != 0U));
   return PX4LITE_OK;
 }
 
@@ -120,8 +164,12 @@ void Storage_SD_Init(void)
 {
   memset(&s_fatfs, 0, sizeof(s_fatfs));
   memset(&s_data_file, 0, sizeof(s_data_file));
-  memset(&s_error_file, 0, sizeof(s_error_file));
+  memset(&s_event_file, 0, sizeof(s_event_file));
   memset(&s_status, 0, sizeof(s_status));
+  s_data_file_date  = 0U;
+  s_event_file_date = 0U;
+  s_data_file_open  = 0U;
+  s_event_file_open = 0U;
   s_status.state = PX4LITE_STATE_UNINITIALIZED;
 }
 
@@ -175,14 +223,21 @@ static Px4Lite_Result_t Storage_SD_WriteLine(FIL *file, const char *line, uint32
   return result;
 }
 
-Px4Lite_Result_t Storage_SD_WriteDataLine(const char *line, uint32_t now_ms)
+Px4Lite_Result_t Storage_SD_WriteDataLine(const char *line, uint32_t target_date_ymd, uint32_t now_ms)
 {
+  if (Storage_SD_EnsureFileForDate(&s_data_file, &s_data_file_open, &s_data_file_date, STORAGE_RECORD_DATA, target_date_ymd) != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
   return Storage_SD_WriteLine(&s_data_file, line, now_ms);
 }
 
-Px4Lite_Result_t Storage_SD_WriteErrorLine(const char *line, uint32_t now_ms)
+Px4Lite_Result_t Storage_SD_WriteEventLine(const char *line, uint32_t target_date_ymd, uint32_t now_ms)
 {
-  return Storage_SD_WriteLine(&s_error_file, line, now_ms);
+  if (Storage_SD_EnsureFileForDate(&s_event_file, &s_event_file_open, &s_event_file_date, STORAGE_RECORD_EVENT, target_date_ymd) != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
+  return Storage_SD_WriteLine(&s_event_file, line, now_ms);
+}
+
+Px4Lite_Result_t Storage_SD_WriteErrorLine(const char *line, uint32_t target_date_ymd, uint32_t now_ms)
+{
+  return Storage_SD_WriteEventLine(line, target_date_ymd, now_ms);
 }
 
 Px4Lite_Result_t Storage_SD_Sync(uint32_t now_ms)
@@ -192,8 +247,8 @@ Px4Lite_Result_t Storage_SD_Sync(uint32_t now_ms)
 
   if (Storage_SD_IsReady() == 0U) { return PX4LITE_NOT_READY; }
 
-  data_result  = f_sync(&s_data_file);
-  error_result = f_sync(&s_error_file);
+  data_result  = (s_data_file_open != 0U) ? f_sync(&s_data_file) : FR_OK;
+  error_result = (s_event_file_open != 0U) ? f_sync(&s_event_file) : FR_OK;
   if ((data_result == FR_OK) && (error_result == FR_OK)) {
     s_status.last_sync_ok = 1U;
     return PX4LITE_OK;
@@ -213,5 +268,5 @@ void Storage_SD_CopyStatus(Storage_SdStatus_t *out)
 
 uint8_t Storage_SD_IsReady(void)
 {
-  return ((s_status.state == PX4LITE_STATE_ONLINE) && (s_status.mounted != 0U) && (s_status.files_open != 0U)) ? 1U : 0U;
+  return ((s_status.state == PX4LITE_STATE_ONLINE) && (s_status.mounted != 0U)) ? 1U : 0U;
 }

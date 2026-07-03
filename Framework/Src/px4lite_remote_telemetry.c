@@ -8,6 +8,7 @@
  */
 
 #include "px4lite_remote_telemetry.h"
+#include "px4lite_platform.h"
 
 #include <string.h>
 
@@ -183,7 +184,7 @@ Px4Lite_RemoteMode_t Px4Lite_RemoteTelemetryGetMode(void)
 
 Px4Lite_Result_t Px4Lite_RemoteTelemetrySetTargetSysId(uint8_t sysid)
 {
-  if (sysid == PX4LITE_MAVLINK_SYSTEM_ID) { return PX4LITE_INVALID_PARAM; }
+  if (sysid == Px4Lite_PlatformMavlinkSystemId()) { return PX4LITE_INVALID_PARAM; }
   s_snapshot.target_sysid = sysid;
   return PX4LITE_OK;
 }
@@ -198,7 +199,7 @@ uint8_t Px4Lite_RemoteTelemetryAcceptSysId(uint8_t sysid)
   uint8_t target = s_snapshot.target_sysid;
 
   if (s_mode != PX4LITE_REMOTE_MODE_REMOTE) { return 0U; }
-  if (sysid == PX4LITE_MAVLINK_SYSTEM_ID) { return 0U; }
+  if (sysid == Px4Lite_PlatformMavlinkSystemId()) { return 0U; }
   if (target == PX4LITE_REMOTE_TARGET_SYSID_ANY) { return 1U; }
   return (sysid == target) ? 1U : 0U;
 }
@@ -225,7 +226,7 @@ void Px4Lite_RemoteTelemetryObserveHeartbeat(uint8_t sysid, uint8_t compid, uint
 {
   Px4Lite_RemoteDeviceInfo_t *device;
 
-  if ((s_mode != PX4LITE_REMOTE_MODE_REMOTE) || (sysid == PX4LITE_MAVLINK_SYSTEM_ID)) { return; }
+  if ((s_mode != PX4LITE_REMOTE_MODE_REMOTE) || (sysid == Px4Lite_PlatformMavlinkSystemId())) { return; }
 
   device = RemoteTelemetry_FindDevice(sysid, 1U, now_ms);
   if (device == 0) { return; }

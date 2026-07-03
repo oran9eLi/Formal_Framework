@@ -81,21 +81,6 @@ static uint32_t Lora_E22_GetUartDmaTimeoutMs(uint16_t length_bytes);
 static void Lora_E22_ResetRuntimeState(uint32_t now_ms);
 static void Lora_E22_TxStep(uint32_t now_ms);
 
-/* E22 在位检测（基于 AUX 引脚）：
-   E22 的 AUX 为推挽输出，模块在位且就绪时主动把 AUX 拉高。BSP 把 AUX 配成内部下拉
-   输入，于是：模块在位 -> AUX 被模块驱动为高；模块未接入 -> 下拉到低。
-   因此 init 顶部的“等待 AUX 就绪”循环若在超时内变高，即说明模块在位；若超时(无模块
-   下拉恒低)则 init 返回 BUSY，上层据此判 FAILED(红)。本函数在就绪等待通过后调用，
-   再多采样几次以避开模块忙(AUX 暂时拉低)的瞬态。 */
-static uint8_t Lora_E22_AuxPresent(void)
-{
-  uint32_t t0 = BSP_Time_GetTickMs();
-  while ((uint32_t)(BSP_Time_GetTickMs() - t0) < 30U) {
-    if (BSP_LoRa_IsReady() != 0U) { return 1U; }
-  }
-  return 0U;
-}
-
 static uint8_t Lora_E22_RecordAuxReady(uint32_t now_ms)
 {
   if (BSP_LoRa_IsReady() != 0U) {
@@ -149,8 +134,13 @@ Lora_Result_t Lora_E22_Init(void)
   ready_ms = BSP_Time_GetTickMs();
   Lora_E22_ResetRuntimeState(ready_ms);
 
-  /* 走到这里说明 AUX 已就绪(变高)，即模块在位；再采样确认避开瞬态忙。 */
-  s_present = Lora_E22_AuxPresent();
+  /* 在位检测(基于 AUX 引脚)：E22 的 AUX 为推挽输出，模块在位且就绪时主动把 AUX 拉高，
+     BSP 把 AUX 配成内部下拉输入。能走出上面的等待环就说明 AUX 已被模块驱动为高，即模块
+     在位；若模块未接入则 AUX 下拉恒低，等待环超时返回 BUSY、s_present 保持 0。
+     这里直接判为在位，不再额外做 30ms 采样——采样窗口若撞上模块瞬时忙(AUX 暂低)会把
+     在位模块误判为未接入，而 ResetRuntimeState 已先置 s_initialized=1，Service 的补判
+     分支以 s_initialized==0 为前提，会导致 s_present 永久卡 0、收发被整体关闭。 */
+  s_present = 1U;
 
   return LORA_RESULT_OK;
 }
@@ -178,6 +168,10 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
     if (Lora_E22_RecordAuxReady(now_ms) == 0U) { return LORA_RESULT_IO_ERROR; }
     s_present = 1U;
     Lora_E22_ResetRuntimeState(now_ms);
+  } else if (s_present == 0U) {
+    /* 已初始化但在位标志意外落在 0(如 init 撞上瞬时忙的历史路径)：运行期一旦 AUX 就绪
+       即补判为在位，避免一次性闩锁把收发永久关闭。 */
+    if (BSP_LoRa_IsReady() != 0U) { s_present = 1U; }
   }
 
   if (s_reinit_request != 0U) {

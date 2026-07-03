@@ -25,6 +25,8 @@ virtualFolder:
         - path: Framework/Src/px4lite_mavlink_tx.c
         - path: Framework/Src/px4lite_mavlink_rx.c
         - path: Framework/Src/px4lite_remote_telemetry.c
+        - path: Framework/Src/px4lite_local_msglog.c
+        - path: Framework/Src/px4lite_remote_tunnel.c
         - path: Framework/Src/px4lite_attitude.c
         - path: Framework/Src/px4lite_alarm.c
         - path: Framework/Src/px4lite_time.c
@@ -44,6 +46,7 @@ virtualFolder:
         - path: Business/Src/business_display_placeholder.c
         - path: Business/Src/app_data_api.c
         - path: Business/Src/app_display_model.c
+        - path: Business/Src/app_message_log.c
       folders: []
     - name: GNSS Driver
       files:
@@ -67,6 +70,7 @@ virtualFolder:
         - path: Bsp/Src/bsp_i2c.c
         - path: Bsp/Src/bsp_adc.c
         - path: Bsp/Src/bsp_adc2.c
+        - path: Bsp/Src/bsp_adc_current.c
         - path: Bsp/Src/bsp_time.c
         - path: Bsp/Src/bsp_spi.c
         - path: Bsp/Src/bsp_pwm.c
@@ -131,6 +135,11 @@ virtualFolder:
         - path: Storage/Src/storage_csv.c
         - path: Storage/Src/storage_queue.c
         - path: Storage/Src/diskio_sd_spi.c
+        - path: Storage/Src/storage_event.c
+        - path: Storage/Src/storage_time.c
+        - path: Storage/Src/storage_file.c
+        - path: Storage/Src/storage_drop_event.c
+        - path: Storage/Src/storage_module_event.c
         - path: Third_Party/FatFs/ff.c
       folders: []
 dependenceList: []

@@ -493,6 +493,16 @@
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_recovery.c</FilePath>
             </File>
+            <File>
+              <FileName>px4lite_local_msglog.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_local_msglog.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_remote_tunnel.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_remote_tunnel.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -532,6 +542,11 @@
               <FileName>app_display_model.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Business\Src\app_display_model.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_message_log.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Business\Src\app_message_log.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -647,6 +662,11 @@
               <FileName>bsp_button.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\bsp_button.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_adc_current.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_adc_current.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -1322,6 +1342,31 @@
               <FileName>ff.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Third_Party\FatFs\ff.c</FilePath>
+            </File>
+            <File>
+              <FileName>storage_drop_event.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Storage\Src\storage_drop_event.c</FilePath>
+            </File>
+            <File>
+              <FileName>storage_event.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Storage\Src\storage_event.c</FilePath>
+            </File>
+            <File>
+              <FileName>storage_file.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Storage\Src\storage_file.c</FilePath>
+            </File>
+            <File>
+              <FileName>storage_module_event.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Storage\Src\storage_module_event.c</FilePath>
+            </File>
+            <File>
+              <FileName>storage_time.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Storage\Src\storage_time.c</FilePath>
             </File>
           </Files>
         </Group>

@@ -32,6 +32,22 @@ static uint32_t s_heartbeat_ms[PX4LITE_HEARTBEAT_COUNT];
 static uint32_t s_heartbeat_seen_mask;
 
 /**
+ * @brief 由芯片 96-bit UID 派生本机 MAVLink 系统号(一套固件多台自动不同)。
+ *
+ * @details UID 三字异或后取模到 [1,250]，避开 0 与广播地址 255；同一颗芯片结果固定，
+ * 首次调用后缓存。两端 sysid 因 UID 不同而不同，收发不再互相拒收。
+ */
+uint8_t Px4Lite_PlatformMavlinkSystemId(void)
+{
+  static uint8_t s_sysid = 0U;
+  if (s_sysid == 0U) {
+    uint32_t h = HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2();
+    s_sysid = (uint8_t)(1U + (h % 250U));
+  }
+  return s_sysid;
+}
+
+/**
  * @brief 将 float 按四舍五入方式转换为 int32。
  *
  * @param[in] value 输入浮点值。
@@ -386,6 +402,7 @@ Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement)
   memset(measurement, 0, sizeof(*measurement));
   measurement->header.sample_time_ms = snapshot.sample_time_ms;
   measurement->voltage_mv            = (uint32_t)((snapshot.voltage_v * 1000.0f) + 0.5f);
+  measurement->current_ma            = snapshot.current_ma;
   measurement->percent               = snapshot.percent;
   measurement->low_voltage           = snapshot.low_voltage;
 
@@ -414,6 +431,7 @@ Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement)
   memset(measurement, 0, sizeof(*measurement));
   measurement->header.sample_time_ms = snapshot.sample_time_ms;
   measurement->voltage_mv            = (uint32_t)((snapshot.voltage_v * 1000.0f) + 0.5f);
+  measurement->current_ma            = snapshot.current_ma;
   measurement->percent               = snapshot.percent;
   measurement->low_voltage           = snapshot.low_voltage;
 

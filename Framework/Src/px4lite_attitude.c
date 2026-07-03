@@ -25,6 +25,11 @@
 #define PX4LITE_ATTITUDE_ACCEL_TRUST_MAX_G       1.15f
 #define PX4LITE_ATTITUDE_GYRO_STATIC_LIMIT_DPS   3.0f
 #define PX4LITE_ATTITUDE_GYRO_BIAS_SAMPLE_COUNT  128U
+/* 静止检测(用于"静止冻结"，对陀螺零偏免疫)：加速度模长接近 1g、相邻帧加速度方向
+   几乎不变、相邻帧角速度几乎不变，三者同时满足才判定静止。 */
+#define PX4LITE_ATTITUDE_STATIC_ACCEL_NORM_TOL_G 0.05f
+#define PX4LITE_ATTITUDE_STATIC_ACCEL_DELTA_G    0.03f
+#define PX4LITE_ATTITUDE_STATIC_GYRO_DELTA_DPS   2.0f
 
 /**
  * @brief 计算浮点绝对值，避免依赖库实现差异。
@@ -149,22 +154,28 @@ static float Px4Lite_AttitudeDynamicAlpha(float dt_s, float accel_trust)
 }
 
 /**
- * @brief 判断当前 IMU 样本是否适合用于静止零偏校准。
+ * @brief 判断设备当前是否物理静止。
  *
- * @param[in] accel_norm_g 加速度模长，单位 g。
- * @param[in] gyro_x_dps X 轴角速度，单位 degree/s。
- * @param[in] gyro_y_dps Y 轴角速度，单位 degree/s。
- * @param[in] gyro_z_dps Z 轴角速度，单位 degree/s。
+ * @details
+ * 不看陀螺绝对值(那会被零偏污染：零偏大于阈值时静止也判不出)，而是看：
+ * 1) 加速度模长接近 1g(只受重力)；
+ * 2) 加速度方向(三轴)相对上一帧几乎不变(设备没翻转/平移)；
+ * 3) 角速度相对上一帧几乎不变(恒定零偏的相邻帧差≈0，故对零偏免疫)。
+ * 三者同时满足才算静止。该结果同时用于"静止冻结"和陀螺零偏静止采样。
  *
- * @retval 1 当前样本满足静止判据。
- * @retval 0 当前样本不满足静止判据。
+ * @param[in] state 估计器状态(读取上一帧加速度/陀螺)。
+ * @retval 1 静止；0 运动。
  */
-static uint8_t Px4Lite_AttitudeIsStatic(float accel_norm_g, float gyro_x_dps, float gyro_y_dps, float gyro_z_dps)
+static uint8_t Px4Lite_AttitudeIsStatic(const Px4Lite_AttitudeState_t *state, float accel_norm_g, float accel_x_g, float accel_y_g, float accel_z_g, float gyro_x_dps, float gyro_y_dps, float gyro_z_dps)
 {
-  if ((accel_norm_g < PX4LITE_ATTITUDE_ACCEL_FULL_MIN_G) || (accel_norm_g > PX4LITE_ATTITUDE_ACCEL_FULL_MAX_G)) { return 0U; }
-  if (Px4Lite_AttitudeAbsFloat(gyro_x_dps) > PX4LITE_ATTITUDE_GYRO_STATIC_LIMIT_DPS) { return 0U; }
-  if (Px4Lite_AttitudeAbsFloat(gyro_y_dps) > PX4LITE_ATTITUDE_GYRO_STATIC_LIMIT_DPS) { return 0U; }
-  if (Px4Lite_AttitudeAbsFloat(gyro_z_dps) > PX4LITE_ATTITUDE_GYRO_STATIC_LIMIT_DPS) { return 0U; }
+  if (Px4Lite_AttitudeAbsFloat(accel_norm_g - 1.0f) > PX4LITE_ATTITUDE_STATIC_ACCEL_NORM_TOL_G) { return 0U; }
+  if (state->motion_ref_valid == 0U) { return 0U; }
+  if (Px4Lite_AttitudeAbsFloat(accel_x_g - state->accel_prev_g[0]) > PX4LITE_ATTITUDE_STATIC_ACCEL_DELTA_G) { return 0U; }
+  if (Px4Lite_AttitudeAbsFloat(accel_y_g - state->accel_prev_g[1]) > PX4LITE_ATTITUDE_STATIC_ACCEL_DELTA_G) { return 0U; }
+  if (Px4Lite_AttitudeAbsFloat(accel_z_g - state->accel_prev_g[2]) > PX4LITE_ATTITUDE_STATIC_ACCEL_DELTA_G) { return 0U; }
+  if (Px4Lite_AttitudeAbsFloat(gyro_x_dps - state->gyro_prev_dps[0]) > PX4LITE_ATTITUDE_STATIC_GYRO_DELTA_DPS) { return 0U; }
+  if (Px4Lite_AttitudeAbsFloat(gyro_y_dps - state->gyro_prev_dps[1]) > PX4LITE_ATTITUDE_STATIC_GYRO_DELTA_DPS) { return 0U; }
+  if (Px4Lite_AttitudeAbsFloat(gyro_z_dps - state->gyro_prev_dps[2]) > PX4LITE_ATTITUDE_STATIC_GYRO_DELTA_DPS) { return 0U; }
   return 1U;
 }
 
@@ -266,7 +277,15 @@ Px4Lite_Result_t Px4Lite_AttitudeUpdate(Px4Lite_AttitudeState_t *state, const Px
 
   accel_norm_g = Px4Lite_AttitudeAccelNorm(accel_x_g, accel_y_g, accel_z_g);
   accel_trust  = Px4Lite_AttitudeAccelTrust(accel_norm_g);
-  is_static    = Px4Lite_AttitudeIsStatic(accel_norm_g, gyro_x_dps, gyro_y_dps, gyro_z_dps);
+  is_static    = Px4Lite_AttitudeIsStatic(state, accel_norm_g, accel_x_g, accel_y_g, accel_z_g, gyro_x_dps, gyro_y_dps, gyro_z_dps);
+  /* 记录本帧原始加速度/陀螺，供下一帧静止检测做变化量比较(必须在零偏扣除之前)。 */
+  state->accel_prev_g[0]  = accel_x_g;
+  state->accel_prev_g[1]  = accel_y_g;
+  state->accel_prev_g[2]  = accel_z_g;
+  state->gyro_prev_dps[0] = gyro_x_dps;
+  state->gyro_prev_dps[1] = gyro_y_dps;
+  state->gyro_prev_dps[2] = gyro_z_dps;
+  state->motion_ref_valid = 1U;
   gyro_freeze  = Px4Lite_AttitudeUpdateGyroBias(state, is_static, gyro_x_dps, gyro_y_dps, gyro_z_dps);
   if (state->gyro_bias_valid != 0U) {
     gyro_x_dps -= state->gyro_bias_dps[0];
@@ -291,6 +310,10 @@ Px4Lite_Result_t Px4Lite_AttitudeUpdate(Px4Lite_AttitudeState_t *state, const Px
     }
     state->yaw_deg   = 0.0f;
     state->valid     = 1U;
+  } else if (is_static != 0U) {
+    /* 静止冻结：检测到设备没动，就保持三轴姿态不变、完全不积分，
+       从根本上消除静止漂移 → 数据不漂、绝对稳定。设备一动(加速度方向或
+       角速度变化超阈值)立即走下面的正常滤波跟随。 */
   } else {
     dt_s             = Px4Lite_AttitudeDtSeconds(state, imu);
     roll_gyro        = state->roll_deg + (gyro_x_dps * dt_s);
@@ -302,8 +325,18 @@ Px4Lite_Result_t Px4Lite_AttitudeUpdate(Px4Lite_AttitudeState_t *state, const Px
   }
 
   state->last_sample_time_ms = imu->header.sample_time_ms;
-  *roll_deg100               = Px4Lite_AttitudeRoundDeg100(state->roll_deg);
-  *pitch_deg100              = Px4Lite_AttitudeRoundDeg100(state->pitch_deg);
-  *yaw_deg100                = Px4Lite_AttitudeRoundDeg100(state->yaw_deg);
+
+  /* 上电水平校准：陀螺零偏静止校准完成后(此刻板子应处于水平)，把当前 roll/pitch
+     记为零位偏移，之后输出减去它，消除 IMU 安装/焊接倾角，使水平时地平仪居中。
+     仅作用于对外输出，不改动内部估计状态。 */
+  if ((state->gyro_bias_valid != 0U) && (state->level_offset_valid == 0U)) {
+    state->roll_offset_deg    = state->roll_deg;
+    state->pitch_offset_deg   = state->pitch_deg;
+    state->level_offset_valid = 1U;
+  }
+
+  *roll_deg100               = Px4Lite_AttitudeRoundDeg100(state->roll_deg - state->roll_offset_deg);
+  *pitch_deg100              = Px4Lite_AttitudeRoundDeg100(state->pitch_deg - state->pitch_offset_deg);
+  *yaw_deg100                = Px4Lite_AttitudeRoundDeg100(Px4Lite_AttitudeWrapDeg(state->yaw_deg - state->yaw_offset_deg));
   return PX4LITE_OK;
 }

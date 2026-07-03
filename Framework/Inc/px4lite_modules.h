@@ -118,6 +118,13 @@ Px4Lite_Result_t Px4Lite_EstimatorInit(void);
 void Px4Lite_EstimatorRun(uint32_t now_ms);
 
 /**
+ * @brief 请求按当前姿态重做水平校准（把当前 roll/pitch 记为零位）。
+ *
+ * @note 仅置位请求标志，下一次 Px4Lite_EstimatorRun 消费，线程安全。
+ */
+void Px4Lite_RequestAttitudeLevelCalibration(void);
+
+/**
  * @brief 初始化 LoRa/comm 模块和 MAVLink 发送器。
  *
  * @return 初始化结果。

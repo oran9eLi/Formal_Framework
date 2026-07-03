@@ -12,7 +12,9 @@
 #include <string.h>
 
 #include "px4lite_config.h"
+#include "px4lite_platform.h"
 #include "px4lite_remote_telemetry.h"
+#include "px4lite_remote_tunnel.h"
 
 #if defined(__CC_ARM)
 #define MAVLINK_ALIGNED_FIELDS   0
@@ -189,6 +191,16 @@ static Px4Lite_Result_t MavlinkRx_HandleNamedValueInt(const mavlink_message_t *m
     return PX4LITE_OK;
   }
 
+  if (MavlinkRx_NameEquals(named.name, "MOTBAT", 6U) != 0U) {
+    packed = (uint32_t)named.value;
+    snapshot->voltage2_mv      = (uint32_t)(packed & 0xFFFFU);
+    snapshot->battery2_percent = (uint8_t)((packed >> 16U) & 0xFFU);
+    if (snapshot->battery2_percent > 100U) { snapshot->battery2_percent = 100U; }
+    snapshot->low_voltage2     = (uint8_t)((packed >> 24U) & 0x01U);
+    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_POWER, now_ms);
+    return PX4LITE_OK;
+  }
+
   if (MavlinkRx_NameEquals(named.name, "MODSTAT", 7U) != 0U) {
     packed = (uint32_t)named.value;
     snapshot->module_state[PX4LITE_MODULE_GNSS]    = (uint8_t)(packed & 0x0FU);
@@ -266,6 +278,7 @@ static Px4Lite_Result_t MavlinkRx_HandleSysStatus(const mavlink_message_t *msg, 
   snapshot->voltage_mv      = sys.voltage_battery;
   snapshot->current_ma      = sys.current_battery;
   snapshot->battery_percent = (sys.battery_remaining < 0) ? 0U : (uint8_t)sys.battery_remaining;
+  snapshot->low_voltage     = ((sys.battery_remaining >= 0) && (sys.battery_remaining < 20)) ? 1U : 0U;
   Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_POWER | PX4LITE_REMOTE_VALID_STATUS, now_ms);
   return PX4LITE_OK;
 }
@@ -287,6 +300,7 @@ static Px4Lite_Result_t MavlinkRx_HandleBatteryStatus(const mavlink_message_t *m
   if (cells != 0U) { snapshot->voltage_mv = total_mv; }
   snapshot->current_ma      = battery.current_battery * 10;
   snapshot->battery_percent = (battery.battery_remaining < 0) ? 0U : (uint8_t)battery.battery_remaining;
+  snapshot->low_voltage     = (battery.charge_state == MAV_BATTERY_CHARGE_STATE_LOW) ? 1U : 0U;
   Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_POWER, now_ms);
   return PX4LITE_OK;
 }
@@ -326,6 +340,74 @@ void Px4Lite_MavlinkRxInit(uint32_t now_ms)
   s_loss_last_ms   = now_ms;
 }
 
+static Px4Lite_Result_t MavlinkRx_HandleTunnelAlarm(const mavlink_tunnel_t *tun, const mavlink_message_t *msg, uint32_t now_ms)
+{
+  Px4Lite_RemoteTelemetrySnapshot_t *snapshot;
+  uint8_t count = 0U;
+  uint8_t ver = 0U;
+
+  snapshot = Px4Lite_RemoteTelemetryMutable();
+  if (Px4Lite_UnpackAlarmTable(tun->payload, tun->payload_length, now_ms,
+                               snapshot->alarm_records, (uint8_t)PX4LITE_MODULE_COUNT,
+                               &count, &ver) != PX4LITE_OK) {
+    return PX4LITE_IO_ERROR;
+  }
+  snapshot->alarm_table_count     = count;
+  snapshot->alarm_table_ver       = ver;
+  snapshot->alarm_table_update_ms = now_ms;
+  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_ALARM, now_ms);
+  return PX4LITE_OK;
+}
+
+static Px4Lite_Result_t MavlinkRx_HandleTunnelLog(const mavlink_tunnel_t *tun, const mavlink_message_t *msg, uint32_t now_ms)
+{
+  Px4Lite_RemoteTelemetrySnapshot_t *snapshot;
+  Px4Lite_LogEntry_t rx[PX4LITE_TUNNEL_LOG_MAX_ENTRIES];
+  uint8_t count = 0U;
+  uint16_t latest = 0U;
+  uint8_t i;
+
+  if (Px4Lite_UnpackMessageLog(tun->payload, tun->payload_length, rx,
+                               PX4LITE_TUNNEL_LOG_MAX_ENTRIES, &count, &latest) != PX4LITE_OK) {
+    return PX4LITE_IO_ERROR;
+  }
+
+  snapshot = Px4Lite_RemoteTelemetryMutable();
+  /* 去重追加：仅 sequence > log_last_seq 的条目，允许序号空洞。 */
+  for (i = 0U; i < count; ++i) {
+    if (rx[i].sequence > snapshot->log_last_seq) {
+      uint16_t pos;
+      if (snapshot->log_count < (uint16_t)PX4LITE_REMOTE_LOG_CAP) {
+        pos = snapshot->log_count;
+        snapshot->log_count++;
+      } else {
+        /* 满则左移丢最旧。 */
+        uint16_t k;
+        for (k = 1U; k < (uint16_t)PX4LITE_REMOTE_LOG_CAP; ++k) { snapshot->log_entries[k - 1U] = snapshot->log_entries[k]; }
+        pos = (uint16_t)(PX4LITE_REMOTE_LOG_CAP - 1U);
+      }
+      snapshot->log_entries[pos] = rx[i];
+      snapshot->log_last_seq = rx[i].sequence;
+    }
+  }
+  /* count=0 心跳：仅对齐认知，不补数据；仍刷新时间与有效位。 */
+  snapshot->log_update_ms = now_ms;
+  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_LOG, now_ms);
+  return PX4LITE_OK;
+}
+
+static Px4Lite_Result_t MavlinkRx_HandleTunnel(const mavlink_message_t *msg, uint32_t now_ms)
+{
+  mavlink_tunnel_t tun;
+
+  mavlink_msg_tunnel_decode(msg, &tun);
+  switch (tun.payload_type) {
+    case PX4LITE_TUNNEL_PT_ALARM_TABLE: return MavlinkRx_HandleTunnelAlarm(&tun, msg, now_ms);
+    case PX4LITE_TUNNEL_PT_MESSAGE_LOG: return MavlinkRx_HandleTunnelLog(&tun, msg, now_ms);
+    default:                            return PX4LITE_IDLE;
+  }
+}
+
 Px4Lite_Result_t Px4Lite_MavlinkRxHandleFrame(const Px4Lite_LoRaRxFrame_t *frame, uint32_t now_ms)
 {
   mavlink_message_t msg;
@@ -344,7 +426,7 @@ Px4Lite_Result_t Px4Lite_MavlinkRxHandleFrame(const Px4Lite_LoRaRxFrame_t *frame
 #endif
 
   MavlinkRx_LoadMessage(frame, &msg);
-  if ((frame->msg_id == MAVLINK_MSG_ID_HEARTBEAT) && (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) && (frame->system_id != PX4LITE_MAVLINK_SYSTEM_ID)) {
+  if ((frame->msg_id == MAVLINK_MSG_ID_HEARTBEAT) && (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) && (frame->system_id != Px4Lite_PlatformMavlinkSystemId())) {
     mavlink_heartbeat_t heartbeat;
 
     mavlink_msg_heartbeat_decode(&msg, &heartbeat);
@@ -388,6 +470,9 @@ Px4Lite_Result_t Px4Lite_MavlinkRxHandleFrame(const Px4Lite_LoRaRxFrame_t *frame
     case MAVLINK_MSG_ID_STATUSTEXT:
       result = MavlinkRx_HandleStatustext(&msg, now_ms);
       break;
+    case MAVLINK_MSG_ID_TUNNEL:
+      result = MavlinkRx_HandleTunnel(&msg, now_ms);
+      break;
     default:
       s_stats.unsupported_count++;
       Px4Lite_RemoteTelemetryRecordUnsupported(frame->system_id);
@@ -411,6 +496,4 @@ void Px4Lite_MavlinkRxGetStats(Px4Lite_MavlinkRxStats_t *out)
   if (out == 0) { return; }
   *out = s_stats;
 }
-
-
 

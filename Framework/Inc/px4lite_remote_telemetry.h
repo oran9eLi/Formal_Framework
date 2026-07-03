@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include "px4lite_config.h"
 #include "px4lite_types.h"
+#include "px4lite_local_msglog.h"
 
 #ifndef PX4LITE_REMOTE_TELEMETRY_TIMEOUT_MS
 #define PX4LITE_REMOTE_TELEMETRY_TIMEOUT_MS 3000U /**< 远端遥测失联超时，单位：ms。 */
@@ -32,6 +33,9 @@
 #define PX4LITE_REMOTE_VALID_MOTOR       (1UL << 8) /**< 远端电机只读显示字段有效。 */
 #define PX4LITE_REMOTE_VALID_MODULES     (1UL << 9) /**< 远端模块状态灯/系统就绪字段有效。 */
 #define PX4LITE_REMOTE_VALID_ALARM       (1UL << 10) /**< 远端告警摘要字段有效。 */
+#define PX4LITE_REMOTE_VALID_LOG         (1UL << 11) /**< 远端消息日志字段有效。 */
+
+#define PX4LITE_REMOTE_LOG_CAP PX4LITE_LOCAL_LOG_CAP /**< 远端日志容量，与本机一致(9)。 */
 
 #ifndef PX4LITE_REMOTE_TARGET_SYSID_DEFAULT
 #define PX4LITE_REMOTE_TARGET_SYSID_DEFAULT PX4LITE_REMOTE_TARGET_SYSID_ANY /**< 默认手动目标 sysid。 */
@@ -128,6 +132,12 @@ typedef struct {
   uint32_t voltage_mv;          /**< 电池或输入电压，单位：mV。 */
   int32_t current_ma;           /**< 电流，单位：mA；未知时可为 0。 */
   uint8_t battery_percent;      /**< 电量百分比，范围：0 到 100；未知时为 0。 */
+  uint8_t low_voltage;          /**< 主控电池低电压标志，1 表示低电压。 */
+  uint16_t reserved_power0;     /**< 保留字段，保持结构体对齐。 */
+  uint32_t voltage2_mv;         /**< 电机电池电压，单位：mV。 */
+  uint8_t battery2_percent;     /**< 电机电池电量百分比，范围：0 到 100；未知时为 0。 */
+  uint8_t low_voltage2;         /**< 电机电池低电压标志，1 表示低电压。 */
+  uint16_t reserved_power1;     /**< 保留字段，保持结构体对齐。 */
   uint32_t date_ymd;            /**< 远端本地日期，编码 YYYYMMDD。 */
   uint32_t time_hhmmss;         /**< 远端本地时间，编码 HHMMSS。 */
   uint8_t motor_duty_percent[PX4LITE_MOTOR_COUNT]; /**< 远端电机目标油门百分比，范围 0 到 100。 */
@@ -142,6 +152,15 @@ typedef struct {
   uint16_t highest_fault_code;  /**< 远端最高严重度告警的故障码，0 表示无活动告警。 */
   uint16_t reserved3;           /**< 保留字段，保持结构体对齐。 */
   uint32_t alarm_active_mask;   /**< 远端活动告警来源位图，bit 对应来源 ID。 */
+  Px4Lite_AlarmRecord_t alarm_records[PX4LITE_MODULE_COUNT]; /**< 远端活动告警行(完整告警表)。 */
+  uint8_t alarm_table_count;    /**< 远端活动告警行数。 */
+  uint8_t alarm_table_ver;      /**< 远端告警表内容版本(TUNNEL ver)。 */
+  uint16_t reserved_alarm_tbl;  /**< 保留字段，保持结构体对齐。 */
+  uint32_t alarm_table_update_ms; /**< 告警表最近更新时间，单位 ms。 */
+  Px4Lite_LogEntry_t log_entries[PX4LITE_REMOTE_LOG_CAP]; /**< 远端日志(旧→新)。 */
+  uint16_t log_count;           /**< 远端日志有效条目数。 */
+  uint16_t log_last_seq;        /**< 已接收的最高日志序号。 */
+  uint32_t log_update_ms;       /**< 日志最近更新时间，单位 ms。 */
   char status_text[32];         /**< 远端状态文本，UTF-8/ASCII，以 0 结尾。 */
 } Px4Lite_RemoteTelemetrySnapshot_t;
 

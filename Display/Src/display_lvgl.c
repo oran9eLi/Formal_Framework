@@ -380,7 +380,15 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
       break;
     case DISPLAY_HMI_VAR_BATTERY_VOLTAGE:
     case DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE:
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu.%02lu""\xE4""\xBC""\x8F", (unsigned long)(value / 100U), (unsigned long)(value % 100U));
+      {
+        uint32_t deci_v = (value + 5U) / 10U; /* 0.01V 单位四舍五入到 0.1V，仅保留一位小数 */
+        (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu.%lu""\xE4""\xBC""\x8F", (unsigned long)(deci_v / 10U), (unsigned long)(deci_v % 10U));
+      }
+      break;
+    case DISPLAY_HMI_VAR_BATTERY_CURRENT:
+    case DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT:
+      /* 0.1A 单位，保留一位小数，单位"安"(U+5B89) */
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu.%lu""\xE5""\xAE""\x89", (unsigned long)(value / 10U), (unsigned long)(value % 10U));
       break;
     case DISPLAY_HMI_VAR_BATTERY_PERCENT:
     case DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT:
@@ -842,6 +850,15 @@ static void Display_LvglEstopEventCb(lv_event_t *event)
   (void)Display_RequestMotorEmergencyStop();
 }
 
+static void Display_LvglAttitudeCalEventCb(lv_event_t *event)
+{
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
+    return;
+  }
+
+  (void)Display_RequestAttitudeLevelCalibration();
+}
+
 /**
  * @brief Apply one cached value to currently active LVGL objects.
  */
@@ -962,11 +979,13 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
   /* 公司名：第一行东创大为，第二行CNS飞控系统 */
   (void)Display_LvglCreateLabel(bar, "\xE4""\xB8""\x9C""\xE5""\x88""\x9B""\xE5""\xA4""\xA7""\xE4""\xB8""\xBA", 68, 10, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
   (void)Display_LvglCreateLabel(bar, "CNS\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 68, 36, &display_lvgl_font_zh_16, lv_color_hex(0xB0C8D8));
-  /* 日期时间（含前缀标签，x=174 与公司名之间留约一字宽） */
-  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xA5""\xE6""\x9C""\x9F", 174, 12, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 208, 10, 82, &lv_font_montserrat_14);
-  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xB6""\xE9""\x97""\xB4", 174, 36, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 208, 36, 82, &lv_font_montserrat_14);
+  /* 日期/时间/飞行时间竖排三行（表头 64px 内，行距 20px，标签 x=174 数值 x=208） */
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xA5""\xE6""\x9C""\x9F", 174, 4, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 208, 3, 90, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xB6""\xE9""\x97""\xB4", 174, 24, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_CLOCK_TIME, 208, 23, 90, &lv_font_montserrat_14);
+  (void)Display_LvglCreateLabel(bar, "\xE9""\xA3""\x9E""\xE8""\xA1""\x8C", 174, 44, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_FLIGHT_TIME_S, 208, 43, 90, &lv_font_montserrat_14);
   /* 中间标题 */
   (void)Display_LvglCreateCenteredLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 298, 9, 268, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
   (void)Display_LvglCreateCenteredLabel(bar, Display_LvglPageTitle(page), 298, 35, 268, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
@@ -1305,16 +1324,16 @@ static void Display_LvglCreateFlightPage(lv_obj_t *parent)
 
   Display_LvglCreateSystemColumn(parent);
   card = Display_LvglCreateCard(parent, 264, DISPLAY_LVGL_BODY_Y, 268, DISPLAY_LVGL_BODY_H, "\xE9""\xA3""\x9E""\xE8""\xA1""\x8C""\xE6""\x95""\xB0""\xE6""\x8D""\xAE");
-  /* 删除电池/电机电量进度条，行距均匀重排；动力电压/电量改称电机电压/电量；湿度下新增气压。 */
+  /* 飞行时间移至顶栏；每组电池按 电压/电流/电量 三行排列；行距 30px 容纳 9 行。 */
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_BATTERY_VOLTAGE, "\xE4""\xB8""\xBB""\xE6""\x8E""\xA7""\xE7""\x94""\xB5""\xE5""\x8E""\x8B", 22, 48, 154);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_BATTERY_PERCENT, "\xE4""\xB8""\xBB""\xE6""\x8E""\xA7""\xE7""\x94""\xB5""\xE9""\x87""\x8F", 22, 82, 154);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE5""\x8E""\x8B", 22, 116, 154);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE9""\x87""\x8F", 22, 150, 154);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_FLIGHT_TIME_S, "\xE9""\xA3""\x9E""\xE8""\xA1""\x8C""\xE6""\x97""\xB6""\xE9""\x97""\xB4", 22, 184, 154);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_TEMPERATURE, "\xE6""\xB8""\xA9""\xE5""\xBA""\xA6", 22, 218, 154);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_HUMIDITY, "\xE6""\xB9""\xBF""\xE5""\xBA""\xA6", 22, 252, 154);
-  /* 气压：标签"气压"中的"气"(U+6C14)需重新生成字体后才显示，数值"<值>帕"可正常显示。 */
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PRESSURE, "\xE6""\xB0""\x94""\xE5""\x8E""\x8B", 22, 286, 154);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_BATTERY_CURRENT, "\xE4""\xB8""\xBB""\xE6""\x8E""\xA7""\xE7""\x94""\xB5""\xE6""\xB5""\x81", 22, 78, 154);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_BATTERY_PERCENT, "\xE4""\xB8""\xBB""\xE6""\x8E""\xA7""\xE7""\x94""\xB5""\xE9""\x87""\x8F", 22, 108, 154);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE5""\x8E""\x8B", 22, 138, 154);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE6""\xB5""\x81", 22, 168, 154);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE9""\x87""\x8F", 22, 198, 154);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_TEMPERATURE, "\xE6""\xB8""\xA9""\xE5""\xBA""\xA6", 22, 228, 154);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_HUMIDITY, "\xE6""\xB9""\xBF""\xE5""\xBA""\xA6", 22, 258, 154);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PRESSURE, "\xE6""\xB0""\x94""\xE5""\x8E""\x8B", 22, 288, 154);
   Display_LvglCreateMessageLogPanel(parent, 540, 252);
 }
 
@@ -1612,10 +1631,30 @@ static void Display_LvglCreateAircraftPage(lv_obj_t *parent)
   s_attitude_obj = horizon;
   lv_obj_add_event_cb(horizon, Display_LvglHorizonDrawCb, LV_EVENT_DRAW_POST, NULL);
 
-  /* 三态姿态数据下移到卡片底部三行，行距压缩到 24px 给地平仪让出高度 */
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_ROLL, "\xE6""\xA8""\xAA""\xE6""\xBB""\x9A", 24, 256, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PITCH, "\xE4""\xBF""\xAF""\xE4""\xBB""\xB0", 24, 280, 142);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_YAW, "\xE5""\x81""\x8F""\xE8""\x88""\xAA", 24, 304, 142);
+  /* 三态姿态数据下移到卡片底部三行，行距压缩到 24px 给地平仪让出高度；
+     数据整体左移，右侧腾出"校准"按钮位置。 */
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_ROLL, "\xE6""\xA8""\xAA""\xE6""\xBB""\x9A", 16, 256, 96);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PITCH, "\xE4""\xBF""\xAF""\xE4""\xBB""\xB0", 16, 280, 96);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_YAW, "\xE5""\x81""\x8F""\xE8""\x88""\xAA", 16, 304, 96);
+
+  /* 校准按钮：点下把当前姿态记为水平零位，地平仪以当前姿势归零。 */
+  {
+    lv_obj_t *cal = lv_obj_create(card);
+    lv_obj_t *cal_label;
+
+    lv_obj_set_size(cal, 74, 64);
+    lv_obj_set_pos(cal, 186, 258);
+    lv_obj_set_style_radius(cal, 4, 0);
+    lv_obj_set_style_bg_color(cal, lv_color_hex(0x1B3A4E), 0);
+    lv_obj_set_style_bg_opa(cal, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(cal, 1, 0);
+    lv_obj_set_style_border_color(cal, lv_color_hex(0x1DB7C9), 0);
+    lv_obj_add_flag(cal, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(cal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(cal, Display_LvglAttitudeCalEventCb, LV_EVENT_CLICKED, 0);
+    cal_label = Display_LvglCreateLabel(cal, "\xE6""\xA0""\xA1""\xE5""\x87""\x86", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+    lv_obj_center(cal_label);
+  }
 
   Display_LvglCreateMessageLogPanel(parent, 540, 252);
 }
@@ -1659,10 +1698,11 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
     lv_coord_t label_x = (lv_coord_t)(x - 10);
     Display_HmiVariableId_t id = (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1 + i);
 
-    (void)Display_LvglCreateLabel(card, motor_names[i], label_x, 40, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
+    (void)Display_LvglCreateLabel(card, motor_names[i], label_x, 34, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
     s_motor_pwm_bars[i] = lv_slider_create(card);
-    lv_obj_set_size(s_motor_pwm_bars[i], 28, 150);
-    lv_obj_set_pos(s_motor_pwm_bars[i], (lv_coord_t)(x + 1), 68);
+    /* 顶端下移、缩短滑轨(底端不动)，使滑点滑到 100% 时不再压住上方"X号"名称。 */
+    lv_obj_set_size(s_motor_pwm_bars[i], 28, 138);
+    lv_obj_set_pos(s_motor_pwm_bars[i], (lv_coord_t)(x + 1), 80);
     lv_slider_set_range(s_motor_pwm_bars[i], 0, 100);
     lv_slider_set_value(s_motor_pwm_bars[i], 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_motor_pwm_bars[i], lv_color_hex(0x263748), LV_PART_MAIN);

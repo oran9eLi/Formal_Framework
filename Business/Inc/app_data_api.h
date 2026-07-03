@@ -114,6 +114,8 @@ typedef struct {
   float relative_humidity_pct;  /**< 相对湿度，单位：%。 */
   uint32_t voltage_mv;          /**< 电池 1 电压，单位：mV。 */
   uint32_t voltage2_mv;         /**< 电池 2 电压，单位：mV。 */
+  int32_t current_ma;           /**< 电池 1 电流，单位：mA；未接入或采样失败时为 0。 */
+  int32_t current2_ma;          /**< 电池 2 电流，单位：mA；未接入或采样失败时为 0。 */
   uint8_t battery_percent;      /**< 电池 1 电量百分比，范围：0 到 100。 */
   uint8_t low_voltage;          /**< 电池 1 低电压标志，1 表示低电压。 */
   uint8_t battery2_percent;     /**< 电池 2 电量百分比，范围：0 到 100。 */
@@ -225,6 +227,13 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms);
  * @return 设置结果。
  */
 Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent);
+
+/**
+ * @brief 请求按当前姿态重做水平校准（地平仪以当前姿势归零）。
+ *
+ * @return 请求结果。
+ */
+Px4Lite_Result_t App_RequestAttitudeLevelCalibration(void);
 
 /**
  * @brief 复制统一日期时间快照。

@@ -39,6 +39,7 @@ static uint32_t s_last_baro_work_ms;
 static uint32_t s_last_battery_work_ms;
 static uint32_t s_last_battery2_work_ms;
 static Px4Lite_AttitudeState_t s_attitude_state;
+static volatile uint8_t s_attitude_level_cal_request; /* 1=请求按当前姿态重做水平校准 */
 
 /**
  * @brief 根据定位类型、卫星数和 HDOP 计算有限范围 GNSS 质量分。
@@ -508,8 +509,14 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 Px4Lite_Result_t Px4Lite_EstimatorInit(void)
 {
   Px4Lite_AttitudeInit(&s_attitude_state);
+  s_attitude_level_cal_request = 0U;
   Px4Lite_SetStatus(PX4LITE_MODULE_ESTIMATOR, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, Px4Lite_PlatformGetMs());
   return PX4LITE_OK;
+}
+
+void Px4Lite_RequestAttitudeLevelCalibration(void)
+{
+  s_attitude_level_cal_request = 1U;
 }
 
 /**
@@ -532,6 +539,18 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
   int32_t yaw_rate_dps100    = 0;
 
   memset(&navigation, 0, sizeof(navigation));
+
+  /* 水平校准请求：按下即以当前姿态为基准，把横滚/俯仰/偏航三轴都记为零位，
+     使三个数据从 0 开始(不依赖陀螺零偏标定状态)。估计器未出首帧时忽略本次请求。 */
+  if (s_attitude_level_cal_request != 0U) {
+    s_attitude_level_cal_request = 0U;
+    if (s_attitude_state.valid != 0U) {
+      s_attitude_state.roll_offset_deg    = s_attitude_state.roll_deg;
+      s_attitude_state.pitch_offset_deg   = s_attitude_state.pitch_deg;
+      s_attitude_state.yaw_offset_deg     = s_attitude_state.yaw_deg;
+      s_attitude_state.level_offset_valid = 1U;
+    }
+  }
 
   if ((Px4Lite_CopyGnss(&gnss) == PX4LITE_OK) && (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U)) {
     navigation.latitude_e7        = gnss.latitude_e7;
@@ -681,9 +700,9 @@ void Px4Lite_HealthRun(uint32_t now_ms)
 
 #if PX4LITE_ENABLE_LORA
   /*
-   * LoRa 状态改由 comm 任务按“在位 + 链路”单写者发布三态(见 Px4Lite_CommWorkRun)：
-   * 未接入=FAILED(红)、已接入未链接=STARTING(黄)、已链接=ONLINE(绿)。Health 不再
-   * 把 LoRa 下调为 OFFLINE，避免“已接入但暂无对端”被误判为红色离线。
+   * LoRa 状态由 comm 任务按本机模块插电在位二态发布：
+   * 未接入/未上电=FAILED(红)，已接入并上电=ONLINE(绿)。
+   * Health 不再按远端链路或数据超时下调 LoRa 状态。
    */
   (void)lora_state;
   (void)lora_last_valid_ms;
@@ -813,13 +832,14 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
 {
 #if PX4LITE_ENABLE_LORA
   uint32_t now_ms         = Px4Lite_PlatformGetMs();
-  Px4Lite_Result_t result = Px4Lite_LoRaInit();
+  Px4Lite_Result_t lora_result = Px4Lite_LoRaInit();
+  Px4Lite_Result_t result = lora_result;
 
   Px4Lite_RemoteTelemetryInit(now_ms);
   Px4Lite_MavlinkRxInit(now_ms);
   if (Px4Lite_MavlinkTxInit(now_ms) != PX4LITE_OK) { result = PX4LITE_IO_ERROR; }
 
-  Px4Lite_SetStatus(PX4LITE_MODULE_LORA, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  Px4Lite_SetStatus(PX4LITE_MODULE_LORA, (lora_result == PX4LITE_OK) ? PX4LITE_STATE_ONLINE : PX4LITE_STATE_FAILED, (lora_result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   return result;
 #else
   return PX4LITE_OK;
@@ -830,7 +850,6 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 {
 #if PX4LITE_ENABLE_LORA
   Px4Lite_CommDebugInfo_t info;
-  Px4Lite_State_t state;
   Px4Lite_Result_t result;
   uint32_t last_valid_ms;
 
@@ -856,9 +875,9 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
-  state = Px4Lite_LoRaGetState(now_ms);
+  (void)Px4Lite_LoRaGetState(now_ms);
 
-  /* LoRa 模块在位/就绪按 AUX ready 维护；远端数据是否有效由 RemoteTelemetry 判定。 */
+  /* LoRa 调试时间仍记录 AUX ready；显示状态只按本机模块插电在位发布。 */
   last_valid_ms = info.last_ready_ms;
 
   taskENTER_CRITICAL();
@@ -868,18 +887,11 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count;
   taskEXIT_CRITICAL();
 
-  /*
-   * LoRa 三态由 comm 任务单写者按模块在位和本地服务状态发布；
-   * 远端数据缺失/过期只影响远端快照，不自动回退到本地显示。
-   */
+  /* 当前状态发布按本机模块插电在位二态执行，不再参考 result 或远端连接状态。 */
   if (Px4Lite_LoRaIsPresent() == 0U) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_FAILED, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
-  } else if (result != PX4LITE_OK) {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
-  } else if (state == PX4LITE_STATE_ONLINE) {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   } else {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_STARTING, PX4LITE_FAULT_NONE, now_ms);
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   }
 #else
   (void)now_ms;

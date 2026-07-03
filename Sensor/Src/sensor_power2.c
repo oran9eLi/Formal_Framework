@@ -11,6 +11,7 @@
 #include "sensor_power2.h"
 
 #include "bsp_adc2.h"
+#include "bsp_adc_current.h"
 #include "sensor_power_config.h"
 
 #include <string.h>
@@ -40,10 +41,12 @@ static const Power2_PercentPoint_t s_percent_curve2[] = {
 
 static Power_Snapshot_t s_snapshot2;
 static uint32_t s_filtered_voltage_mv2;
+static int32_t s_filtered_current_ma2;
 static uint8_t s_pending_percent_count2;
 static uint8_t s_pending_low_voltage_count2;
 static uint8_t s_initialized2;
 static uint8_t s_filter_valid2;
+static uint8_t s_current_filter_valid2;
 static volatile uint8_t s_reinit_request2;
 
 /**
@@ -65,6 +68,61 @@ static uint32_t Power2_ApplyCalibration(uint32_t measured_mv)
 #endif
 
   return (calibrated_mv > 0) ? (uint32_t)calibrated_mv : 0U;
+}
+
+/**
+ * @brief 取有符号整数绝对值并返回无符号幅值。
+ */
+static uint32_t Power2_AbsI32(int32_t value)
+{
+  return (value < 0) ? (uint32_t)(-value) : (uint32_t)value;
+}
+
+/**
+ * @brief 将第二电池电流计 ADC 引脚电压换算为电流。
+ */
+static int32_t Power2_CalcCurrentMa(uint32_t adc_mv)
+{
+  int32_t delta_mv;
+  int32_t current_ma;
+
+#if POWER2_CURRENT_MV_PER_A == 0
+#error "POWER2_CURRENT_MV_PER_A must not be zero"
+#endif
+
+  delta_mv   = (int32_t)adc_mv - (int32_t)POWER2_CURRENT_ZERO_MV;
+  current_ma = (int32_t)(((int64_t)delta_mv * 1000LL) / (int64_t)POWER2_CURRENT_MV_PER_A);
+  current_ma += (int32_t)POWER2_CURRENT_OFFSET_MA;
+
+  return (Power2_AbsI32(current_ma) <= POWER2_CURRENT_DEADBAND_MA) ? 0 : current_ma;
+}
+
+/**
+ * @brief 对第二电池电流做一阶低通滤波。
+ */
+static int32_t Power2_FilterCurrent(int32_t current_ma)
+{
+#if POWER2_CURRENT_FILTER_TOTAL == 0
+#error "POWER2_CURRENT_FILTER_TOTAL must not be zero"
+#endif
+
+  if (s_current_filter_valid2 == 0U) {
+    s_filtered_current_ma2  = current_ma;
+    s_current_filter_valid2 = 1U;
+  } else {
+    s_filtered_current_ma2 = (int32_t)((((int64_t)s_filtered_current_ma2 * POWER2_CURRENT_FILTER_OLD_WEIGHT) + current_ma + (POWER2_CURRENT_FILTER_TOTAL / 2U)) / POWER2_CURRENT_FILTER_TOTAL);
+  }
+
+  return s_filtered_current_ma2;
+}
+
+/**
+ * @brief 计算第二电池输出功率。
+ */
+static uint32_t Power2_CalcPowerMw(uint32_t voltage_mv, int32_t current_ma)
+{
+  if (current_ma <= 0) { return 0U; }
+  return (uint32_t)((((uint64_t)voltage_mv) * (uint32_t)current_ma) / 1000ULL);
 }
 
 /**
@@ -216,9 +274,11 @@ Power_Result_t Sensor_Power2_Init(void)
 {
   memset(&s_snapshot2, 0, sizeof(s_snapshot2));
   s_filtered_voltage_mv2       = 0U;
+  s_filtered_current_ma2       = 0;
   s_pending_percent_count2     = 0U;
   s_pending_low_voltage_count2 = 0U;
   s_filter_valid2              = 0U;
+  s_current_filter_valid2      = 0U;
   s_initialized2               = 1U;
   return POWER_RESULT_OK;
 }
@@ -231,8 +291,10 @@ void Sensor_Power2_RequestReinit(void)
 Power_Result_t Sensor_Power2_Service(uint32_t now_ms)
 {
   uint32_t measured_voltage_mv = 0U;
+  uint32_t current_adc_mv      = 0U;
   uint32_t voltage_mv;
   uint32_t filtered_voltage_mv;
+  int32_t current_ma;
   uint8_t candidate_percent;
 
   if (s_reinit_request2 != 0U) {
@@ -256,6 +318,16 @@ Power_Result_t Sensor_Power2_Service(uint32_t now_ms)
   s_snapshot2.percent        = (s_snapshot2.rx_sequence == 1U) ? candidate_percent : Power2_ApplyPercentConfirm(s_snapshot2.percent, candidate_percent, filtered_voltage_mv);
   s_snapshot2.low_voltage    = Power2_ApplyLowVoltageConfirm(s_snapshot2.low_voltage, filtered_voltage_mv);
 
+  if (BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CURRENT_BATTERY2, &current_adc_mv) == BSP_STATUS_OK) {
+    current_ma             = Power2_FilterCurrent(Power2_CalcCurrentMa(current_adc_mv));
+    s_snapshot2.current_ma = current_ma;
+    s_snapshot2.power_mw   = Power2_CalcPowerMw(voltage_mv, current_ma);
+  } else {
+    s_snapshot2.error_count++;
+    s_snapshot2.current_ma = 0;
+    s_snapshot2.power_mw   = 0U;
+  }
+
   return POWER_RESULT_OK;
 }
 
@@ -274,6 +346,8 @@ Power_Result_t Sensor_Power2_GetStatus(Power_Status_t *out)
   out->rx_sequence    = s_snapshot2.rx_sequence;
   out->sample_time_ms = s_snapshot2.sample_time_ms;
   out->error_count    = s_snapshot2.error_count;
+  out->current_ma     = s_snapshot2.current_ma;
+  out->power_mw       = s_snapshot2.power_mw;
   out->percent        = s_snapshot2.percent;
   out->low_voltage    = s_snapshot2.low_voltage;
   out->reserved       = 0U;
