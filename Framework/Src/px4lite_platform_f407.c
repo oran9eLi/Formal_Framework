@@ -13,6 +13,7 @@
 #include "px4lite_imu_axis_map.h"
 #include "bsp_gnss.h"
 #include "bsp_lora.h"
+#include "bsp_remoteid.h"
 #include "bsp_button.h"
 #include "bsp_pwm.h"
 #include "bsp_rtc.h"
@@ -26,26 +27,15 @@
 #include "stm32f4xx_hal.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include <math.h>
 #include <string.h>
 
 static uint32_t s_heartbeat_ms[PX4LITE_HEARTBEAT_COUNT];
 static uint32_t s_heartbeat_seen_mask;
-
-/**
- * @brief 由芯片 96-bit UID 派生本机 MAVLink 系统号(一套固件多台自动不同)。
- *
- * @details UID 三字异或后取模到 [1,250]，避开 0 与广播地址 255；同一颗芯片结果固定，
- * 首次调用后缓存。两端 sysid 因 UID 不同而不同，收发不再互相拒收。
- */
-uint8_t Px4Lite_PlatformMavlinkSystemId(void)
-{
-  static uint8_t s_sysid = 0U;
-  if (s_sysid == 0U) {
-    uint32_t h = HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2();
-    s_sysid = (uint8_t)(1U + (h % 250U));
-  }
-  return s_sysid;
-}
+static uint32_t s_baro_last_sample_ms;
+static int32_t s_baro_last_altitude_mm;
+static int32_t s_baro_vertical_speed_cms;
+static uint8_t s_baro_altitude_valid;
 
 /**
  * @brief 将 float 按四舍五入方式转换为 int32。
@@ -58,6 +48,66 @@ static int32_t Px4Lite_RoundFloatToI32(float value)
 {
   if (value >= 0.0f) { return (int32_t)(value + 0.5f); }
   return (int32_t)(value - 0.5f);
+}
+
+/**
+ * @brief 将整数限制到闭区间内。
+ */
+static int32_t Px4Lite_ClampI32(int32_t value, int32_t min_value, int32_t max_value)
+{
+  if (value < min_value) { return min_value; }
+  if (value > max_value) { return max_value; }
+  return value;
+}
+
+/**
+ * @brief 将标准大气模型下的气压转换为海拔高度。
+ */
+static int32_t Px4Lite_BaroPressureToAltitudeMm(float pressure_pa)
+{
+  float ratio;
+  float altitude_m;
+
+  if (pressure_pa <= 0.0f) { return 0; }
+
+  ratio      = pressure_pa / PX4LITE_BARO_SEA_LEVEL_PA;
+  altitude_m = 44330.0f * (1.0f - powf(ratio, 0.19029495f));
+  return Px4Lite_RoundFloatToI32(altitude_m * 1000.0f);
+}
+
+/**
+ * @brief 更新气压高度差分垂直速度，使用限幅和一阶滤波抑制跳变。
+ */
+static int32_t Px4Lite_BaroUpdateVerticalSpeed(int32_t altitude_mm, uint32_t sample_time_ms)
+{
+  int32_t velocity_cms = 0;
+  uint32_t dt_ms;
+
+  if ((s_baro_altitude_valid == 0U) || (s_baro_last_sample_ms == 0U) || (sample_time_ms <= s_baro_last_sample_ms)) {
+    s_baro_altitude_valid     = 1U;
+    s_baro_last_sample_ms     = sample_time_ms;
+    s_baro_last_altitude_mm   = altitude_mm;
+    s_baro_vertical_speed_cms = 0;
+    return 0;
+  }
+
+  dt_ms = sample_time_ms - s_baro_last_sample_ms;
+  if (dt_ms <= PX4LITE_BARO_MAX_AGE_MS) {
+    int32_t delta_mm = altitude_mm - s_baro_last_altitude_mm;
+
+    if (delta_mm > PX4LITE_BARO_MAX_JUMP_MM) { delta_mm = PX4LITE_BARO_MAX_JUMP_MM; }
+    if (delta_mm < -PX4LITE_BARO_MAX_JUMP_MM) { delta_mm = -PX4LITE_BARO_MAX_JUMP_MM; }
+
+    velocity_cms = (int32_t)(((int64_t)delta_mm * 100) / (int64_t)dt_ms);
+    velocity_cms = Px4Lite_ClampI32(velocity_cms, -PX4LITE_BARO_MAX_VERTICAL_CMS, PX4LITE_BARO_MAX_VERTICAL_CMS);
+    s_baro_vertical_speed_cms += (velocity_cms - s_baro_vertical_speed_cms) / 4;
+  } else {
+    s_baro_vertical_speed_cms = 0;
+  }
+
+  s_baro_last_sample_ms   = sample_time_ms;
+  s_baro_last_altitude_mm = altitude_mm;
+  return s_baro_vertical_speed_cms;
 }
 
 #if PX4LITE_ENABLE_HARDWARE_WATCHDOG
@@ -153,6 +203,24 @@ uint32_t Px4Lite_PlatformGetUs(void)
 }
 
 /**
+ * @brief 读取 STM32F407 96-bit 硬件唯一 ID。
+ *
+ * @param[out] uid_words 输出 UID word0/word1/word2。
+ * @param[in] word_capacity 输出缓冲区 word 容量。
+ *
+ * @return 读取结果。
+ */
+Px4Lite_Result_t Px4Lite_PlatformGetHardwareUid(uint32_t *uid_words, uint8_t word_capacity)
+{
+  if ((uid_words == 0) || (word_capacity < 3U)) { return PX4LITE_INVALID_PARAM; }
+
+  uid_words[0] = HAL_GetUIDw0();
+  uid_words[1] = HAL_GetUIDw1();
+  uid_words[2] = HAL_GetUIDw2();
+  return PX4LITE_OK;
+}
+
+/**
  * @brief 记录一个必需任务最近一次成功执行时间。
  *
  * @param[in] id 心跳编号。
@@ -191,9 +259,16 @@ uint8_t Px4Lite_PlatformHeartbeatsHealthy(uint32_t now_ms)
 #if PX4LITE_ENABLE_DISPLAY
   required_mask |= (1UL << (uint32_t)PX4LITE_HEARTBEAT_DISPLAY);
 #endif
+#if PX4LITE_ENABLE_LORA || PX4LITE_ENABLE_REMOTE_ID
+  required_mask |= (1UL << (uint32_t)PX4LITE_HEARTBEAT_COMM);
+#endif
+#if PX4LITE_ENABLE_CONTROL
+  required_mask |= (1UL << (uint32_t)PX4LITE_HEARTBEAT_CONTROL);
+#endif
   if ((seen_mask & required_mask) != required_mask) { return 0U; }
 
   for (i = 0U; i < (uint32_t)PX4LITE_HEARTBEAT_COUNT; ++i) {
+    if ((required_mask & (1UL << i)) == 0U) { continue; }
     if ((uint32_t)(now_ms - heartbeat[i]) > PX4LITE_TASK_HEARTBEAT_TIMEOUT_MS) { return 0U; }
   }
 
@@ -332,7 +407,13 @@ Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *measurement)
 
 Px4Lite_Result_t Px4Lite_BaroInit(void)
 {
-  return (Sensor_BME280_Init() == BME280_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  Px4Lite_Result_t result = (Sensor_BME280_Init() == BME280_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+
+  s_baro_last_sample_ms     = 0U;
+  s_baro_last_altitude_mm   = 0;
+  s_baro_vertical_speed_cms = 0;
+  s_baro_altitude_valid     = 0U;
+  return result;
 }
 
 void Px4Lite_BaroRequestReinit(void)
@@ -363,6 +444,10 @@ Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement)
   measurement->pressure_pa           = snapshot.pressure_pa;
   measurement->temperature_c         = snapshot.temperature_c;
   measurement->relative_humidity_pct = snapshot.relative_humidity_pct;
+  if ((snapshot.pressure_pa >= PX4LITE_BARO_PRESSURE_MIN_PA) && (snapshot.pressure_pa <= PX4LITE_BARO_PRESSURE_MAX_PA)) {
+    measurement->pressure_altitude_mm = Px4Lite_BaroPressureToAltitudeMm(snapshot.pressure_pa);
+    measurement->vertical_speed_cms   = Px4Lite_BaroUpdateVerticalSpeed(measurement->pressure_altitude_mm, measurement->header.sample_time_ms);
+  }
 
   last_rx_sequence = snapshot.rx_sequence;
   return PX4LITE_OK;
@@ -370,7 +455,7 @@ Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement)
 
 Px4Lite_Result_t Px4Lite_BatteryInit(void)
 {
-  /* 第二块电池(ADC2/PA4)与电池 1 同周期采样，独立缓存电压与电量。 */
+  /* 第二块电池(ADC2/PA4)与电池 1 同周期采样，独立缓存电压与电量；缺装时不阻塞电池 1。 */
   (void)Sensor_Power2_Init();
   return (Sensor_Power_Init() == POWER_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
 }
@@ -470,8 +555,13 @@ uint8_t Px4Lite_ButtonPressed(Px4Lite_ButtonId_t button)
 
 Px4Lite_Result_t Px4Lite_LoRaInit(void)
 {
+  Lora_Result_t result;
+
   if (BSP_LoRa_Init() != 0) { return PX4LITE_IO_ERROR; }
-  return (Lora_E22_Init() == LORA_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  result = Lora_E22_Init();
+  if (result == LORA_RESULT_OK) { return PX4LITE_OK; }
+  if (result == LORA_RESULT_BUSY) { return PX4LITE_BUSY; }
+  return PX4LITE_IO_ERROR;
 }
 
 void Px4Lite_LoRaRequestReinit(void)
@@ -481,44 +571,55 @@ void Px4Lite_LoRaRequestReinit(void)
 
 Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms)
 {
-  return (Lora_E22_Service(now_ms) == LORA_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  Lora_Result_t result = Lora_E22_Service(now_ms);
+  if (result == LORA_RESULT_OK) { return PX4LITE_OK; }
+  if (result == LORA_RESULT_BUSY) { return PX4LITE_BUSY; }
+  return PX4LITE_IO_ERROR;
 }
 
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len)
 {
-  Lora_Result_t result = Lora_E22_Send(data, len);
+  Lora_Result_t result;
+
+  if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
+
+  result = Lora_E22_Send(data, len);
   if (result == LORA_RESULT_OK) return PX4LITE_OK;
   if (result == LORA_RESULT_BUSY) return PX4LITE_BUSY;
+  if (result == LORA_RESULT_INVALID_PARAM) return PX4LITE_INVALID_PARAM;
   return PX4LITE_IO_ERROR;
 }
 
-Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_LoRaRxFrame_t *out)
+uint8_t Px4Lite_LoRaIsTxIdle(void)
 {
-  Lora_RxFrame_t frame;
-  Lora_Result_t result;
-
-  if (out == 0) { return PX4LITE_INVALID_PARAM; }
-
-  memset(&frame, 0, sizeof(frame));
-  result = Lora_E22_CopyRxFrame(&frame);
-  if (result == LORA_RESULT_NO_DATA) { return PX4LITE_IDLE; }
-  if (result != LORA_RESULT_OK) { return PX4LITE_IO_ERROR; }
-
-  memset(out, 0, sizeof(*out));
-  out->frame_len    = frame.frame_len;
-  out->system_id    = frame.system_id;
-  out->component_id = frame.component_id;
-  out->sequence     = frame.sequence;
-  out->payload_len  = frame.payload_len;
-  out->msg_id       = frame.msg_id;
-  if (out->payload_len > PX4LITE_LORA_RX_PAYLOAD_MAX) { return PX4LITE_INVALID_PARAM; }
-  memcpy(out->data, frame.data, out->payload_len);
-  return PX4LITE_OK;
+  return Lora_E22_IsTxIdle();
 }
 
-uint8_t Px4Lite_LoRaIsPresent(void)
+Px4Lite_Result_t Px4Lite_RemoteIdInit(void)
 {
-  return Lora_E22_IsPresent();
+  return (BSP_RemoteId_Init() == 0) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+}
+
+uint8_t Px4Lite_RemoteIdIsReady(void)
+{
+  return BSP_RemoteId_IsReady();
+}
+
+void Px4Lite_RemoteIdAbortTx(void)
+{
+  BSP_RemoteId_AbortTx();
+}
+
+Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len)
+{
+  int32_t result;
+
+  if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
+
+  result = BSP_RemoteId_StartSend(data, len);
+  if (result == 0) { return PX4LITE_OK; }
+  if (result == 1) { return PX4LITE_BUSY; }
+  return PX4LITE_IO_ERROR;
 }
 
 Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms)
@@ -527,12 +628,17 @@ Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms)
     case LORA_STATE_ONLINE:
       return PX4LITE_STATE_ONLINE;
     case LORA_STATE_OFFLINE:
-      return PX4LITE_STATE_OFFLINE;
+      return PX4LITE_STATE_DEGRADED;
     case LORA_STATE_FAILED:
       return PX4LITE_STATE_FAILED;
     default:
       return PX4LITE_STATE_STARTING;
   }
+}
+
+uint8_t Px4Lite_LoRaIsPresent(void)
+{
+  return Lora_E22_IsPresent();
 }
 
 void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out)
@@ -551,8 +657,36 @@ void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out)
   out->rx_byte_count     = info.rx_byte_count;
   out->rx_overflow_count = info.rx_overflow_count;
   out->rx_drop_count     = info.rx_drop_count;
+  out->rx_sequence_expected_count = info.rx_sequence_expected_count;
+  out->rx_sequence_lost_count     = info.rx_sequence_lost_count;
   out->last_rx_ms        = info.last_rx_ms;
   out->last_tx_ms        = info.last_tx_ms;
-  out->last_ready_ms     = info.last_ready_ms;
   out->last_msg_id       = info.last_msg_id;
+  out->rx_loss_rate_x10  = info.rx_loss_rate_x10;
+}
+
+Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_CommRxFrame_t *out)
+{
+  Lora_RxFrame_t frame;
+  Lora_Result_t result;
+
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+
+  memset(&frame, 0, sizeof(frame));
+  result = Lora_E22_CopyRxFrame(&frame);
+  if (result == LORA_RESULT_NO_DATA) { return PX4LITE_NOT_READY; }
+  if (result == LORA_RESULT_INVALID_PARAM) { return PX4LITE_INVALID_PARAM; }
+  if (result != LORA_RESULT_OK) { return PX4LITE_IO_ERROR; }
+
+  memset(out, 0, sizeof(*out));
+  out->rx_time_ms   = frame.rx_time_ms;
+  out->msg_id       = frame.msg_id;
+  out->frame_len    = frame.frame_len;
+  out->system_id    = frame.system_id;
+  out->component_id = frame.component_id;
+  out->sequence     = frame.sequence;
+  out->payload_len  = (frame.payload_len > PX4LITE_COMM_RX_PAYLOAD_MAX) ? PX4LITE_COMM_RX_PAYLOAD_MAX : frame.payload_len;
+  if (out->payload_len > 0U) { memcpy(out->payload, frame.data, out->payload_len); }
+
+  return PX4LITE_OK;
 }

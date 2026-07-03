@@ -1,10 +1,10 @@
 /**
  * @file px4lite_mavlink_rx.h
- * @brief LoRa 接收侧 MAVLink 消息分发接口。
+ * @brief Framework 层 MAVLink 接收解码和远端遥测快照接口。
  *
  * @details
- * 本模块属于 Framework 通信层，由 CommTask 调用。它只负责解码 LoRa 驱动已经识别
- * 的 MAVLink payload，并写入 RemoteTelemetry；不做 Display 渲染、模式切换或控制执行。
+ * 本模块只消费通信层提供的 MAVLink 帧事实，逐字段解码为远端遥测快照。
+ * LoRa 驱动不解释业务语义，Business/Display 不直接读取 LoRa RX 帧。
  */
 
 #ifndef PX4LITE_MAVLINK_RX_H
@@ -12,46 +12,50 @@
 
 #include <stdint.h>
 #include "px4lite_types.h"
-#include "px4lite_platform.h"
 
 /**
- * @brief MAVLink RX 统计。
- */
-typedef struct {
-  uint32_t handled_count;     /**< 已处理并写入远端快照的消息数量。 */
-  uint32_t filtered_count;    /**< 因模式或 system id 不匹配被过滤的消息数量。 */
-  uint32_t unsupported_count; /**< 当前不支持的 MAVLink 消息数量。 */
-  uint32_t invalid_count;     /**< 输入参数或 payload 长度非法的消息数量。 */
-  uint32_t last_msg_id;       /**< 最近处理的 MAVLink message id。 */
-  uint8_t last_sysid;         /**< 最近处理的 MAVLink system id。 */
-  uint8_t last_compid;        /**< 最近处理的 MAVLink component id。 */
-  uint16_t rx_loss_permille;  /**< 接收链路丢包率，靠 MAVLink seq 跳变推断，单位：‰(0~1000)。 */
-} Px4Lite_MavlinkRxStats_t;
-
-/**
- * @brief 初始化 MAVLink RX 分发统计。
+ * @brief 执行一次 MAVLink RX 解码调度。
  *
- * @param[in] now_ms 当前系统时间，单位：ms。
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 解码结果。
  */
-void Px4Lite_MavlinkRxInit(uint32_t now_ms);
+Px4Lite_Result_t Px4Lite_MavlinkRxRun(uint32_t now_ms);
 
 /**
- * @brief 处理一帧 LoRa 驱动输出的 MAVLink 消息。
+ * @brief 获取最近一次通过本机 ID 过滤的对端有效 MAVLink 帧时间。
  *
- * @param[in] frame LoRa 接收帧，不能为 NULL。
- * @param[in] now_ms 当前系统时间，单位：ms。
- *
- * @return 处理结果。
+ * @return 最近对端解码成功帧时间，单位：ms；0 表示尚未收到。
  */
-Px4Lite_Result_t Px4Lite_MavlinkRxHandleFrame(const Px4Lite_LoRaRxFrame_t *frame, uint32_t now_ms);
+uint32_t Px4Lite_MavlinkRxLastPeerMs(void);
 
 /**
- * @brief 复制 MAVLink RX 统计。
+ * @brief 复制最近一份远端遥测快照。
  *
  * @param[out] out 输出缓冲区，不能为 NULL。
+ *
+ * @return 复制结果。
  */
-void Px4Lite_MavlinkRxGetStats(Px4Lite_MavlinkRxStats_t *out);
+Px4Lite_Result_t Px4Lite_CopyRemoteTelemetry(Px4Lite_RemoteTelemetry_t *out);
+
+/**
+ * @brief 选择 Display/Business 默认读取的远端节点。
+ *
+ * @param[in] node_id 远端节点 ID，由 DCDW-xxx 数字后缀派生。
+ *
+ * @return 选择结果。
+ */
+Px4Lite_Result_t Px4Lite_SelectRemoteNode(uint8_t node_id);
+
+/**
+ * @brief 获取当前默认远端节点 ID。
+ *
+ * @param[out] node_id 输出节点 ID，不能为 NULL。
+ *
+ * @return 复制结果。
+ */
+Px4Lite_Result_t Px4Lite_GetSelectedRemoteNode(uint8_t *node_id);
+
+Px4Lite_Result_t Px4Lite_CopyRemoteNodeStatuses(Px4Lite_RemoteNodeStatus_t *out, uint8_t capacity, uint8_t *count, uint32_t now_ms);
 
 #endif
-
-

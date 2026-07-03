@@ -29,9 +29,23 @@ int main(void)
   SystemClock_Config();
 
   DebugConsole_Init();
-  BSP_Init();
+  if (BSP_Init() != BSP_STATUS_OK) {
+    DBG_BOOT_PRINT("boot failed: BSP_Init");
+    Error_Handler();
+  }
 
-  if ((Px4Lite_PlatformInit() != PX4LITE_OK) || (Px4Lite_AppInit() != pdPASS) || (Business_AppInit() != pdPASS)) { Error_Handler(); }
+  if (Px4Lite_PlatformInit() != PX4LITE_OK) {
+    DBG_BOOT_PRINT("boot failed: Px4Lite_PlatformInit");
+    Error_Handler();
+  }
+  if (Px4Lite_AppInit() != pdPASS) {
+    DBG_BOOT_PRINT("boot failed: Px4Lite_AppInit");
+    Error_Handler();
+  }
+  if (Business_AppInit() != pdPASS) {
+    DBG_BOOT_PRINT("boot failed: Business_AppInit");
+    Error_Handler();
+  }
 
   DBG_BOOT_PRINT("Formal framework started: sensors + business + display");
   vTaskStartScheduler();
@@ -78,6 +92,7 @@ static void SystemClock_Config(void)
  */
 void Error_Handler(void)
 {
+  BSP_EmergencyStopDma();
   __disable_irq();
   for (;;) {}
 }

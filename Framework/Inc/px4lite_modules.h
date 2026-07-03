@@ -113,7 +113,7 @@ Px4Lite_Result_t Px4Lite_EstimatorInit(void);
  *
  * @param[in] now_ms 当前 estimator 周期时间，单位：ms。
  *
- * @note 当前负责 GNSS 到 Navigation、IMU 到 Attitude 的基础转换。
+ * @note 当前负责 GNSS/IMU/Baro 到 Navigation 的基础融合、IMU 启动零偏标定和质量过滤。
  */
 void Px4Lite_EstimatorRun(uint32_t now_ms);
 
@@ -132,6 +132,22 @@ void Px4Lite_RequestAttitudeLevelCalibration(void);
 Px4Lite_Result_t Px4Lite_CommModulesInit(void);
 
 /**
+ * @brief 初始化 ESP32-S3 RemoteID 模块和 MAVLink/OpenDroneID 发送器。
+ *
+ * @return 初始化结果。
+ */
+Px4Lite_Result_t Px4Lite_RemoteIdModuleInit(void);
+
+/**
+ * @brief 请求 RemoteID 模块在 comm task 中重新初始化本地 UART4/DMA 发送通道。
+ *
+ * @return 请求提交结果。
+ *
+ * @note 该函数供 registry recovery 调用，只置位请求标志，不在 Health task 中执行 HAL I/O。
+ */
+Px4Lite_Result_t Px4Lite_RemoteIdRecover(void);
+
+/**
  * @brief 执行一次非阻塞通信周期。
  *
  * @param[in] now_ms 当前 comm 周期时间，单位：ms。
@@ -146,6 +162,13 @@ void Px4Lite_CommWorkRun(uint32_t now_ms);
  * @param[out] out 输出缓冲区，不能为 NULL。
  */
 void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out);
+
+/**
+ * @brief 复制最近一帧通信接收数据。
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ * @return 复制结果。
+ */
+Px4Lite_Result_t Px4Lite_CopyCommRxFrame(Px4Lite_CommRxFrame_t *out);
 
 /**
  * @brief 初始化健康监控服务。

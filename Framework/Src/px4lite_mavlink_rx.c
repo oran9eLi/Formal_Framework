@@ -1,20 +1,23 @@
 /**
  * @file px4lite_mavlink_rx.c
- * @brief 将 LoRa 接收到的 MAVLink 消息解码为远端显示快照。
+ * @brief 将通信层接收的 MAVLink 帧解码为远端遥测快照。
  *
  * @details
- * CommTask 是本文件唯一调用者。消息按 MAVLink 字段解码后写入 RemoteTelemetry，
- * 不直接发送 C 结构体内存，不执行任何远程控制命令。
+ * Comm task 是本文件唯一写者。LoRa 驱动只提供 MAVLink 帧事实，本文件按标准
+ * MAVLink message id 逐字段解码，禁止直接发送或解释 C 结构体内存。
  */
 
 #include "px4lite_mavlink_rx.h"
 
+#include <limits.h>
 #include <string.h>
 
 #include "px4lite_config.h"
-#include "px4lite_platform.h"
+#include "px4lite_command.h"
+#include "px4lite_identity.h"
+#include "px4lite_mavlink_tx.h"
+#include "px4lite_modules.h"
 #include "px4lite_remote_telemetry.h"
-#include "px4lite_remote_tunnel.h"
 
 #if defined(__CC_ARM)
 #define MAVLINK_ALIGNED_FIELDS   0
@@ -28,472 +31,606 @@
 #pragma diag_default 66
 #endif
 
-#define MAVLINK_RX_RAD_TO_DEG100 5729.57795131f
+#define MAV_RX_RAD_TO_DEG100 5729.57795f
+#define MAV_RX_SEQUENCE_JUMP_MAX 64U
 
-static Px4Lite_MavlinkRxStats_t s_stats;
+static uint8_t MavRx_NameEquals(const char name[10], const char *literal);
 
-/* 接收端单向链路丢包率：发送端无回传，只能统计本机发送失败，无法得知空中丢包；
-   接收端用每帧自带的递增 MAVLink seq 作为发送端隐式计数，相邻帧 seq 之差即推断的
-   丢失帧数。只对当前目标源(已通过 sysid 过滤)统计；换源或长断链(超过 RESET_MS)重置
-   基线，避免 8 位 seq 回绕把一次长断链算成巨大假丢包。按滑动窗口给出千分比(0~1000)。 */
-#ifndef PX4LITE_MAVLINK_RX_LOSS_WINDOW
-#define PX4LITE_MAVLINK_RX_LOSS_WINDOW   64U   /**< 丢包率评估窗口，单位：期望帧数。 */
-#endif
-#ifndef PX4LITE_MAVLINK_RX_LOSS_RESET_MS
-#define PX4LITE_MAVLINK_RX_LOSS_RESET_MS 2000U /**< 接收间隔超过此值视为断链重连，重置基线。 */
-#endif
+static Px4Lite_CommRxFrame_t s_rx_frame_scratch;
+static mavlink_message_t s_rx_message_scratch;
+static Px4Lite_RemoteTelemetry_t s_rx_remote_scratch;
+static uint32_t s_last_peer_rx_ms;
 
-static uint8_t  s_loss_seq_valid;  /**< 基线 seq 是否有效。 */
-static uint8_t  s_loss_last_seq;   /**< 最近一帧的 MAVLink seq。 */
-static uint8_t  s_loss_src_sysid;  /**< 当前丢包统计绑定的来源 sysid。 */
-static uint16_t s_loss_win_recv;   /**< 当前窗口已收到帧数。 */
-static uint16_t s_loss_win_lost;   /**< 当前窗口按 seq 跳变推断的丢失帧数。 */
-static uint32_t s_loss_last_ms;    /**< 最近一帧接收时间，单位：ms。 */
-
-/**
- * @brief 用目标源帧的 MAVLink seq 跳变更新接收端丢包率。
- *
- * @param[in] sysid 来源 system id，已通过目标过滤。
- * @param[in] seq 本帧 MAVLink 帧头序号。
- * @param[in] now_ms 当前系统时间，单位：ms。
- */
-static void MavlinkRx_UpdateLoss(uint8_t sysid, uint8_t seq, uint32_t now_ms)
+static int32_t MavRx_FloatToInt32(float value)
 {
-  uint8_t gap;
-
-  /* 换源、首帧或长断链重连：重置基线，本帧只作为新起点，不计入丢失。 */
-  if ((s_loss_seq_valid == 0U) || (sysid != s_loss_src_sysid) ||
-      ((uint32_t)(now_ms - s_loss_last_ms) > PX4LITE_MAVLINK_RX_LOSS_RESET_MS)) {
-    s_loss_seq_valid = 1U;
-    s_loss_src_sysid = sysid;
-    s_loss_last_seq  = seq;
-    s_loss_last_ms   = now_ms;
-    s_loss_win_recv  = 0U;
-    s_loss_win_lost  = 0U;
-    return;
-  }
-
-  gap = (uint8_t)(seq - s_loss_last_seq - 1U); /* 8 位回绕自然覆盖 < 256 的间隔 */
-  s_loss_last_seq = seq;
-  s_loss_last_ms  = now_ms;
-  s_loss_win_recv = (uint16_t)(s_loss_win_recv + 1U);
-  s_loss_win_lost = (uint16_t)(s_loss_win_lost + gap);
-
-  if ((uint16_t)(s_loss_win_recv + s_loss_win_lost) >= PX4LITE_MAVLINK_RX_LOSS_WINDOW) {
-    uint32_t total = (uint32_t)s_loss_win_recv + (uint32_t)s_loss_win_lost;
-    s_stats.rx_loss_permille = (uint16_t)(((uint32_t)s_loss_win_lost * 1000U) / total);
-    s_loss_win_recv = 0U;
-    s_loss_win_lost = 0U;
-  }
+  if (value >= 0.0f) { return (int32_t)(value + 0.5f); }
+  return (int32_t)(value - 0.5f);
 }
 
-static uint8_t MavlinkRx_NameEquals(const char name[10], const char *expected, uint8_t length)
+static uint16_t MavRx_CalcLossRateX10(uint32_t lost_count, uint32_t expected_count)
 {
-  return (memcmp(name, expected, length) == 0) ? 1U : 0U;
+  uint64_t scaled;
+
+  if (expected_count == 0U) { return 0U; }
+  if (expected_count < PX4LITE_MAVLINK_LOSS_MIN_EXPECTED) { return 0U; }
+
+  scaled = (((uint64_t)lost_count * 1000ULL) + ((uint64_t)expected_count / 2ULL)) / (uint64_t)expected_count;
+  if (scaled > 1000ULL) { return 1000U; }
+  return (uint16_t)scaled;
 }
 
-static int32_t MavlinkRx_RadToDeg100(float value)
+static void MavRx_UpdateSequenceStats(Px4Lite_RemoteTelemetry_t *remote, const Px4Lite_CommRxFrame_t *frame, uint32_t previous_rx_ms)
 {
-  float scaled = value * MAVLINK_RX_RAD_TO_DEG100;
-  return (scaled >= 0.0f) ? (int32_t)(scaled + 0.5f) : (int32_t)(scaled - 0.5f);
-}
+  uint8_t delta;
 
-static void MavlinkRx_LoadMessage(const Px4Lite_LoRaRxFrame_t *frame, mavlink_message_t *msg)
-{
-  memset(msg, 0, sizeof(*msg));
-  msg->len    = frame->payload_len;
-  msg->sysid  = frame->system_id;
-  msg->compid = frame->component_id;
-  msg->seq    = frame->sequence;
-  msg->msgid  = frame->msg_id;
-  memcpy(_MAV_PAYLOAD_NON_CONST(msg), frame->data, frame->payload_len);
-}
+  if ((remote == 0) || (frame == 0)) { return; }
+  (void)previous_rx_ms;
 
-static Px4Lite_Result_t MavlinkRx_HandleHeartbeat(const mavlink_message_t *msg, uint32_t now_ms)
-{
-  mavlink_heartbeat_t heartbeat;
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot = Px4Lite_RemoteTelemetryMutable();
-
-  mavlink_msg_heartbeat_decode(msg, &heartbeat);
-  snapshot->mav_type      = heartbeat.type;
-  snapshot->base_mode     = heartbeat.base_mode;
-  snapshot->system_status = heartbeat.system_status;
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_IDENTITY | PX4LITE_REMOTE_VALID_STATUS, now_ms);
-  return PX4LITE_OK;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleAttitude(const mavlink_message_t *msg, uint32_t now_ms)
-{
-  mavlink_attitude_t attitude;
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot = Px4Lite_RemoteTelemetryMutable();
-
-  mavlink_msg_attitude_decode(msg, &attitude);
-  snapshot->roll_deg100       = MavlinkRx_RadToDeg100(attitude.roll);
-  snapshot->pitch_deg100      = MavlinkRx_RadToDeg100(attitude.pitch);
-  snapshot->yaw_deg100        = MavlinkRx_RadToDeg100(attitude.yaw);
-  snapshot->roll_rate_dps100  = MavlinkRx_RadToDeg100(attitude.rollspeed);
-  snapshot->pitch_rate_dps100 = MavlinkRx_RadToDeg100(attitude.pitchspeed);
-  snapshot->yaw_rate_dps100   = MavlinkRx_RadToDeg100(attitude.yawspeed);
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_ATTITUDE, now_ms);
-  return PX4LITE_OK;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleGpsRaw(const mavlink_message_t *msg, uint32_t now_ms)
-{
-  mavlink_gps_raw_int_t gps;
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot = Px4Lite_RemoteTelemetryMutable();
-
-  mavlink_msg_gps_raw_int_decode(msg, &gps);
-  snapshot->latitude_e7     = gps.lat;
-  snapshot->longitude_e7    = gps.lon;
-  snapshot->altitude_mm     = gps.alt;
-  snapshot->hdop_x100       = gps.eph;
-  snapshot->satellites_used = gps.satellites_visible;
-  snapshot->gnss_fix_type   = gps.fix_type;
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_NAVIGATION, now_ms);
-  return PX4LITE_OK;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleNamedValueInt(const mavlink_message_t *msg, uint32_t now_ms)
-{
-  mavlink_named_value_int_t named;
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot = Px4Lite_RemoteTelemetryMutable();
-  uint32_t packed;
-  uint16_t satellites_used;
-  uint16_t value_u16;
-
-  mavlink_msg_named_value_int_decode(msg, &named);
-  if (MavlinkRx_NameEquals(named.name, "GNSS_SAT", 8U) != 0U) {
-    packed           = (uint32_t)named.value;
-    satellites_used  = (uint16_t)(((packed >> 16U) & 0xFFU) + ((packed >> 24U) & 0xFFU));
-    snapshot->satellites_used = (satellites_used > 255U) ? 255U : (uint8_t)satellites_used;
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_NAVIGATION, now_ms);
-    return PX4LITE_OK;
-  }
-
-  if (MavlinkRx_NameEquals(named.name, "TIME_LOC", 8U) != 0U) {
-    snapshot->time_hhmmss = (named.value < 0) ? 0U : (uint32_t)named.value;
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_TIME, now_ms);
-    return PX4LITE_OK;
-  }
-
-  if (MavlinkRx_NameEquals(named.name, "DATE_LOC", 8U) != 0U) {
-    snapshot->date_ymd = (named.value < 0) ? 0U : (uint32_t)named.value;
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_TIME, now_ms);
-    return PX4LITE_OK;
-  }
-
-  if (MavlinkRx_NameEquals(named.name, "HUMIDITY", 8U) != 0U) {
-    value_u16 = (named.value < 0) ? 0U : (uint16_t)named.value;
-    if (value_u16 > 1000U) { value_u16 = 1000U; }
-    snapshot->relative_humidity_pct = ((float)value_u16) / 10.0f;
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_ENVIRONMENT, now_ms);
-    return PX4LITE_OK;
-  }
-
-  if (MavlinkRx_NameEquals(named.name, "MOTBAT", 6U) != 0U) {
-    packed = (uint32_t)named.value;
-    snapshot->voltage2_mv      = (uint32_t)(packed & 0xFFFFU);
-    snapshot->battery2_percent = (uint8_t)((packed >> 16U) & 0xFFU);
-    if (snapshot->battery2_percent > 100U) { snapshot->battery2_percent = 100U; }
-    snapshot->low_voltage2     = (uint8_t)((packed >> 24U) & 0x01U);
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_POWER, now_ms);
-    return PX4LITE_OK;
-  }
-
-  if (MavlinkRx_NameEquals(named.name, "MODSTAT", 7U) != 0U) {
-    packed = (uint32_t)named.value;
-    snapshot->module_state[PX4LITE_MODULE_GNSS]    = (uint8_t)(packed & 0x0FU);
-    snapshot->module_state[PX4LITE_MODULE_IMU]     = (uint8_t)((packed >> 4U) & 0x0FU);
-    snapshot->module_state[PX4LITE_MODULE_BARO]    = (uint8_t)((packed >> 8U) & 0x0FU);
-    snapshot->module_state[PX4LITE_MODULE_5G]      = (uint8_t)((packed >> 12U) & 0x0FU);
-    snapshot->module_state[PX4LITE_MODULE_STORAGE] = (uint8_t)((packed >> 16U) & 0x0FU);
-    snapshot->module_state[PX4LITE_MODULE_CONTROL] = (uint8_t)((packed >> 20U) & 0x0FU);
-    snapshot->system_ready                         = (uint8_t)((packed >> 24U) & 0x01U);
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_MODULES, now_ms);
-    return PX4LITE_OK;
-  }
-
-  if (MavlinkRx_NameEquals(named.name, "ALRMHI", 6U) != 0U) {
-    packed = (uint32_t)named.value;
-    snapshot->highest_fault_code = (uint16_t)(packed & 0xFFFFU);
-    snapshot->highest_source_id  = (uint8_t)((packed >> 16U) & 0xFFU);
-    snapshot->highest_severity   = (uint8_t)((packed >> 24U) & 0x0FU);
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_ALARM, now_ms);
-    return PX4LITE_OK;
-  }
-
-  if (MavlinkRx_NameEquals(named.name, "ALRMMSK", 7U) != 0U) {
-    snapshot->alarm_active_mask = (uint32_t)named.value;
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_ALARM, now_ms);
-    return PX4LITE_OK;
-  }
-
-  if (MavlinkRx_NameEquals(named.name, "MOTOR12", 7U) != 0U) {
-    packed = (uint32_t)named.value;
-    snapshot->motor_duty_percent[0] = (uint8_t)(packed & 0xFFU);
-    snapshot->motor_duty_percent[1] = (uint8_t)((packed >> 8U) & 0xFFU);
-    snapshot->motor_run_state       = (uint8_t)((packed >> 16U) & 0xFFU);
-    snapshot->motor_speed_level     = (uint8_t)((packed >> 24U) & 0xFFU);
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_MOTOR, now_ms);
-    return PX4LITE_OK;
-  }
-
-  if (MavlinkRx_NameEquals(named.name, "MOTOR34", 7U) != 0U) {
-    packed = (uint32_t)named.value;
-    snapshot->motor_duty_percent[2] = (uint8_t)(packed & 0xFFU);
-    snapshot->motor_duty_percent[3] = (uint8_t)((packed >> 8U) & 0xFFU);
-    snapshot->motor_run_state       = (uint8_t)((packed >> 16U) & 0xFFU);
-    snapshot->motor_speed_level     = (uint8_t)((packed >> 24U) & 0xFFU);
-    Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_MOTOR, now_ms);
-    return PX4LITE_OK;
-  }
-
-  return PX4LITE_IDLE;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleGlobalPosition(const mavlink_message_t *msg, uint32_t now_ms)
-{
-  mavlink_global_position_int_t pos;
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot = Px4Lite_RemoteTelemetryMutable();
-
-  mavlink_msg_global_position_int_decode(msg, &pos);
-  snapshot->latitude_e7         = pos.lat;
-  snapshot->longitude_e7        = pos.lon;
-  snapshot->altitude_mm         = pos.relative_alt;
-  snapshot->velocity_north_cms  = pos.vx;
-  snapshot->velocity_east_cms   = pos.vy;
-  snapshot->velocity_down_cms   = pos.vz;
-  if ((snapshot->valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) == 0U) { snapshot->yaw_deg100 = pos.hdg; }
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_NAVIGATION, now_ms);
-  return PX4LITE_OK;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleSysStatus(const mavlink_message_t *msg, uint32_t now_ms)
-{
-  mavlink_sys_status_t sys;
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot = Px4Lite_RemoteTelemetryMutable();
-
-  mavlink_msg_sys_status_decode(msg, &sys);
-  snapshot->voltage_mv      = sys.voltage_battery;
-  snapshot->current_ma      = sys.current_battery;
-  snapshot->battery_percent = (sys.battery_remaining < 0) ? 0U : (uint8_t)sys.battery_remaining;
-  snapshot->low_voltage     = ((sys.battery_remaining >= 0) && (sys.battery_remaining < 20)) ? 1U : 0U;
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_POWER | PX4LITE_REMOTE_VALID_STATUS, now_ms);
-  return PX4LITE_OK;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleBatteryStatus(const mavlink_message_t *msg, uint32_t now_ms)
-{
-  mavlink_battery_status_t battery;
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot = Px4Lite_RemoteTelemetryMutable();
-  uint32_t total_mv = 0U;
-  uint8_t cells     = 0U;
-  uint8_t i;
-
-  mavlink_msg_battery_status_decode(msg, &battery);
-  for (i = 0U; i < 10U; ++i) {
-    if ((battery.voltages[i] == UINT16_MAX) || (battery.voltages[i] == 0U)) { continue; }
-    total_mv += battery.voltages[i];
-    cells++;
-  }
-  if (cells != 0U) { snapshot->voltage_mv = total_mv; }
-  snapshot->current_ma      = battery.current_battery * 10;
-  snapshot->battery_percent = (battery.battery_remaining < 0) ? 0U : (uint8_t)battery.battery_remaining;
-  snapshot->low_voltage     = (battery.charge_state == MAV_BATTERY_CHARGE_STATE_LOW) ? 1U : 0U;
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_POWER, now_ms);
-  return PX4LITE_OK;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleScaledPressure(const mavlink_message_t *msg, uint32_t now_ms)
-{
-  mavlink_scaled_pressure_t pressure;
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot = Px4Lite_RemoteTelemetryMutable();
-
-  mavlink_msg_scaled_pressure_decode(msg, &pressure);
-  snapshot->pressure_pa   = pressure.press_abs * 100.0f;
-  snapshot->temperature_c = ((float)pressure.temperature) / 100.0f;
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_ENVIRONMENT, now_ms);
-  return PX4LITE_OK;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleStatustext(const mavlink_message_t *msg, uint32_t now_ms)
-{
-  mavlink_statustext_t text;
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot = Px4Lite_RemoteTelemetryMutable();
-
-  mavlink_msg_statustext_decode(msg, &text);
-  memcpy(snapshot->status_text, text.text, sizeof(snapshot->status_text) - 1U);
-  snapshot->status_text[sizeof(snapshot->status_text) - 1U] = '\0';
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_TEXT, now_ms);
-  return PX4LITE_OK;
-}
-
-void Px4Lite_MavlinkRxInit(uint32_t now_ms)
-{
-  memset(&s_stats, 0, sizeof(s_stats));
-  s_loss_seq_valid = 0U;
-  s_loss_last_seq  = 0U;
-  s_loss_src_sysid = 0U;
-  s_loss_win_recv  = 0U;
-  s_loss_win_lost  = 0U;
-  s_loss_last_ms   = now_ms;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleTunnelAlarm(const mavlink_tunnel_t *tun, const mavlink_message_t *msg, uint32_t now_ms)
-{
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot;
-  uint8_t count = 0U;
-  uint8_t ver = 0U;
-
-  snapshot = Px4Lite_RemoteTelemetryMutable();
-  if (Px4Lite_UnpackAlarmTable(tun->payload, tun->payload_length, now_ms,
-                               snapshot->alarm_records, (uint8_t)PX4LITE_MODULE_COUNT,
-                               &count, &ver) != PX4LITE_OK) {
-    return PX4LITE_IO_ERROR;
-  }
-  snapshot->alarm_table_count     = count;
-  snapshot->alarm_table_ver       = ver;
-  snapshot->alarm_table_update_ms = now_ms;
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_ALARM, now_ms);
-  return PX4LITE_OK;
-}
-
-static Px4Lite_Result_t MavlinkRx_HandleTunnelLog(const mavlink_tunnel_t *tun, const mavlink_message_t *msg, uint32_t now_ms)
-{
-  Px4Lite_RemoteTelemetrySnapshot_t *snapshot;
-  Px4Lite_LogEntry_t rx[PX4LITE_TUNNEL_LOG_MAX_ENTRIES];
-  uint8_t count = 0U;
-  uint16_t latest = 0U;
-  uint8_t i;
-
-  if (Px4Lite_UnpackMessageLog(tun->payload, tun->payload_length, rx,
-                               PX4LITE_TUNNEL_LOG_MAX_ENTRIES, &count, &latest) != PX4LITE_OK) {
-    return PX4LITE_IO_ERROR;
-  }
-
-  snapshot = Px4Lite_RemoteTelemetryMutable();
-  /* 去重追加：仅 sequence > log_last_seq 的条目，允许序号空洞。 */
-  for (i = 0U; i < count; ++i) {
-    if (rx[i].sequence > snapshot->log_last_seq) {
-      uint16_t pos;
-      if (snapshot->log_count < (uint16_t)PX4LITE_REMOTE_LOG_CAP) {
-        pos = snapshot->log_count;
-        snapshot->log_count++;
-      } else {
-        /* 满则左移丢最旧。 */
-        uint16_t k;
-        for (k = 1U; k < (uint16_t)PX4LITE_REMOTE_LOG_CAP; ++k) { snapshot->log_entries[k - 1U] = snapshot->log_entries[k]; }
-        pos = (uint16_t)(PX4LITE_REMOTE_LOG_CAP - 1U);
+  if (remote->sequence_seen == 0U) {
+    remote->sequence_seen = 1U;
+    remote->last_packet_sequence = frame->sequence;
+  } else {
+    delta = (uint8_t)(frame->sequence - remote->last_packet_sequence);
+    if (delta != 0U) {
+      /* 只按序号跳变幅度判断，不再按静默时长判断：静默再久也不能免罚，
+         否则"走远失联很久再回来"这种真实丢包会被当成正常重新同步而永远
+         算作 0% 丢包。序号跳变过大(通常是对端序号被重置/重启)才不计入，
+         真实的连续丢包(哪怕跨越很长静默时间)必须计数。 */
+      if (delta <= MAV_RX_SEQUENCE_JUMP_MAX) {
+        remote->rx_sequence_lost_count += (uint32_t)(delta - 1U);
       }
-      snapshot->log_entries[pos] = rx[i];
-      snapshot->log_last_seq = rx[i].sequence;
+      remote->last_packet_sequence = frame->sequence;
     }
   }
-  /* count=0 心跳：仅对齐认知，不补数据；仍刷新时间与有效位。 */
-  snapshot->log_update_ms = now_ms;
-  Px4Lite_RemoteTelemetryCommit(msg->sysid, msg->compid, PX4LITE_REMOTE_VALID_LOG, now_ms);
-  return PX4LITE_OK;
+
+  remote->rx_sequence_expected_count = remote->rx_frame_count + remote->rx_sequence_lost_count;
+  remote->rx_loss_rate_x10 = MavRx_CalcLossRateX10(remote->rx_sequence_lost_count, remote->rx_sequence_expected_count);
 }
 
-static Px4Lite_Result_t MavlinkRx_HandleTunnel(const mavlink_message_t *msg, uint32_t now_ms)
+static uint8_t MavRx_FrameToRemoteNode(const Px4Lite_CommRxFrame_t *frame, uint8_t *node_id_out)
 {
-  mavlink_tunnel_t tun;
+  uint8_t node_id;
 
-  mavlink_msg_tunnel_decode(msg, &tun);
-  switch (tun.payload_type) {
-    case PX4LITE_TUNNEL_PT_ALARM_TABLE: return MavlinkRx_HandleTunnelAlarm(&tun, msg, now_ms);
-    case PX4LITE_TUNNEL_PT_MESSAGE_LOG: return MavlinkRx_HandleTunnelLog(&tun, msg, now_ms);
-    default:                            return PX4LITE_IDLE;
+  if ((frame == 0) || (node_id_out == 0) || (frame->system_id == 0U)) { return 0U; }
+  node_id = frame->system_id;
+  if (node_id == (uint8_t)Px4Lite_IdentityGetNodeId()) { return 0U; }
+  if (node_id >= PX4LITE_REMOTE_NODE_MAX) { return 0U; }
+  *node_id_out = node_id;
+  return 1U;
+}
+
+static uint8_t MavRx_NameEquals(const char name[10], const char *literal)
+{
+  uint8_t i;
+
+  if ((name == 0) || (literal == 0)) { return 0U; }
+  for (i = 0U; i < 10U; i++) {
+    if (literal[i] == '\0') { return 1U; }
+    if (name[i] != literal[i]) { return 0U; }
   }
+  return (literal[10] == '\0') ? 1U : 0U;
 }
 
-Px4Lite_Result_t Px4Lite_MavlinkRxHandleFrame(const Px4Lite_LoRaRxFrame_t *frame, uint32_t now_ms)
+static uint8_t MavRx_TextContains(const char text[50], const char *literal)
 {
-  mavlink_message_t msg;
+  uint8_t i;
+  uint8_t j;
+
+  if (literal == 0) { return 0U; }
+  for (i = 0U; i < 50U; i++) {
+    for (j = 0U; (literal[j] != '\0') && ((uint8_t)(i + j) < 50U) && (text[(uint8_t)(i + j)] == literal[j]); j++) {
+    }
+    if (literal[j] == '\0') { return 1U; }
+  }
+  return 0U;
+}
+
+static uint16_t MavRx_ParseAlarmSource(const char text[50])
+{
+  if (MavRx_TextContains(text, "GNSS") != 0U) { return (uint16_t)PX4LITE_MODULE_GNSS; }
+  if (MavRx_TextContains(text, "IMU") != 0U) { return (uint16_t)PX4LITE_MODULE_IMU; }
+  if (MavRx_TextContains(text, "BARO") != 0U) { return (uint16_t)PX4LITE_MODULE_BARO; }
+  if (MavRx_TextContains(text, "POWER") != 0U) { return (uint16_t)PX4LITE_MODULE_BATTERY; }
+  if (MavRx_TextContains(text, "LORA") != 0U) { return (uint16_t)PX4LITE_MODULE_LORA; }
+  if (MavRx_TextContains(text, "DISPLAY") != 0U) { return (uint16_t)PX4LITE_MODULE_DISPLAY; }
+  if (MavRx_TextContains(text, "CONTROL") != 0U) { return (uint16_t)PX4LITE_MODULE_CONTROL; }
+  if (MavRx_TextContains(text, "SYSTEM") != 0U) { return (uint16_t)PX4LITE_MODULE_SYSTEM; }
+  if (MavRx_TextContains(text, "EST") != 0U) { return (uint16_t)PX4LITE_MODULE_ESTIMATOR; }
+  if (MavRx_TextContains(text, "SD") != 0U) { return (uint16_t)PX4LITE_MODULE_STORAGE; }
+  if (MavRx_TextContains(text, "5G") != 0U) { return (uint16_t)PX4LITE_MODULE_5G; }
+  if (MavRx_TextContains(text, "REMOTEID") != 0U) { return (uint16_t)PX4LITE_MODULE_REMOTE_ID; }
+  if (MavRx_TextContains(text, "ALARM ALARM") != 0U) { return (uint16_t)PX4LITE_MODULE_ALARM; }
+  return (uint16_t)PX4LITE_MODULE_COUNT;
+}
+
+static void MavRx_AppendRemoteLog(Px4Lite_RemoteTelemetry_t *remote, const Px4Lite_LogEntry_t *entry)
+{
+  uint8_t i;
+
+  if ((remote == 0) || (entry == 0) || (entry->sequence == 0U)) { return; }
+  for (i = 0U; i < remote->remote_log_count; i++) {
+    if (remote->remote_log_entries[i].sequence == entry->sequence) {
+      remote->remote_log_entries[i] = *entry;
+      remote->remote_log_latest_seq = entry->sequence;
+      remote->valid_mask |= PX4LITE_REMOTE_VALID_LOG;
+      remote->log_update_ms = remote->last_rx_ms;
+      return;
+    }
+  }
+
+  if (remote->remote_log_count < PX4LITE_LOCAL_LOG_CAP) {
+    remote->remote_log_entries[remote->remote_log_count] = *entry;
+    remote->remote_log_count++;
+  } else {
+    for (i = 1U; i < PX4LITE_LOCAL_LOG_CAP; i++) {
+      remote->remote_log_entries[(uint8_t)(i - 1U)] = remote->remote_log_entries[i];
+    }
+    remote->remote_log_entries[(uint8_t)(PX4LITE_LOCAL_LOG_CAP - 1U)] = *entry;
+  }
+
+  remote->remote_log_latest_seq = entry->sequence;
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_LOG;
+  remote->log_update_ms = remote->last_rx_ms;
+}
+
+static void MavRx_MessageFromFrame(const Px4Lite_CommRxFrame_t *frame, mavlink_message_t *message)
+{
+  uint8_t payload_len;
+
+  memset(message, 0, sizeof(*message));
+  payload_len = frame->payload_len;
+  if (payload_len > MAVLINK_MAX_PAYLOAD_LEN) { payload_len = MAVLINK_MAX_PAYLOAD_LEN; }
+  message->msgid  = frame->msg_id;
+  message->sysid  = frame->system_id;
+  message->compid = frame->component_id;
+  message->seq    = frame->sequence;
+  message->len    = payload_len;
+  memcpy(_MAV_PAYLOAD_NON_CONST(message), frame->payload, payload_len);
+}
+
+static void MavRx_UpdateSource(Px4Lite_RemoteTelemetry_t *remote, const Px4Lite_CommRxFrame_t *frame)
+{
+  uint32_t previous_rx_ms;
+
+  previous_rx_ms        = remote->last_rx_ms;
+  remote->last_rx_ms     = frame->rx_time_ms;
+  remote->last_msg_id    = frame->msg_id;
+  remote->system_id      = frame->system_id;
+  remote->component_id   = frame->component_id;
+  remote->rx_frame_count = remote->rx_frame_count + 1U;
+  MavRx_UpdateSequenceStats(remote, frame, previous_rx_ms);
+}
+
+static void MavRx_UpdateStaleMask(Px4Lite_RemoteTelemetry_t *remote, uint32_t now_ms)
+{
+  uint32_t stale = 0U;
+
+  if (remote == 0) { return; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->heartbeat_update_ms) > PX4LITE_REMOTE_HEARTBEAT_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_HEARTBEAT; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_NAVIGATION) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->navigation_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_NAVIGATION; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->attitude_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_ATTITUDE; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_ENVIRONMENT) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->environment_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_ENVIRONMENT; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_BATTERY) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->battery_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_BATTERY; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->modules_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_MODULES; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->alarm_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_ALARM; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_MOTOR) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->motor_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_MOTOR; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_LOG) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->log_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_LOG; }
+  remote->stale_mask = stale;
+}
+
+static void MavRx_MarkHeartbeatSeen(Px4Lite_RemoteTelemetry_t *remote)
+{
+  if (remote == 0) { return; }
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_HEARTBEAT;
+  remote->heartbeat_update_ms = remote->last_rx_ms;
+}
+
+static uint8_t MavRx_DecodeHeartbeat(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_heartbeat_t packet;
+
+  if ((remote == 0) || (message == 0)) { return 0U; }
+
+  mavlink_msg_heartbeat_decode(message, &packet);
+  remote->heartbeat_type            = packet.type;
+  remote->heartbeat_autopilot       = packet.autopilot;
+  remote->heartbeat_base_mode       = packet.base_mode;
+  remote->heartbeat_system_status   = packet.system_status;
+  remote->heartbeat_mavlink_version = packet.mavlink_version;
+  MavRx_MarkHeartbeatSeen(remote);
+  return 1U;
+}
+
+static uint8_t MavRx_DecodeGpsRaw(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_gps_raw_int_t packet;
+
+  mavlink_msg_gps_raw_int_decode(message, &packet);
+  remote->latitude_e7     = packet.lat;
+  remote->longitude_e7    = packet.lon;
+  remote->altitude_mm     = packet.alt;
+  remote->gnss_fix_type   = packet.fix_type;
+  remote->hdop_x100       = (packet.eph != UINT16_MAX) ? packet.eph : 0U;
+  remote->satellites_used = (packet.satellites_visible != UINT8_MAX) ? packet.satellites_visible : 0U;
+  if ((packet.cog != UINT16_MAX) && (packet.cog <= 36000U)) { remote->yaw_deg100 = (int32_t)packet.cog; }
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
+  remote->navigation_update_ms = remote->last_rx_ms;
+  return 1U;
+}
+
+static uint8_t MavRx_DecodeAttitude(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_attitude_t packet;
+
+  mavlink_msg_attitude_decode(message, &packet);
+  remote->roll_deg100       = MavRx_FloatToInt32(packet.roll * MAV_RX_RAD_TO_DEG100);
+  remote->pitch_deg100      = MavRx_FloatToInt32(packet.pitch * MAV_RX_RAD_TO_DEG100);
+  remote->yaw_deg100        = MavRx_FloatToInt32(packet.yaw * MAV_RX_RAD_TO_DEG100);
+  remote->roll_rate_dps100  = MavRx_FloatToInt32(packet.rollspeed * MAV_RX_RAD_TO_DEG100);
+  remote->pitch_rate_dps100 = MavRx_FloatToInt32(packet.pitchspeed * MAV_RX_RAD_TO_DEG100);
+  remote->yaw_rate_dps100   = MavRx_FloatToInt32(packet.yawspeed * MAV_RX_RAD_TO_DEG100);
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_ATTITUDE;
+  remote->attitude_update_ms = remote->last_rx_ms;
+  return 1U;
+}
+
+static uint8_t MavRx_DecodePosition(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_global_position_int_t packet;
+
+  mavlink_msg_global_position_int_decode(message, &packet);
+  remote->latitude_e7        = packet.lat;
+  remote->longitude_e7       = packet.lon;
+  remote->altitude_mm        = packet.alt;
+  remote->velocity_north_cms = packet.vx;
+  remote->velocity_east_cms  = packet.vy;
+  remote->velocity_down_cms  = packet.vz;
+  if (packet.hdg != UINT16_MAX) { remote->yaw_deg100 = (int32_t)packet.hdg; }
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
+  remote->navigation_update_ms = remote->last_rx_ms;
+  return 1U;
+}
+
+static uint8_t MavRx_DecodeSysStatus(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_sys_status_t packet;
+
+  mavlink_msg_sys_status_decode(message, &packet);
+  if (packet.voltage_battery != UINT16_MAX) {
+    remote->voltage_mv = packet.voltage_battery;
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
+    remote->battery_update_ms = remote->last_rx_ms;
+  }
+  if (packet.battery_remaining >= 0) {
+    remote->battery_percent = (uint8_t)packet.battery_remaining;
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
+    remote->battery_update_ms = remote->last_rx_ms;
+  }
+  remote->low_voltage = (packet.battery_remaining >= 0 && packet.battery_remaining <= 15) ? 1U : 0U;
+  return 1U;
+}
+
+static uint8_t MavRx_DecodeBattery(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_battery_status_t packet;
+
+  mavlink_msg_battery_status_decode(message, &packet);
+  if (packet.voltages[0] != UINT16_MAX) { remote->voltage_mv = packet.voltages[0]; }
+  if (packet.battery_remaining >= 0) { remote->battery_percent = (uint8_t)packet.battery_remaining; }
+  remote->low_voltage = (packet.charge_state == (uint8_t)MAV_BATTERY_CHARGE_STATE_LOW) ? 1U : 0U;
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
+  remote->battery_update_ms = remote->last_rx_ms;
+  return 1U;
+}
+
+static uint8_t MavRx_DecodePressure(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_scaled_pressure_t packet;
+
+  mavlink_msg_scaled_pressure_decode(message, &packet);
+  remote->pressure_pa           = packet.press_abs * 100.0f;
+  remote->temperature_c         = ((float)packet.temperature) / 100.0f;
+  remote->relative_humidity_pct = 0.0f;
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_ENVIRONMENT;
+  remote->environment_update_ms = remote->last_rx_ms;
+  return 1U;
+}
+
+static void MavRx_ApplyModuleStatePart(Px4Lite_RemoteTelemetry_t *remote, uint8_t part, uint32_t packed)
+{
+  uint8_t i;
+
+  for (i = 0U; i < 8U; i++) {
+    uint8_t module_index = (uint8_t)(part * 8U + i);
+    uint8_t state_value  = (uint8_t)((packed >> (i * 4U)) & 0x0FU);
+
+    if (module_index >= (uint8_t)PX4LITE_MODULE_COUNT) { break; }
+    if (state_value > (uint8_t)PX4LITE_STATE_DISABLED) { state_value = (uint8_t)PX4LITE_STATE_UNINITIALIZED; }
+    remote->module_state[module_index] = (Px4Lite_State_t)state_value;
+    remote->module_state_valid_mask |= (1UL << module_index);
+  }
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_MODULES;
+  remote->modules_update_ms = remote->last_rx_ms;
+}
+
+static Px4Lite_State_t MavRx_NormalizeState(uint32_t value)
+{
+  if (value > (uint32_t)PX4LITE_STATE_DISABLED) { return PX4LITE_STATE_UNINITIALIZED; }
+  return (Px4Lite_State_t)value;
+}
+
+static void MavRx_ApplyCompactModuleState(Px4Lite_RemoteTelemetry_t *remote, uint32_t packed)
+{
+  if (remote == 0) { return; }
+
+  remote->module_state[PX4LITE_MODULE_GNSS]    = MavRx_NormalizeState(packed & 0x0FUL);
+  remote->module_state[PX4LITE_MODULE_IMU]     = MavRx_NormalizeState((packed >> 4U) & 0x0FUL);
+  remote->module_state[PX4LITE_MODULE_BARO]    = MavRx_NormalizeState((packed >> 8U) & 0x0FUL);
+  remote->module_state[PX4LITE_MODULE_5G]      = MavRx_NormalizeState((packed >> 12U) & 0x0FUL);
+  remote->module_state[PX4LITE_MODULE_STORAGE] = MavRx_NormalizeState((packed >> 16U) & 0x0FUL);
+  remote->module_state[PX4LITE_MODULE_CONTROL] = MavRx_NormalizeState((packed >> 20U) & 0x0FUL);
+
+  remote->module_state_valid_mask |= (1UL << PX4LITE_MODULE_GNSS);
+  remote->module_state_valid_mask |= (1UL << PX4LITE_MODULE_IMU);
+  remote->module_state_valid_mask |= (1UL << PX4LITE_MODULE_BARO);
+  remote->module_state_valid_mask |= (1UL << PX4LITE_MODULE_5G);
+  remote->module_state_valid_mask |= (1UL << PX4LITE_MODULE_STORAGE);
+  remote->module_state_valid_mask |= (1UL << PX4LITE_MODULE_CONTROL);
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_MODULES;
+  remote->modules_update_ms = remote->last_rx_ms;
+}
+
+static void MavRx_ApplyMotorPair(Px4Lite_RemoteTelemetry_t *remote, uint8_t pair_part, uint32_t packed)
+{
+  uint8_t first;
+  uint8_t duty0;
+  uint8_t duty1;
+  uint8_t i;
+
+  if (remote == 0) { return; }
+  pair_part = (uint8_t)(pair_part % 2U);
+  first = (uint8_t)(pair_part * 2U);
+  duty0 = (uint8_t)(packed & 0xFFU);
+  duty1 = (uint8_t)((packed >> 8U) & 0xFFU);
+  if (duty0 > 100U) { duty0 = 100U; }
+  if (duty1 > 100U) { duty1 = 100U; }
+
+  if (first < PX4LITE_MOTOR_COUNT) { remote->motor_duty_percent[first] = duty0; }
+  if ((uint8_t)(first + 1U) < PX4LITE_MOTOR_COUNT) { remote->motor_duty_percent[(uint8_t)(first + 1U)] = duty1; }
+  remote->motor_run_state = (uint8_t)((packed >> 16U) & 0x01U);
+  remote->motor_speed_level = (uint8_t)((packed >> 24U) & 0xFFU);
+  if (remote->motor_speed_level > 100U) { remote->motor_speed_level = 100U; }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (remote->motor_duty_percent[i] > remote->motor_speed_level) { remote->motor_speed_level = remote->motor_duty_percent[i]; }
+  }
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_MOTOR;
+  remote->motor_update_ms = remote->last_rx_ms;
+}
+
+static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message, uint32_t now_ms)
+{
+  mavlink_named_value_int_t packet;
+  Px4Lite_LogEntry_t log_entry;
+  uint32_t value;
+  uint8_t gps_used;
+  uint8_t bds_used;
+  uint8_t i;
+
+  mavlink_msg_named_value_int_decode(message, &packet);
+  value = (uint32_t)packet.value;
+  (void)now_ms;
+  if (MavRx_NameEquals(packet.name, "GNSS_SAT") != 0U) {
+    gps_used = (uint8_t)((value >> 16U) & 0xFFU);
+    bds_used = (uint8_t)((value >> 24U) & 0xFFU);
+    remote->satellites_used = (uint8_t)(gps_used + bds_used);
+    if (remote->satellites_used == 0U) { remote->satellites_used = (uint8_t)((value & 0xFFU) + ((value >> 8U) & 0xFFU)); }
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
+    remote->navigation_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "MODSTAT0") != 0U) {
+    MavRx_ApplyModuleStatePart(remote, 0U, value);
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "MODSTAT1") != 0U) {
+    MavRx_ApplyModuleStatePart(remote, 1U, value);
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "MODSTAT") != 0U) {
+    MavRx_ApplyCompactModuleState(remote, value);
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "BAT2STAT") != 0U) {
+    remote->voltage2_mv = (uint32_t)(value & 0xFFFFU);
+    remote->battery2_percent = (uint8_t)((value >> 16U) & 0xFFU);
+    remote->low_voltage2 = (uint8_t)((value >> 24U) & 0x01U);
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
+    remote->battery_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "GNSSUTC") != 0U) {
+    remote->gnss_utc_date = value;
+    remote->gnss_utc_sec = packet.time_boot_ms;
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
+    remote->navigation_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "BAROALT") != 0U) {
+    remote->altitude_mm = (int32_t)value;
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
+    remote->navigation_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
+
+  if ((MavRx_NameEquals(packet.name, "HUMIDITY") != 0U) || (MavRx_NameEquals(packet.name, "ENVHUM") != 0U)) {
+    if (value > 1000U) { value = 1000U; }
+    remote->relative_humidity_pct = ((float)value) / 10.0f;
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_ENVIRONMENT;
+    remote->environment_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "ALRMHI") != 0U) {
+    remote->highest_fault_code = (uint16_t)(value & 0xFFFFU);
+    remote->highest_source_id = (uint16_t)((value >> 16U) & 0xFFU);
+    remote->highest_severity = (Px4Lite_AlarmSeverity_t)((value >> 24U) & 0x0FU);
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_ALARM;
+    remote->alarm_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "ALRMMSK") != 0U) {
+    remote->alarm_active_mask = value;
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_ALARM;
+    remote->alarm_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "MOTOR12") != 0U) {
+    MavRx_ApplyMotorPair(remote, 0U, value);
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "MOTOR34") != 0U) {
+    MavRx_ApplyMotorPair(remote, 1U, value);
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "MOTORPWM") != 0U) {
+    remote->motor_speed_level = 0U;
+    for (i = 0U; (i < PX4LITE_MOTOR_COUNT) && (i < 4U); i++) {
+      remote->motor_duty_percent[i] = (uint8_t)((value >> (i * 8U)) & 0xFFU);
+      if (remote->motor_duty_percent[i] > 100U) { remote->motor_duty_percent[i] = 100U; }
+      if (remote->motor_duty_percent[i] > remote->motor_speed_level) { remote->motor_speed_level = remote->motor_duty_percent[i]; }
+    }
+    remote->motor_run_state = (uint8_t)(packet.time_boot_ms & 0x01U);
+    if (((packet.time_boot_ms >> 8U) & 0xFFU) > remote->motor_speed_level) { remote->motor_speed_level = (uint8_t)((packet.time_boot_ms >> 8U) & 0xFFU); }
+    if (remote->motor_speed_level > 100U) { remote->motor_speed_level = 100U; }
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_MOTOR;
+    remote->motor_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "LOGSYNC") != 0U) {
+    memset(&log_entry, 0, sizeof(log_entry));
+    log_entry.sequence    = (uint16_t)(value & 0xFFFFU);
+    log_entry.message_id  = (uint16_t)((value >> 16U) & 0xFFU);
+    log_entry.time_hhmmss = packet.time_boot_ms;
+    log_entry.severity    = (uint8_t)((value >> 24U) & 0x0FU);
+    log_entry.active      = (uint8_t)((value >> 28U) & 0x01U);
+    log_entry.source_id   = (uint8_t)((value >> 29U) & 0x07U);
+    MavRx_AppendRemoteLog(remote, &log_entry);
+    return 1U;
+  }
+
+  return 0U;
+}
+static uint8_t MavRx_DecodeStatusText(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_statustext_t packet;
+
+  mavlink_msg_statustext_decode(message, &packet);
+  remote->highest_fault_code = packet.id;
+  remote->highest_source_id  = MavRx_ParseAlarmSource(packet.text);
+  remote->highest_severity   = packet.severity;
+  remote->alarm_active_mask  = (remote->highest_source_id < (uint16_t)PX4LITE_MODULE_COUNT) ? (1UL << remote->highest_source_id) : 0U;
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_ALARM;
+  remote->alarm_update_ms = remote->last_rx_ms;
+  return 1U;
+}
+
+static uint8_t MavRx_DecodeCommandLong(const mavlink_message_t *message, uint32_t now_ms)
+{
+  mavlink_command_long_t packet;
+
+  mavlink_msg_command_long_decode(message, &packet);
+  return (Px4Lite_CommandHandleMavlinkLong(packet.command, message->sysid, message->compid, packet.target_system, packet.target_component, packet.param1, packet.param2, packet.param3, packet.param4, now_ms) == PX4LITE_OK) ? 1U : 0U;
+}
+
+static uint8_t MavRx_DecodeCommandAck(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message, uint32_t now_ms)
+{
+  mavlink_command_ack_t packet;
   Px4Lite_Result_t result;
 
-  if (frame == 0) {
-    s_stats.invalid_count++;
-    return PX4LITE_INVALID_PARAM;
-  }
-
-#if PX4LITE_LORA_RX_PAYLOAD_MAX < 255U
-  if (frame->payload_len > PX4LITE_LORA_RX_PAYLOAD_MAX) {
-    s_stats.invalid_count++;
-    return PX4LITE_INVALID_PARAM;
-  }
-#endif
-
-  MavlinkRx_LoadMessage(frame, &msg);
-  if ((frame->msg_id == MAVLINK_MSG_ID_HEARTBEAT) && (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) && (frame->system_id != Px4Lite_PlatformMavlinkSystemId())) {
-    mavlink_heartbeat_t heartbeat;
-
-    mavlink_msg_heartbeat_decode(&msg, &heartbeat);
-    Px4Lite_RemoteTelemetryObserveHeartbeat(frame->system_id, frame->component_id, heartbeat.type, heartbeat.base_mode, heartbeat.system_status, now_ms);
-  }
-
-  if (Px4Lite_RemoteTelemetryAcceptSysId(frame->system_id) == 0U) {
-    s_stats.filtered_count++;
-    Px4Lite_RemoteTelemetryRecordFiltered(frame->system_id);
-    return (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) ? PX4LITE_OK : PX4LITE_IDLE;
-  }
-
-  /* 帧已通过目标 sysid 过滤，按 seq 跳变累计该来源的链路丢包率。 */
-  MavlinkRx_UpdateLoss(frame->system_id, frame->sequence, now_ms);
-
-  switch (frame->msg_id) {
-    case MAVLINK_MSG_ID_HEARTBEAT:
-      result = MavlinkRx_HandleHeartbeat(&msg, now_ms);
-      break;
-    case MAVLINK_MSG_ID_GPS_RAW_INT:
-      result = MavlinkRx_HandleGpsRaw(&msg, now_ms);
-      break;
-    case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
-      result = MavlinkRx_HandleGlobalPosition(&msg, now_ms);
-      break;
-    case MAVLINK_MSG_ID_NAMED_VALUE_INT:
-      result = MavlinkRx_HandleNamedValueInt(&msg, now_ms);
-      break;
-    case MAVLINK_MSG_ID_ATTITUDE:
-      result = MavlinkRx_HandleAttitude(&msg, now_ms);
-      break;
-    case MAVLINK_MSG_ID_SYS_STATUS:
-      result = MavlinkRx_HandleSysStatus(&msg, now_ms);
-      break;
-    case MAVLINK_MSG_ID_BATTERY_STATUS:
-      result = MavlinkRx_HandleBatteryStatus(&msg, now_ms);
-      break;
-    case MAVLINK_MSG_ID_SCALED_PRESSURE:
-      result = MavlinkRx_HandleScaledPressure(&msg, now_ms);
-      break;
-    case MAVLINK_MSG_ID_STATUSTEXT:
-      result = MavlinkRx_HandleStatustext(&msg, now_ms);
-      break;
-    case MAVLINK_MSG_ID_TUNNEL:
-      result = MavlinkRx_HandleTunnel(&msg, now_ms);
-      break;
-    default:
-      s_stats.unsupported_count++;
-      Px4Lite_RemoteTelemetryRecordUnsupported(frame->system_id);
-      return PX4LITE_IDLE;
-  }
-
-  if (result == PX4LITE_OK) {
-    s_stats.handled_count++;
-    s_stats.last_msg_id = frame->msg_id;
-    s_stats.last_sysid  = frame->system_id;
-    s_stats.last_compid = frame->component_id;
-  } else if (result == PX4LITE_IDLE) {
-    s_stats.unsupported_count++;
-    Px4Lite_RemoteTelemetryRecordUnsupported(frame->system_id);
-  }
-  return result;
+  mavlink_msg_command_ack_decode(message, &packet);
+  result = Px4Lite_CommandHandleMavlinkAck(packet.command, packet.result, packet.target_system, packet.target_component, now_ms);
+  (void)remote;
+  return (result == PX4LITE_OK) ? 1U : 0U;
 }
 
-void Px4Lite_MavlinkRxGetStats(Px4Lite_MavlinkRxStats_t *out)
+static uint8_t MavRx_DecodeMessage(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message, uint32_t now_ms)
 {
-  if (out == 0) { return; }
-  *out = s_stats;
+  switch (message->msgid) {
+    case MAVLINK_MSG_ID_HEARTBEAT:
+      return MavRx_DecodeHeartbeat(remote, message);
+    case MAVLINK_MSG_ID_GPS_RAW_INT:
+      return MavRx_DecodeGpsRaw(remote, message);
+    case MAVLINK_MSG_ID_ATTITUDE:
+      return MavRx_DecodeAttitude(remote, message);
+    case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
+      return MavRx_DecodePosition(remote, message);
+    case MAVLINK_MSG_ID_SYS_STATUS:
+      return MavRx_DecodeSysStatus(remote, message);
+    case MAVLINK_MSG_ID_BATTERY_STATUS:
+      return MavRx_DecodeBattery(remote, message);
+    case MAVLINK_MSG_ID_SCALED_PRESSURE:
+      return MavRx_DecodePressure(remote, message);
+    case MAVLINK_MSG_ID_NAMED_VALUE_INT:
+      return MavRx_DecodeNamedValueInt(remote, message, now_ms);
+    case MAVLINK_MSG_ID_STATUSTEXT:
+      return MavRx_DecodeStatusText(remote, message);
+    case MAVLINK_MSG_ID_COMMAND_LONG:
+      return MavRx_DecodeCommandLong(message, now_ms);
+    case MAVLINK_MSG_ID_COMMAND_ACK:
+      return MavRx_DecodeCommandAck(remote, message, now_ms);
+    default:
+      return 0U;
+  }
 }
 
+Px4Lite_Result_t Px4Lite_MavlinkRxRun(uint32_t now_ms)
+{
+  uint8_t remote_node_id;
+  uint8_t decoded;
+  Px4Lite_Result_t copy_result;
+
+  if (Px4Lite_CopyCommRxFrame(&s_rx_frame_scratch) != PX4LITE_OK) { return PX4LITE_IDLE; }
+  if (s_rx_frame_scratch.payload_len > PX4LITE_COMM_RX_PAYLOAD_MAX) { return PX4LITE_OVERFLOW; }
+  if (MavRx_FrameToRemoteNode(&s_rx_frame_scratch, &remote_node_id) == 0U) { return PX4LITE_IDLE; }
+
+  MavRx_MessageFromFrame(&s_rx_frame_scratch, &s_rx_message_scratch);
+  copy_result = Px4Lite_RemoteTelemetryCopyNode(remote_node_id, &s_rx_remote_scratch);
+  if (copy_result == PX4LITE_NOT_READY) {
+    memset(&s_rx_remote_scratch, 0, sizeof(s_rx_remote_scratch));
+  } else if (copy_result != PX4LITE_OK) {
+    return copy_result;
+  }
+
+  MavRx_UpdateSource(&s_rx_remote_scratch, &s_rx_frame_scratch);
+  decoded = MavRx_DecodeMessage(&s_rx_remote_scratch, &s_rx_message_scratch, now_ms);
+  if (decoded != 0U) {
+    s_last_peer_rx_ms = s_rx_frame_scratch.rx_time_ms;
+    MavRx_UpdateStaleMask(&s_rx_remote_scratch, now_ms);
+    s_rx_remote_scratch.decoded_frame_count = s_rx_remote_scratch.decoded_frame_count + 1U;
+    s_rx_remote_scratch.header.sample_time_ms  = s_rx_frame_scratch.rx_time_ms;
+    s_rx_remote_scratch.header.publish_time_ms = now_ms;
+    s_rx_remote_scratch.header.flags           = PX4LITE_DATA_VALID;
+    s_rx_remote_scratch.header.device_id       = (uint16_t)(((uint16_t)s_rx_frame_scratch.system_id << 8U) | s_rx_frame_scratch.component_id);
+    s_rx_remote_scratch.header.valid           = 1U;
+    s_rx_remote_scratch.header.quality         = 100U;
+    (void)Px4Lite_RemoteTelemetryCommitNode(remote_node_id, &s_rx_remote_scratch, now_ms);
+  }
+
+  return (decoded != 0U) ? PX4LITE_OK : PX4LITE_IDLE;
+}
+
+uint32_t Px4Lite_MavlinkRxLastPeerMs(void)
+{
+  return s_last_peer_rx_ms;
+}

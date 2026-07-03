@@ -23,14 +23,13 @@ typedef struct {
   uint32_t attitude_count;         /**< ATTITUDE 已调度次数。 */
   uint32_t position_count;         /**< GLOBAL_POSITION_INT 已调度次数。 */
   uint32_t sys_status_count;       /**< SYS_STATUS 已调度次数。 */
+  uint32_t module_state_count;     /**< MODSTAT0/MODSTAT1 NAMED_VALUE_INT 已调度次数。 */
   uint32_t battery_status_count;   /**< BATTERY_STATUS 已调度次数。 */
   uint32_t scaled_pressure_count;  /**< SCALED_PRESSURE 已调度次数。 */
   uint32_t statustext_count;       /**< STATUSTEXT 已调度次数。 */
-  uint32_t remote_detail_count;    /**< 远程显示扩展 NAMED_VALUE_INT 已调度次数。 */
-  uint32_t remote_motor_count;     /**< 远程电机 NAMED_VALUE_INT 已调度次数。 */
-  uint32_t remote_status_count;    /**< 远程模块状态/告警 NAMED_VALUE_INT 已调度次数。 */
-  uint32_t remote_alarm_count;     /**< 完整告警表 TUNNEL 已发送次数。 */
-  uint32_t remote_log_count;       /**< 消息日志 TUNNEL 已发送次数(含心跳)。 */
+  uint32_t command_count;          /**< COMMAND_LONG 已调度次数。 */
+  uint32_t command_ack_tx_count;   /**< COMMAND_ACK 已发送次数。 */
+  uint32_t command_ack_rx_count;   /**< COMMAND_ACK 已接收次数。 */
   uint32_t no_data_count;          /**< 因无可用 topic 数据跳过发送的次数。 */
   uint32_t stale_count;            /**< 因 topic 数据过期跳过发送的次数。 */
   uint32_t busy_count;             /**< 因 LoRa 发送忙跳过发送的次数。 */
@@ -78,5 +77,14 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms);
  * @note 本函数只复制内存统计，不访问 LoRa 硬件。
  */
 void Px4Lite_MavlinkTxGetStats(Px4Lite_MavlinkTxStats_t *out);
+
+Px4Lite_Result_t Px4Lite_MavlinkStartRemoteView(uint8_t target_node_id, uint32_t now_ms);
+Px4Lite_Result_t Px4Lite_MavlinkStopRemoteView(uint8_t target_node_id, uint32_t now_ms);
+Px4Lite_Result_t Px4Lite_MavlinkAcceptRemoteViewRequest(uint8_t requester_node_id, uint32_t lease_ms, uint32_t now_ms);
+void Px4Lite_MavlinkAcceptRemoteViewStop(uint8_t requester_node_id, uint32_t now_ms);
+void Px4Lite_MavlinkSetTxEnabled(uint8_t enabled);
+uint8_t Px4Lite_MavlinkGetTxEnabled(void);
+void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component);
+void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result, uint32_t now_ms);
 
 #endif

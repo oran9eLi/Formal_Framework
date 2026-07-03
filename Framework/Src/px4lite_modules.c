@@ -20,6 +20,7 @@
 #include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
 #include "px4lite_remote_telemetry.h"
+#include "px4lite_remoteid_tx.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
@@ -34,6 +35,8 @@ static uint32_t s_battery2_sequence;
 static uint32_t s_navigation_sequence;
 static uint32_t s_health_sequence;
 static uint32_t s_start_ms;
+static uint32_t s_remoteid_busy_since_ms;
+static volatile uint8_t s_remoteid_reinit_requested;
 static uint32_t s_last_imu_work_ms;
 static uint32_t s_last_baro_work_ms;
 static uint32_t s_last_battery_work_ms;
@@ -333,8 +336,16 @@ Px4Lite_Result_t Px4Lite_BatteryRecover(void)
 
 Px4Lite_Result_t Px4Lite_LoraRecover(void)
 {
-#if PX4LITE_ENABLE_LORA
+#if PX4LITE_ENABLE_LORA && PX4LITE_LORA_RECOVERY_ENABLE
   Px4Lite_LoRaRequestReinit();
+#endif
+  return PX4LITE_OK;
+}
+
+Px4Lite_Result_t Px4Lite_RemoteIdRecover(void)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  s_remoteid_reinit_requested = 1U;
 #endif
   return PX4LITE_OK;
 }
@@ -832,16 +843,59 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
 {
 #if PX4LITE_ENABLE_LORA
   uint32_t now_ms         = Px4Lite_PlatformGetMs();
-  Px4Lite_Result_t lora_result = Px4Lite_LoRaInit();
-  Px4Lite_Result_t result = lora_result;
+  Px4Lite_Result_t result = Px4Lite_LoRaInit();
 
   Px4Lite_RemoteTelemetryInit(now_ms);
-  Px4Lite_MavlinkRxInit(now_ms);
-  if (Px4Lite_MavlinkTxInit(now_ms) != PX4LITE_OK) { result = PX4LITE_IO_ERROR; }
+  if (result == PX4LITE_BUSY) { Px4Lite_LoRaRequestReinit(); }
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
+    Px4Lite_Result_t tx_init_result = Px4Lite_MavlinkTxInit(now_ms);
+    if (tx_init_result != PX4LITE_OK) { result = tx_init_result; }
+  }
 
-  Px4Lite_SetStatus(PX4LITE_MODULE_LORA, (lora_result == PX4LITE_OK) ? PX4LITE_STATE_ONLINE : PX4LITE_STATE_FAILED, (lora_result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  Px4Lite_SetStatus(PX4LITE_MODULE_LORA,
+                    ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED,
+                    ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE,
+                    now_ms);
+  return (result == PX4LITE_BUSY) ? PX4LITE_OK : result;
+#else
+  return PX4LITE_OK;
+#endif
+}
+
+Px4Lite_Result_t Px4Lite_RemoteIdModuleInit(void)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  uint32_t now_ms         = Px4Lite_PlatformGetMs();
+  Px4Lite_Result_t result = Px4Lite_RemoteIdInit();
+
+  if (result == PX4LITE_OK) { result = Px4Lite_RemoteIdTxInit(now_ms); }
+  s_remoteid_busy_since_ms = 0U;
+  s_remoteid_reinit_requested = 0U;
+
+  Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   return result;
 #else
+  return PX4LITE_OK;
+#endif
+}
+
+static Px4Lite_Result_t Px4Lite_RemoteIdRunReinitIfRequested(uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  Px4Lite_Result_t result;
+
+  if (s_remoteid_reinit_requested == 0U) { return PX4LITE_OK; }
+
+  s_remoteid_reinit_requested = 0U;
+  Px4Lite_RemoteIdAbortTx();
+  result = Px4Lite_RemoteIdInit();
+  if (result == PX4LITE_OK) { result = Px4Lite_RemoteIdTxInit(now_ms); }
+
+  s_remoteid_busy_since_ms = 0U;
+  Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  return result;
+#else
+  (void)now_ms;
   return PX4LITE_OK;
 #endif
 }
@@ -850,50 +904,101 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 {
 #if PX4LITE_ENABLE_LORA
   Px4Lite_CommDebugInfo_t info;
+  Px4Lite_State_t state;
   Px4Lite_Result_t result;
-  uint32_t last_valid_ms;
-
-  (void)Px4Lite_RemoteTelemetryUpdateModeButton(Px4Lite_ButtonPressed(PX4LITE_BUTTON_KEY0), now_ms);
+  Px4Lite_Result_t rx_result;
+  Px4Lite_Result_t tx_result;
+  uint32_t peer_rx_ms;
 
   result = Px4Lite_LoRaService(now_ms);
-  /* 仅在模块在位时发送：未接入时不发，发送/接收计数保持为 0。 */
-  if ((result == PX4LITE_OK) && (Px4Lite_LoRaIsPresent() != 0U)) {
-    if (Px4Lite_RemoteTelemetryGetMode() == PX4LITE_REMOTE_MODE_REMOTE) {
-      Px4Lite_LoRaRxFrame_t rx_frame;
-      uint8_t rx_budget = 16U;
-
-      while ((rx_budget != 0U) && (Px4Lite_LoRaCopyRxFrame(&rx_frame) == PX4LITE_OK)) {
-        Px4Lite_Result_t rx_result = Px4Lite_MavlinkRxHandleFrame(&rx_frame, now_ms);
-        if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY) && (rx_result != PX4LITE_STALE) && (rx_result != PX4LITE_BUSY)) { result = rx_result; }
-        rx_budget--;
-      }
-    } else {
-      Px4Lite_Result_t tx_result = Px4Lite_MavlinkTxRun(now_ms);
-      if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
-    }
+  if (result == PX4LITE_OK) {
+    rx_result = Px4Lite_MavlinkRxRun(now_ms);
+    if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY)) { result = rx_result; }
+    tx_result = Px4Lite_MavlinkTxRun(now_ms);
+    if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
   }
 
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
-  (void)Px4Lite_LoRaGetState(now_ms);
-
-  /* LoRa 调试时间仍记录 AUX ready；显示状态只按本机模块插电在位发布。 */
-  last_valid_ms = info.last_ready_ms;
+  state = Px4Lite_LoRaGetState(now_ms);
+  peer_rx_ms = Px4Lite_MavlinkRxLastPeerMs();
 
   taskENTER_CRITICAL();
-  s_status[PX4LITE_MODULE_LORA].last_rx_ms    = info.last_rx_ms;
-  s_status[PX4LITE_MODULE_LORA].last_valid_ms = last_valid_ms;
+  s_status[PX4LITE_MODULE_LORA].last_rx_ms    = peer_rx_ms;
   s_status[PX4LITE_MODULE_LORA].error_count   = info.parse_error_count + info.send_error_count;
-  s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count;
+  s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count + info.rx_sequence_lost_count;
+  if ((state == PX4LITE_STATE_ONLINE) && ((result == PX4LITE_OK) || (result == PX4LITE_BUSY))) {
+    s_status[PX4LITE_MODULE_LORA].last_valid_ms = now_ms;
+  }
   taskEXIT_CRITICAL();
 
-  /* 当前状态发布按本机模块插电在位二态执行，不再参考 result 或远端连接状态。 */
-  if (Px4Lite_LoRaIsPresent() == 0U) {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_FAILED, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
-  } else {
+  /*
+   * 教学 LoRa 模式只用本机硬件在位状态驱动红/绿灯：
+   * E22 未供电或 AUX 长期不可用为红灯；本机模块可用即为绿灯。
+   * 是否收到对端数据只进入统计和远端数据新鲜度，不再影响本机 LoRa 灯色。
+   */
+  if ((state == PX4LITE_STATE_FAILED) || (state == PX4LITE_STATE_OFFLINE)) {
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  } else if ((result != PX4LITE_OK) && (result != PX4LITE_BUSY)) {
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  } else if (state == PX4LITE_STATE_ONLINE) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   }
-#else
+#endif
+
+#if PX4LITE_ENABLE_REMOTE_ID
+  {
+    Px4Lite_RemoteIdTxStats_t remoteid_stats;
+    Px4Lite_Result_t remoteid_result;
+
+    if (Px4Lite_RemoteIdRunReinitIfRequested(now_ms) != PX4LITE_OK) { return; }
+    if (Px4Lite_RemoteIdIsReady() == 0U) {
+      Px4Lite_RecordSensorIoError(PX4LITE_MODULE_REMOTE_ID, now_ms);
+      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+      return;
+    }
+
+    remoteid_result = Px4Lite_RemoteIdTxRun(now_ms);
+    memset(&remoteid_stats, 0, sizeof(remoteid_stats));
+    Px4Lite_RemoteIdTxGetStats(&remoteid_stats);
+
+    if (remoteid_result == PX4LITE_OK) {
+      taskENTER_CRITICAL();
+      s_status[PX4LITE_MODULE_REMOTE_ID].last_rx_ms = remoteid_stats.last_success_ms;
+      s_status[PX4LITE_MODULE_REMOTE_ID].last_valid_ms = remoteid_stats.last_success_ms;
+      s_status[PX4LITE_MODULE_REMOTE_ID].error_count = remoteid_stats.error_count;
+      s_status[PX4LITE_MODULE_REMOTE_ID].drop_count = remoteid_stats.busy_count;
+      s_status[PX4LITE_MODULE_REMOTE_ID].consecutive_errors = 0U;
+      if (s_status[PX4LITE_MODULE_REMOTE_ID].consecutive_valid < 65535U) { s_status[PX4LITE_MODULE_REMOTE_ID].consecutive_valid++; }
+      taskEXIT_CRITICAL();
+      s_remoteid_busy_since_ms = 0U;
+      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
+    } else if (remoteid_result == PX4LITE_BUSY) {
+      if (s_remoteid_busy_since_ms == 0U) { s_remoteid_busy_since_ms = now_ms; }
+      if (Px4Lite_ElapsedMs(now_ms, s_remoteid_busy_since_ms) > PX4LITE_REMOTEID_TX_BUSY_TIMEOUT_MS) {
+        Px4Lite_RemoteIdAbortTx();
+        s_remoteid_reinit_requested = 1U;
+        Px4Lite_RecordSensorIoError(PX4LITE_MODULE_REMOTE_ID, now_ms);
+        Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+      }
+    } else if (remoteid_result == PX4LITE_IO_ERROR) {
+      s_remoteid_busy_since_ms = 0U;
+      s_remoteid_reinit_requested = 1U;
+      Px4Lite_RecordSensorIoError(PX4LITE_MODULE_REMOTE_ID, now_ms);
+      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+    } else {
+      s_remoteid_busy_since_ms = 0U;
+      if ((remoteid_stats.last_success_ms == 0U) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_REMOTEID_STARTUP_GRACE_MS)) {
+        Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+      } else if ((remoteid_stats.last_success_ms != 0U) && (Px4Lite_ElapsedMs(now_ms, remoteid_stats.last_success_ms) > PX4LITE_REMOTEID_OFFLINE_MS)) {
+        Px4Lite_RecordSensorIoError(PX4LITE_MODULE_REMOTE_ID, now_ms);
+        Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+      }
+    }
+  }
+#endif
+
+#if !PX4LITE_ENABLE_LORA && !PX4LITE_ENABLE_REMOTE_ID
   (void)now_ms;
 #endif
 }
@@ -901,27 +1006,32 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out)
 {
   Px4Lite_MavlinkTxStats_t stats;
-  Px4Lite_MavlinkRxStats_t rx_stats;
 
   if (out == 0) { return; }
 
   Px4Lite_LoRaGetDebugInfo(out);
   memset(&stats, 0, sizeof(stats));
-  memset(&rx_stats, 0, sizeof(rx_stats));
   Px4Lite_MavlinkTxGetStats(&stats);
-  Px4Lite_MavlinkRxGetStats(&rx_stats);
   out->mav_heartbeat_count       = stats.heartbeat_count;
   out->mav_gps_raw_count         = stats.gps_raw_count;
   out->mav_gnss_detail_count     = stats.gnss_detail_count;
   out->mav_attitude_count        = stats.attitude_count;
   out->mav_position_count        = stats.position_count;
   out->mav_sys_status_count      = stats.sys_status_count;
+  out->mav_module_state_count    = stats.module_state_count;
   out->mav_battery_status_count  = stats.battery_status_count;
   out->mav_scaled_pressure_count = stats.scaled_pressure_count;
   out->mav_statustext_count      = stats.statustext_count;
+  out->mav_command_count         = stats.command_count;
+  out->mav_command_ack_tx_count  = stats.command_ack_tx_count;
+  out->mav_command_ack_rx_count  = stats.command_ack_rx_count;
   out->mav_no_data_count         = stats.no_data_count;
   out->mav_stale_count           = stats.stale_count;
   out->mav_error_count           = stats.error_count;
   out->mav_last_tx_msg_id        = stats.last_message_id;
-  out->rx_loss_permille          = rx_stats.rx_loss_permille;
+}
+
+Px4Lite_Result_t Px4Lite_CopyCommRxFrame(Px4Lite_CommRxFrame_t *out)
+{
+  return Px4Lite_LoRaCopyRxFrame(out);
 }

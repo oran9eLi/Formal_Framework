@@ -51,6 +51,16 @@ void BSP_GNSS_DmaIrqHandler(void);
  * @brief 在错误后恢复 GNSS UART 和 DMA 接收路径。
  */
 BSP_Status_t BSP_GNSS_RecoverRx(void);
+/**
+ * @brief Request GNSS RX recovery from USART2 ISR; only sets a flag in ISR.
+ */
+void BSP_GNSS_RequestRecoverRx(void);
+/**
+ * @brief Consume one pending GNSS RX recovery request from the owner service.
+ *
+ * @return 1 if a request was pending, 0 otherwise.
+ */
+uint8_t BSP_GNSS_ConsumeRecoverRxRequest(void);
 
 #if DEBUG_GNSS_BSP_MONITOR_ENABLE
 /**

@@ -28,6 +28,8 @@
 static uint8_t s_esc_armed;
 static uint8_t s_last_run_valid;
 static volatile uint8_t s_target_throttle_percent[PX4LITE_MOTOR_COUNT];
+static volatile uint32_t s_target_update_ms[PX4LITE_MOTOR_COUNT];
+static volatile uint8_t s_estop_latched;
 static uint32_t s_arm_start_ms;
 static uint32_t s_last_run_ms;
 static uint32_t s_sequence;
@@ -82,6 +84,7 @@ static void Px4Lite_ControlClearTargets(void)
 
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     s_target_throttle_percent[i] = 0U;
+    s_target_update_ms[i]        = 0U;
   }
 }
 
@@ -92,6 +95,7 @@ static void Px4Lite_ControlReset(uint32_t now_ms)
 {
   s_esc_armed      = 0U;
   s_last_run_valid = 0U;
+  s_estop_latched  = 0U;
   s_arm_start_ms   = now_ms;
   s_last_run_ms    = now_ms;
   Px4Lite_ControlClearTargets();
@@ -159,8 +163,10 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uin
 {
   if (motor_index >= PX4LITE_MOTOR_COUNT) { return PX4LITE_INVALID_PARAM; }
   if (throttle_percent > 100U) { throttle_percent = 100U; }
+  if ((s_estop_latched != 0U) && (throttle_percent != 0U)) { return PX4LITE_BUSY; }
 
   s_target_throttle_percent[motor_index] = throttle_percent;
+  s_target_update_ms[motor_index]        = Px4Lite_PlatformGetMs();
   return PX4LITE_OK;
 }
 
@@ -171,7 +177,7 @@ Px4Lite_Result_t Px4Lite_ControlModuleInit(void)
 
   result = Px4Lite_MotorInit();
   Px4Lite_ControlReset(now_ms);
-  Px4Lite_SetExternalModuleState(PX4LITE_MODULE_CONTROL, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SYSTEM_SELF_CHECK, now_ms);
+  Px4Lite_SetExternalModuleState(PX4LITE_MODULE_CONTROL, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_DEGRADED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SYSTEM_SELF_CHECK, now_ms);
   return result;
 }
 
@@ -192,12 +198,20 @@ void Px4Lite_ControlRun(uint32_t now_ms)
   Px4Lite_Result_t result;
 
   if ((s_last_run_valid != 0U) && (Px4Lite_ElapsedMs(now_ms, s_last_run_ms) > PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS)) {
-    Px4Lite_ControlReset(now_ms);
+    s_estop_latched = 1U;
+    s_esc_armed     = 0U;
+    s_arm_start_ms  = now_ms;
+    Px4Lite_ControlClearTargets();
+    (void)Px4Lite_MotorDisarmAll();
   }
   s_last_run_valid = 1U;
   s_last_run_ms    = now_ms;
 
-  if (Px4Lite_ControlPressEdge(PX4LITE_BUTTON_KEY1) != 0U) { Px4Lite_ControlClearTargets(); }
+  if (Px4Lite_ControlPressEdge(PX4LITE_BUTTON_KEY1) != 0U) {
+    s_estop_latched = 1U;
+    Px4Lite_ControlClearTargets();
+    (void)Px4Lite_MotorDisarmAll();
+  }
 
   if (s_esc_armed == 0U) {
     for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
@@ -212,14 +226,20 @@ void Px4Lite_ControlRun(uint32_t now_ms)
   }
 
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
-    duty_percent[i] = s_target_throttle_percent[i];
-    if (duty_percent[i] > 100U) { duty_percent[i] = 100U; }
+    if ((s_estop_latched != 0U) || (s_target_update_ms[i] == 0U) || (Px4Lite_ElapsedMs(now_ms, s_target_update_ms[i]) > PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS)) {
+      s_target_throttle_percent[i] = 0U;
+      s_target_update_ms[i]        = 0U;
+      duty_percent[i]              = 0U;
+    } else {
+      duty_percent[i] = s_target_throttle_percent[i];
+      if (duty_percent[i] > 100U) { duty_percent[i] = 100U; }
+    }
     pulse_us[i] = Px4Lite_ControlThrottleToPulseUs(duty_percent[i]);
   }
 
   result = Px4Lite_ControlWriteAll(pulse_us);
-  Px4Lite_ControlPublish(now_ms, duty_percent, 1U);
-  Px4Lite_SetExternalModuleState(PX4LITE_MODULE_CONTROL, (result == PX4LITE_OK) ? PX4LITE_STATE_ONLINE : PX4LITE_STATE_DEGRADED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SYSTEM_SELF_CHECK, now_ms);
+  Px4Lite_ControlPublish(now_ms, duty_percent, (s_estop_latched == 0U) ? 1U : 0U);
+  Px4Lite_SetExternalModuleState(PX4LITE_MODULE_CONTROL, ((result == PX4LITE_OK) && (s_estop_latched == 0U)) ? PX4LITE_STATE_ONLINE : PX4LITE_STATE_DEGRADED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SYSTEM_SELF_CHECK, now_ms);
 }
 
 #else

@@ -29,7 +29,8 @@ typedef enum {
   GNSS_RESULT_OK = 0,       /**< 操作成功。 */
   GNSS_RESULT_NO_DATA,      /**< 当前无新数据。 */
   GNSS_RESULT_NO_FIX,       /**< 有数据但无有效定位。 */
-  GNSS_RESULT_INVALID_PARAM /**< 参数非法。 */
+  GNSS_RESULT_INVALID_PARAM, /**< 参数非法。 */
+  GNSS_RESULT_IO_ERROR      /**< UART/DMA 或 BSP 访问失败。 */
 } Gnss_Result_t;
 
 /**

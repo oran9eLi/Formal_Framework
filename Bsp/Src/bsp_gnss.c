@@ -24,6 +24,7 @@ static volatile uint16_t s_rx_head       = 0U;
 static volatile uint16_t s_rx_tail       = 0U;
 static volatile uint8_t s_rx_ovf         = 0U;
 static volatile uint32_t s_rx_drop_count = 0U;
+static volatile uint8_t s_rx_recover_request;
 
 #if DEBUG_GNSS_BSP_MONITOR_ENABLE
 static volatile uint32_t s_dbg_usart2_irq_count       = 0U;
@@ -110,6 +111,7 @@ BSP_Status_t BSP_GNSS_Init(void)
   s_rx_tail       = 0U;
   s_rx_ovf        = 0U;
   s_rx_drop_count = 0U;
+  s_rx_recover_request = 0U;
 
   if (HAL_UART_Receive_DMA(&s_gnss_uart, s_rx_buf, BSP_GNSS_RX_BUF_SIZE) != HAL_OK) { return BSP_STATUS_ERROR; }
   __HAL_UART_ENABLE_IT(&s_gnss_uart, UART_IT_IDLE);
@@ -130,6 +132,7 @@ BSP_Status_t BSP_GNSS_DeInit(void)
   s_rx_head = 0U;
   s_rx_tail = 0U;
   s_rx_ovf  = 0U;
+  s_rx_recover_request = 0U;
   return BSP_STATUS_OK;
 }
 
@@ -153,14 +156,39 @@ BSP_Status_t BSP_GNSS_RecoverRx(void)
   s_rx_head = 0U;
   s_rx_tail = 0U;
   s_rx_ovf  = 0U;
-
+  s_rx_recover_request = 0U;
   if (HAL_UART_Receive_DMA(&s_gnss_uart, s_rx_buf, BSP_GNSS_RX_BUF_SIZE) != HAL_OK) { return BSP_STATUS_ERROR; }
   __HAL_UART_ENABLE_IT(&s_gnss_uart, UART_IT_IDLE);
   return BSP_STATUS_OK;
 }
 
 /**
- * @brief 从 BSP 环形缓冲复制可用 GNSS 字节。
+ * @brief Request GNSS RX recovery from USART2 ISR; this only sets a flag.
+ */
+void BSP_GNSS_RequestRecoverRx(void)
+{
+  s_rx_recover_request = 1U;
+}
+
+/**
+ * @brief Consume one pending GNSS RX recovery request in the owner service.
+ */
+uint8_t BSP_GNSS_ConsumeRecoverRxRequest(void)
+{
+  uint32_t primask;
+  uint8_t request;
+
+  primask = __get_PRIMASK();
+  __disable_irq();
+  request = s_rx_recover_request;
+  s_rx_recover_request = 0U;
+  if (primask == 0U) { __enable_irq(); }
+
+  return request;
+}
+
+/**
+ * @brief Copy available GNSS bytes from the BSP ring buffer.
  */
 uint16_t BSP_GNSS_GetRxData(uint8_t *dst, uint16_t max_len)
 {

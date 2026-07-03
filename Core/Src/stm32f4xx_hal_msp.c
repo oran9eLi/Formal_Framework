@@ -71,6 +71,27 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     HAL_NVIC_EnableIRQ(BSP_LORA_RX_DMA_IRQn);
     HAL_NVIC_SetPriority(BSP_LORA_TX_DMA_IRQn, BSP_LORA_IRQ_PRIORITY, 0U);
     HAL_NVIC_EnableIRQ(BSP_LORA_TX_DMA_IRQn);
+  } else if (huart->Instance == BSP_REMOTEID_UART) {
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_UART4_CLK_ENABLE();
+    __HAL_RCC_DMA1_CLK_ENABLE();
+
+    gpio.Mode      = GPIO_MODE_AF_PP;
+    gpio.Speed     = GPIO_SPEED_FREQ_HIGH;
+    gpio.Pull      = GPIO_NOPULL;
+    gpio.Pin       = BSP_REMOTEID_TX_PIN;
+    gpio.Alternate = BSP_REMOTEID_TX_AF;
+    HAL_GPIO_Init(BSP_REMOTEID_TX_PORT, &gpio);
+
+    gpio.Pin       = BSP_REMOTEID_RX_PIN;
+    gpio.Pull      = GPIO_PULLUP;
+    gpio.Alternate = BSP_REMOTEID_RX_AF;
+    HAL_GPIO_Init(BSP_REMOTEID_RX_PORT, &gpio);
+
+    HAL_NVIC_SetPriority(BSP_REMOTEID_IRQn, BSP_REMOTEID_IRQ_PRIORITY, 0U);
+    HAL_NVIC_EnableIRQ(BSP_REMOTEID_IRQn);
+    HAL_NVIC_SetPriority(BSP_REMOTEID_TX_DMA_IRQn, BSP_REMOTEID_IRQ_PRIORITY, 0U);
+    HAL_NVIC_EnableIRQ(BSP_REMOTEID_TX_DMA_IRQn);
   }
 }
 
@@ -90,6 +111,11 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
     HAL_NVIC_DisableIRQ(BSP_LORA_RX_DMA_IRQn);
     HAL_NVIC_DisableIRQ(BSP_LORA_TX_DMA_IRQn);
     HAL_GPIO_DeInit(BSP_LORA_TX_PORT, BSP_LORA_TX_PIN | BSP_LORA_RX_PIN);
+  } else if (huart->Instance == BSP_REMOTEID_UART) {
+    __HAL_RCC_UART4_CLK_DISABLE();
+    HAL_NVIC_DisableIRQ(BSP_REMOTEID_IRQn);
+    HAL_NVIC_DisableIRQ(BSP_REMOTEID_TX_DMA_IRQn);
+    HAL_GPIO_DeInit(BSP_REMOTEID_TX_PORT, BSP_REMOTEID_TX_PIN | BSP_REMOTEID_RX_PIN);
   }
 }
 

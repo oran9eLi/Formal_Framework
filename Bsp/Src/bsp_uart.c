@@ -1,13 +1,17 @@
 /**
  * @file bsp_uart.c
- * @brief 实现 USART1 调试控制台发送接口。
+ * @brief 实现调试 UART 的 BSP 原始发送接口。
+ *
+ * @details
+ * 本文件只封装调试串口的 HAL 初始化和阻塞发送，不做日志格式化、不做业务判断。
+ * 上层调试输出必须通过 DebugConsole 互斥后调用，避免多个任务交叉打印。
  */
 
 #include "bsp_uart.h"
+
 #include "bsp_config.h"
 #include "stm32f4xx_hal.h"
 
-/***************DEBUG***************/
 static UART_HandleTypeDef huart1;
 
 /**
@@ -15,7 +19,7 @@ static UART_HandleTypeDef huart1;
  *
  * @param[in] status HAL 返回状态。
  *
- * @return BSP 通用返回码，避免向上层泄漏 HAL_StatusTypeDef。
+ * @return BSP 通用返回码，避免向上层泄漏 HAL 类型。
  */
 static BSP_Status_t BSP_UART_MapHalStatus(HAL_StatusTypeDef status)
 {
@@ -26,26 +30,53 @@ static BSP_Status_t BSP_UART_MapHalStatus(HAL_StatusTypeDef status)
 }
 
 /**
- * @brief 按配置引脚和波特率初始化调试 UART。
+ * @brief 按 `bsp_config.h` 配置初始化调试 UART。
+ *
+ * @return BSP 通用返回码。
  */
 BSP_Status_t BSP_UART_Init(void)
 {
-  huart1.Instance          = USART1;
-  huart1.Init.BaudRate     = 115200;
-  huart1.Init.WordLength   = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits     = UART_STOPBITS_1;
-  huart1.Init.Parity       = UART_PARITY_NONE;
-  huart1.Init.Mode         = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Instance          = BSP_DBG_UART;
+  huart1.Init.BaudRate     = BSP_DBG_UART_BAUD;
+  huart1.Init.WordLength   = BSP_DBG_UART_WORD;
+  huart1.Init.StopBits     = BSP_DBG_UART_STOP;
+  huart1.Init.Parity       = BSP_DBG_UART_PARITY;
+  huart1.Init.Mode         = BSP_DBG_UART_MODE;
+  huart1.Init.HwFlowCtl    = BSP_DBG_UART_HWCTL;
+  huart1.Init.OverSampling = BSP_DBG_UART_OVERSAMP;
   return BSP_UART_MapHalStatus(HAL_UART_Init(&huart1));
 }
 
 /**
- * @brief 通过调试 UART 在超时时间内发送完整字节缓冲区。
+ * @brief 通过调试 UART 阻塞发送字节缓冲区。
+ *
+ * @param[in] data 待发送数据缓冲区，不能为 NULL。
+ * @param[in] length 待发送字节数。
+ * @param[in] timeout_ms HAL 阻塞发送超时时间，单位 ms。
+ *
+ * @return BSP 通用返回码。
  */
 BSP_Status_t BSP_UART_Send(const uint8_t *data, uint16_t length, uint32_t timeout_ms)
 {
   return BSP_UART_MapHalStatus(HAL_UART_Transmit(&huart1, (uint8_t *)data, length, timeout_ms));
 }
-/*************DEBUG END*************/
+
+/**
+ * @brief 复制调试 UART 当前 HAL 配置。
+ *
+ * @param[out] out 输出缓冲区，允许为 NULL。
+ */
+void BSP_UART_GetDebugInfo(BSP_UART_DebugInfo_t *out)
+{
+  if (out == 0) { return; }
+
+  out->instance      = (uint32_t)(uintptr_t)huart1.Instance;
+  out->baud_rate     = huart1.Init.BaudRate;
+  out->word_length   = huart1.Init.WordLength;
+  out->stop_bits     = huart1.Init.StopBits;
+  out->parity        = huart1.Init.Parity;
+  out->mode          = huart1.Init.Mode;
+  out->hw_flow_ctl   = huart1.Init.HwFlowCtl;
+  out->over_sampling = huart1.Init.OverSampling;
+  out->initialized   = (huart1.gState != HAL_UART_STATE_RESET) ? 1U : 0U;
+}
