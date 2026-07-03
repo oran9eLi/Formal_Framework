@@ -26,7 +26,9 @@ virtualFolder:
         - path: Framework/Src/px4lite_mavlink_rx.c
         - path: Framework/Src/px4lite_remote_telemetry.c
         - path: Framework/Src/px4lite_local_msglog.c
-        - path: Framework/Src/px4lite_remote_tunnel.c
+        - path: Framework/Src/px4lite_remoteid_tx.c
+        - path: Framework/Src/px4lite_identity.c
+        - path: Framework/Src/px4lite_command.c
         - path: Framework/Src/px4lite_attitude.c
         - path: Framework/Src/px4lite_alarm.c
         - path: Framework/Src/px4lite_time.c
@@ -65,6 +67,7 @@ virtualFolder:
         - path: Bsp/Src/bsp_gnss.c
         - path: Bsp/Src/bsp_rtc.c
         - path: Bsp/Src/bsp_lora.c
+        - path: Bsp/Src/bsp_remoteid.c
         - path: Bsp/Src/bsp_lcd_fsmc.c
         - path: Bsp/Src/bsp_touch_port.c
         - path: Bsp/Src/bsp_i2c.c
@@ -79,18 +82,17 @@ virtualFolder:
     - name: Display
       files:
         - path: Display/Src/display.c
-        - path: Display/Src/display_gfx.c
         - path: Display/Src/display_gt911.c
         - path: Display/Src/display_logo.c
         - path: Display/Src/display_pages.c
         - path: Display/Src/display_ssd1963.c
-        - path: Display/Src/display_text.c
       folders: []
     - name: Debug
       files:
         - path: Debug/Src/debug_console.c
         - path: Debug/Src/debug_task_monitor.c
         - path: Debug/Src/debug_service.c
+        - path: Debug/Src/debug_selftest.c
       folders: []
     - name: HAL
       files:

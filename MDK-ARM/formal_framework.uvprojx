@@ -499,9 +499,19 @@
               <FilePath>..\Framework\Src\px4lite_local_msglog.c</FilePath>
             </File>
             <File>
-              <FileName>px4lite_remote_tunnel.c</FileName>
+              <FileName>px4lite_remoteid_tx.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Framework\Src\px4lite_remote_tunnel.c</FilePath>
+              <FilePath>..\Framework\Src\px4lite_remoteid_tx.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_identity.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_identity.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_command.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_command.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -617,6 +627,11 @@
               <FileName>bsp_lora.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\bsp_lora.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_remoteid.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_remoteid.c</FilePath>
             </File>
             <File>
               <FileName>bsp_lcd_fsmc.c</FileName>
@@ -1157,6 +1172,11 @@
               <FileName>debug_service.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Debug\Src\debug_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>debug_selftest.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Debug\Src\debug_selftest.c</FilePath>
             </File>
           </Files>
         </Group>
