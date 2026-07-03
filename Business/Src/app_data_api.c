@@ -14,10 +14,12 @@
 #include "px4lite_config.h"
 #include "px4lite_control.h"
 #include "px4lite_faults.h"
+#include "px4lite_identity.h"
 #include "px4lite_local_msglog.h"
 #include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
 #include "px4lite_modules.h"
+#include "px4lite_remote_telemetry.h"
 #include "px4lite_topics.h"
 
 /*
@@ -32,6 +34,67 @@ static App_MotorSnapshot_t s_display_motor_scratch;
 static Px4Lite_AlarmSnapshot_t s_display_alarm_scratch;
 static Px4Lite_RemoteTelemetry_t s_display_remote_scratch;
 static Px4Lite_RemoteNodeStatus_t s_remote_node_status_scratch[PX4LITE_REMOTE_NODE_MAX];
+
+static uint16_t App_CountBits32(uint32_t value)
+{
+  uint16_t count = 0U;
+
+  while (value != 0U) {
+    count = (uint16_t)(count + (uint16_t)(value & 1UL));
+    value >>= 1U;
+  }
+  return count;
+}
+
+static uint8_t App_IsLeapYear(uint32_t year)
+{
+  if ((year % 400UL) == 0UL) { return 1U; }
+  if ((year % 100UL) == 0UL) { return 0U; }
+  return ((year % 4UL) == 0UL) ? 1U : 0U;
+}
+
+static uint8_t App_DaysInMonth(uint32_t year, uint32_t month)
+{
+  static const uint8_t days[12] = {31U, 28U, 31U, 30U, 31U, 30U, 31U, 31U, 30U, 31U, 30U, 31U};
+
+  if ((month < 1U) || (month > 12U)) { return 31U; }
+  if ((month == 2U) && (App_IsLeapYear(year) != 0U)) { return 29U; }
+  return days[month - 1U];
+}
+
+static uint8_t App_FillDisplayTimeFromGnss(App_DisplaySnapshot_t *out, uint32_t utc_date, uint32_t utc_sec)
+{
+  uint32_t year;
+  uint32_t month;
+  uint32_t day;
+  uint32_t local_sec;
+
+  if ((out == 0) || (utc_date == 0U) || (utc_sec >= 86400UL)) { return 0U; }
+
+  year = 2000UL + (utc_date / 10000UL);
+  month = (utc_date / 100UL) % 100UL;
+  day = utc_date % 100UL;
+  if ((year < 2000UL) || (year > 2099UL) || (month < 1UL) || (month > 12UL) || (day < 1UL) || (day > (uint32_t)App_DaysInMonth(year, month))) { return 0U; }
+
+  local_sec = utc_sec + PX4LITE_TIME_LOCAL_OFFSET_S;
+  while (local_sec >= 86400UL) {
+    local_sec -= 86400UL;
+    day++;
+    if (day > (uint32_t)App_DaysInMonth(year, month)) {
+      day = 1UL;
+      month++;
+      if (month > 12UL) {
+        month = 1UL;
+        year++;
+      }
+    }
+  }
+
+  out->date_time_valid = 1U;
+  out->local_date_ymd = (year * 10000UL) + (month * 100UL) + day;
+  out->local_time_hhmmss = ((local_sec / 3600UL) * 10000UL) + (((local_sec / 60UL) % 60UL) * 100UL) + (local_sec % 60UL);
+  return 1U;
+}
 
 /**
  * @brief 从已复制的系统快照中汇总活动模块故障。
@@ -486,8 +549,8 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
   if (out == 0) { return 0U; }
 
   memset(out, 0, sizeof(*out));
-  out->view_node_id = (uint8_t)PX4LITE_NODE_ID;
-  out->view_system_id = (uint8_t)PX4LITE_MAVLINK_SYSTEM_ID;
+  out->view_node_id = (uint8_t)Px4Lite_IdentityGetNodeId();
+  out->view_system_id = (uint8_t)Px4Lite_IdentityGetMavlinkSystemId();
   out->view_remote_id_valid = 1U;
 
   if (App_CopyNavigation(&s_display_navigation_scratch, now_ms) == PX4LITE_OK) {
@@ -584,10 +647,6 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   out->view_system_id = s_display_remote_scratch.system_id;
   out->view_node_id = s_display_remote_scratch.system_id;
   out->view_remote_id_valid = 1U;
-  out->lora_active_viewer_node_id = s_display_remote_scratch.lora_active_viewer_node_id;
-  out->lora_view_remaining_s = s_display_remote_scratch.lora_view_remaining_s;
-  out->lora_view_preempted = ((s_display_remote_scratch.lora_active_viewer_node_id != 0U) &&
-                              (s_display_remote_scratch.lora_active_viewer_node_id != (uint8_t)PX4LITE_NODE_ID)) ? 1U : 0U;
 
   module_loaded = App_FillRemoteModuleViews(out, &s_display_remote_scratch);
   if (module_loaded != 0U) {
@@ -620,6 +679,7 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
     out->hdop_x100          = s_display_remote_scratch.hdop_x100;
     out->satellites_used    = s_display_remote_scratch.satellites_used;
     out->gnss_fix_type      = s_display_remote_scratch.gnss_fix_type;
+    (void)App_FillDisplayTimeFromGnss(out, s_display_remote_scratch.gnss_utc_date, s_display_remote_scratch.gnss_utc_sec);
   }
 
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ATTITUDE) == 0U)) {
@@ -647,22 +707,19 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   }
 
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ALARM) == 0U)) {
-    uint8_t i;
-
     out->alarm_valid               = 1U;
     out->highest_fault_code        = s_display_remote_scratch.highest_fault_code;
     out->highest_source_id         = s_display_remote_scratch.highest_source_id;
     out->warning_fault_mask        = s_display_remote_scratch.alarm_active_mask;
-    out->alarm_active_count        = s_display_remote_scratch.alarm_record_count;
+    out->alarm_active_count        = App_CountBits32(s_display_remote_scratch.alarm_active_mask);
     out->alarm_highest_fault_code  = s_display_remote_scratch.highest_fault_code;
-    for (i = 0U; (i < s_display_remote_scratch.alarm_record_count) && (i < APP_DISPLAY_ALARM_MAX) && (i < PX4LITE_REMOTE_ALARM_RECORD_MAX); i++) {
-      out->alarms[i].source_id  = s_display_remote_scratch.alarm_records[i].source_id;
-      out->alarms[i].fault_code = s_display_remote_scratch.alarm_records[i].fault_code;
-      out->alarms[i].severity   = (uint8_t)s_display_remote_scratch.alarm_records[i].severity;
-      out->alarms[i].active     = s_display_remote_scratch.alarm_records[i].active;
-      out->alarms[i].raised_ms  = s_display_remote_scratch.alarm_records[i].raised_ms;
-      out->alarms[i].updated_ms = s_display_remote_scratch.alarm_records[i].updated_ms;
-      out->alarms[i].detail     = s_display_remote_scratch.alarm_records[i].detail;
+    if (s_display_remote_scratch.highest_fault_code != 0U) {
+      out->alarms[0].source_id  = s_display_remote_scratch.highest_source_id;
+      out->alarms[0].fault_code = s_display_remote_scratch.highest_fault_code;
+      out->alarms[0].severity   = s_display_remote_scratch.highest_severity;
+      out->alarms[0].active     = 1U;
+      out->alarms[0].updated_ms = s_display_remote_scratch.alarm_update_ms;
+      out->alarms[0].raised_ms  = s_display_remote_scratch.alarm_update_ms;
     }
   }
 
@@ -682,8 +739,6 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   out->lora_ack_count = comm.mav_command_ack_rx_count + comm.mav_command_ack_tx_count;
   out->lora_loss_rate_x10 = s_display_remote_scratch.rx_loss_rate_x10;
 
-  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->imu.state) == 0U)) { out->attitude_valid = 0U; }
-  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->baro.state) == 0U)) { out->environment_valid = 0U; }
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (App_ViewStateHasUsableData(out->battery.state) == 0U)) {
     out->battery_percent = 0U;
     out->battery2_percent = 0U;
@@ -691,7 +746,7 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
     out->voltage2_mv = 0U;
   }
 
-  out->any_valid = ((out->navigation_valid != 0U) || (out->attitude_valid != 0U) || (out->system_valid != 0U) || (out->environment_valid != 0U) || (out->alarm_valid != 0U) || ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U)) ? 1U : 0U;
+  out->any_valid = ((out->navigation_valid != 0U) || (out->attitude_valid != 0U) || (out->system_valid != 0U) || (out->environment_valid != 0U) || (out->alarm_valid != 0U) || (out->motor_valid != 0U) || ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U)) ? 1U : 0U;
   return out->any_valid;
 }
 
@@ -715,58 +770,48 @@ uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity
   uint16_t count;
   uint16_t i;
 
+  (void)now_ms;
+  if (last_seq != 0) { *last_seq = 0U; }
   if ((entries == 0) || (capacity == 0U)) { return 0U; }
   if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
-  if (Px4Lite_IsFresh(&s_display_remote_scratch.header, now_ms, APP_REMOTE_MAX_AGE_MS) == 0U) { return 0U; }
-  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) ||
-      ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_LOG) != 0U)) {
-    return 0U;
-  }
+  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) { return 0U; }
 
-  count = s_display_remote_scratch.log_count;
-  if (count > PX4LITE_REMOTE_LOG_ENTRY_MAX) { count = PX4LITE_REMOTE_LOG_ENTRY_MAX; }
+  count = s_display_remote_scratch.remote_log_count;
   if (count > capacity) { count = capacity; }
-
   for (i = 0U; i < count; i++) {
-    entries[i] = s_display_remote_scratch.log_entries[i];
+    uint16_t src_index = (uint16_t)(s_display_remote_scratch.remote_log_count - count + i);
+    entries[i] = s_display_remote_scratch.remote_log_entries[src_index];
   }
-  if (last_seq != 0) { *last_seq = s_display_remote_scratch.log_latest_seq; }
+  if (last_seq != 0) { *last_seq = s_display_remote_scratch.remote_log_latest_seq; }
   return count;
 }
 
 uint32_t App_GetRemoteMessageLogVersion(uint32_t now_ms)
 {
+  (void)now_ms;
   if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
-  if (Px4Lite_IsFresh(&s_display_remote_scratch.header, now_ms, APP_REMOTE_MAX_AGE_MS) == 0U) { return 0U; }
-  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) ||
-      ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_LOG) != 0U)) {
-    return 0U;
-  }
-  return (uint32_t)s_display_remote_scratch.log_latest_seq;
+  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) { return 0U; }
+  return ((uint32_t)s_display_remote_scratch.remote_log_latest_seq << 1U) ^ s_display_remote_scratch.log_update_ms;
 }
 
 uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms)
 {
-  uint8_t node_id;
-
-  if (Px4Lite_GetSelectedRemoteNode(&node_id) != PX4LITE_OK) { return 0U; }
-  return (Px4Lite_MavlinkSetRemoteView(enabled, node_id, now_ms) == PX4LITE_OK) ? 1U : 0U;
+  if (Px4Lite_RemoteTelemetrySetMode((enabled != 0U) ? PX4LITE_REMOTE_MODE_REMOTE : PX4LITE_REMOTE_MODE_LOCAL, now_ms) != PX4LITE_OK) { return 0U; }
+  Px4Lite_MavlinkSetTxEnabled((enabled != 0U) ? 0U : 1U);
+  return 1U;
 }
 
 uint8_t App_SelectRemoteNode(uint8_t node_id, uint32_t now_ms)
 {
-#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
-  if ((node_id == (uint8_t)PX4LITE_NODE_ID) || (node_id == (uint8_t)PX4LITE_MASTER_NODE_ID)) { return 0U; }
-#else
-  if (node_id != (uint8_t)PX4LITE_MASTER_NODE_ID) { return 0U; }
-#endif
+  if (node_id == Px4Lite_IdentityGetNodeId()) { return 0U; }
   if (Px4Lite_SelectRemoteNode(node_id) != PX4LITE_OK) { return 0U; }
   return App_SetRemoteViewEnabled(1U, now_ms);
 }
 
 uint8_t App_RemoteViewExpired(uint32_t now_ms)
 {
-  return Px4Lite_MavlinkRemoteViewExpired(now_ms);
+  (void)now_ms;
+  return 0U;
 }
 
 uint8_t App_GetSelectedRemoteNode(uint8_t *node_id)
@@ -804,11 +849,7 @@ Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t c
   if ((result != PX4LITE_OK) && (result != PX4LITE_NOT_READY)) { return result; }
 
   for (i = 0U; (i < raw_count) && (written < capacity); i++) {
-#if PX4LITE_NODE_ROLE == PX4LITE_NODE_ROLE_MASTER
-    if ((s_remote_node_status_scratch[i].node_id == (uint8_t)PX4LITE_NODE_ID) || (s_remote_node_status_scratch[i].node_id == (uint8_t)PX4LITE_MASTER_NODE_ID)) { continue; }
-#else
-    if (s_remote_node_status_scratch[i].node_id != (uint8_t)PX4LITE_MASTER_NODE_ID) { continue; }
-#endif
+    if (s_remote_node_status_scratch[i].node_id == Px4Lite_IdentityGetNodeId()) { continue; }
     out[written].node_id = s_remote_node_status_scratch[i].node_id;
     out[written].system_id = s_remote_node_status_scratch[i].system_id;
     out[written].heartbeat_type = s_remote_node_status_scratch[i].heartbeat_type;
@@ -819,8 +860,6 @@ Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t c
     out[written].rx_frame_count = s_remote_node_status_scratch[i].rx_frame_count;
     out[written].rx_sequence_lost_count = s_remote_node_status_scratch[i].rx_sequence_lost_count;
     out[written].rx_loss_rate_x10 = s_remote_node_status_scratch[i].rx_loss_rate_x10;
-    out[written].active_viewer_node_id = s_remote_node_status_scratch[i].active_viewer_node_id;
-    out[written].active_viewer_remaining_s = s_remote_node_status_scratch[i].active_viewer_remaining_s;
     out[written].reserved = 0U;
     written++;
   }

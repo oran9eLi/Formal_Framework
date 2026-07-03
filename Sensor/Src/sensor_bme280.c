@@ -272,6 +272,7 @@ Bme280_Result_t Sensor_BME280_Init(void)
     s_initialized       = 1U;
     s_next_init_ms      = 0U;
     s_read_fail_count   = 0U;
+    s_reinit_request    = 0U;
     s_measure_state     = BME280_MEASURE_IDLE;
     s_measure_start_ms  = 0U;
   }
@@ -288,14 +289,18 @@ static void Bme280_NoteReadFailure(void)
   s_snapshot.error_count++;
   s_measure_state = BME280_MEASURE_IDLE;
   if (++s_read_fail_count >= BME280_REINIT_FAIL_LIMIT) {
-    s_initialized     = 0U;
-    s_read_fail_count = 0U;
+    s_initialized      = 0U;
+    s_reinit_request   = 1U;
+    s_next_init_ms     = 0U;
+    s_read_fail_count  = 0U;
+    s_measure_start_ms = 0U;
   }
 }
 
 void Sensor_BME280_RequestReinit(void)
 {
   s_reinit_request = 1U;
+  s_next_init_ms   = 0U;
 }
 
 Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)

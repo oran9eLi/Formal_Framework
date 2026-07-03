@@ -253,23 +253,20 @@ typedef struct {
   uint32_t lora_tx_count;                                /**< LoRa 本机发送完成帧计数。 */
   uint32_t lora_rx_count;                                /**< LoRa 接收合法帧计数。 */
   uint32_t lora_lost_count;                              /**< LoRa 接收侧按 MAVLink 序号估算的丢帧数量。 */
-  uint32_t lora_ack_count;                               /**< LoRa stream/poll 控制面的真实 COMMAND_ACK 收发计数。 */
+  uint32_t lora_ack_count;                               /**< LoRa/MAVLink 真实 COMMAND_ACK 收发计数。 */
   uint16_t lora_loss_rate_x10;                           /**< LoRa 接收侧估算丢包率，单位：0.1%。 */
   uint16_t reserved2;                                    /**< 保留字段，保持结构体对齐。 */
   uint16_t alarm_active_count;                           /**< 活动告警数量。 */
   uint16_t alarm_highest_fault_code;                     /**< 告警表最高故障码。 */
   App_AlarmRecord_t alarms[APP_DISPLAY_ALARM_MAX];       /**< Display 使用的活动告警记录表。 */
-  uint8_t lora_active_viewer_node_id;                    /**< LoRa full-stream active viewer node id, 0 means none. */
-  uint16_t lora_view_remaining_s;                        /**< LoRa full-stream view countdown, s. */
-  uint8_t lora_view_preempted;                           /**< Current remote view has been taken by another node. */
 } App_DisplaySnapshot_t;
 
 /**
  * @brief App 层远端节点列表显示状态。
  *
  * @details
- * 状态来源为 Framework MAVLink RX 远端槽位表。主机通信页用该状态决定选择框灯色；
- * 从机只保留主机节点。Remote ID 接入前，`node_id` 作为临时身份显示。
+ * 状态来源为 Framework MAVLink RX 远端槽位表。通信页用该状态决定选择框灯色；
+ * `node_id` 从 DCDW-xxx 数字后缀派生，用于 LoRa/MAVLink 路由和临时身份显示。
  */
 typedef enum {
   APP_REMOTE_NODE_EMPTY = 0,                             /**< 未发现节点。 */
@@ -287,7 +284,7 @@ typedef enum {
  * `App_CopyRemoteDisplaySnapshot()` 读取，不能在页面层直接消费 Framework 远端槽位。
  */
 typedef struct {
-  uint8_t node_id;                                       /**< 远端节点 ID，主机为 0，从机从 1 递增。 */
+  uint8_t node_id;                                       /**< 远端节点 ID，由 DCDW-xxx 数字后缀派生。 */
   uint8_t system_id;                                     /**< 对应 MAVLink system id。 */
   uint8_t heartbeat_type;                                /**< HEARTBEAT type，用于调试和后续节点分类。 */
   uint8_t heartbeat_system_status;                       /**< HEARTBEAT system_status，用于调试和后续健康分类。 */
@@ -298,9 +295,6 @@ typedef struct {
   uint32_t rx_sequence_lost_count;                       /**< 当前节点按 MAVLink seq 估算的丢帧数。 */
   uint16_t rx_loss_rate_x10;                             /**< 当前节点接收侧丢包率，单位 0.1%。 */
   uint16_t reserved;                                     /**< 保留字段，保持结构体对齐。 */
-  uint8_t active_viewer_node_id;                         /**< Active full-stream viewer node id from summary. */
-  uint8_t reserved2;                                     /**< Reserved for alignment. */
-  uint16_t active_viewer_remaining_s;                    /**< Active full-stream viewer countdown, s. */
 } App_RemoteNodeView_t;
 
 /**
@@ -490,7 +484,7 @@ uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms);
 /**
  * @brief 选择一个远端节点并开启主数据查看。
  *
- * @param[in] node_id 远端节点 ID；主机只允许选择从机，从机只允许选择主机。
+ * @param[in] node_id 远端节点 ID，不能等于本机 DCDW 后缀。
  * @param[in] now_ms 当前系统毫秒时间。
  *
  * @return 1 表示选择成功，0 表示角色不允许、节点非法或命令提交失败。

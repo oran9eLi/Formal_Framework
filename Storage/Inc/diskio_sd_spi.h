@@ -19,6 +19,10 @@ typedef enum {
 } DiskioSdSpi_Error_t;
 
 uint8_t DiskioSdSpi_IsInitialized(void);
+/**
+ * @brief 清理 SPI SD diskio 内部状态，供热插拔重新挂载前调用。
+ */
+void DiskioSdSpi_Reset(void);
 uint8_t DiskioSdSpi_CardType(void);
 DiskioSdSpi_Error_t DiskioSdSpi_LastError(void);
 uint8_t DiskioSdSpi_LastCommand(void);

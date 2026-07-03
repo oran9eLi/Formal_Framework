@@ -65,6 +65,11 @@ BSP_Status_t BSP_Init(void)
   s_bsp_init_debug.failed_mask    = 0U;
   s_bsp_init_debug.result         = BSP_STATUS_OK;
 
+  /* E22 M0/M1 内部上拉，STM32 引脚悬空期间模块会按休眠模式完成上电自检；
+     必须最先拉低模式引脚，让 E22 自检结束时直接进入正常模式，避免冷启动
+     偶发滞留休眠态(AUX 恒低、初始化死等)。 */
+  BSP_LoRa_PreInit();
+
 #if BSP_ENABLE_I2C
   s_bsp_init_debug.enabled_mask |= BSP_INIT_I2C_MASK;
   result = BSP_I2C_Init();

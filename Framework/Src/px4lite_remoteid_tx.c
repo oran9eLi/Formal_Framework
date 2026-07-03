@@ -100,6 +100,27 @@ static void RemoteId_FillCharText(char *dst, uint8_t dst_len, const char *src)
 }
 
 /**
+ * @brief 将 STM32 96-bit UID 填入 OpenDroneID id_or_mac 字段。
+ */
+static void RemoteId_FillHardwareUid(void)
+{
+  uint32_t uid_words[3];
+  uint8_t i;
+  uint8_t offset;
+
+  memset(s_id_or_mac, 0, sizeof(s_id_or_mac));
+  if (Px4Lite_PlatformGetHardwareUid(uid_words, 3U) != PX4LITE_OK) { return; }
+
+  for (i = 0U; i < 3U; i++) {
+    offset = (uint8_t)(i * 4U);
+    s_id_or_mac[offset + 0U] = (uint8_t)((uid_words[i] >> 24) & 0xFFU);
+    s_id_or_mac[offset + 1U] = (uint8_t)((uid_words[i] >> 16) & 0xFFU);
+    s_id_or_mac[offset + 2U] = (uint8_t)((uid_words[i] >> 8) & 0xFFU);
+    s_id_or_mac[offset + 3U] = (uint8_t)(uid_words[i] & 0xFFU);
+  }
+}
+
+/**
  * @brief 将厘米每秒速度限幅为 OpenDroneID 水平速度字段。
  */
 static uint16_t RemoteId_HorizontalSpeedCms(const Px4Lite_VehicleNavigation_t *nav)
@@ -192,7 +213,7 @@ static void RemoteId_RecordResult(Px4Lite_Result_t result, uint32_t now_ms, cons
 static Px4Lite_Result_t RemoteId_SendHeartbeat(uint32_t now_ms)
 {
   (void)now_ms;
-  (void)mavlink_msg_heartbeat_pack_chan(PX4LITE_REMOTEID_MAVLINK_SYSTEM_ID, PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_remoteid_message, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_INVALID, 0U, 0U, MAV_STATE_ACTIVE);
+  (void)mavlink_msg_heartbeat_pack_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_remoteid_message, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_INVALID, 0U, 0U, MAV_STATE_ACTIVE);
   return RemoteId_SendPrepared();
 }
 
@@ -202,7 +223,7 @@ static Px4Lite_Result_t RemoteId_SendHeartbeat(uint32_t now_ms)
 static Px4Lite_Result_t RemoteId_SendBasicId(uint32_t now_ms)
 {
   (void)now_ms;
-  (void)mavlink_msg_open_drone_id_basic_id_pack(PX4LITE_REMOTEID_MAVLINK_SYSTEM_ID, PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_ID_TYPE_SERIAL_NUMBER, MAV_ODID_UA_TYPE_HELICOPTER_OR_MULTIROTOR, s_uas_id);
+  (void)mavlink_msg_open_drone_id_basic_id_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_ID_TYPE_SERIAL_NUMBER, MAV_ODID_UA_TYPE_HELICOPTER_OR_MULTIROTOR, s_uas_id);
   return RemoteId_SendPrepared();
 }
 
@@ -224,7 +245,7 @@ static Px4Lite_Result_t RemoteId_SendLocation(uint32_t now_ms)
   altitude_m = ((float)s_remoteid_nav.fused_altitude_mm) / 1000.0f;
   timestamp_s = (float)(s_remoteid_nav.gnss_utc_sec % 86400UL);
 
-  (void)mavlink_msg_open_drone_id_location_pack(PX4LITE_REMOTEID_MAVLINK_SYSTEM_ID, PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_STATUS_AIRBORNE, RemoteId_DirectionDeg100(&s_remoteid_nav), RemoteId_HorizontalSpeedCms(&s_remoteid_nav), RemoteId_SpeedVerticalCms(&s_remoteid_nav), s_remoteid_nav.latitude_e7, s_remoteid_nav.longitude_e7, altitude_m, altitude_m, MAV_ODID_HEIGHT_REF_OVER_TAKEOFF, 0.0f, MAV_ODID_HOR_ACC_UNKNOWN, MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_SPEED_ACC_UNKNOWN, timestamp_s, MAV_ODID_TIME_ACC_UNKNOWN);
+  (void)mavlink_msg_open_drone_id_location_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_STATUS_AIRBORNE, RemoteId_DirectionDeg100(&s_remoteid_nav), RemoteId_HorizontalSpeedCms(&s_remoteid_nav), RemoteId_SpeedVerticalCms(&s_remoteid_nav), s_remoteid_nav.latitude_e7, s_remoteid_nav.longitude_e7, altitude_m, altitude_m, MAV_ODID_HEIGHT_REF_OVER_TAKEOFF, 0.0f, MAV_ODID_HOR_ACC_UNKNOWN, MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_SPEED_ACC_UNKNOWN, timestamp_s, MAV_ODID_TIME_ACC_UNKNOWN);
 
   result = RemoteId_SendPrepared();
   if (result == PX4LITE_OK) { s_remoteid_stats.last_location_seq = s_remoteid_nav.header.sequence; }
@@ -248,7 +269,7 @@ static Px4Lite_Result_t RemoteId_SendSystem(uint32_t now_ms)
     }
   }
 
-  (void)mavlink_msg_open_drone_id_system_pack(PX4LITE_REMOTEID_MAVLINK_SYSTEM_ID, PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_OPERATOR_LOCATION_TYPE_TAKEOFF, MAV_ODID_CLASSIFICATION_TYPE_UNDECLARED, latitude, longitude, 1U, 0U, -1000.0f, -1000.0f, MAV_ODID_CATEGORY_EU_UNDECLARED, MAV_ODID_CLASS_EU_UNDECLARED, altitude_m, now_ms / 1000UL);
+  (void)mavlink_msg_open_drone_id_system_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_OPERATOR_LOCATION_TYPE_TAKEOFF, MAV_ODID_CLASSIFICATION_TYPE_UNDECLARED, latitude, longitude, 1U, 0U, -1000.0f, -1000.0f, MAV_ODID_CATEGORY_EU_UNDECLARED, MAV_ODID_CLASS_EU_UNDECLARED, altitude_m, now_ms / 1000UL);
   return RemoteId_SendPrepared();
 }
 
@@ -258,7 +279,7 @@ static Px4Lite_Result_t RemoteId_SendSystem(uint32_t now_ms)
 static Px4Lite_Result_t RemoteId_SendOperatorId(uint32_t now_ms)
 {
   (void)now_ms;
-  (void)mavlink_msg_open_drone_id_operator_id_pack(PX4LITE_REMOTEID_MAVLINK_SYSTEM_ID, PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_OPERATOR_ID_TYPE_CAA, s_operator_id);
+  (void)mavlink_msg_open_drone_id_operator_id_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_OPERATOR_ID_TYPE_CAA, s_operator_id);
   return RemoteId_SendPrepared();
 }
 
@@ -268,7 +289,7 @@ static Px4Lite_Result_t RemoteId_SendOperatorId(uint32_t now_ms)
 static Px4Lite_Result_t RemoteId_SendSelfId(uint32_t now_ms)
 {
   (void)now_ms;
-  (void)mavlink_msg_open_drone_id_self_id_pack(PX4LITE_REMOTEID_MAVLINK_SYSTEM_ID, PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_DESC_TYPE_TEXT, s_self_id);
+  (void)mavlink_msg_open_drone_id_self_id_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_DESC_TYPE_TEXT, s_self_id);
   return RemoteId_SendPrepared();
 }
 
@@ -289,7 +310,7 @@ Px4Lite_Result_t Px4Lite_RemoteIdTxInit(uint32_t now_ms)
   memset(s_remoteid_frame, 0, sizeof(s_remoteid_frame));
   memset(&s_remoteid_stats, 0, sizeof(s_remoteid_stats));
   memset(&s_remoteid_nav, 0, sizeof(s_remoteid_nav));
-  memset(s_id_or_mac, 0, sizeof(s_id_or_mac));
+  RemoteId_FillHardwareUid();
   {
     char full_id[PX4LITE_IDENTITY_FULL_ID_MAX_LEN];
     Px4Lite_IdentityFormatFullId(full_id, (uint8_t)sizeof(full_id));

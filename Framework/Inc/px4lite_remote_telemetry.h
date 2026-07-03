@@ -22,8 +22,8 @@ extern "C" {
  * @brief 显示数据源模式。
  */
 typedef enum {
-  PX4LITE_REMOTE_MODE_LOCAL = 0, /**< 本地模式，显示本机数据，不主动租约远端主数据。 */
-  PX4LITE_REMOTE_MODE_REMOTE     /**< 远程模式，显示当前选中远端节点数据并维持续租。 */
+  PX4LITE_REMOTE_MODE_LOCAL = 0, /**< 本地模式，显示本机数据。 */
+  PX4LITE_REMOTE_MODE_REMOTE     /**< 远程模式，显示当前选中远端节点数据。 */
 } Px4Lite_RemoteMode_t;
 
 /**
@@ -53,7 +53,7 @@ Px4Lite_RemoteMode_t Px4Lite_RemoteTelemetryGetMode(void);
 /**
  * @brief 复制指定远端节点快照，供 MAVLink RX 在栈外 scratch 中增量更新。
  *
- * @param[in] node_id 远端节点 ID，主机为 0，从机从 1 递增。
+ * @param[in] node_id 远端节点 ID，由 DCDW-xxx 数字后缀派生。
  * @param[out] out 输出快照，不能为 NULL。
  *
  * @return 复制结果；节点尚无数据时返回 PX4LITE_NOT_READY 并清零输出。
@@ -63,7 +63,7 @@ Px4Lite_Result_t Px4Lite_RemoteTelemetryCopyNode(uint8_t node_id, Px4Lite_Remote
 /**
  * @brief 提交指定远端节点快照。
  *
- * @param[in] node_id 远端节点 ID，主机为 0，从机从 1 递增。
+ * @param[in] node_id 远端节点 ID，由 DCDW-xxx 数字后缀派生。
  * @param[in] snapshot 已解码的远端快照，不能为 NULL。
  * @param[in] now_ms 当前系统时间，单位：ms。
  *

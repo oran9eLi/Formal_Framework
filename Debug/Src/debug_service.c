@@ -14,6 +14,9 @@
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
 #include "px4lite_topics.h"
+#if DEBUG_IMU_MONITOR_ENABLE
+#include "sensor_mpu6050.h"
+#endif
 #include "task.h"
 
 #if DEBUG_PERIODIC_SERVICE_ENABLE
@@ -54,6 +57,7 @@ static void DebugService_ReportImu(uint32_t now_ms)
 {
   App_NavigationSnapshot_t nav;
   Px4Lite_ModuleStatus_t status;
+  Mpu6050_Status_t driver_status;
   Px4Lite_Result_t status_rc;
   Px4Lite_Result_t nav_rc;
   uint32_t report_ms;
@@ -64,6 +68,7 @@ static void DebugService_ReportImu(uint32_t now_ms)
 
   /* Debug 特例：Framework 状态用于诊断模块健康，App 快照用于查看业务可见姿态。 */
   status_rc = Px4Lite_GetModuleStatus(PX4LITE_MODULE_IMU, &status);
+  (void)Sensor_MPU6050_GetStatus(&driver_status);
   report_ms = Px4Lite_PlatformGetMs();
   nav_rc    = App_CopyNavigation(&nav, report_ms);
 
@@ -71,14 +76,20 @@ static void DebugService_ReportImu(uint32_t now_ms)
     imu_age_ms = Px4Lite_ElapsedMs(report_ms, status.last_rx_ms);
     imu_fresh  = ((status.state == PX4LITE_STATE_ONLINE) && (imu_age_ms <= PX4LITE_IMU_MAX_AGE_MS)) ? 1U : 0U;
     if ((nav_rc == PX4LITE_OK) && ((nav.valid_mask & PX4LITE_NAV_VALID_ATTITUDE) != 0U)) {
-      DBG_PRINT("IMU: state=%u err=%lu age=%lu fresh=%u "
+      DBG_PRINT("IMU: state=%u err=%lu age=%lu fresh=%u drv_stage=%u drv_rc=%u reinit=%lu chip=0x%02X bsp=%u "
                 "roll_cdeg=%ld pitch_cdeg=%ld yaw_cdeg=%ld "
                 "rate_cdps=%ld,%ld,%ld",
-                (unsigned int)status.state, (unsigned long)status.error_count, (unsigned long)imu_age_ms, (unsigned int)imu_fresh, (long)nav.roll_deg100, (long)nav.pitch_deg100, (long)nav.yaw_deg100, (long)nav.roll_rate_dps100, (long)nav.pitch_rate_dps100, (long)nav.yaw_rate_dps100);
+                (unsigned int)status.state, (unsigned long)status.error_count, (unsigned long)imu_age_ms, (unsigned int)imu_fresh,
+                (unsigned int)driver_status.last_stage, (unsigned int)driver_status.last_result, (unsigned long)driver_status.reinit_count,
+                (unsigned int)driver_status.last_chip_id, (unsigned int)driver_status.last_bsp_status,
+                (long)nav.roll_deg100, (long)nav.pitch_deg100, (long)nav.yaw_deg100, (long)nav.roll_rate_dps100, (long)nav.pitch_rate_dps100, (long)nav.yaw_rate_dps100);
     } else {
-      DBG_PRINT("IMU: state=%u fault=%u err=%lu age=%lu fresh=%u "
+      DBG_PRINT("IMU: state=%u fault=%u err=%lu age=%lu fresh=%u drv_stage=%u drv_rc=%u reinit=%lu chip=0x%02X bsp=%u "
                 "no valid attitude rc=%d mask=0x%08lX",
-                (unsigned int)status.state, (unsigned int)status.fault_code, (unsigned long)status.error_count, (unsigned long)imu_age_ms, (unsigned int)imu_fresh, (int)nav_rc, (nav_rc == PX4LITE_OK) ? (unsigned long)nav.valid_mask : 0UL);
+                (unsigned int)status.state, (unsigned int)status.fault_code, (unsigned long)status.error_count, (unsigned long)imu_age_ms, (unsigned int)imu_fresh,
+                (unsigned int)driver_status.last_stage, (unsigned int)driver_status.last_result, (unsigned long)driver_status.reinit_count,
+                (unsigned int)driver_status.last_chip_id, (unsigned int)driver_status.last_bsp_status,
+                (int)nav_rc, (nav_rc == PX4LITE_OK) ? (unsigned long)nav.valid_mask : 0UL);
     }
   } else {
     DBG_PRINT("IMU: framework status unavailable rc=%d", (int)status_rc);

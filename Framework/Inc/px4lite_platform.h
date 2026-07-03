@@ -48,6 +48,20 @@ uint32_t Px4Lite_PlatformGetMs(void);
 uint32_t Px4Lite_PlatformGetUs(void);
 
 /**
+ * @brief 读取 STM32 硬件唯一 ID。
+ *
+ * @param[out] uid_words 输出 3 个 32 位 UID word，不能为 NULL。
+ * @param[in] word_capacity 输出缓冲区 word 容量，必须大于等于 3。
+ *
+ * @return 读取结果。
+ * @retval PX4LITE_OK 读取成功。
+ * @retval PX4LITE_INVALID_PARAM 参数非法。
+ *
+ * @note UID 是硬件唯一身份，供 5G 云端绑定、RemoteID id_or_mac 和重复 DCDW 编号检测使用。
+ */
+Px4Lite_Result_t Px4Lite_PlatformGetHardwareUid(uint32_t *uid_words, uint8_t word_capacity);
+
+/**
  * @brief 记录一个必需任务最近一次成功执行时间。
  *
  * @param[in] id 心跳编号，必须小于 `PX4LITE_HEARTBEAT_COUNT`。
@@ -257,6 +271,12 @@ Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms);
  * 调用方在返回 OK 后可以立即复用自己的输入缓冲区。
  */
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief 查询 LoRa 发送通道当前是否空闲，可以立即提交下一帧。
+ * @return 1 表示空闲，0 表示上一帧仍在发送中。
+ */
+uint8_t Px4Lite_LoRaIsTxIdle(void);
 
 /**
  * @brief 初始化 ESP32-S3 RemoteID UART4 发送通道。

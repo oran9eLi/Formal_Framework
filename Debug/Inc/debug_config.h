@@ -24,7 +24,7 @@
 #define DEBUG_GNSS_BSP_MONITOR_ENABLE 0U
 
 /* Reserved independent module switches. */
-#define DEBUG_IMU_MONITOR_ENABLE       0U
+#define DEBUG_IMU_MONITOR_ENABLE       1U
 #define DEBUG_BARO_MONITOR_ENABLE      0U
 #define DEBUG_POWER_MONITOR_ENABLE     0U
 #define DEBUG_LORA_MONITOR_ENABLE      0U

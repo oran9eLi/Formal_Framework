@@ -26,6 +26,9 @@
 static volatile uint8_t s_remount_request;
 static uint32_t s_last_data_ms;
 static uint32_t s_last_sync_ms;
+static uint32_t s_status_fault_until_ms;
+static uint32_t s_status_ready_since_ms;
+static uint16_t s_status_fault_code;
 static Storage_Record_t s_work_record;
 static Storage_Record_t s_pop_record;
 
@@ -40,6 +43,33 @@ static int32_t Storage_RoundFloatToI32(float value)
 {
   if (value >= 0.0f) { return (int32_t)(value + 0.5f); }
   return (int32_t)(value - 0.5f);
+}
+
+/**
+ * @brief 判断当前时间是否仍在 SD 状态保持窗口内。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ * @param[in] deadline_ms 保持窗口截止时间，0 表示没有保持窗口。
+ *
+ * @return 1 表示仍在保持窗口内，0 表示已经过期。
+ */
+static uint8_t Storage_TimeBefore(uint32_t now_ms, uint32_t deadline_ms)
+{
+  if (deadline_ms == 0U) { return 0U; }
+  return ((int32_t)(now_ms - deadline_ms) < 0) ? 1U : 0U;
+}
+
+/**
+ * @brief 记录一次 SD 存储故障，并让公开状态至少保持一段降级时间。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ * @param[in] fault_code 公开故障码。
+ */
+static void Storage_RecordStatusFault(uint32_t now_ms, uint16_t fault_code)
+{
+  s_status_fault_until_ms = now_ms + STORAGE_STATUS_FAULT_HOLD_MS;
+  s_status_ready_since_ms = 0U;
+  s_status_fault_code     = fault_code;
 }
 
 /**
@@ -113,7 +143,10 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     return;
   }
 
-  if (StorageQueue_Push(&s_work_record) != PX4LITE_OK) { Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_FULL, StorageQueue_DropCount(), "storage_queue_full"); }
+  if (StorageQueue_Push(&s_work_record) != PX4LITE_OK) {
+    Storage_RecordStatusFault(now_ms, PX4LITE_FAULT_STORAGE_FULL);
+    Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_FULL, StorageQueue_DropCount(), "storage_queue_full");
+  }
 }
 
 /**
@@ -129,7 +162,10 @@ static void Storage_ConsumeOne(uint32_t now_ms)
   if (StorageQueue_Pop(&s_pop_record) != PX4LITE_OK) { return; }
 
   result = (s_pop_record.type == STORAGE_RECORD_ERROR) ? Storage_SD_WriteErrorLine(s_pop_record.line, now_ms) : Storage_SD_WriteDataLine(s_pop_record.line, now_ms);
-  if (result != PX4LITE_OK) { Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_WRITE, (uint32_t)result, "sd_write_failed"); }
+  if (result != PX4LITE_OK) {
+    Storage_RecordStatusFault(now_ms, PX4LITE_FAULT_STORAGE_WRITE);
+    Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_WRITE, (uint32_t)result, "sd_write_failed");
+  }
 }
 
 /**
@@ -140,8 +176,26 @@ static void Storage_ConsumeOne(uint32_t now_ms)
 static void Storage_PublishState(uint32_t now_ms)
 {
   if (Storage_SD_IsReady() != 0U) {
+    if (Storage_TimeBefore(now_ms, s_status_fault_until_ms) != 0U) {
+      Px4Lite_SetExternalModuleState(PX4LITE_MODULE_STORAGE, PX4LITE_STATE_DEGRADED, s_status_fault_code, now_ms);
+      return;
+    }
+
+    if (s_status_ready_since_ms == 0U) {
+      s_status_ready_since_ms = now_ms;
+      Px4Lite_SetExternalModuleState(PX4LITE_MODULE_STORAGE, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_NOT_READY, now_ms);
+      return;
+    }
+
+    if ((uint32_t)(now_ms - s_status_ready_since_ms) < STORAGE_STATUS_RECOVERY_STABLE_MS) {
+      Px4Lite_SetExternalModuleState(PX4LITE_MODULE_STORAGE, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_NOT_READY, now_ms);
+      return;
+    }
+
+    s_status_fault_code = PX4LITE_FAULT_NONE;
     Px4Lite_SetExternalModuleState(PX4LITE_MODULE_STORAGE, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   } else {
+    s_status_ready_since_ms = 0U;
     Px4Lite_SetExternalModuleState(PX4LITE_MODULE_STORAGE, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_NOT_READY, now_ms);
   }
 }
@@ -151,6 +205,9 @@ Px4Lite_Result_t Px4Lite_StorageModuleInit(void)
   s_remount_request = 0U;
   s_last_data_ms    = 0U;
   s_last_sync_ms    = 0U;
+  s_status_fault_until_ms = 0U;
+  s_status_ready_since_ms = 0U;
+  s_status_fault_code     = PX4LITE_FAULT_NONE;
   StorageQueue_Init();
   Storage_SD_Init();
   return PX4LITE_OK;
@@ -180,7 +237,10 @@ void Px4Lite_StorageWorkRun(uint32_t now_ms)
   Storage_ConsumeOne(now_ms);
 
   if ((s_last_sync_ms == 0U) || ((uint32_t)(now_ms - s_last_sync_ms) >= STORAGE_SYNC_PERIOD_MS)) {
-    if (Storage_SD_Sync(now_ms) == PX4LITE_IO_ERROR) { Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_WRITE, 0U, "sd_sync_failed"); }
+    if (Storage_SD_Sync(now_ms) == PX4LITE_IO_ERROR) {
+      Storage_RecordStatusFault(now_ms, PX4LITE_FAULT_STORAGE_WRITE);
+      Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_WRITE, 0U, "sd_sync_failed");
+    }
     s_last_sync_ms = now_ms;
   }
 

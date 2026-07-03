@@ -14,17 +14,11 @@
 #include <stdint.h>
 #include "px4lite_local_msglog.h"
 
-#ifndef PX4LITE_REMOTE_LOG_ENTRY_MAX
-#define PX4LITE_REMOTE_LOG_ENTRY_MAX 5U
-#endif
-
 #define PX4LITE_COMM_RX_PAYLOAD_MAX 255U /**< 通信接收帧 payload 最大长度，单位：byte。 */
 
 /**
  * @brief Framework 通用返回值。
  */
-#define PX4LITE_REMOTE_VALID_LORA_SUMMARY (1UL << 9) /**< LoRa view lease summary is available. */
-
 typedef enum {
   PX4LITE_OK = 0,        /**< 操作成功。 */
   PX4LITE_IDLE,          /**< 当前无待处理工作。 */
@@ -391,10 +385,8 @@ typedef struct {
 #define PX4LITE_REMOTE_VALID_ENVIRONMENT (1UL << 4) /**< 已收到远端环境数据。 */
 #define PX4LITE_REMOTE_VALID_BATTERY     (1UL << 5) /**< 已收到远端电源数据。 */
 #define PX4LITE_REMOTE_VALID_ALARM       (1UL << 6) /**< 已收到远端告警数据。 */
-#define PX4LITE_REMOTE_VALID_LOG         (1UL << 7) /**< 已收到远端消息日志序号或增量。 */
-#define PX4LITE_REMOTE_VALID_MOTOR       (1UL << 8) /**< 已收到远端电机输出数据。 */
-
-#define PX4LITE_REMOTE_ALARM_RECORD_MAX 5U /**< 远端告警表缓存容量，限制静态 RAM 占用并匹配当前显示行数。 */
+#define PX4LITE_REMOTE_VALID_MOTOR       (1UL << 7) /**< 已收到远端电机目标油门数据。 */
+#define PX4LITE_REMOTE_VALID_LOG         (1UL << 8) /**< 已收到远端消息日志数据。 */
 
 typedef enum {
   PX4LITE_REMOTE_NODE_EMPTY = 0,
@@ -415,8 +407,6 @@ typedef struct {
   uint32_t rx_sequence_lost_count;
   uint16_t rx_loss_rate_x10;
   uint8_t heartbeat_system_status;
-  uint8_t active_viewer_node_id;
-  uint16_t active_viewer_remaining_s;
 } Px4Lite_RemoteNodeStatus_t;
 
 /**
@@ -437,8 +427,8 @@ typedef struct {
   uint32_t battery_update_ms;                         /**< 最近收到电源数据的时间，单位：ms。 */
   uint32_t modules_update_ms;                         /**< 最近收到模块状态数据的时间，单位：ms。 */
   uint32_t alarm_update_ms;                           /**< 最近收到告警数据的时间，单位：ms。 */
-  uint32_t log_update_ms;                             /**< 最近收到消息日志序号或增量的时间，单位：ms。 */
-  uint32_t motor_update_ms;                           /**< 最近收到电机输出数据的时间，单位：ms。 */
+  uint32_t motor_update_ms;                           /**< 最近收到电机目标油门数据的时间，单位：ms。 */
+  uint32_t log_update_ms;                             /**< 最近收到消息日志数据的时间，单位：ms。 */
   uint32_t last_msg_id;                               /**< 最近解码的 MAVLink message id。 */
   uint32_t rx_frame_count;                            /**< 已接收合法 MAVLink 帧计数。 */
   uint32_t decoded_frame_count;                       /**< 已成功映射到远端快照的帧计数。 */
@@ -486,22 +476,14 @@ typedef struct {
   uint8_t battery2_percent;                           /**< 第二电池电量百分比，范围 0 到 100。 */
   uint8_t low_voltage;                                /**< 主电池低电压标志，1 表示低电压。 */
   uint8_t low_voltage2;                               /**< 第二电池低电压标志，1 表示低电压。 */
-  uint8_t alarm_record_count;                         /**< 已缓存远端告警记录数量。 */
-  uint8_t alarm_table_version;                        /**< 远端告警表版本号。 */
-  uint16_t log_latest_seq;                            /**< 远端消息日志最新序号，0 表示未知。 */
-  uint8_t log_count;                                  /**< 本次接收到的远端日志条数。 */
-  uint8_t motor_run_state;                            /**< 远端电机运行状态，1 表示允许输出。 */
-  uint8_t motor_speed_level;                          /**< 远端电机目标油门最大值，范围 0 到 100。 */
-  uint8_t reserved_remote2;                           /**< 保留字段，保持结构体对齐。 */
-  uint8_t motor_duty_percent[PX4LITE_MOTOR_COUNT];    /**< 远端每路电机目标油门百分比，范围 0 到 100。 */
-  Px4Lite_AlarmRecord_t alarm_records[PX4LITE_REMOTE_ALARM_RECORD_MAX]; /**< 远端活动告警表缓存。 */
+  uint8_t motor_duty_percent[PX4LITE_MOTOR_COUNT];    /**< 远端四路目标油门百分比。 */
+  uint8_t motor_run_state;                            /**< 远端电机运行状态，1 表示允许输出目标油门。 */
+  uint8_t motor_speed_level;                          /**< 远端四路目标油门最大值，范围 0 到 100。 */
+  uint8_t remote_log_count;                           /**< 远端消息日志缓存条目数量。 */
+  uint16_t remote_log_latest_seq;                     /**< 远端消息日志最新序号。 */
+  Px4Lite_LogEntry_t remote_log_entries[PX4LITE_LOCAL_LOG_CAP]; /**< 远端消息日志固定环形显示缓存。 */
   uint8_t system_id;                                  /**< 远端 MAVLink system id。 */
   uint8_t component_id;                               /**< 远端 MAVLink component id。 */
-  Px4Lite_LogEntry_t log_entries[PX4LITE_REMOTE_LOG_ENTRY_MAX]; /**< 远端结构化消息日志缓存，旧到新排列。 */
-  uint32_t lora_summary_update_ms;                    /**< Last LoRa view lease summary time, ms. */
-  uint8_t lora_active_viewer_node_id;                 /**< Active full-stream viewer node id, 0 means none. */
-  uint8_t lora_view_lease_id;                         /**< LoRa view lease sequence. */
-  uint16_t lora_view_remaining_s;                     /**< Active full-stream lease remaining time, s. */
 } Px4Lite_RemoteTelemetry_t;
 
 /**

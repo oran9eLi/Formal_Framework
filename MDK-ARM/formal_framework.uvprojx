@@ -489,11 +489,6 @@
               <FilePath>..\Framework\Src\px4lite_platform_f407.c</FilePath>
             </File>
             <File>
-              <FileName>px4lite_remote_tunnel.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Framework\Src\px4lite_remote_tunnel.c</FilePath>
-            </File>
-            <File>
               <FileName>px4lite_remote_telemetry.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_remote_telemetry.c</FilePath>

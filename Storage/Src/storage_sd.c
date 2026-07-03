@@ -150,6 +150,25 @@ static void Storage_SD_CloseFiles(void)
   Storage_SD_SetFilesOpen(0U);
 }
 
+/**
+ * @brief 清理 FatFS 和 diskio 旧状态，为下一次挂载尝试做准备。
+ *
+ * @note 热插拔或启动无卡失败后，FatFS 与 diskio 可能保留旧文件句柄、挂载态
+ *       或初始化失败态。每次重新挂载前先统一清理，避免插卡后仍卡在旧红灯。
+ */
+static void Storage_SD_PrepareMountAttempt(void)
+{
+  Storage_SD_CloseFiles();
+  (void)f_mount(0, "0:", 0U);
+  DiskioSdSpi_Reset();
+  memset(&s_fatfs, 0, sizeof(s_fatfs));
+  memset(&s_data_file, 0, sizeof(s_data_file));
+  memset(&s_error_file, 0, sizeof(s_error_file));
+  Storage_SD_SetMounted(0U);
+  Storage_SD_SetFilesOpen(0U);
+  Storage_SD_SetLastSyncOk(0U);
+}
+
 static Px4Lite_Result_t Storage_SD_WriteRaw(FIL *file, const char *line)
 {
   UINT written = 0U;
@@ -209,6 +228,7 @@ static Px4Lite_Result_t Storage_SD_OpenFiles(void)
 
 void Storage_SD_Init(void)
 {
+  Storage_SD_PrepareMountAttempt();
   memset(&s_fatfs, 0, sizeof(s_fatfs));
   memset(&s_data_file, 0, sizeof(s_data_file));
   memset(&s_error_file, 0, sizeof(s_error_file));
@@ -224,6 +244,7 @@ void Storage_SD_Service(uint32_t now_ms)
   Storage_SD_CopyStatus(&status);
   if ((status.state == PX4LITE_STATE_ONLINE) || ((status.last_attempt_ms != 0U) && ((uint32_t)(now_ms - status.last_attempt_ms) < STORAGE_MOUNT_RETRY_MS))) { return; }
 
+  Storage_SD_PrepareMountAttempt();
   Storage_SD_SetState(PX4LITE_STATE_STARTING, now_ms);
   result = f_mount(&s_fatfs, "0:", 1U);
   Storage_SD_UpdateDiskDiag(result);

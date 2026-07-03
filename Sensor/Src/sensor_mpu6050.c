@@ -124,6 +124,20 @@ static uint8_t Mpu6050_IsOutOfRange(const int16_t accel_raw[3], const int16_t gy
   return 0U;
 }
 
+/**
+ * @brief 判断当前采样失败是否应计入自动重初始化门限。
+ *
+ * 连续读失败、全零帧、超范围帧和尖峰帧都说明当前采样链路不可用。
+ * 达到门限后由 sensor task 在下一轮执行 I2C 恢复和 MPU6050 重新初始化。
+ */
+static uint8_t Mpu6050_ShouldCountForReinit(Mpu6050_Stage_t stage)
+{
+  return ((stage == MPU6050_STAGE_DATA_READ) ||
+          (stage == MPU6050_STAGE_ZERO_FRAME) ||
+          (stage == MPU6050_STAGE_RANGE_REJECT) ||
+          (stage == MPU6050_STAGE_SPIKE_REJECT)) ? 1U : 0U;
+}
+
 static void Mpu6050_ClearSnapshotPreserveErrors(void)
 {
   uint32_t primask;
@@ -149,8 +163,7 @@ static void Mpu6050_NoteSampleFailure(uint32_t now_ms, Mpu6050_Stage_t stage, Mp
   s_accept_next_sample = 1U;
 #endif
 
-  if (stage == MPU6050_STAGE_DATA_READ) {
-
+  if (Mpu6050_ShouldCountForReinit(stage) != 0U) {
     if (s_read_fail_count < 255U) { s_read_fail_count++; }
     if (s_read_fail_count >= MPU6050_REINIT_FAIL_LIMIT) {
       s_initialized    = 0U;
@@ -180,6 +193,8 @@ static Mpu6050_Result_t Mpu6050_TryReinit(uint32_t now_ms)
     s_next_init_ms   = now_ms + Mpu6050_InitRetryDelayMs();
   } else {
     s_init_fail_count = 0U;
+    s_next_init_ms    = 0U;
+    s_reinit_request  = 0U;
   }
   return result;
 }
@@ -272,6 +287,7 @@ Mpu6050_Result_t Sensor_MPU6050_Init(void)
 
   s_initialized     = 1U;
   s_next_init_ms    = 0U;
+  s_reinit_request  = 0U;
   s_init_fail_count = 0U;
   s_last_stage      = MPU6050_STAGE_NONE;
   s_last_result     = MPU6050_RESULT_OK;

@@ -855,6 +855,7 @@ static void Display_LvglLocalRemoteEventCb(lv_event_t *event)
   } else if (Display_GetDataSource() == DISPLAY_DATA_SOURCE_REMOTE) {
     Display_LvglRequestLocalView(s_current_lvgl_page, 1U);
   } else {
+    (void)App_SetRemoteViewEnabled(1U, s_last_tick_ms);
     s_page_before_hidden = s_current_lvgl_page;
     s_requested_page     = DISPLAY_HMI_PAGE_HIDDEN;
     s_page_change_requested = 1U;
@@ -1631,18 +1632,11 @@ static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
         dot_color = lv_palette_main(LV_PALETTE_AMBER);
       }
 
-      if (s_remote_node_views[i].active_viewer_node_id != 0U) {
-        (void)snprintf(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), "DCDW-%03u  View %03u  %us",
-                       (unsigned int)s_remote_node_views[i].node_id,
-                       (unsigned int)s_remote_node_views[i].active_viewer_node_id,
-                       (unsigned int)s_remote_node_views[i].active_viewer_remaining_s);
-      } else {
-        (void)snprintf(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), "DCDW-%03u  RX %lu  Loss %u.%u%%",
-                       (unsigned int)s_remote_node_views[i].node_id,
-                       (unsigned long)s_remote_node_views[i].rx_frame_count,
-                       (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 / 10U),
-                       (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 % 10U));
-      }
+      (void)snprintf(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), "DCDW-%03u  RX %lu  Loss %u.%u%%",
+                     (unsigned int)s_remote_node_views[i].node_id,
+                     (unsigned long)s_remote_node_views[i].rx_frame_count,
+                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 / 10U),
+                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 % 10U));
       btn = lv_obj_create(list);
       lv_obj_set_size(btn, 300, 30);
       lv_obj_set_pos(btn, 0, (lv_coord_t)(i * 36U));

@@ -26,6 +26,8 @@ static volatile uint16_t s_rx_head;
 static volatile uint16_t s_rx_tail;
 static volatile uint32_t s_rx_overflow_count;
 static volatile uint8_t s_rx_recover_request;
+static volatile uint32_t s_uart_error_count;
+static volatile uint32_t s_uart_last_error_sr;
 
 static uint8_t s_tx_buf[BSP_LORA_TX_BUF_SIZE];
 static volatile uint8_t s_tx_busy;
@@ -60,11 +62,18 @@ static void BSP_LoRa_UpdateRxPosition(void)
  */
 int32_t BSP_LoRa_Init(void)
 {
-  GPIO_InitTypeDef gpio;
-
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_USART3_CLK_ENABLE();
   __HAL_RCC_DMA1_CLK_ENABLE();
+
+  if (s_lora_uart.Instance == BSP_LORA_UART) {
+    (void)HAL_UART_AbortReceive(&s_lora_uart);
+    (void)HAL_UART_AbortTransmit(&s_lora_uart);
+    (void)HAL_UART_DMAStop(&s_lora_uart);
+  }
+  if (hdma_lora_rx.Instance != (DMA_Stream_TypeDef *)0) { (void)HAL_DMA_DeInit(&hdma_lora_rx); }
+  if (hdma_lora_tx.Instance != (DMA_Stream_TypeDef *)0) { (void)HAL_DMA_DeInit(&hdma_lora_tx); }
+  s_tx_busy = 0U;
 
   /* HAL_UART_MspInit(UART3) 负责 PB10/PB11 AF7、DMA、NVIC；本函数只填写运行期参数。 */
 
@@ -96,8 +105,12 @@ int32_t BSP_LoRa_Init(void)
   s_rx_tail           = 0U;
   s_rx_overflow_count = 0U;
   s_rx_recover_request = 0U;
+  s_uart_error_count   = 0U;
+  s_uart_last_error_sr = 0U;
 
   if (HAL_UART_Receive_DMA(&s_lora_uart, s_rx_buf, BSP_LORA_RX_BUF_SIZE) != HAL_OK) { return -1; }
+  __HAL_DMA_DISABLE_IT(&hdma_lora_rx, DMA_IT_HT);
+  __HAL_UART_ENABLE_IT(&s_lora_uart, UART_IT_ERR);
   __HAL_UART_ENABLE_IT(&s_lora_uart, UART_IT_IDLE);
 
   /* USART3 TX DMA 为单次 memory-to-peripheral，按需启动，不能使用 circular 模式。 */
@@ -115,8 +128,31 @@ int32_t BSP_LoRa_Init(void)
   __HAL_LINKDMA(&s_lora_uart, hdmatx, hdma_lora_tx);
   s_tx_busy = 0U;
 
+  BSP_LoRa_PreInit();
+
+  return 0;
+}
+
+/**
+ * @brief 尽早配置 E22 模式/AUX 引脚并驱动到正常模式。
+ *
+ * @details
+ * E22 的 M0/M1 内部上拉：STM32 复位后引脚悬空期间模块读到 M0=M1=1，
+ * 会以休眠/配置模式完成自身上电自检。若等到很晚的模块初始化阶段才拉低，
+ * 模块需要再做一次模式切换，且该切换若落在自检窗口内可能被错过，导致
+ * AUX 永远为低、本机初始化死等——表现为"断电冷启动偶发不通，复位就好"。
+ * 本函数只做 GPIO 配置和电平输出，无任何阻塞，必须在 BSP_Init 最先调用。
+ */
+void BSP_LoRa_PreInit(void)
+{
+  GPIO_InitTypeDef gpio;
+
   /* E22 模式引脚：M0=PF1，M1=PF2。 */
   __HAL_RCC_GPIOF_CLK_ENABLE();
+
+  /* 先写 ODR 再配输出方向，保证引脚一变为输出立即是低电平(正常模式)。 */
+  HAL_GPIO_WritePin(BSP_LORA_M0_PORT, BSP_LORA_M0_PIN, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(BSP_LORA_M1_PORT, BSP_LORA_M1_PIN, GPIO_PIN_RESET);
 
   gpio.Mode  = GPIO_MODE_OUTPUT_PP;
   gpio.Pull  = GPIO_NOPULL;
@@ -133,8 +169,6 @@ int32_t BSP_LoRa_Init(void)
   gpio.Pull = GPIO_PULLDOWN;
   gpio.Pin  = BSP_LORA_AUX_PIN;
   HAL_GPIO_Init(BSP_LORA_AUX_PORT, &gpio);
-
-  return 0;
 }
 
 /**
@@ -296,6 +330,32 @@ void BSP_LoRa_RxIdleCallback(uint16_t dummy)
 }
 
 /**
+ * @brief 在 USART3 错误中断内清除错误并请求 comm 任务恢复 RX DMA。
+ *
+ * @param[in] sr_snapshot 进入中断时采样的 USART3 SR。
+ *
+ * @note 热插拔或外部供电地弹可能造成 FE/NE/ORE 连续触发。ISR 只清标志并暂时关闭
+ *       LoRa UART 错误/IDLE 中断，避免中断风暴；真正 DMAStop/Receive_DMA 在 comm task 中执行。
+ */
+void BSP_LoRa_UartErrorIrqHandler(uint32_t sr_snapshot)
+{
+  volatile uint32_t tmp;
+
+  s_uart_error_count++;
+  s_uart_last_error_sr = sr_snapshot;
+  s_rx_recover_request = 1U;
+
+  __HAL_UART_DISABLE_IT(&s_lora_uart, UART_IT_ERR);
+  __HAL_UART_DISABLE_IT(&s_lora_uart, UART_IT_IDLE);
+
+  tmp = s_lora_uart.Instance->SR;
+  tmp = s_lora_uart.Instance->DR;
+  (void)tmp;
+
+  s_lora_uart.ErrorCode = HAL_UART_ERROR_NONE;
+}
+
+/**
  * @brief 处理 LoRa RX DMA 中断。
  */
 void BSP_LoRa_DmaIrqHandler(void)
@@ -331,6 +391,9 @@ uint8_t BSP_LoRa_ConsumeRecoverRxRequest(void)
 
 /**
  * @brief Recover the LoRa UART and RX DMA receive path in comm service context.
+ * @note 只允许在 comm 任务上下文调用，禁止在 ISR 内调用：内部 HAL_DMA_Abort
+ *       依赖 HAL_GetTick 做超时，tick 中断优先级低于 USART3/DMA ISR，在 ISR
+ *       内调用时 tick 冻结，超时永不触发，DMA 异常时会把整机锁死到断电。
  */
 void BSP_LoRa_RecoverRx(void)
 {
@@ -344,12 +407,16 @@ void BSP_LoRa_RecoverRx(void)
 
   s_lora_uart.ErrorCode = HAL_UART_ERROR_NONE;
 
-  (void)HAL_UART_DMAStop(&s_lora_uart);
+  /* 只中止接收方向；HAL_UART_DMAStop 会连带中止正在发送的 TX DMA，
+     使 s_tx_busy 只能等 TxStep 超时兜底，每次 RX 错误都白丢一帧。 */
+  (void)HAL_UART_AbortReceive(&s_lora_uart);
 
   s_rx_head = 0U;
   s_rx_tail = 0U;
   s_rx_recover_request = 0U;
 
   (void)HAL_UART_Receive_DMA(&s_lora_uart, s_rx_buf, BSP_LORA_RX_BUF_SIZE);
+  __HAL_DMA_DISABLE_IT(&hdma_lora_rx, DMA_IT_HT);
+  __HAL_UART_ENABLE_IT(&s_lora_uart, UART_IT_ERR);
   __HAL_UART_ENABLE_IT(&s_lora_uart, UART_IT_IDLE);
 }

@@ -54,6 +54,8 @@ static uint32_t s_last_aux_ready_ms;
 static uint32_t s_init_wait_start_ms;
 static uint32_t s_parse_last_byte_ms;
 static uint8_t s_initialized;
+static uint8_t s_local_failed;
+static uint8_t s_bsp_reinit_needed;
 static volatile uint8_t s_reinit_request;
 static uint8_t s_rx_sequence_seen[LORA_E22_MAVLINK_SYSID_MAX];
 static uint8_t s_rx_sequence_last[LORA_E22_MAVLINK_SYSID_MAX];
@@ -61,8 +63,8 @@ static uint8_t s_rx_sequence_last[LORA_E22_MAVLINK_SYSID_MAX];
 /* Non-blocking transmit state machine, advanced from Lora_E22_Service().
    The comm task never blocks on the air interface: a frame is staged here,
    the machine waits (without spinning) for AUX to go idle, starts a USART3
-   TX DMA, then waits for AUX to return idle before counting local TX done.
-   TX completion is local evidence only; peer online is proven by RX. */
+   TX DMA, then counts local TX done when the UART DMA transfer completes.
+   Peer link online is still proven by RX. */
 #define LORA_E22_BITS_PER_BYTE          10U
 #define LORA_E22_TIMEOUT_MIN_MS         20U
 #define LORA_E22_AIR_TIMEOUT_MARGIN_MS  200U
@@ -71,12 +73,16 @@ static uint8_t s_rx_sequence_last[LORA_E22_MAVLINK_SYSID_MAX];
 #define LORA_E22_LOSS_MIN_EXPECTED      32U
 #define LORA_E22_INIT_AUX_TIMEOUT_MS    500U
 #define LORA_E22_PARSE_IDLE_RESET_MS    200U
+#define LORA_E22_SEQUENCE_JUMP_MAX      64U
+/* 本机发射占空上限，与 px4lite_config.h 的 PX4LITE_LORA_TX_DUTY_LIMIT_PCT 预算一致。
+   连续满占空发射会让 E22 持续大电流+发热，诱发模块内部死锁(只能断电恢复)，
+   同时半双工链路也需要给对端和本机接收留出空口窗口。 */
+#define LORA_E22_TX_DUTY_LIMIT_PCT      40U
 
 typedef enum {
   LORA_TX_IDLE = 0,
   LORA_TX_WAIT_AUX,
-  LORA_TX_SENDING,
-  LORA_TX_WAIT_AIR_DONE
+  LORA_TX_SENDING
 } Lora_TxState_t;
 
 static Lora_TxState_t s_tx_state;
@@ -85,6 +91,8 @@ static Lora_TxState_t s_tx_state;
 static uint8_t s_tx_pending[LORA_E22_TX_BUF_SIZE];
 static uint16_t s_tx_pending_len;
 static uint32_t s_tx_state_ms;
+/* 上一帧发完后强制静默到该时刻，保证发射占空 <= LORA_E22_TX_DUTY_LIMIT_PCT。 */
+static uint32_t s_tx_gap_until_ms;
 
 static uint32_t Lora_E22_SaturatedAddU32(uint32_t a, uint32_t b);
 static uint16_t Lora_E22_CalcLossRateX10(uint32_t lost_count, uint32_t expected_count);
@@ -92,9 +100,9 @@ static uint32_t Lora_E22_CalcTimeoutMs(uint16_t length_bytes, uint32_t bitrate_b
 static uint32_t Lora_E22_GetAuxWaitTimeoutMs(void);
 static uint32_t Lora_E22_GetUartDmaTimeoutMs(uint16_t length_bytes);
 static uint32_t Lora_E22_GetAirDoneTimeoutMs(uint16_t length_bytes);
-static void Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence);
+static uint8_t Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence, uint32_t now_ms);
 static void Lora_E22_RecordAuxReady(uint32_t now_ms);
-static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms, uint32_t timeout_ms);
+static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms);
 static void Lora_E22_ResetParser(void);
 static void Lora_E22_TxStep(uint32_t now_ms);
 
@@ -146,21 +154,32 @@ static uint32_t Lora_E22_GetAirDoneTimeoutMs(uint16_t length_bytes)
   return Lora_E22_CalcTimeoutMs(length_bytes, BSP_LoRa_GetAirBps(), LORA_E22_AIR_TIMEOUT_MARGIN_MS);
 }
 
-static void Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence)
+static uint8_t Lora_E22_UpdateSequenceStats(uint8_t system_id, uint8_t sequence, uint32_t now_ms)
 {
   uint8_t delta;
+
+  (void)now_ms;
 
   if (s_rx_sequence_seen[system_id] == 0U) {
     s_rx_sequence_seen[system_id] = 1U;
     s_rx_sequence_last[system_id] = sequence;
-    return;
+    return 0U;
   }
 
   delta = (uint8_t)(sequence - s_rx_sequence_last[system_id]);
-  if (delta == 0U) { return; }
+  if (delta == 0U) {
+    return 0U;
+  }
 
-  s_rx_sequence_lost_count += (uint32_t)(delta - 1U);
+  /* 只按序号跳变幅度判断，不再按静默时长判断：静默再久也不能免罚，
+     否则"走远失联很久再回来"这种真实丢包会被当成正常重新同步而永远
+     算作 0% 丢包。序号跳变过大(通常是对端序号被重置/重启)才不计入，
+     真实的连续丢包(哪怕跨越很长静默时间)必须计数。 */
+  if (delta <= LORA_E22_SEQUENCE_JUMP_MAX) {
+    s_rx_sequence_lost_count += (uint32_t)(delta - 1U);
+  }
   s_rx_sequence_last[system_id] = sequence;
+  return 0U;
 }
 
 /**
@@ -178,30 +197,30 @@ static void Lora_E22_RecordAuxReady(uint32_t now_ms)
 }
 
 /**
- * @brief 判断本机 E22 是否长期不可用。
+ * @brief 判断本机 E22 模块是否已经长期不可用。
  *
- * @param[in] now_ms 当前时间，单位：ms。
- * @param[in] timeout_ms AUX 长期不就绪超时，单位：ms。
+ * @param[in] now_ms 当前 comm 周期时间，单位：ms。
  *
- * @return 1 表示本机模块疑似拔掉或硬件不可用；0 表示未形成离线事实。
+ * @return 1 表示本机模块不可用，0 表示仍可认为本机模块存在。
  *
- * @note 发送状态机未超时前，AUX 低电平属于半双工正常忙状态，不作为拔掉证据。
+ * @note AUX 在 DMA 发送和空中发送期间会短暂拉低，因此发送状态机未超时时不把 AUX 低电平当作拔掉。
  */
-static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms, uint32_t timeout_ms)
+static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms)
 {
-  uint32_t tx_guard_ms = Lora_E22_GetAuxWaitTimeoutMs() +
-                         Lora_E22_GetUartDmaTimeoutMs(LORA_E22_TX_BUF_SIZE) +
-                         Lora_E22_GetAirDoneTimeoutMs(LORA_E22_TX_BUF_SIZE);
+  uint32_t tx_guard_ms;
+  uint32_t aux_low_ms;
 
   if (BSP_LoRa_IsReady() != 0U) { return 0U; }
+  if (s_last_aux_ready_ms == 0U) { return 1U; }
 
-  if ((s_tx_state != LORA_TX_IDLE) && ((uint32_t)(now_ms - s_tx_state_ms) <= tx_guard_ms)) {
-    return 0U;
-  }
+  aux_low_ms = (uint32_t)(now_ms - s_last_aux_ready_ms);
 
-  if (s_last_aux_ready_ms == 0U) { return 0U; }
+  tx_guard_ms = Lora_E22_GetAuxWaitTimeoutMs();
+  tx_guard_ms = Lora_E22_SaturatedAddU32(tx_guard_ms, Lora_E22_GetUartDmaTimeoutMs(LORA_E22_TX_BUF_SIZE));
+  tx_guard_ms = Lora_E22_SaturatedAddU32(tx_guard_ms, Lora_E22_GetAirDoneTimeoutMs(LORA_E22_TX_BUF_SIZE));
+  if ((s_tx_state != LORA_TX_IDLE) && ((uint32_t)(now_ms - s_tx_state_ms) <= tx_guard_ms)) { return 0U; }
 
-  return ((uint32_t)(now_ms - s_last_aux_ready_ms) > timeout_ms) ? 1U : 0U;
+  return (aux_low_ms > LORA_E22_PRESENT_TIMEOUT_MS) ? 1U : 0U;
 }
 
 static void Lora_E22_ResetParser(void)
@@ -220,10 +239,20 @@ Lora_Result_t Lora_E22_Init(void)
   now_ms = BSP_Time_GetTickMs();
   if (BSP_LoRa_IsReady() == 0U) {
     if (s_init_wait_start_ms == 0U) { s_init_wait_start_ms = now_ms; }
-    if ((uint32_t)(now_ms - s_init_wait_start_ms) > LORA_E22_INIT_AUX_TIMEOUT_MS) { s_init_wait_start_ms = now_ms; }
+    if ((uint32_t)(now_ms - s_init_wait_start_ms) > LORA_E22_INIT_AUX_TIMEOUT_MS) {
+      s_init_wait_start_ms = now_ms;
+      s_local_failed       = 1U;
+      /* E22 可能在冷启动自检窗口错过了 M0/M1 的下降沿而滞留休眠态。
+         重试路径每次都写低电平，同电平重写不产生沿，模块永远唤不醒。
+         这里先驱动回休眠模式电平，下次重试开头的 SetMode(0) 就是一个
+         真实下降沿，强制 E22 重新锁存工作模式。 */
+      BSP_LoRa_SetMode(3U);
+      return LORA_RESULT_IO_ERROR;
+    }
     return LORA_RESULT_BUSY;
   }
   s_init_wait_start_ms = 0U;
+  s_local_failed       = 0U;
 
   memset(s_rx_queue, 0, sizeof(s_rx_queue));
   s_rx_q_head = 0U;
@@ -249,6 +278,7 @@ Lora_Result_t Lora_E22_Init(void)
   s_tx_state          = LORA_TX_IDLE;
   s_tx_pending_len    = 0U;
   s_tx_state_ms       = 0U;
+  s_tx_gap_until_ms   = 0U;
   s_initialized       = 1U;
 
   return LORA_RESULT_OK;
@@ -256,7 +286,8 @@ Lora_Result_t Lora_E22_Init(void)
 
 void Lora_E22_RequestReinit(void)
 {
-  s_reinit_request = 1U;
+  s_bsp_reinit_needed = 1U;
+  s_reinit_request    = 1U;
 }
 
 Lora_Result_t Lora_E22_Service(uint32_t now_ms)
@@ -270,8 +301,20 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
 
   if (s_reinit_request != 0U) {
     s_reinit_request = 0U;
+    if (s_bsp_reinit_needed != 0U) {
+      s_bsp_reinit_needed = 0U;
+      if (BSP_LoRa_Init() != 0) {
+        s_bsp_reinit_needed = 1U;
+        s_reinit_request    = 1U;
+        s_initialized       = 0U;
+        s_local_failed      = 1U;
+        return LORA_RESULT_IO_ERROR;
+      }
+      s_local_failed = 0U;
+    }
     init_result = Lora_E22_Init();
     if (init_result != LORA_RESULT_OK) {
+      if (init_result == LORA_RESULT_IO_ERROR) { s_bsp_reinit_needed = 1U; }
       s_reinit_request = 1U;
       return init_result;
     }
@@ -329,7 +372,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
         memcpy(slot->data, _MAV_PAYLOAD(&s_parse_msg), s_parse_msg.len);
         s_rx_q_head = (uint16_t)((s_rx_q_head + 1U) % LORA_E22_RX_QUEUE_LEN);
         s_rx_q_count++;
-        Lora_E22_UpdateSequenceStats(s_parse_msg.sysid, s_parse_msg.seq);
+        (void)Lora_E22_UpdateSequenceStats(s_parse_msg.sysid, s_parse_msg.seq, now_ms);
         s_rx_frame_count++;
         s_last_rx_ms  = now_ms;
         s_last_msg_id = s_parse_msg.msgid;
@@ -374,20 +417,37 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out)
 
 Lora_State_t Lora_E22_GetState(uint32_t now_ms, uint32_t offline_timeout_ms)
 {
-  if (s_initialized == 0U) { return LORA_STATE_NOT_READY; }
-  if (Lora_E22_LocalUnavailable(now_ms, offline_timeout_ms) != 0U) { return LORA_STATE_FAILED; }
-  if (s_last_rx_ms == 0U) { return LORA_STATE_NOT_READY; }
-  if ((uint32_t)(now_ms - s_last_rx_ms) <= offline_timeout_ms) { return LORA_STATE_ONLINE; }
-  return LORA_STATE_OFFLINE;
+  (void)offline_timeout_ms;
+
+  if (s_initialized == 0U) {
+    Lora_E22_RecordAuxReady(now_ms);
+    if (BSP_LoRa_IsReady() != 0U) {
+      s_local_failed       = 0U;
+      s_bsp_reinit_needed = 1U;
+      s_reinit_request    = 1U;
+      return LORA_STATE_NOT_READY;
+    }
+    return (s_local_failed != 0U) ? LORA_STATE_FAILED : LORA_STATE_NOT_READY;
+  }
+  Lora_E22_RecordAuxReady(now_ms);
+
+  if (Lora_E22_LocalUnavailable(now_ms) != 0U) {
+    s_local_failed = 1U;
+    return LORA_STATE_FAILED;
+  }
+
+  return LORA_STATE_ONLINE;
 }
 
 uint8_t Lora_E22_IsPresent(void)
 {
   uint32_t now_ms;
 
+  if (BSP_LoRa_IsReady() != 0U) { return 1U; }
   if (s_initialized == 0U) { return 0U; }
   now_ms = BSP_Time_GetTickMs();
-  return (Lora_E22_LocalUnavailable(now_ms, LORA_E22_PRESENT_TIMEOUT_MS) == 0U) ? 1U : 0U;
+  Lora_E22_RecordAuxReady(now_ms);
+  return (Lora_E22_LocalUnavailable(now_ms) == 0U) ? 1U : 0U;
 }
 
 /* Advance the transmit state machine. Called every comm cycle from
@@ -418,21 +478,19 @@ static void Lora_E22_TxStep(uint32_t now_ms)
 
     case LORA_TX_SENDING:
       if (BSP_LoRa_IsTxBusy() == 0U) {
-        s_tx_state    = LORA_TX_WAIT_AIR_DONE;
-        s_tx_state_ms = now_ms;
-      } else if ((uint32_t)(now_ms - s_tx_state_ms) > Lora_E22_GetUartDmaTimeoutMs(s_tx_pending_len)) {
-        BSP_LoRa_AbortTx();
-        s_send_error_count++;
-        s_tx_state = LORA_TX_IDLE;
-      }
-      break;
+        uint32_t air_ms;
+        uint32_t bps = BSP_LoRa_GetAirBps();
 
-    case LORA_TX_WAIT_AIR_DONE:
-      if (BSP_LoRa_IsBusy() == 0U) {
         s_tx_frame_count++;
         s_last_tx_ms = now_ms;
         s_tx_state   = LORA_TX_IDLE;
-      } else if ((uint32_t)(now_ms - s_tx_state_ms) > Lora_E22_GetAirDoneTimeoutMs(s_tx_pending_len)) {
+        /* 按帧空口时间换算强制静默期：gap = air * (100 - duty) / duty。 */
+        if (bps != 0U) {
+          air_ms = (((uint32_t)s_tx_pending_len * LORA_E22_BITS_PER_BYTE * 1000U) + bps - 1U) / bps;
+          s_tx_gap_until_ms = now_ms + ((air_ms * (100U - LORA_E22_TX_DUTY_LIMIT_PCT)) / LORA_E22_TX_DUTY_LIMIT_PCT);
+        }
+      } else if ((uint32_t)(now_ms - s_tx_state_ms) > Lora_E22_GetUartDmaTimeoutMs(s_tx_pending_len)) {
+        BSP_LoRa_AbortTx();
         s_send_error_count++;
         s_tx_state = LORA_TX_IDLE;
       }
@@ -444,14 +502,28 @@ static void Lora_E22_TxStep(uint32_t now_ms)
   }
 }
 
+uint8_t Lora_E22_IsTxIdle(void)
+{
+  if (s_tx_state != LORA_TX_IDLE) { return 0U; }
+  /* 强制静默期内同样报忙，MAVLink 调度器不编码、不消耗序号。 */
+  if ((int32_t)(BSP_Time_GetTickMs() - s_tx_gap_until_ms) < 0) { return 0U; }
+  return 1U;
+}
+
 Lora_Result_t Lora_E22_Send(const uint8_t *data, uint16_t len)
 {
   if (data == 0 || len == 0U || len > LORA_E22_TX_BUF_SIZE) { return LORA_RESULT_INVALID_PARAM; }
+  if (s_initialized == 0U) { return LORA_RESULT_BUSY; }
 
   /* One frame in flight at a time. While a frame is staged or sending,
      report BUSY so the MAVLink scheduler retries after its short backoff
      instead of overwriting the in-flight frame. */
   if (s_tx_state != LORA_TX_IDLE) {
+    s_tx_busy_count++;
+    return LORA_RESULT_BUSY;
+  }
+  /* 占空静默期内拒绝新帧，双保险(调度器正常情况下已被 IsTxIdle 挡住)。 */
+  if ((int32_t)(BSP_Time_GetTickMs() - s_tx_gap_until_ms) < 0) {
     s_tx_busy_count++;
     return LORA_RESULT_BUSY;
   }

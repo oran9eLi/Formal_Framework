@@ -14,6 +14,10 @@
 #include "stm32f4xx_hal.h"
 
 /**
+ * @brief 尽早配置 E22 模式/AUX 引脚并驱动到正常模式，须在 BSP_Init 最先调用。
+ */
+void BSP_LoRa_PreInit(void);
+/**
  * @brief 初始化 LoRa E22 使用的 UART、DMA 和控制 GPIO。
  */
 int32_t BSP_LoRa_Init(void);
@@ -89,6 +93,12 @@ void BSP_LoRa_RecoverRx(void);
  * @brief Request LoRa RX recovery from USART3 ISR; only sets a flag in ISR.
  */
 void BSP_LoRa_RequestRecoverRx(void);
+/**
+ * @brief 在 USART3 错误中断中清错误并请求 LoRa RX 恢复。
+ *
+ * @param[in] sr_snapshot USART3 SR 快照。
+ */
+void BSP_LoRa_UartErrorIrqHandler(uint32_t sr_snapshot);
 /**
  * @brief Consume one pending LoRa RX recovery request from the owner service.
  *

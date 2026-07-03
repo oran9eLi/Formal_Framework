@@ -279,9 +279,13 @@ void USART3_IRQHandler(void)
   UART_HandleTypeDef *huart = BSP_LoRa_GetUartHandle();
   uint32_t sr               = USART3->SR;
 
+  /* 错误分支绝不能在 ISR 内直接执行 DMA 恢复：BSP_LoRa_RecoverRx 内部的
+     HAL_DMA_Abort 以 HAL_GetTick 做超时，而 tick 中断优先级低于本 ISR，
+     tick 在此期间被冻结，"有界等待"退化为死循环，整机只能断电恢复。
+     这里只清错误标志并置恢复请求，真正的 DMAStop/重启由 comm 任务在
+     Lora_E22_Service 中执行（与 USART2/GNSS 的恢复模式一致）。 */
   if ((sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE)) != 0U) {
-    BSP_LoRa_RequestRecoverRx();
-    HAL_UART_IRQHandler(huart);
+    BSP_LoRa_UartErrorIrqHandler(sr);
     return;
   }
 

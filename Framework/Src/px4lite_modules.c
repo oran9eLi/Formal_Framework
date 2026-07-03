@@ -1167,10 +1167,17 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
   Px4Lite_Result_t result = Px4Lite_LoRaInit();
 
   Px4Lite_RemoteTelemetryInit(now_ms);
-  if (result == PX4LITE_OK) { result = Px4Lite_MavlinkTxInit(now_ms); }
+  if (result == PX4LITE_BUSY) { Px4Lite_LoRaRequestReinit(); }
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
+    Px4Lite_Result_t tx_init_result = Px4Lite_MavlinkTxInit(now_ms);
+    if (tx_init_result != PX4LITE_OK) { result = tx_init_result; }
+  }
 
-  Px4Lite_SetStatus(PX4LITE_MODULE_LORA, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
-  return result;
+  Px4Lite_SetStatus(PX4LITE_MODULE_LORA,
+                    ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED,
+                    ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE,
+                    now_ms);
+  return (result == PX4LITE_BUSY) ? PX4LITE_OK : result;
 #else
   return PX4LITE_OK;
 #endif
@@ -1222,6 +1229,7 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   Px4Lite_Result_t result;
   Px4Lite_Result_t rx_result;
   Px4Lite_Result_t tx_result;
+  uint32_t peer_rx_ms;
 
   result = Px4Lite_LoRaService(now_ms);
   if (result == PX4LITE_OK) {
@@ -1234,26 +1242,28 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
   state = Px4Lite_LoRaGetState(now_ms);
+  peer_rx_ms = Px4Lite_MavlinkRxLastPeerMs();
 
   taskENTER_CRITICAL();
-  s_status[PX4LITE_MODULE_LORA].last_rx_ms    = info.last_rx_ms;
-  s_status[PX4LITE_MODULE_LORA].last_valid_ms = info.last_rx_ms;
+  s_status[PX4LITE_MODULE_LORA].last_rx_ms    = peer_rx_ms;
   s_status[PX4LITE_MODULE_LORA].error_count   = info.parse_error_count + info.send_error_count;
   s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count + info.rx_sequence_lost_count;
+  if ((state == PX4LITE_STATE_ONLINE) && ((result == PX4LITE_OK) || (result == PX4LITE_BUSY))) {
+    s_status[PX4LITE_MODULE_LORA].last_valid_ms = now_ms;
+  }
   taskEXIT_CRITICAL();
 
   /*
-   * RX freshness is the only ONLINE evidence. Local TX completion stays in
-   * debug stats for later half-duplex scheduling and link-budget analysis.
+   * 教学 LoRa 模式只用本机硬件在位状态驱动红/绿灯：
+   * E22 未供电或 AUX 长期不可用为红灯；本机模块可用即为绿灯。
+   * 是否收到对端数据只进入统计和远端数据新鲜度，不再影响本机 LoRa 灯色。
    */
-  if (state == PX4LITE_STATE_FAILED) {
+  if ((state == PX4LITE_STATE_FAILED) || (state == PX4LITE_STATE_OFFLINE)) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
-  } else if (result != PX4LITE_OK) {
+  } else if ((result != PX4LITE_OK) && (result != PX4LITE_BUSY)) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   } else if (state == PX4LITE_STATE_ONLINE) {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
-  } else if ((state == PX4LITE_STATE_DEGRADED) || ((state == PX4LITE_STATE_STARTING) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_LORA_STARTUP_GRACE_MS))) {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
   }
 #endif
 

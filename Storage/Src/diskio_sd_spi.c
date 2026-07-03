@@ -334,6 +334,22 @@ uint8_t DiskioSdSpi_IsInitialized(void)
   return ((s_status & STA_NOINIT) == 0U) ? 1U : 0U;
 }
 
+/**
+ * @brief 复位 SPI SD diskio 的内部卡状态。
+ *
+ * @note 该函数只清理 diskio 状态和片选，不做阻塞初始化；下一次 FatFS mount
+ *       会重新进入 disk_initialize()。
+ */
+void DiskioSdSpi_Reset(void)
+{
+  s_status        = STA_NOINIT;
+  s_card_type     = 0U;
+  s_last_error    = DISKIO_SD_SPI_ERR_NONE;
+  s_last_command  = 0xFFU;
+  s_last_response = 0xFFU;
+  BSP_SPI1_SD_Deselect();
+}
+
 uint8_t DiskioSdSpi_CardType(void)
 {
   return s_card_type;

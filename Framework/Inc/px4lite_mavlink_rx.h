@@ -23,6 +23,13 @@
 Px4Lite_Result_t Px4Lite_MavlinkRxRun(uint32_t now_ms);
 
 /**
+ * @brief 获取最近一次通过本机 ID 过滤的对端有效 MAVLink 帧时间。
+ *
+ * @return 最近对端解码成功帧时间，单位：ms；0 表示尚未收到。
+ */
+uint32_t Px4Lite_MavlinkRxLastPeerMs(void);
+
+/**
  * @brief 复制最近一份远端遥测快照。
  *
  * @param[out] out 输出缓冲区，不能为 NULL。
@@ -34,7 +41,7 @@ Px4Lite_Result_t Px4Lite_CopyRemoteTelemetry(Px4Lite_RemoteTelemetry_t *out);
 /**
  * @brief 选择 Display/Business 默认读取的远端节点。
  *
- * @param[in] node_id 远端节点 ID，主机为 0，从机从 1 开始。
+ * @param[in] node_id 远端节点 ID，由 DCDW-xxx 数字后缀派生。
  *
  * @return 选择结果。
  */

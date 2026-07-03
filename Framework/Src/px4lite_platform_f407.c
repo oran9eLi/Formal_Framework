@@ -203,6 +203,24 @@ uint32_t Px4Lite_PlatformGetUs(void)
 }
 
 /**
+ * @brief 读取 STM32F407 96-bit 硬件唯一 ID。
+ *
+ * @param[out] uid_words 输出 UID word0/word1/word2。
+ * @param[in] word_capacity 输出缓冲区 word 容量。
+ *
+ * @return 读取结果。
+ */
+Px4Lite_Result_t Px4Lite_PlatformGetHardwareUid(uint32_t *uid_words, uint8_t word_capacity)
+{
+  if ((uid_words == 0) || (word_capacity < 3U)) { return PX4LITE_INVALID_PARAM; }
+
+  uid_words[0] = HAL_GetUIDw0();
+  uid_words[1] = HAL_GetUIDw1();
+  uid_words[2] = HAL_GetUIDw2();
+  return PX4LITE_OK;
+}
+
+/**
  * @brief 记录一个必需任务最近一次成功执行时间。
  *
  * @param[in] id 心跳编号。
@@ -534,8 +552,13 @@ uint8_t Px4Lite_ButtonPressed(Px4Lite_ButtonId_t button)
 
 Px4Lite_Result_t Px4Lite_LoRaInit(void)
 {
+  Lora_Result_t result;
+
   if (BSP_LoRa_Init() != 0) { return PX4LITE_IO_ERROR; }
-  return (Lora_E22_Init() == LORA_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  result = Lora_E22_Init();
+  if (result == LORA_RESULT_OK) { return PX4LITE_OK; }
+  if (result == LORA_RESULT_BUSY) { return PX4LITE_BUSY; }
+  return PX4LITE_IO_ERROR;
 }
 
 void Px4Lite_LoRaRequestReinit(void)
@@ -562,6 +585,11 @@ Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len)
   if (result == LORA_RESULT_BUSY) return PX4LITE_BUSY;
   if (result == LORA_RESULT_INVALID_PARAM) return PX4LITE_INVALID_PARAM;
   return PX4LITE_IO_ERROR;
+}
+
+uint8_t Px4Lite_LoRaIsTxIdle(void)
+{
+  return Lora_E22_IsTxIdle();
 }
 
 Px4Lite_Result_t Px4Lite_RemoteIdInit(void)
