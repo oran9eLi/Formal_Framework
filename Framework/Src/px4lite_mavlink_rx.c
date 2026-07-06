@@ -94,7 +94,7 @@ static uint8_t MavRx_FrameToRemoteNode(const Px4Lite_CommRxFrame_t *frame, uint8
   if ((frame == 0) || (node_id_out == 0) || (frame->system_id == 0U)) { return 0U; }
   node_id = frame->system_id;
   if (node_id == (uint8_t)Px4Lite_IdentityGetNodeId()) { return 0U; }
-  if (node_id >= PX4LITE_REMOTE_NODE_MAX) { return 0U; }
+  /* node_id 现为 UID 派生 sysid(1..250)，不再按表容量截断；槽位由 RemoteTelemetry 动态分配。 */
   *node_id_out = node_id;
   return 1U;
 }

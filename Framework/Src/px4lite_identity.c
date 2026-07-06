@@ -3,33 +3,16 @@
  * @brief Unified identity derivation for LoRa, MAVLink and RemoteID.
  *
  * @details
- * PX4LITE_DEVICE_NAME is the only manual identity configured by product builds.
- * LoRa node id and MAVLink system id are derived from its numeric suffix, so
- * DCDW-001 maps to node/system id 1, DCDW-002 maps to 2, and so on.
+ * MAVLink/LoRa 本机 sysid、node id 由**芯片 96-bit 唯一 UID** 运行时派生，范围 [1,250]。
+ * 同一套固件烧到多块板，各芯片 UID 不同 → sysid 自动不同，无需人工改 PX4LITE_DEVICE_NAME
+ * 即可互相识别收发（避免两端 sysid 相同被接收端当作"自己发的"丢弃）。
+ * PX4LITE_DEVICE_NAME 仍作可读设备名用于本机显示与 RemoteID 文本，不再决定 sysid。
  */
 
 #include "px4lite_identity.h"
 
 #include "px4lite_config.h"
-
-static uint8_t Identity_ParseSuffix3(const char *name)
-{
-  uint8_t i;
-  uint8_t len = 0U;
-  uint16_t value;
-
-  if (name == 0) { return 1U; }
-  while ((name[len] != '\0') && (len < 32U)) { len++; }
-  if (len < 3U) { return 1U; }
-
-  value = 0U;
-  for (i = (uint8_t)(len - 3U); i < len; i++) {
-    if ((name[i] < '0') || (name[i] > '9')) { return 1U; }
-    value = (uint16_t)((value * 10U) + (uint16_t)(name[i] - '0'));
-  }
-  if ((value == 0U) || (value >= PX4LITE_REMOTE_NODE_MAX) || (value > 255U)) { return 1U; }
-  return (uint8_t)value;
-}
+#include "px4lite_platform.h"
 
 const char *Px4Lite_IdentityGetDeviceName(void)
 {
@@ -38,7 +21,20 @@ const char *Px4Lite_IdentityGetDeviceName(void)
 
 uint8_t Px4Lite_IdentityGetNumericId(void)
 {
-  return Identity_ParseSuffix3(PX4LITE_DEVICE_NAME);
+  static uint8_t s_cached_id = 0U;
+  uint32_t uid[3];
+  uint32_t h;
+
+  if (s_cached_id != 0U) { return s_cached_id; }
+
+  /* 芯片 UID 三字异或后取模到 [1,250]，避开 0 与广播 255；同一芯片固定，首次后缓存。 */
+  if (Px4Lite_PlatformGetHardwareUid(uid, 3U) != PX4LITE_OK) {
+    s_cached_id = 1U;
+    return s_cached_id;
+  }
+  h = uid[0] ^ uid[1] ^ uid[2];
+  s_cached_id = (uint8_t)(1U + (h % 250U));
+  return s_cached_id;
 }
 
 uint8_t Px4Lite_IdentityGetNodeId(void)

@@ -20,19 +20,61 @@
 static Px4Lite_RemoteMode_t s_mode;
 static Px4Lite_RemoteTelemetry_t s_remote[PX4LITE_REMOTE_NODE_MAX];
 static uint32_t s_remote_sequence[PX4LITE_REMOTE_NODE_MAX];
+static uint8_t s_slot_node[PX4LITE_REMOTE_NODE_MAX]; /* 每槽绑定的对端 node_id(=sysid,UID派生1..250)，0=空闲 */
 static uint8_t s_selected_remote_node_id;
 static uint32_t s_mode_changed_ms;
 
+/*
+ * node_id(对端 sysid) 由芯片 UID 派生，范围 1..250，无法直接索引 NODE_MAX 个槽的小表，
+ * 改为动态槽位分配：本函数仅查找已绑定该 node_id 的槽(读取/选择用，不分配)，找不到返回 0。
+ */
 static uint8_t RemoteTelemetry_NodeIdToIndex(uint8_t node_id, uint8_t *index)
 {
-  if ((index == 0) || (node_id >= PX4LITE_REMOTE_NODE_MAX)) { return 0U; }
-  *index = node_id;
+  uint8_t i;
+
+  if ((index == 0) || (node_id == 0U)) { return 0U; }
+  for (i = 0U; i < PX4LITE_REMOTE_NODE_MAX; i++) {
+    if (s_slot_node[i] == node_id) { *index = i; return 1U; }
+  }
+  return 0U;
+}
+
+/*
+ * 收帧写入用：查找已绑定槽；无则分配空槽；表满则淘汰 last_rx_ms 最旧的槽。
+ * 分配/淘汰时清空该槽的旧遥测与序号，避免残留脏数据。
+ */
+static uint8_t RemoteTelemetry_AllocSlot(uint8_t node_id, uint8_t *index)
+{
+  uint8_t i;
+  uint8_t oldest = 0U;
+  uint32_t oldest_ms = 0xFFFFFFFFUL;
+
+  if ((index == 0) || (node_id == 0U)) { return 0U; }
+  if (RemoteTelemetry_NodeIdToIndex(node_id, index) != 0U) { return 1U; }
+
+  for (i = 0U; i < PX4LITE_REMOTE_NODE_MAX; i++) {
+    if (s_slot_node[i] == 0U) {
+      s_slot_node[i] = node_id;
+      memset(&s_remote[i], 0, sizeof(s_remote[i]));
+      s_remote_sequence[i] = 0U;
+      *index = i;
+      return 1U;
+    }
+  }
+
+  for (i = 0U; i < PX4LITE_REMOTE_NODE_MAX; i++) {
+    if (s_remote[i].last_rx_ms < oldest_ms) { oldest_ms = s_remote[i].last_rx_ms; oldest = i; }
+  }
+  s_slot_node[oldest] = node_id;
+  memset(&s_remote[oldest], 0, sizeof(s_remote[oldest]));
+  s_remote_sequence[oldest] = 0U;
+  *index = oldest;
   return 1U;
 }
 
 static uint8_t RemoteTelemetry_DefaultNode(void)
 {
-  return 0U;
+  return 0U; /* 0 = 无选中 */
 }
 
 static uint32_t RemoteTelemetry_MaxU32(uint32_t a, uint32_t b)
@@ -78,6 +120,7 @@ void Px4Lite_RemoteTelemetryInit(uint32_t now_ms)
   taskENTER_CRITICAL();
   memset(s_remote, 0, sizeof(s_remote));
   memset(s_remote_sequence, 0, sizeof(s_remote_sequence));
+  memset(s_slot_node, 0, sizeof(s_slot_node));
   s_mode = PX4LITE_REMOTE_MODE_LOCAL;
   s_selected_remote_node_id = RemoteTelemetry_DefaultNode();
   s_mode_changed_ms = now_ms;
@@ -135,7 +178,7 @@ Px4Lite_Result_t Px4Lite_RemoteTelemetryCommitNode(uint8_t node_id, const Px4Lit
 
   if (snapshot == 0) { return PX4LITE_INVALID_PARAM; }
   if (node_id == (uint8_t)Px4Lite_IdentityGetNodeId()) { return PX4LITE_INVALID_PARAM; }
-  if (RemoteTelemetry_NodeIdToIndex(node_id, &index) == 0U) { return PX4LITE_INVALID_PARAM; }
+  if (RemoteTelemetry_AllocSlot(node_id, &index) == 0U) { return PX4LITE_INVALID_PARAM; }
 
   local = *snapshot;
   RemoteTelemetry_UpdateStaleMask(&local, now_ms);
@@ -210,7 +253,7 @@ Px4Lite_Result_t Px4Lite_CopyRemoteNodeStatuses(Px4Lite_RemoteNodeStatus_t *out,
     RemoteTelemetry_UpdateStaleMask(&local, now_ms);
 
     memset(&out[written], 0, sizeof(out[written]));
-    out[written].node_id = i;
+    out[written].node_id = s_slot_node[i]; /* 对外用绑定的 node_id(sysid)，非内部槽索引 */
     out[written].system_id = local.system_id;
     out[written].component_id = local.component_id;
     out[written].heartbeat_type = local.heartbeat_type;
