@@ -124,7 +124,13 @@
 #define PX4LITE_LORA_OFFLINE_MS          8000U
 #define PX4LITE_LORA_STARTUP_GRACE_MS    3000U
 #define PX4LITE_LORA_RECOVERY_ENABLE     1U
-#define PX4LITE_REMOTE_NODE_MAX          41U
+/*
+ * 远端节点表容量。node_id 直接作为表索引（见 RemoteTelemetry_NodeIdToIndex），
+ * 且 node_id 由 DCDW-xxx 编号后缀派生，故本宏同时决定“可同时显示的最大远端板号”：
+ * 取 8 表示支持 DCDW-000..007。单节点快照约 408B，41→8 省约 13.5KB SRAM，
+ * 是屏幕端 128KB SRAM 容纳 fj 融合体系的关键。若需接入更大编号，按 RAM 余量上调。
+ */
+#define PX4LITE_REMOTE_NODE_MAX          8U
 
 /*
  * 板卡身份配置：
