@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "app_message_log.h"
+#include "px4lite_config.h"
 #include "px4lite_mavlink_rx.h"
 #include "px4lite_topics.h"
 

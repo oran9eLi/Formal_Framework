@@ -146,6 +146,8 @@ typedef struct {
   float relative_humidity_pct;  /**< 相对湿度，单位：%。 */
   uint32_t voltage_mv;          /**< 电池或输入电压，单位：mV。 */
   uint32_t voltage2_mv;         /**< 第二电池或外设独立供电电压，单位：mV。 */
+  int32_t current_ma;           /**< 电池 1 电流，单位：mA；未接入或采样失败时为 0。 */
+  int32_t current2_ma;          /**< 电池 2 电流，单位：mA；未接入或采样失败时为 0。 */
   uint8_t battery_percent;      /**< 电量百分比，范围：0 到 100。 */
   uint8_t battery2_percent;     /**< 第二电池电量百分比，范围：0 到 100。 */
   uint8_t low_voltage;          /**< 低电压标志，1 表示低电压。 */
