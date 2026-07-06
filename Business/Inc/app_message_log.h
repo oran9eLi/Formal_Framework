@@ -1,90 +1,72 @@
 /**
  * @file app_message_log.h
- * @brief Business层结构化消息日志生产器接口。
+ * @brief 业务层结构化消息日志：协议级消息枚举 + 生产者 API。
  *
  * @details
- * 本模块按业务状态变化生成稳定的消息编号，并通过 `app_data_api.h` 写入本机固定环形日志。
- * Display 层可以保留自己的屏幕显示缓存，但远程日志、Tunnel 中继和后续 5G/RemoteID
- * 业务日志统一以本模块生成的消息为准。
+ * message_id 为与显示无关的协议枚举(append-only 契约)，供本机屏幕、远端同构显示与
+ * PC 监控共用。取值镜像历史 Display_LogMsg_t，二者逐一相等。
  */
-
 #ifndef APP_MESSAGE_LOG_H
 #define APP_MESSAGE_LOG_H
 
 #include <stdint.h>
-#include "app_data_api.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- * @brief 业务消息编号，append-only，不允许重排已有值。
+ * @brief 消息日志条目类型(协议枚举，append-only：只许尾部追加，不许重排/改号)。
  */
 typedef enum {
-  APP_LOGMSG_SYSTEM_START = 0, /**< 系统启动。 */
-  APP_LOGMSG_IMU_LEVEL_WAIT,   /**< 开机静止水平基准等待中。 */
-  APP_LOGMSG_IMU_LEVEL_OK,     /**< 开机静止水平基准完成。 */
-  APP_LOGMSG_SELFCHECK_OK,     /**< 自检通过。 */
-  APP_LOGMSG_SELFCHECK_PART,   /**< 自检部分通过。 */
-  APP_LOGMSG_SELFCHECK_FAIL,   /**< 自检失败。 */
-  APP_LOGMSG_GPS_OK,           /**< GNSS 正常。 */
-  APP_LOGMSG_GPS_NOSIG,        /**< GNSS 无定位或信号弱。 */
-  APP_LOGMSG_GPS_LOST,         /**< GNSS 断开。 */
-  APP_LOGMSG_ATT_OK,           /**< 姿态正常。 */
-  APP_LOGMSG_ATT_LOST,         /**< 姿态断开。 */
-  APP_LOGMSG_ENV_OK,           /**< 环境/气压正常。 */
-  APP_LOGMSG_ENV_LOST,         /**< 环境/气压断开。 */
-  APP_LOGMSG_COMM_OK,          /**< 通信正常。 */
-  APP_LOGMSG_COMM_LOST,        /**< 通信断开。 */
-  APP_LOGMSG_STORAGE_OK,       /**< 存储正常。 */
-  APP_LOGMSG_STORAGE_LOST,     /**< 存储断开。 */
-  APP_LOGMSG_MOTOR_OK,         /**< 电机供电正常。 */
-  APP_LOGMSG_MOTOR_DISCONNECT, /**< 电机电池未连接。 */
-  APP_LOGMSG_MOTOR_LOWPOWER,   /**< 电机供电不足。 */
-  APP_LOGMSG_MOTOR1_FAIL,      /**< 1号电机故障。 */
-  APP_LOGMSG_MOTOR2_FAIL,      /**< 2号电机故障。 */
-  APP_LOGMSG_MOTOR3_FAIL,      /**< 3号电机故障。 */
-  APP_LOGMSG_MOTOR4_FAIL,      /**< 4号电机故障。 */
-  APP_LOGMSG_MOTOR_ALL_FAIL,   /**< 全部电机故障。 */
-  APP_LOGMSG_MOTOR_DEAD,       /**< 电机电池严重亏电。 */
-  APP_LOGMSG_MOTOR_CHARGE,     /**< 电机电池需充电。 */
-  APP_LOGMSG_MAIN_CHARGE,      /**< 主控电池需充电。 */
-  APP_LOGMSG_ALARM_ACTIVE,     /**< 有活动告警。 */
-  APP_LOGMSG_ALARM_NONE,       /**< 无活动告警。 */
-  APP_LOGMSG_COUNT             /**< 消息编号数量。 */
+  APP_LOGMSG_SYSTEM_START = 0, /* 系统启动 */
+  APP_LOGMSG_SELFCHECK_OK,     /* 自检通过 */
+  APP_LOGMSG_SELFCHECK_PART,   /* 自检部分通过 */
+  APP_LOGMSG_SELFCHECK_FAIL,   /* 自检未通过 */
+  APP_LOGMSG_GPS_OK,           /* GPS正常 */
+  APP_LOGMSG_GPS_NOSIG,        /* GPS无信号 */
+  APP_LOGMSG_GPS_LOST,         /* GPS断开 */
+  APP_LOGMSG_ATT_OK,           /* 姿态正常 */
+  APP_LOGMSG_ATT_LOST,         /* 姿态断开 */
+  APP_LOGMSG_ENV_OK,           /* 环境正常 */
+  APP_LOGMSG_ENV_LOST,         /* 环境断开 */
+  APP_LOGMSG_COMM_OK,          /* 通信正常 */
+  APP_LOGMSG_COMM_LOST,        /* 通信断开 */
+  APP_LOGMSG_STORAGE_OK,       /* 存储正常 */
+  APP_LOGMSG_STORAGE_LOST,     /* 存储断开 */
+  APP_LOGMSG_MOTOR_OK,         /* 电机正常 */
+  APP_LOGMSG_MOTOR_DISCONNECT, /* 电机断开 */
+  APP_LOGMSG_MOTOR_LOWPOWER,   /* 电机供电不足 */
+  APP_LOGMSG_MOTOR1_FAIL,      /* 1号电机故障 */
+  APP_LOGMSG_MOTOR2_FAIL,      /* 2号电机故障 */
+  APP_LOGMSG_MOTOR3_FAIL,      /* 3号电机故障 */
+  APP_LOGMSG_MOTOR4_FAIL,      /* 4号电机故障 */
+  APP_LOGMSG_MOTOR_ALL_FAIL,   /* 全部电机故障 */
+  APP_LOGMSG_MOTOR_DEAD,       /* 电机电池没电 */
+  APP_LOGMSG_MOTOR_CHARGE,     /* 电机电池需充电 */
+  APP_LOGMSG_MAIN_CHARGE,      /* 主控电池需充电 */
+  APP_LOGMSG_ALARM_ACTIVE,     /* 有告警 */
+  APP_LOGMSG_ALARM_NONE,       /* 无告警 */
+  APP_LOGMSG_COUNT
 } App_LogMessageId_t;
 
-/**
- * @brief 初始化业务消息日志生产器和 Framework 本地日志 ring。
- *
- * @param[in] now_ms 当前系统时间，单位：ms。
- */
+#include "app_display_model.h"
+#include "px4lite_types.h"
+
+/** @brief 复位日志缓冲与去抖/档位状态。 */
 void App_MessageLogInit(uint32_t now_ms);
 
-/**
- * @brief 推进一次业务消息日志状态机。
- *
- * @param[in] now_ms 当前系统时间，单位：ms。
- */
+/** @brief 每周期推进：读本机模块/环境/告警，按去抖规则追加日志。 */
 void App_MessageLogUpdate(uint32_t now_ms);
 
 /**
- * @brief 复制当前本地业务消息日志。
- *
- * @param[out] entries 输出日志数组，不能为 NULL。
- * @param[in] capacity 输出数组容量。
- * @param[out] version 日志版本号，可为 NULL。
- * @param[out] last_seq 最新日志序号，可为 NULL。
- *
- * @return 复制到输出数组的条目数。
+ * @brief 拷出当前本机日志快照(按时间旧→新)。
+ * @return PX4LITE_OK 有数据；PX4LITE_NOT_READY 无条目；PX4LITE_INVALID_PARAM 空指针。
  */
-uint16_t App_MessageLogCopy(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint32_t *version, uint16_t *last_seq);
-
-uint32_t App_MessageLogGetVersion(void);
+Px4Lite_Result_t App_MessageLogCopy(App_DisplayLogSnapshot_t *out);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif /* APP_MESSAGE_LOG_H */

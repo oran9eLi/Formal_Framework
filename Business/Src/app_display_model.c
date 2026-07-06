@@ -249,24 +249,9 @@ Px4Lite_Result_t App_GetDisplayMessageLog(App_DisplayLogSnapshot_t *out, uint32_
 
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
 
-  /* LOCAL：返回本机业务日志缓冲(app_message_log 生产)。 */
+  /* LOCAL：本机业务日志完全走屏幕原版 app_message_log(App_DisplayLogSnapshot_t 直出)。 */
   if (App_GetRemoteDisplayMode() != PX4LITE_REMOTE_MODE_REMOTE) {
-    uint32_t version = 0U;
-
-    memset(out, 0, sizeof(*out));
-    n = App_MessageLogCopy(entries, (uint16_t)APP_DISPLAY_LOG_CAP, &version, &last_seq);
-    out->version = version;
-    out->count   = n;
-    for (i = 0U; i < n; ++i) {
-      out->entries[i].sequence    = entries[i].sequence;
-      out->entries[i].message_id  = entries[i].message_id;
-      out->entries[i].time_hhmmss = entries[i].time_hhmmss;
-      out->entries[i].fault_code  = entries[i].fault_code;
-      out->entries[i].severity    = entries[i].severity;
-      out->entries[i].source_id   = entries[i].source_id;
-      out->entries[i].active      = entries[i].active;
-    }
-    return PX4LITE_OK;
+    return App_MessageLogCopy(out);
   }
 
   /* REMOTE：返回远端同步日志(fj NAMED_VALUE 日志通道)；version 取远端日志版本。 */
