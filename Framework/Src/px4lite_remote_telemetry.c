@@ -155,9 +155,12 @@ Px4Lite_Result_t Px4Lite_RemoteTelemetryCopyNode(uint8_t node_id, Px4Lite_Remote
   uint8_t index;
 
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
+  /* 未知 node_id(尚无绑定槽) 返回 NOT_READY 而非 INVALID_PARAM：
+     收帧首帧走此路径时，RxRun 需据 NOT_READY 清零后继续 decode+CommitNode 才能首次分配槽。
+     若返回 INVALID_PARAM，RxRun 会提前 return，新节点永远建不了槽、进不了表。 */
   if (RemoteTelemetry_NodeIdToIndex(node_id, &index) == 0U) {
     memset(out, 0, sizeof(*out));
-    return PX4LITE_INVALID_PARAM;
+    return PX4LITE_NOT_READY;
   }
 
   taskENTER_CRITICAL();
