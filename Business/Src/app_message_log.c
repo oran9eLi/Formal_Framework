@@ -102,7 +102,12 @@ static void AppLog_UpdateBands(uint32_t now_ms)
 
 static Px4Lite_State_t AppLog_ModuleState(Px4Lite_ModuleId_t id, Px4Lite_ModuleStatus_t *status)
 {
-  if ((status != 0) && (App_GetModuleStatus(id, status) == PX4LITE_OK)) { return status->state; }
+  Px4Lite_ModuleStatus_t local;
+  Px4Lite_ModuleStatus_t *slot = (status != 0) ? status : &local;
+
+  /* status 可为 NULL（调用方只需 state 时）：仍用局部缓冲读真实状态，
+     不能因 NULL 就直接返回 OFFLINE，否则姿态/环境/通信/存储永远被判断开。 */
+  if (App_GetModuleStatus(id, slot) == PX4LITE_OK) { return slot->state; }
   if (status != 0) { memset(status, 0, sizeof(*status)); status->module_id = id; status->state = PX4LITE_STATE_OFFLINE; }
   return PX4LITE_STATE_OFFLINE;
 }
