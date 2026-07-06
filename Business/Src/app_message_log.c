@@ -20,6 +20,7 @@
 #define APP_MOTOR_BAT_DEAD_MV    9000U
 #define APP_MOTOR_BAT_RUN_MV     9900U
 #define APP_MOTOR_BAT_OK_MV      10500U
+#define APP_MOTOR_BAT_MAX_MV     13500U /* 超此值视为电机电池未插(ADC悬空高值)，判断开；须与显示层一致 */
 #define APP_MAIN_BAT_PRESENT_MV  5000U
 #define APP_MAIN_BAT_CHARGE_MV   10500U
 #define APP_BAT_HYST_MV          200U
@@ -97,6 +98,8 @@ static void AppLog_UpdateBands(uint32_t now_ms)
   App_EnvironmentSnapshot_t env;
   if (App_CopyEnvironment(&env, now_ms) != PX4LITE_OK) { return; }
   s_motor_band = AppLog_BandHyst(s_motor_band, env.voltage2_mv, motor_t, 4U);
+  /* 超上限视为未插电池(ADC 悬空高值)，强制断开档，与显示层电机灯判定一致，避免没插却报"电机正常"。 */
+  if (env.voltage2_mv > APP_MOTOR_BAT_MAX_MV) { s_motor_band = APP_MOTOR_BAND_DISCONNECT; }
   s_main_band  = AppLog_BandHyst(s_main_band, env.voltage_mv, main_t, 2U);
 }
 
