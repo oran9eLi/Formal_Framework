@@ -419,6 +419,9 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
     case DISPLAY_HMI_VAR_UPTIME_MS:
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu""\xE7""\xA7""\x92", (unsigned long)(value / 1000U));
       break;
+    case DISPLAY_HMI_VAR_VIEW_NODE_ID:
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "DCDW-%03lu", (unsigned long)value);
+      break;
     case DISPLAY_HMI_VAR_FLIGHT_TIME_S:
       hh = value / 3600U;
       mm = (value / 60U) % 60U;
@@ -1063,6 +1066,8 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
   /* 中间标题 */
   (void)Display_LvglCreateCenteredLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 298, 9, 268, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
   (void)Display_LvglCreateCenteredLabel(bar, Display_LvglPageTitle(page), 298, 35, 268, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
+  /* 本机/当前查看对象身份 DCDW-xxx：本地模式=本机 sysid(UID派生，两台应不同)，远端模式=选中节点。 */
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_VIEW_NODE_ID, 568, 1, 100, &lv_font_montserrat_14);
   /* 本地/远端按钮：放在"系统"左侧，点按切换本地常规页 / 远端通信连接页；
      标题随当前页显示"本地"或"远端"，按在远端页时高亮。 */
   {

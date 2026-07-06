@@ -1144,6 +1144,17 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
 
   display_mode = App_GetRemoteDisplayMode();
 
+  /* 右上角身份显示：本地模式=本机 sysid(UID派生)，远端模式=当前选中远端节点。 */
+  {
+    uint8_t view_id = 0U;
+    if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
+      (void)App_GetSelectedRemoteNode(&view_id);
+    } else {
+      view_id = App_GetLocalNodeId();
+    }
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_VIEW_NODE_ID, view_id);
+  }
+
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_UPTIME_MS, now_ms);
   /* 飞行时间(上电后运行)，秒粒度，避免毫秒每帧抖动导致重绘 */
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms / 1000U);

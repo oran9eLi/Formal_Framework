@@ -825,6 +825,11 @@ uint8_t App_GetSelectedRemoteNode(uint8_t *node_id)
   return (Px4Lite_GetSelectedRemoteNode(node_id) == PX4LITE_OK) ? 1U : 0U;
 }
 
+uint8_t App_GetLocalNodeId(void)
+{
+  return (uint8_t)Px4Lite_IdentityGetNodeId();
+}
+
 static App_RemoteNodeState_t App_MapRemoteNodeState(Px4Lite_RemoteNodeState_t state)
 {
   switch (state) {

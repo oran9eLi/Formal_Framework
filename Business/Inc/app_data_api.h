@@ -515,6 +515,13 @@ uint8_t App_RemoteViewExpired(uint32_t now_ms);
 uint8_t App_GetSelectedRemoteNode(uint8_t *node_id);
 
 /**
+ * @brief 返回本机 node_id(=MAVLink sysid，由芯片 UID 派生)，用于本地视图身份显示。
+ *
+ * @return 本机 node_id，范围 [1,250]。
+ */
+uint8_t App_GetLocalNodeId(void);
+
+/**
  * @brief 复制 LVGL 通信页使用的远端节点列表。
  *
  * @param[out] out 输出数组，不能为 NULL。
