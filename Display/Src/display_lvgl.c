@@ -574,6 +574,10 @@ static const char *Display_LvglLogMessageText(Display_LogMsg_t msg)
   switch (msg) {
     case DISPLAY_LOGMSG_SYSTEM_START:
       return "\xE7""\xB3""\xBB""\xE7""\xBB""\x9F""\xE5""\x90""\xAF""\xE5""\x8A""\xA8";
+    case DISPLAY_LOGMSG_IMU_LEVEL_WAIT:
+      return "\xE5""\xA7""\xBF""\xE6""\x80""\x81""\xE6""\xA0""\xA1""\xE5""\x87""\x86""\xE4""\xB8""\xAD"; /* 姿态校准中 */
+    case DISPLAY_LOGMSG_IMU_LEVEL_OK:
+      return "\xE5""\xA7""\xBF""\xE6""\x80""\x81""\xE6""\xA0""\xA1""\xE5""\x87""\x86""\xE5""\xAE""\x8C""\xE6""\x88""\x90"; /* 姿态校准完成 */
     case DISPLAY_LOGMSG_SELFCHECK_OK:
       return "\xE8""\x87""\xAA""\xE6""\xA3""\x80""\xE9""\x80""\x9A""\xE8""\xBF""\x87";
     case DISPLAY_LOGMSG_SELFCHECK_PART:
