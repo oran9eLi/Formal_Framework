@@ -139,7 +139,7 @@
  * - MAVLink system id / LoRa node id 从末尾三位数字派生，避免再维护主从编号。
  * - STM32 硬件唯一 UID 由 Platform Adapter 读取，不在本文件手填。
  */
-#define PX4LITE_DEVICE_NAME              "DCDW-001"
+#define PX4LITE_DEVICE_NAME              "DCDW-002"
 #define PX4LITE_MAVLINK_COMPONENT_ID     191U
 #define PX4LITE_LORA_UART_BAUD_BPS       9600U /**< USART3 到 E22 的本地串口波特率，单位：bit/s。 */
 #define PX4LITE_LORA_AIR_RATE_BPS        9600U /**< E22 当前空中速率，单位：bit/s。 */
