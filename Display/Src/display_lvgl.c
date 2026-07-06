@@ -1172,8 +1172,9 @@ static void Display_LvglCreateSystemColumnAt(lv_obj_t *parent, lv_coord_t x, lv_
   uint16_t i;
 
   card = Display_LvglCreateCard(parent, x, DISPLAY_LVGL_BODY_Y, w, DISPLAY_LVGL_BODY_H, "\xE7""\xB3""\xBB""\xE7""\xBB""\x9F""\xE7""\x8A""\xB6""\xE6""\x80""\x81");
+  /* 起始 44 + 行距 28：含 RemoteID 共 10 项，末项底部约 44+9*28+16=312，容于卡片高 330。 */
   for (i = 0U; i < DISPLAY_LVGL_STATUS_COUNT; i++) {
-    lv_coord_t y = (lv_coord_t)(48 + (i * 30U));
+    lv_coord_t y = (lv_coord_t)(44 + (i * 28U));
     s_status_leds[i] = Display_LvglCreateStatusDot(card, 18, y + 3);
     (void)Display_LvglCreateLabel(card, s_status_items[i].name, 42, y, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
   }
@@ -1374,11 +1375,12 @@ static void Display_LvglCreateSelfCheckPage(lv_obj_t *parent)
   uint16_t i;
 
   card = Display_LvglCreateCard(parent, 24, 82, 500, 320, "\xE4""\xB8""\x8A""\xE7""\x94""\xB5""\xE8""\x87""\xAA""\xE6""\xA3""\x80");
+  /* 3 列网格：含 RemoteID 共 10 项占 4 行；行距压到 66 让第 4 行容于卡片高 320。 */
   for (i = 0U; i < DISPLAY_LVGL_STATUS_COUNT; i++) {
     lv_coord_t col = (lv_coord_t)(i % 3U);
     lv_coord_t row = (lv_coord_t)(i / 3U);
     lv_coord_t x   = (lv_coord_t)(34 + (col * 154));
-    lv_coord_t y   = (lv_coord_t)(58 + (row * 72));
+    lv_coord_t y   = (lv_coord_t)(52 + (row * 66));
 
     s_status_leds[i] = Display_LvglCreateStatusDot(card, x, y + 2);
     (void)Display_LvglCreateLabel(card, s_status_items[i].name, x + 22, y - 2, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));

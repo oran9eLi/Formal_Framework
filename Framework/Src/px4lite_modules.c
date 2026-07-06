@@ -904,7 +904,6 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 {
 #if PX4LITE_ENABLE_LORA
   Px4Lite_CommDebugInfo_t info;
-  Px4Lite_State_t state;
   Px4Lite_Result_t result;
   Px4Lite_Result_t rx_result;
   Px4Lite_Result_t tx_result;
@@ -920,28 +919,24 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
-  state = Px4Lite_LoRaGetState(now_ms);
+  (void)Px4Lite_LoRaGetState(now_ms); /* 仍调用以推进内部状态机；灯色只按硬件在位判定 */
+  (void)result;
   peer_rx_ms = Px4Lite_MavlinkRxLastPeerMs();
 
   taskENTER_CRITICAL();
   s_status[PX4LITE_MODULE_LORA].last_rx_ms    = peer_rx_ms;
   s_status[PX4LITE_MODULE_LORA].error_count   = info.parse_error_count + info.send_error_count;
   s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count + info.rx_sequence_lost_count;
-  if ((state == PX4LITE_STATE_ONLINE) && ((result == PX4LITE_OK) || (result == PX4LITE_BUSY))) {
-    s_status[PX4LITE_MODULE_LORA].last_valid_ms = now_ms;
-  }
   taskEXIT_CRITICAL();
 
   /*
-   * 教学 LoRa 模式只用本机硬件在位状态驱动红/绿灯：
-   * E22 未供电或 AUX 长期不可用为红灯；本机模块可用即为绿灯。
-   * 是否收到对端数据只进入统计和远端数据新鲜度，不再影响本机 LoRa 灯色。
+   * LoRa 灯色/通信状态按屏幕原版：本机模块在位(E22 插着)即 ONLINE(绿)，未接入为 FAILED(红)。
+   * 是否收到对端数据只进入统计与远端数据新鲜度，不影响本机 LoRa 灯，
+   * 避免 E22 已接上但因未收到对端帧被判非 ONLINE、消息日志误报"通信断开"。
    */
-  if ((state == PX4LITE_STATE_FAILED) || (state == PX4LITE_STATE_OFFLINE)) {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
-  } else if ((result != PX4LITE_OK) && (result != PX4LITE_BUSY)) {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
-  } else if (state == PX4LITE_STATE_ONLINE) {
+  if (Px4Lite_LoRaIsPresent() == 0U) {
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_FAILED, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  } else {
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   }
 #endif
