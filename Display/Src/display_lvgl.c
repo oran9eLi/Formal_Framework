@@ -148,8 +148,26 @@ static uint8_t s_lvgl_display_ready;
 static uint8_t s_control_update_active;
 static uint32_t s_last_tick_ms;
 static uint32_t s_next_remote_list_rebuild_ms;
+static uint32_t s_remote_list_sig; /* 通信连接页节点列表内容签名(node_id+state)，仅内容变化才整页重建，避免每秒屏闪 */
 static App_RemoteNodeView_t s_remote_node_views[DISPLAY_LVGL_REMOTE_ROWS];
 static char s_remote_node_texts[DISPLAY_LVGL_REMOTE_ROWS][64];
+
+/**
+ * @brief 计算远端节点列表内容签名，只纳入 node_id 与在线状态。
+ * @note  丢包率/接收计数持续微变不进签名，避免通信连接页每秒整页重建导致屏闪；
+ *        仅当节点上下线或状态切换时签名变化，才触发一次重建。
+ */
+static uint32_t Display_LvglRemoteNodeSig(const App_RemoteNodeView_t *views, uint8_t count)
+{
+  uint32_t sig = 2166136261UL ^ (uint32_t)count;
+  uint8_t i;
+
+  for (i = 0U; i < count; i++) {
+    sig = (sig * 16777619UL) ^ (uint32_t)views[i].node_id;
+    sig = (sig * 16777619UL) ^ (uint32_t)views[i].state;
+  }
+  return sig;
+}
 
 /**
  * @brief 远端视图下的触摸活动保活：任何点按都刷新远端视图有效期。
@@ -1897,6 +1915,9 @@ static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_TX_COUNT, "\xE5""\x8F""\x91""\xE9""\x80""\x81""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 32, 148, 180);
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_RX_COUNT, "\xE6""\x8E""\xA5""\xE6""\x94""\xB6""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 32, 188, 180);
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_LOSS_RATE, "\xE4""\xB8""\xA2""\xE5""\x8C""\x85""\xE7""\x8E""\x87", 32, 228, 180);
+
+  /* 记录本次构建的节点列表签名；周期检查只在签名变化时才重建，静止时不重绘。 */
+  s_remote_list_sig = Display_LvglRemoteNodeSig(s_remote_node_views, count);
 }
 
 /**
@@ -2046,14 +2067,24 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
     Display_LvglRequestLocalView(s_current_lvgl_page, 1U);
   }
 
-  /* 通信连接页周期重建节点列表，反映在线状态与丢包率变化。 */
+  /* 通信连接页：仅当节点上下线/状态变化(签名变化)时才整页重建，静止时不重绘，消除屏闪。 */
   if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) &&
       (s_page_change_requested == 0U) &&
       (s_next_remote_list_rebuild_ms != 0U) &&
       ((int32_t)(now_ms - s_next_remote_list_rebuild_ms) >= 0)) {
-    s_requested_page              = DISPLAY_HMI_PAGE_HIDDEN;
-    s_page_change_requested       = 1U;
-    s_page_rebuild_requested      = 1U;
+    App_RemoteNodeView_t probe[DISPLAY_LVGL_REMOTE_ROWS];
+    uint8_t probe_count = 0U;
+    uint32_t sig;
+
+    if (App_CopyRemoteNodeStatuses(probe, DISPLAY_LVGL_REMOTE_ROWS, &probe_count, now_ms) != PX4LITE_OK) {
+      probe_count = 0U;
+    }
+    sig = Display_LvglRemoteNodeSig(probe, probe_count);
+    if (sig != s_remote_list_sig) {
+      s_requested_page         = DISPLAY_HMI_PAGE_HIDDEN;
+      s_page_change_requested  = 1U;
+      s_page_rebuild_requested = 1U;
+    }
     s_next_remote_list_rebuild_ms = now_ms + DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS;
   }
 
