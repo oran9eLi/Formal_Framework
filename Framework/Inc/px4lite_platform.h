@@ -317,6 +317,9 @@ void Px4Lite_RemoteIdAbortTx(void);
  */
 Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len);
 
+Px4Lite_Result_t Px4Lite_RpiMavlinkInit(void);
+Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len);
+
 /**
  * @brief 获取 LoRa 模块当前公开状态。
  *

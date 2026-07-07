@@ -17,6 +17,7 @@
 #include "px4lite_identity.h"
 #include "px4lite_local_msglog.h"
 #include "px4lite_platform.h"
+#include "px4lite_remoteid_tx.h"
 #include "px4lite_topics.h"
 
 #if defined(__CC_ARM)
@@ -128,6 +129,20 @@ static uint8_t s_motor_urgent_hold;
 static uint8_t s_module_state_part;
 static uint8_t s_tx_enabled;
 
+#if PX4LITE_ENABLE_RPI_MAVLINK
+/* 树莓派链路独立发送序号。RPi 被视为一条独立 MAVLink 链路，其序号必须自成
+   连续序列(镜像帧 + RPi 专属扩展帧共用本计数器)，才能让树莓派侧正确统计丢包。 */
+static uint8_t s_rpi_tx_seq;
+static uint32_t s_next_rpi_lorastat_ms;
+static uint32_t s_next_rpi_ridstat_ms;
+static uint32_t s_next_rpi_alarm_ms;
+static uint32_t s_next_rpi_log_ms;
+static uint32_t s_rpi_lorastat_count;
+static uint32_t s_rpi_ridstat_count;
+static uint32_t s_rpi_alarm_count;
+static uint32_t s_rpi_log_count;
+#endif
+
 #define MAV_TX_MOTOR_PAIR_COUNT     2U
 #define MAV_TX_MOTOR_URGENT_FRAMES  4U
 
@@ -153,6 +168,119 @@ static uint8_t MavTx_ItemAllowed(const MavTx_Item_t *item, uint32_t now_ms)
   if ((item->scope == MAV_TX_SCOPE_EXTENSION) && (PX4LITE_MAVLINK_ENABLE_NAMED_VALUE_EXTENSIONS == 0U)) { return 0U; }
   return 1U;
 }
+
+#if PX4LITE_ENABLE_RPI_MAVLINK
+/**
+ * @brief 依据当前 magic/len/seq/sysid/compid/msgid 与载荷重算 MAVLink CRC。
+ * @details
+ * 改写 compid 或 seq 后 s_message.checksum 失配，接收端会判为 CRC 错误。
+ * 本函数按 MAVLink1/2 头部布局重算校验和并写回 s_message.checksum，
+ * 供 RPi 镜像帧与 RPi 专属扩展帧复用。
+ */
+static void MavTx_RecomputeChecksum(mavlink_message_t *msg)
+{
+  uint8_t header[MAVLINK_CORE_HEADER_LEN + 1U];
+  uint8_t header_len;
+  uint16_t checksum;
+
+  if (msg->magic == MAVLINK_STX_MAVLINK1) {
+    header_len = MAVLINK_CORE_HEADER_MAVLINK1_LEN;
+    header[0] = msg->magic;
+    header[1] = msg->len;
+    header[2] = msg->seq;
+    header[3] = msg->sysid;
+    header[4] = msg->compid;
+    header[5] = (uint8_t)(msg->msgid & 0xFFU);
+  } else {
+    header_len = MAVLINK_CORE_HEADER_LEN;
+    header[0] = msg->magic;
+    header[1] = msg->len;
+    header[2] = msg->incompat_flags;
+    header[3] = msg->compat_flags;
+    header[4] = msg->seq;
+    header[5] = msg->sysid;
+    header[6] = msg->compid;
+    header[7] = (uint8_t)(msg->msgid & 0xFFU);
+    header[8] = (uint8_t)((msg->msgid >> 8) & 0xFFU);
+    header[9] = (uint8_t)((msg->msgid >> 16) & 0xFFU);
+  }
+
+  checksum = crc_calculate(&header[1], (uint16_t)(header_len - 1U));
+  crc_accumulate_buffer(&checksum, _MAV_PAYLOAD(msg), msg->len);
+  crc_accumulate(mavlink_get_crc_extra(msg), &checksum);
+  msg->checksum = checksum;
+}
+#endif
+
+#if PX4LITE_ENABLE_RPI_MAVLINK
+/**
+ * @brief 把任意已编码 MAVLink 帧镜像一份到树莓派 USART1(公开接口，见头文件)。
+ * @details
+ * 改写 compid=193、用 RPi 独立连续序号(s_rpi_tx_seq)重编号并重算 CRC，只写 USART1，
+ * 返回前恢复原帧 compid/seq/checksum，不影响调用方。RPi 链路自成连续序列(镜像帧、
+ * RPi 专属帧、RemoteID 身份镜像共用本计数器)，让树莓派侧丢包统计正确；LoRa/RemoteID
+ * 各自的 COMM_0 通道序号不受影响。
+ */
+Px4Lite_Result_t Px4Lite_MavlinkTxMirrorToRpi(mavlink_message_t *msg)
+{
+  uint8_t original_component_id;
+  uint8_t original_seq;
+  uint16_t original_checksum;
+  uint16_t length;
+
+  if (msg == 0) { return PX4LITE_INVALID_PARAM; }
+
+  original_component_id = msg->compid;
+  original_seq = msg->seq;
+  original_checksum = msg->checksum;
+
+  msg->compid = PX4LITE_RPI_MAVLINK_COMPONENT_ID;
+  msg->seq    = s_rpi_tx_seq++;
+  MavTx_RecomputeChecksum(msg);
+
+  length = mavlink_msg_to_send_buffer(s_frame, msg);
+
+  msg->compid   = original_component_id;
+  msg->seq      = original_seq;
+  msg->checksum = original_checksum;
+
+  if ((length == 0U) || (length > (uint16_t)sizeof(s_frame))) { return PX4LITE_IO_ERROR; }
+  return Px4Lite_RpiMavlinkSend(s_frame, length);
+}
+#endif
+
+static void MavTx_SendRpiCopy(void)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  (void)Px4Lite_MavlinkTxMirrorToRpi(&s_message);
+#endif
+}
+
+#if PX4LITE_ENABLE_RPI_MAVLINK
+/**
+ * @brief 将已编码(compid=193, COMM_0)的 s_message 仅发送到树莓派 USART1。
+ * @details
+ * 调用方用 encode_chan 在 COMM_0 上编码 RPi 专属扩展消息，这会占用一个 LoRa
+ * 发送序号，但该帧不经 LoRa。这里先把 COMM_0 序号回退，避免远端 LoRa 接收方
+ * 把这个"空洞"误判为丢包(见 Px4Lite_MavlinkTxRun 内相关注释)，再用 RPi 独立
+ * 序号重新编号并重算 CRC，最后只写 USART1。
+ */
+static Px4Lite_Result_t MavTx_SendRpiExclusive(void)
+{
+  mavlink_status_t *chan;
+  uint16_t length;
+
+  chan = mavlink_get_channel_status(MAVLINK_COMM_0);
+  if (chan != 0) { chan->current_tx_seq = s_message.seq; }
+
+  s_message.seq = s_rpi_tx_seq++;
+  MavTx_RecomputeChecksum(&s_message);
+
+  length = mavlink_msg_to_send_buffer(s_frame, &s_message);
+  if ((length == 0U) || (length > (uint16_t)sizeof(s_frame))) { return PX4LITE_IO_ERROR; }
+  return Px4Lite_RpiMavlinkSend(s_frame, length);
+}
+#endif
 
 static void MavTx_QueueAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component)
 {
@@ -286,12 +414,18 @@ static uint8_t MavTx_VisibleSatellites(const Px4Lite_SensorGnss_t *gnss)
  */
 static Px4Lite_Result_t MavTx_SendPrepared(void)
 {
+  Px4Lite_Result_t result;
   uint16_t length;
 
   length = mavlink_msg_to_send_buffer(s_frame, &s_message);
   if ((length == 0U) || (length > (uint16_t)sizeof(s_frame))) { return PX4LITE_IO_ERROR; }
 
-  return Px4Lite_LoRaSend(s_frame, length);
+  result = PX4LITE_OK;
+  if (s_tx_enabled != 0U) {
+    result = Px4Lite_LoRaSend(s_frame, length);
+  }
+  MavTx_SendRpiCopy();
+  return result;
 }
 
 static Px4Lite_Result_t MavTx_SendPendingAck(uint32_t now_ms)
@@ -1172,6 +1306,212 @@ static void MavTx_RecordResult(Px4Lite_Result_t result, uint32_t now_ms, uint32_
   }
 }
 
+#if PX4LITE_ENABLE_RPI_MAVLINK
+/* 小端写 16 位，TUNNEL payload 多字节字段统一小端(与 RPi 侧 ReadU16LE 对齐)。 */
+static void MavTx_TunPutU16(uint8_t *p, uint16_t v)
+{
+  p[0] = (uint8_t)(v & 0xFFU);
+  p[1] = (uint8_t)((v >> 8) & 0xFFU);
+}
+
+/**
+ * @brief 打包完整告警表为 TUNNEL payload(payload_type=0x8001)。
+ * @details
+ * 表头 2 字节：ver + active_count；每行 7 字节：source_id(1)+fault_code(2,LE)+
+ * severity(1)+active(1)+age_s(2,LE)。只收 active 行，最多 PX4LITE_MODULE_COUNT 行。
+ * 布局与 RPi 侧 DecodeAlarmTable 逐字段一致。返回 payload 长度(至少 2 字节表头)。
+ */
+static uint16_t MavTx_PackAlarmTable(uint8_t ver, uint32_t now_ms, uint8_t *out, uint16_t out_cap)
+{
+  uint16_t off = 2U;
+  uint8_t n = 0U;
+  uint16_t i;
+  Px4Lite_AlarmRecord_t rec;
+
+  if ((out == 0) || (out_cap < 2U)) { return 0U; }
+
+  for (i = 0U; i < (uint16_t)PX4LITE_MODULE_COUNT; ++i) {
+    uint8_t *row;
+    uint32_t age_s;
+
+    if (Px4Lite_CopyAlarmRecord(i, &rec) != PX4LITE_OK) { continue; }
+    if (rec.active == 0U) { continue; }
+    if ((uint16_t)(off + 7U) > out_cap) { break; }
+
+    row    = &out[off];
+    row[0] = (uint8_t)(rec.source_id & 0xFFU);
+    MavTx_TunPutU16(&row[1], rec.fault_code);
+    row[3] = (uint8_t)rec.severity;
+    row[4] = rec.active;
+    age_s  = (now_ms - rec.raised_ms) / 1000U;
+    if (age_s > 0xFFFFU) { age_s = 0xFFFFU; }
+    MavTx_TunPutU16(&row[5], (uint16_t)age_s);
+
+    off = (uint16_t)(off + 7U);
+    n++;
+  }
+
+  out[0] = ver;
+  out[1] = n;
+  return off;
+}
+
+/**
+ * @brief 打包当前完整消息日志为 TUNNEL payload(payload_type=0x8002)。
+ * @details
+ * 表头 3 字节：latest_seq(2,LE)+count；每条 8 字节：sequence(2,LE)+message_id(2,LE)+
+ * time(3 字节，按 RPi 契约填时/分/秒各 1 字节)+severity(1)。取当前日志全量快照
+ * (最多 PX4LITE_LOCAL_LOG_CAP 条)，RPi 侧按 sequence 去重。返回 payload 长度。
+ * 注意 time 用时/分/秒三字节，非旧 tunnel 的 U24 十进制，遵循 RPi 数据格式文档。
+ */
+static uint16_t MavTx_PackMessageLogTable(uint8_t *out, uint16_t out_cap)
+{
+  Px4Lite_LogEntry_t entries[PX4LITE_LOCAL_LOG_CAP];
+  uint16_t latest_seq = 0U;
+  uint16_t count;
+  uint16_t off = 3U;
+  uint8_t n = 0U;
+  uint16_t i;
+
+  if ((out == 0) || (out_cap < 3U)) { return 0U; }
+
+  count = Px4Lite_LocalMsgLogCopy(entries, (uint16_t)PX4LITE_LOCAL_LOG_CAP, 0, &latest_seq);
+  for (i = 0U; i < count; ++i) {
+    uint8_t *row;
+    uint32_t t;
+
+    if ((uint16_t)(off + 8U) > out_cap) { break; }
+    row = &out[off];
+    MavTx_TunPutU16(&row[0], entries[i].sequence);
+    MavTx_TunPutU16(&row[2], entries[i].message_id);
+    t = entries[i].time_hhmmss;
+    row[4] = (uint8_t)((t / 10000U) % 100U); /* 时 */
+    row[5] = (uint8_t)((t / 100U) % 100U);   /* 分 */
+    row[6] = (uint8_t)(t % 100U);            /* 秒 */
+    row[7] = (uint8_t)entries[i].severity;
+
+    off = (uint16_t)(off + 8U);
+    n++;
+  }
+
+  MavTx_TunPutU16(&out[0], latest_seq);
+  out[2] = n;
+  return off;
+}
+
+/**
+ * @brief RPi 专属：用 NAMED_VALUE_INT("LORASTAT") 报告 LoRa 链路状态。
+ * @details
+ * 树莓派不接 LoRa 串口，需由本机把 LoRa 链路状态转达。value 位布局：
+ *   [0:15]  接收侧估算丢包率，单位 0.1%(0..1000)
+ *   [16:23] LoRa 节点 ID
+ *   [24]    LoRa 模块在位标志
+ *   [25:27] LoRa 链路状态枚举(Px4Lite_State_t)
+ * 仅发 USART1，不进入 LoRa 目录。
+ */
+static Px4Lite_Result_t MavTx_SendRpiLoraStatus(uint32_t now_ms)
+{
+  Px4Lite_CommDebugInfo_t info;
+  mavlink_named_value_int_t packet;
+  uint32_t packed;
+  uint16_t loss;
+  uint8_t state;
+
+  Px4Lite_LoRaGetDebugInfo(&info);
+  loss  = (info.rx_loss_rate_x10 > 1000U) ? 1000U : info.rx_loss_rate_x10;
+  state = (uint8_t)Px4Lite_LoRaGetState(now_ms);
+
+  packed  = (uint32_t)loss & 0xFFFFUL;
+  packed |= ((uint32_t)Px4Lite_IdentityGetNodeId() & 0xFFUL) << 16U;
+  packed |= ((uint32_t)((Px4Lite_LoRaIsPresent() != 0U) ? 1U : 0U)) << 24U;
+  packed |= ((uint32_t)(state & 0x07U)) << 25U;
+
+  memset(&packet, 0, sizeof(packet));
+  packet.time_boot_ms = now_ms;
+  packet.value        = (int32_t)packed;
+  memcpy(packet.name, "LORASTAT", 8U);
+
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  return MavTx_SendRpiExclusive();
+}
+
+/**
+ * @brief RPi 专属：用 NAMED_VALUE_INT("RIDSTAT") 报告 RemoteID 广播状态。
+ * @details
+ * value 位布局：[0:15] 位置广播成功计数低 16 位；[16:31] 编码/提交错误计数低 16 位。
+ * time_boot_ms 复用 RemoteID 最近一次成功提交时间，树莓派据此判断广播是否仍在推进。
+ * 仅发 USART1。
+ */
+static Px4Lite_Result_t MavTx_SendRpiRemoteIdStatus(uint32_t now_ms)
+{
+  Px4Lite_RemoteIdTxStats_t rid;
+  mavlink_named_value_int_t packet;
+  uint32_t packed;
+
+  Px4Lite_RemoteIdTxGetStats(&rid);
+  packed  = (uint32_t)(rid.location_count & 0xFFFFUL);
+  packed |= ((uint32_t)(rid.error_count & 0xFFFFUL)) << 16U;
+
+  memset(&packet, 0, sizeof(packet));
+  packet.time_boot_ms = rid.last_success_ms;
+  packet.value        = (int32_t)packed;
+  memcpy(packet.name, "RIDSTAT", 7U);
+
+  (void)now_ms;
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  return MavTx_SendRpiExclusive();
+}
+
+/**
+ * @brief RPi 专属：用 TUNNEL(payload_type=0x8001) 发送完整活动告警表。
+ * @details
+ * 替代 LoRa 上的 ALRMHI/ALRMMSK 摘要，给树莓派逐行完整告警表(D1=全量)。无活动告警
+ * 时 count=0，让 RPi 侧感知告警已清空。仅发 USART1。
+ */
+static Px4Lite_Result_t MavTx_SendRpiAlarmTable(uint32_t now_ms)
+{
+  mavlink_tunnel_t packet;
+  uint16_t len;
+
+  memset(&packet, 0, sizeof(packet));
+  len = MavTx_PackAlarmTable(1U, now_ms, packet.payload, (uint16_t)sizeof(packet.payload));
+  if (len < 2U) { return PX4LITE_NOT_READY; }
+
+  packet.target_system    = 0U;
+  packet.target_component = 0U;
+  packet.payload_type     = 0x8001U;
+  packet.payload_length   = (uint8_t)len;
+
+  (void)mavlink_msg_tunnel_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  return MavTx_SendRpiExclusive();
+}
+
+/**
+ * @brief RPi 专属：用 TUNNEL(payload_type=0x8002) 发送完整消息日志快照。
+ * @details
+ * 替代 LoRa 上的单条 LOGSYNC，一帧带当前全部日志(最多 PX4LITE_LOCAL_LOG_CAP 条)，
+ * RPi 侧按 sequence 去重。周期性重发即为全量重播。仅发 USART1。
+ */
+static Px4Lite_Result_t MavTx_SendRpiMessageLogTable(uint32_t now_ms)
+{
+  mavlink_tunnel_t packet;
+  uint16_t len;
+
+  (void)now_ms;
+  memset(&packet, 0, sizeof(packet));
+  len = MavTx_PackMessageLogTable(packet.payload, (uint16_t)sizeof(packet.payload));
+  if (len < 3U) { return PX4LITE_NOT_READY; }
+
+  packet.target_system    = 0U;
+  packet.target_component = 0U;
+  packet.payload_type     = 0x8002U;
+  packet.payload_length   = (uint8_t)len;
+
+  (void)mavlink_msg_tunnel_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  return MavTx_SendRpiExclusive();
+}
+#endif
+
 static const MavTx_Item_t s_mav_tx_catalog[] = {
     {"HEARTBEAT", PX4LITE_MAVLINK_ENABLE_HEARTBEAT, PX4LITE_MAVLINK_HEARTBEAT_PERIOD_MS, MAVLINK_MSG_ID_HEARTBEAT, &s_next_heartbeat_ms, &s_stats.heartbeat_count, MavTx_SendHeartbeat, 0, MAV_TX_SCOPE_ALWAYS},
     {"GPS_RAW", PX4LITE_MAVLINK_ENABLE_GPS_RAW, PX4LITE_MAVLINK_GPS_RAW_PERIOD_MS, MAVLINK_MSG_ID_GPS_RAW_INT, &s_next_gps_raw_ms, &s_stats.gps_raw_count, MavTx_SendGpsRaw, 0, MAV_TX_SCOPE_STANDARD},
@@ -1190,6 +1530,14 @@ static const MavTx_Item_t s_mav_tx_catalog[] = {
     {"STATUSTEXT", PX4LITE_MAVLINK_ENABLE_STATUSTEXT, PX4LITE_MAVLINK_STATUSTEXT_PERIOD_MS, MAVLINK_MSG_ID_STATUSTEXT, &s_next_statustext_ms, &s_stats.statustext_count, MavTx_SendStatusText, 0, MAV_TX_SCOPE_STANDARD},
     {"MOTOR", PX4LITE_MAVLINK_ENABLE_MOTOR_STATUS, PX4LITE_MAVLINK_MOTOR_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_motor_ms, &s_motor_status_count, MavTx_SendMotorStatus, 0, MAV_TX_SCOPE_EXTENSION},
     {"LOG", PX4LITE_MAVLINK_ENABLE_MESSAGE_LOG, PX4LITE_MAVLINK_MESSAGE_LOG_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_log_ms, &s_message_log_count, MavTx_SendMessageLog, 0, MAV_TX_SCOPE_EXTENSION},
+#if PX4LITE_ENABLE_RPI_MAVLINK
+    /* 树莓派专属扩展：只发 USART1(compid 193)，不进入 LoRa 空口。scope 用 ALWAYS，
+       不受 LoRa NAMED_VALUE 扩展策略约束，因为它们是独立于 LoRa 的 RPi 出口数据。 */
+    {"RPILORA", 1U, PX4LITE_MAVLINK_RPI_LORASTAT_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_rpi_lorastat_ms, &s_rpi_lorastat_count, MavTx_SendRpiLoraStatus, 0, MAV_TX_SCOPE_ALWAYS},
+    {"RPIRID", 1U, PX4LITE_MAVLINK_RPI_RIDSTAT_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_rpi_ridstat_ms, &s_rpi_ridstat_count, MavTx_SendRpiRemoteIdStatus, 0, MAV_TX_SCOPE_ALWAYS},
+    {"RPIALRM", 1U, PX4LITE_MAVLINK_RPI_ALARM_PERIOD_MS, MAVLINK_MSG_ID_TUNNEL, &s_next_rpi_alarm_ms, &s_rpi_alarm_count, MavTx_SendRpiAlarmTable, 0, MAV_TX_SCOPE_ALWAYS},
+    {"RPILOG", 1U, PX4LITE_MAVLINK_RPI_LOG_PERIOD_MS, MAVLINK_MSG_ID_TUNNEL, &s_next_rpi_log_ms, &s_rpi_log_count, MavTx_SendRpiMessageLogTable, 0, MAV_TX_SCOPE_ALWAYS},
+#endif
 };
 
 #define MAV_TX_CATALOG_COUNT ((uint8_t)(sizeof(s_mav_tx_catalog) / sizeof(s_mav_tx_catalog[0])))
@@ -1222,6 +1570,19 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_module_state_part = 0U;
   s_tx_enabled = 1U;
 
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  if (Px4Lite_RpiMavlinkInit() != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
+  s_rpi_tx_seq           = 0U;
+  s_rpi_lorastat_count   = 0U;
+  s_rpi_ridstat_count    = 0U;
+  s_rpi_alarm_count      = 0U;
+  s_rpi_log_count        = 0U;
+  s_next_rpi_lorastat_ms = now_ms + 600U;
+  s_next_rpi_ridstat_ms  = now_ms + 650U;
+  s_next_rpi_alarm_ms    = now_ms + 700U;
+  s_next_rpi_log_ms      = now_ms + 750U;
+#endif
+
   s_next_heartbeat_ms   = now_ms + 100U;
   s_next_gps_raw_ms     = now_ms + 100U;
   s_next_gnss_detail_ms = now_ms + 150U;
@@ -1251,12 +1612,14 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
   Px4Lite_Result_t result;
   uint8_t checked;
 
+#if !PX4LITE_ENABLE_RPI_MAVLINK
   if (s_tx_enabled == 0U) { return PX4LITE_IDLE; }
+#endif
 
   /* 上一帧仍在发送时，任何 encode_chan 调用都会白白消耗 MAVLink 通道序号
      (库内部自增)，但帧实际并未发出，接收端会把这个空洞误判为丢包。
      发送前先确认通道空闲，忙时直接跳过整轮编码，不做任何 encode 尝试。 */
-  if (Px4Lite_LoRaIsTxIdle() == 0U) { return PX4LITE_BUSY; }
+  if ((s_tx_enabled != 0U) && (Px4Lite_LoRaIsTxIdle() == 0U)) { return PX4LITE_BUSY; }
 
   result = MavTx_SendPendingAck(now_ms);
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }

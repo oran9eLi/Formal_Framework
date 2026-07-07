@@ -21,6 +21,7 @@
 #define PX4LITE_ENABLE_STORAGE             1U
 /* Remote ID 由 STM32 通过 UART4 向 ESP32-S3 发送 MAVLink/OpenDroneID 消息。 */
 #define PX4LITE_ENABLE_REMOTE_ID           1U
+#define PX4LITE_ENABLE_RPI_MAVLINK         1U
 #define PX4LITE_ENABLE_DISPLAY             1U
 #define PX4LITE_ENABLE_CONTROL             1U
 #define PX4LITE_ENABLE_ALARM               1U
@@ -134,13 +135,17 @@
 
 /*
  * 板卡身份配置：
- * - 只允许人工修改 PX4LITE_DEVICE_NAME，例如 "DCDW-001"。
+ * - PX4LITE_DEVICE_NAME is only the readable identity prefix, for example "DCDW".
  * - LoRa 显示身份、RemoteID UAS ID 和 5G 上报名称均使用该字符串。
  * - MAVLink system id / LoRa node id 从末尾三位数字派生，避免再维护主从编号。
  * - STM32 硬件唯一 UID 由 Platform Adapter 读取，不在本文件手填。
  */
-#define PX4LITE_DEVICE_NAME              "DCDW-002"
+#define PX4LITE_DEVICE_NAME              "DCDW"
 #define PX4LITE_MAVLINK_COMPONENT_ID     191U
+#define PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID 192U
+#define PX4LITE_RPI_MAVLINK_COMPONENT_ID      193U
+#define PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS   20U
+#define PX4LITE_DEBUG_USART1_SILENT_FOR_RPI   PX4LITE_ENABLE_RPI_MAVLINK
 #define PX4LITE_LORA_UART_BAUD_BPS       9600U /**< USART3 到 E22 的本地串口波特率，单位：bit/s。 */
 #define PX4LITE_LORA_AIR_RATE_BPS        9600U /**< E22 当前空中速率，单位：bit/s。 */
 #define PX4LITE_LORA_USABLE_BUDGET_BPS   3840U /**< 半双工默认单端可用发送预算，约为空中速率 40%。 */
@@ -198,12 +203,21 @@
 #define PX4LITE_MAVLINK_RETRY_PERIOD_MS        50U
 
 /*
+ * 树莓派(USART1/compid 193)专属扩展遥测周期。
+ * 这些消息只发 RPi、不上 LoRa，构成 RPi 的"全量数据出口"：
+ * LoRa 链路状态、RemoteID 广播状态(NAMED_VALUE_INT)，完整告警表、批量消息日志(TUNNEL)。
+ * 身份数据(OPEN_DRONE_ID_*)由 RemoteID 发送器镜像到 USART1，不在此列。
+ */
+#define PX4LITE_MAVLINK_RPI_LORASTAT_PERIOD_MS 1000U
+#define PX4LITE_MAVLINK_RPI_RIDSTAT_PERIOD_MS  1000U
+#define PX4LITE_MAVLINK_RPI_ALARM_PERIOD_MS    1000U
+#define PX4LITE_MAVLINK_RPI_LOG_PERIOD_MS      2000U
+
+/*
  * ESP32-S3 RemoteID 发送配置。身份字段是生产默认值，后续可由 5G/网口命令写入配置存储后统一加载。
  * 当前阶段不新增任务，仍由 comm task 以静态缓冲逐帧调度，避免扩大任务栈压力。
  */
 #define PX4LITE_REMOTEID_OPERATOR_ID             "DCDW"
-#define PX4LITE_REMOTEID_SELF_ID                 PX4LITE_DEVICE_NAME
-#define PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID    191U
 #define PX4LITE_REMOTEID_TARGET_SYSTEM           0U
 #define PX4LITE_REMOTEID_TARGET_COMPONENT        0U
 #define PX4LITE_REMOTEID_HEARTBEAT_PERIOD_MS     1000U

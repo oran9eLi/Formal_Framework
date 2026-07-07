@@ -118,6 +118,7 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_DATA, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 540U, 76U, 252U, 330U, "msg_log_data", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_FLIGHT, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 540U, 76U, 252U, 330U, "msg_log_flight", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_AIRCRAFT, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 540U, 76U, 252U, 330U, "msg_log_aircraft", "-", "App_Registry"},
+    {DISPLAY_HMI_VAR_VIEW_NODE_ID, DISPLAY_HMI_PAGE_FLIGHT, 0x110DU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 0U, 0U, 0U, 0U, "view_node_id", "-", "App_Display"},
     {DISPLAY_HMI_VAR_FLIGHT_TIME_S, DISPLAY_HMI_PAGE_FLIGHT, 0x1106U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 260U, 124U, 22U, "flight_time_s", "-", "CNS_State.system"},
     {DISPLAY_HMI_VAR_TEMPERATURE, DISPLAY_HMI_PAGE_FLIGHT, 0x1302U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 296U, 124U, 22U, "temperature",
      "\xB0"
@@ -1147,11 +1148,12 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   /* 右上角身份显示：本地模式=本机 sysid(UID派生)，远端模式=当前选中远端节点。 */
   {
     uint8_t view_id = 0U;
+    uint8_t selected_node = 0U;
     if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
-      (void)App_GetSelectedRemoteNode(&view_id);
-    } else {
-      view_id = App_GetLocalNodeId();
+      (void)App_GetSelectedRemoteNode(&selected_node);
+      if (selected_node != 0U) { view_id = selected_node; }
     }
+    if (view_id == 0U) { view_id = App_GetLocalNodeId(); }
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_VIEW_NODE_ID, view_id);
   }
 

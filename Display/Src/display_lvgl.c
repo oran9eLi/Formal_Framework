@@ -55,6 +55,7 @@
 #define DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS 1000U /* 通信连接页节点列表周期重建间隔 */
 #define DISPLAY_LVGL_LOG_ROWS        9U
 #define DISPLAY_LVGL_ALARM_ROWS      5U
+#define DISPLAY_LVGL_VALUE_LABEL_EXTRA_COUNT 2U
 
 /*
  * 自检汇总告警列表的中文字体。窄卡片要放下"代码+模块+原因"三项，
@@ -118,6 +119,7 @@ static const Display_LvglTabItem_t s_tabs[DISPLAY_LVGL_TAB_COUNT] = {
 };
 
 static Display_LvglValueSlot_t s_value_slots[DISPLAY_HMI_VAR_COUNT];
+static lv_obj_t *s_value_extra_labels[DISPLAY_HMI_VAR_COUNT][DISPLAY_LVGL_VALUE_LABEL_EXTRA_COUNT];
 static uint32_t s_values[DISPLAY_HMI_VAR_COUNT];
 static uint8_t s_value_valid[DISPLAY_HMI_VAR_COUNT];
 static const lv_img_dsc_t s_logo_img_dsc = {
@@ -255,9 +257,13 @@ static const char *Display_LvglStatusText(uint32_t value)
 static void Display_LvglClearActiveObjects(void)
 {
   uint16_t i;
+  uint8_t j;
 
   for (i = 0U; i < DISPLAY_HMI_VAR_COUNT; i++) {
     s_value_slots[i].label = 0;
+    for (j = 0U; j < DISPLAY_LVGL_VALUE_LABEL_EXTRA_COUNT; j++) {
+      s_value_extra_labels[i][j] = 0;
+    }
   }
   for (i = 0U; i < DISPLAY_LVGL_STATUS_COUNT; i++) {
     s_status_leds[i] = 0;
@@ -528,15 +534,28 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
 static void Display_LvglCreateValueLabel(lv_obj_t *parent, Display_HmiVariableId_t id, lv_coord_t x, lv_coord_t y, lv_coord_t w, const lv_font_t *font)
 {
   lv_obj_t *label;
+  uint8_t i;
 
   if (id >= DISPLAY_HMI_VAR_COUNT) {
     return;
   }
 
   label = lv_label_create(parent);
-  s_value_slots[id].label = label;
-  (void)font;
-  lv_obj_set_style_text_font(label, &display_lvgl_font_zh_16, 0);
+  if (s_value_slots[id].label == 0) {
+    s_value_slots[id].label = label;
+  } else {
+    for (i = 0U; i < DISPLAY_LVGL_VALUE_LABEL_EXTRA_COUNT; i++) {
+      if (s_value_extra_labels[id][i] == 0) {
+        s_value_extra_labels[id][i] = label;
+        break;
+      }
+    }
+  }
+  if (id == DISPLAY_HMI_VAR_VIEW_NODE_ID) {
+    lv_obj_set_style_text_font(label, (font != 0) ? font : &lv_font_montserrat_14, 0);
+  } else {
+    lv_obj_set_style_text_font(label, &display_lvgl_font_zh_16, 0);
+  }
   lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
   lv_obj_set_width(label, w);
   lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
@@ -915,6 +934,7 @@ static void Display_LvglAttitudeCalEventCb(lv_event_t *event)
 static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
 {
   uint8_t motor_index;
+  uint8_t label_index;
 
   if (id >= DISPLAY_HMI_VAR_COUNT) {
     return;
@@ -955,6 +975,11 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
   if (s_value_slots[id].label != 0) {
     Display_LvglFormatValue(id, value);
     lv_label_set_text_static(s_value_slots[id].label, s_value_slots[id].text);
+    for (label_index = 0U; label_index < DISPLAY_LVGL_VALUE_LABEL_EXTRA_COUNT; label_index++) {
+      if (s_value_extra_labels[id][label_index] != 0) {
+        lv_label_set_text_static(s_value_extra_labels[id][label_index], s_value_slots[id].text);
+      }
+    }
   }
 }
 

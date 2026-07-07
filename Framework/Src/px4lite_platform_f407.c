@@ -17,6 +17,7 @@
 #include "bsp_button.h"
 #include "bsp_pwm.h"
 #include "bsp_rtc.h"
+#include "bsp_uart.h"
 #include "lora_e22.h"
 #include "bsp_time.h"
 #include "sensor_bme280.h"
@@ -620,6 +621,33 @@ Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len)
   if (result == 0) { return PX4LITE_OK; }
   if (result == 1) { return PX4LITE_BUSY; }
   return PX4LITE_IO_ERROR;
+}
+
+Px4Lite_Result_t Px4Lite_RpiMavlinkInit(void)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  return (BSP_UART_Init() == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+#else
+  return PX4LITE_OK;
+#endif
+}
+
+Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  BSP_Status_t status;
+
+  if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
+
+  status = BSP_UART_Send(data, len, PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS);
+  if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
+  if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
+  return PX4LITE_IO_ERROR;
+#else
+  (void)data;
+  (void)len;
+  return PX4LITE_OK;
+#endif
 }
 
 Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms)

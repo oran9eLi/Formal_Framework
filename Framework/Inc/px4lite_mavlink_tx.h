@@ -87,4 +87,18 @@ uint8_t Px4Lite_MavlinkGetTxEnabled(void);
 void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component);
 void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result, uint32_t now_ms);
 
+/* 前向声明 MAVLink 消息结构标签，避免在本头引入 common/mavlink.h(保持与 types.h 同层)。 */
+struct __mavlink_message;
+
+/**
+ * @brief 把一帧已编码的 MAVLink 消息镜像到树莓派 USART1(compid 193, RPi 独立连续序号)。
+ *
+ * @details
+ * 供 RemoteID 发送器把 OPEN_DRONE_ID_* 身份帧同步给树莓派链路，复用 RPi 侧现成的
+ * OpenDroneID 解码。函数临时改写 msg 的 compid/seq/checksum 并在返回前恢复，不影响
+ * 调用方对该帧的后续使用；只写 USART1，不触碰 LoRa/COMM_0 通道序号。
+ * 仅在 PX4LITE_ENABLE_RPI_MAVLINK 为真时存在实体。
+ */
+Px4Lite_Result_t Px4Lite_MavlinkTxMirrorToRpi(struct __mavlink_message *msg);
+
 #endif
