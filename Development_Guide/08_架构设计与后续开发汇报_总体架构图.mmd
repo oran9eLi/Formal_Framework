@@ -1,0 +1,56 @@
+flowchart TB
+    BOOT["启动与自检<br/>时钟、BSP、模块注册、POST"] --> TASKS
+
+    subgraph DEVICE["硬件与设备驱动层"]
+        HW["UART / DMA / I2C / SPI / ADC"]
+        BSP["BSP<br/>引脚、总线、DMA、中断"]
+        DRIVER["Sensor / Device Driver<br/>协议、校验、标定、设备事实"]
+        HW --> BSP --> DRIVER
+    end
+
+    subgraph TASKS["固定任务集合"]
+        ACQ["采集任务<br/>驱动 Service"]
+        EST["运算/融合任务"]
+        HEALTH["健康与告警任务"]
+        BIZ["业务分发任务"]
+        COMM["通信任务"]
+        LOG["日志任务"]
+        DISPLAY["显示服务"]
+    end
+
+    subgraph DATA["统一数据交换层"]
+        SNAP["Latest Snapshot<br/>低频完整快照"]
+        FIFO["Fixed FIFO<br/>高频连续样本"]
+        EVENT["Event Queue<br/>告警、命令、ACK"]
+        POOL["Memory Pool<br/>通信帧、日志块"]
+    end
+
+    subgraph DOMAIN["Domain 与应用接口"]
+        DOMAIN_SNAPSHOT["导航、姿态、健康 Domain Snapshot"]
+        APP_API["App_CopyNavigation<br/>App_CopySystem<br/>App_GetModuleStatus"]
+    end
+
+    DRIVER --> ACQ
+    ACQ --> SNAP
+    ACQ --> FIFO
+    SNAP --> EST
+    FIFO --> EST
+    EST --> SNAP
+
+    SNAP --> HEALTH
+    FIFO --> HEALTH
+    HEALTH --> EVENT
+
+    SNAP --> DOMAIN_SNAPSHOT
+    EVENT --> BIZ
+    DOMAIN_SNAPSHOT --> APP_API
+    APP_API --> BIZ
+
+    BIZ --> DISPLAY
+    BIZ --> COMM
+    BIZ --> LOG
+    POOL <--> COMM
+    POOL <--> LOG
+
+    COMM --> OUT["LoRa / 5G / Remote ID / Linux A 核"]
+    LOG --> SD["SD 卡"]
