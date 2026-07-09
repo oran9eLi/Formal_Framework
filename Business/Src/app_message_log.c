@@ -46,8 +46,8 @@ static uint8_t s_main_band;   /* 初值=正常(2) */
 /* 去抖与启动跟踪 */
 static uint8_t s_boot_done;
 static uint8_t s_boot_tracking;
-static AppLog_Debounce_t s_db_gps, s_db_att, s_db_env, s_db_comm, s_db_store, s_db_motor, s_db_main, s_db_alarm;
-static App_LogMessageId_t s_boot_self, s_boot_gps, s_boot_att, s_boot_env, s_boot_comm, s_boot_store, s_boot_alarm;
+static AppLog_Debounce_t s_db_gps, s_db_att, s_db_env, s_db_comm, s_db_store, s_db_motor, s_db_main, s_db_alarm, s_db_remoteid;
+static App_LogMessageId_t s_boot_self, s_boot_gps, s_boot_att, s_boot_env, s_boot_comm, s_boot_store, s_boot_alarm, s_boot_remoteid;
 static uint32_t s_boot_since_ms, s_boot_start_t;
 
 static uint32_t AppLog_Hhmmss(uint32_t now_ms)
@@ -161,6 +161,7 @@ void App_MessageLogInit(uint32_t now_ms)
   s_boot_since_ms = now_ms; s_boot_start_t = 0U;
   s_boot_self = APP_LOGMSG_COUNT; s_boot_gps = APP_LOGMSG_COUNT; s_boot_att = APP_LOGMSG_COUNT;
   s_boot_env = APP_LOGMSG_COUNT; s_boot_comm = APP_LOGMSG_COUNT; s_boot_store = APP_LOGMSG_COUNT; s_boot_alarm = APP_LOGMSG_COUNT;
+  s_boot_remoteid = APP_LOGMSG_COUNT;
   /* 去抖初值置为 COUNT(无效)，保证首次真实状态触发提交。 */
   s_db_gps.candidate = s_db_gps.committed = APP_LOGMSG_COUNT; s_db_gps.since_ms = now_ms;
   s_db_att.candidate = s_db_att.committed = APP_LOGMSG_COUNT; s_db_att.since_ms = now_ms;
@@ -170,6 +171,7 @@ void App_MessageLogInit(uint32_t now_ms)
   s_db_motor.candidate = s_db_motor.committed = APP_LOGMSG_COUNT; s_db_motor.since_ms = now_ms;
   s_db_main.candidate = s_db_main.committed = APP_LOGMSG_COUNT; s_db_main.since_ms = now_ms;
   s_db_alarm.candidate = s_db_alarm.committed = APP_LOGMSG_COUNT; s_db_alarm.since_ms = now_ms;
+  s_db_remoteid.candidate = s_db_remoteid.committed = APP_LOGMSG_COUNT; s_db_remoteid.since_ms = now_ms;
 }
 
 void App_MessageLogUpdate(uint32_t now_ms)
@@ -179,7 +181,7 @@ void App_MessageLogUpdate(uint32_t now_ms)
   App_AlarmSnapshot_t alarm;
   uint16_t highest = 0U;
   uint32_t t;
-  App_LogMessageId_t now_self, now_gps, now_att, now_env, now_comm, now_store, now_motor, now_main, now_alarm;
+  App_LogMessageId_t now_self, now_gps, now_att, now_env, now_comm, now_store, now_motor, now_main, now_alarm, now_remoteid;
 
   AppLog_UpdateBands(now_ms);
   t = AppLog_Hhmmss(now_ms);
@@ -202,12 +204,15 @@ void App_MessageLogUpdate(uint32_t now_ms)
   now_motor = AppLog_MotorMsg();
   now_main  = AppLog_MainMsg();
   now_alarm = (highest != 0U) ? APP_LOGMSG_ALARM_ACTIVE : APP_LOGMSG_ALARM_NONE;
+  /* RemoteID(ESP32)在位由 Framework 按 PC8 硬件电平置 ONLINE/FAILED，这里映射为正常/断开日志。 */
+  now_remoteid = AppLog_TwoState(AppLog_ModuleState(PX4LITE_MODULE_REMOTE_ID, 0), APP_LOGMSG_REMOTEID_OK, APP_LOGMSG_REMOTEID_LOST);
 
   if (s_boot_done == 0U) {
     if ((s_boot_tracking == 0U) || (now_self != s_boot_self) || (now_gps != s_boot_gps) || (now_att != s_boot_att) ||
-        (now_env != s_boot_env) || (now_comm != s_boot_comm) || (now_store != s_boot_store) || (now_alarm != s_boot_alarm)) {
+        (now_env != s_boot_env) || (now_comm != s_boot_comm) || (now_store != s_boot_store) || (now_alarm != s_boot_alarm) ||
+        (now_remoteid != s_boot_remoteid)) {
       s_boot_self = now_self; s_boot_gps = now_gps; s_boot_att = now_att; s_boot_env = now_env;
-      s_boot_comm = now_comm; s_boot_store = now_store; s_boot_alarm = now_alarm; s_boot_since_ms = now_ms;
+      s_boot_comm = now_comm; s_boot_store = now_store; s_boot_alarm = now_alarm; s_boot_remoteid = now_remoteid; s_boot_since_ms = now_ms;
       if (s_boot_tracking == 0U) {
         s_boot_start_t = t;
         (void)s_boot_start_t;
@@ -226,6 +231,7 @@ void App_MessageLogUpdate(uint32_t now_ms)
     AppLog_Push(s_boot_store, now_ms);
     AppLog_Push(now_motor, now_ms);
     AppLog_Push(s_boot_alarm, now_ms);
+    AppLog_Push(s_boot_remoteid, now_ms);
 
     AppLog_CommitInitial(&s_db_gps, s_boot_gps, now_ms);
     AppLog_CommitInitial(&s_db_att, s_boot_att, now_ms);
@@ -235,6 +241,7 @@ void App_MessageLogUpdate(uint32_t now_ms)
     AppLog_CommitInitial(&s_db_motor, now_motor, now_ms);
     AppLog_CommitInitial(&s_db_main, now_main, now_ms);
     AppLog_CommitInitial(&s_db_alarm, s_boot_alarm, now_ms);
+    AppLog_CommitInitial(&s_db_remoteid, s_boot_remoteid, now_ms);
     s_boot_done = 1U;
     return;
   }
@@ -247,6 +254,7 @@ void App_MessageLogUpdate(uint32_t now_ms)
   (void)AppLog_Debounce(&s_db_motor, now_motor, now_ms);
   (void)AppLog_Debounce(&s_db_main, now_main, now_ms);
   (void)AppLog_Debounce(&s_db_alarm, now_alarm, now_ms);
+  (void)AppLog_Debounce(&s_db_remoteid, now_remoteid, now_ms);
 }
 
 Px4Lite_Result_t App_MessageLogCopy(App_DisplayLogSnapshot_t *out)

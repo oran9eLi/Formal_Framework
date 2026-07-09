@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 
+#include "bsp_config.h"
 #include "bsp_status.h"
 
 /**
@@ -57,5 +58,28 @@ BSP_Status_t BSP_UART_Send(const uint8_t *data, uint16_t length, uint32_t timeou
  * @param[out] out 输出缓冲区，允许为 NULL；为 NULL 时函数不执行任何操作。
  */
 void BSP_UART_GetDebugInfo(BSP_UART_DebugInfo_t *out);
+
+#if (BSP_ENABLE_RPI_UART == 1U)
+/**
+ * @brief 按 `bsp_config.h` 配置初始化树莓派 MAVLink UART（USART6，PC6/PC7）。
+ *
+ * @details
+ * 与调试 UART（USART1）相互独立，只用于飞控向树莓派单向阻塞发送 MAVLink 帧。
+ *
+ * @return BSP 通用返回码。
+ */
+BSP_Status_t BSP_RpiUART_Init(void);
+
+/**
+ * @brief 通过树莓派 UART 在超时时间内阻塞发送完整字节缓冲区。
+ *
+ * @param[in] data 待发送数据缓冲区，不能为 NULL。
+ * @param[in] length 待发送字节数。
+ * @param[in] timeout_ms HAL 阻塞发送超时时间，单位 ms。
+ *
+ * @return BSP 通用返回码。
+ */
+BSP_Status_t BSP_RpiUART_Send(const uint8_t *data, uint16_t length, uint32_t timeout_ms);
+#endif
 
 #endif

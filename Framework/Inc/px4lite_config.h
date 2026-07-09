@@ -135,17 +135,21 @@
 
 /*
  * 板卡身份配置：
- * - PX4LITE_DEVICE_NAME is only the readable identity prefix, for example "DCDW".
- * - LoRa 显示身份、RemoteID UAS ID 和 5G 上报名称均使用该字符串。
- * - MAVLink system id / LoRa node id 从末尾三位数字派生，避免再维护主从编号。
- * - STM32 硬件唯一 UID 由 Platform Adapter 读取，不在本文件手填。
+ * - PX4LITE_DEVICE_NAME + STM32 UID 哈希短编号组成学校侧编号 DCDW-XXX。
+ * - 该短编号同时作为 LoRa node_id / MAVLink system_id，保持不同板卡自动区分。
+ * - 厂商唯一产品识别码由 DCDWCNS1 + STM32 UID 派生 SN 组成，不依赖 RPi。
  */
 #define PX4LITE_DEVICE_NAME              "DCDW"
+#define PX4LITE_VENDOR_ID_PREFIX         "DCDWCNS1"
 #define PX4LITE_MAVLINK_COMPONENT_ID     191U
 #define PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID 192U
 #define PX4LITE_RPI_MAVLINK_COMPONENT_ID      193U
 #define PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS   20U
-#define PX4LITE_DEBUG_USART1_SILENT_FOR_RPI   PX4LITE_ENABLE_RPI_MAVLINK
+/*
+ * 树莓派 MAVLink 已迁到独立的 USART6(PC6/PC7)，USART1 恢复为纯调试口，
+ * 不再需要为 RPi 静音调试打印。保留本宏仅为回退到 USART1 共线方案时使用。
+ */
+#define PX4LITE_DEBUG_USART1_SILENT_FOR_RPI   0U
 #define PX4LITE_LORA_UART_BAUD_BPS       9600U /**< USART3 到 E22 的本地串口波特率，单位：bit/s。 */
 #define PX4LITE_LORA_AIR_RATE_BPS        9600U /**< E22 当前空中速率，单位：bit/s。 */
 #define PX4LITE_LORA_USABLE_BUDGET_BPS   3840U /**< 半双工默认单端可用发送预算，约为空中速率 40%。 */
@@ -203,10 +207,10 @@
 #define PX4LITE_MAVLINK_RETRY_PERIOD_MS        50U
 
 /*
- * 树莓派(USART1/compid 193)专属扩展遥测周期。
+ * 树莓派(USART6/compid 193)专属扩展遥测周期。
  * 这些消息只发 RPi、不上 LoRa，构成 RPi 的"全量数据出口"：
  * LoRa 链路状态、RemoteID 广播状态(NAMED_VALUE_INT)，完整告警表、批量消息日志(TUNNEL)。
- * 身份数据(OPEN_DRONE_ID_*)由 RemoteID 发送器镜像到 USART1，不在此列。
+ * 身份数据(OPEN_DRONE_ID_*)由 RemoteID 发送器镜像到 USART6，不在此列。
  */
 #define PX4LITE_MAVLINK_RPI_LORASTAT_PERIOD_MS 1000U
 #define PX4LITE_MAVLINK_RPI_RIDSTAT_PERIOD_MS  1000U

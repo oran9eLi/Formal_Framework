@@ -47,6 +47,8 @@ typedef enum {
   APP_LOGMSG_MAIN_CHARGE,      /* 主控电池需充电 */
   APP_LOGMSG_ALARM_ACTIVE,     /* 有告警 */
   APP_LOGMSG_ALARM_NONE,       /* 无告警 */
+  APP_LOGMSG_REMOTEID_OK,      /* RemoteID正常 */
+  APP_LOGMSG_REMOTEID_LOST,    /* RemoteID断开 */
   APP_LOGMSG_COUNT
 } App_LogMessageId_t;
 

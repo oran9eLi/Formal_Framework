@@ -24,8 +24,9 @@
 #define BSP_ENABLE_PWM    1U
 #define BSP_ENABLE_BUTTON 1U
 #define BSP_ENABLE_REMOTEID 1U
+#define BSP_ENABLE_RPI_UART 1U
 
-/* 调试 UART：USART1，PA9/PA10，115200 8N1。 */
+/* 调试 UART：USART1，PA9/PA10，115200 8N1。仅供 DebugConsole 使用，不再复用给树莓派。 */
 #define BSP_DBG_UART          USART1
 #define BSP_DBG_UART_BAUD     115200U
 #define BSP_DBG_UART_WORD     UART_WORDLENGTH_8B
@@ -40,6 +41,25 @@
 #define BSP_DBG_RX_PORT       GPIOA
 #define BSP_DBG_RX_PIN        GPIO_PIN_10
 #define BSP_DBG_RX_AF         GPIO_AF7_USART1
+
+/*
+ * 树莓派 MAVLink UART：USART6，PC6(TX)/PC7(RX)，115200 8N1，经 3.3V USB-TTL 连接。
+ * 只做阻塞 TX(飞控→RPi 全量出口)，不占用 DMA/中断；与调试口 USART1 物理分离。
+ */
+#define BSP_RPI_UART          USART6
+#define BSP_RPI_UART_BAUD     115200U
+#define BSP_RPI_UART_WORD     UART_WORDLENGTH_8B
+#define BSP_RPI_UART_STOP     UART_STOPBITS_1
+#define BSP_RPI_UART_PARITY   UART_PARITY_NONE
+#define BSP_RPI_UART_MODE     UART_MODE_TX_RX
+#define BSP_RPI_UART_HWCTL    UART_HWCONTROL_NONE
+#define BSP_RPI_UART_OVERSAMP UART_OVERSAMPLING_16
+#define BSP_RPI_TX_PORT       GPIOC
+#define BSP_RPI_TX_PIN        GPIO_PIN_6
+#define BSP_RPI_TX_AF         GPIO_AF8_USART6
+#define BSP_RPI_RX_PORT       GPIOC
+#define BSP_RPI_RX_PIN        GPIO_PIN_7
+#define BSP_RPI_RX_AF         GPIO_AF8_USART6
 
 /* ATGM336H GNSS：USART2，PA2/PA3，9600 8N1。 */
 #define BSP_GNSS_UART           USART2
@@ -336,5 +356,11 @@
 #define BSP_REMOTEID_TX_BUF_SIZE    300U
 #define BSP_REMOTEID_IRQn           UART4_IRQn
 #define BSP_REMOTEID_IRQ_PRIORITY   6U
+
+/* ESP32 在位检测：PC8 下拉输入接 ESP32 的 3.3V，高=已插并上电，低=未插/未上电。 */
+#define BSP_ESP_DETECT_PORT         GPIOC
+#define BSP_ESP_DETECT_PIN          GPIO_PIN_8
+
+/* PC11 is the UART4 RX pin; RemoteID status is based on the local TX channel, not a reply packet. */
 
 #endif

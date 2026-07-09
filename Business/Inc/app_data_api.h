@@ -248,6 +248,8 @@ typedef struct {
   float relative_humidity_pct;                           /**< 相对湿度，单位：%。 */
   uint32_t voltage_mv;                                   /**< 电压，单位：mV。 */
   uint32_t voltage2_mv;                                  /**< 第二电池或外设独立供电电压，单位：mV。 */
+  int32_t current_ma;                                    /**< 主电池电流，单位：mA；未测量时为 0。 */
+  int32_t current2_ma;                                   /**< 第二电池电流，单位：mA；未测量时为 0。 */
   uint8_t battery_percent;                               /**< 电量百分比，范围 0 到 100。 */
   uint8_t battery2_percent;                              /**< 第二电池电量百分比，范围 0 到 100。 */
   uint8_t low_voltage;                                   /**< 主电池低电压标志，1 表示低电压。 */
@@ -515,7 +517,7 @@ uint8_t App_RemoteViewExpired(uint32_t now_ms);
 uint8_t App_GetSelectedRemoteNode(uint8_t *node_id);
 
 /**
- * @brief 返回本机 node_id(=MAVLink sysid，由芯片 UID 派生)，用于本地视图身份显示。
+ * @brief 返回本机 node_id(=MAVLink sysid，由 STM32 UID 哈希派生)，用于本地视图身份显示。
  *
  * @return 本机 node_id，范围 [1,250]。
  */

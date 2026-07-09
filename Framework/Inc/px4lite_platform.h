@@ -297,6 +297,15 @@ Px4Lite_Result_t Px4Lite_RemoteIdInit(void);
 uint8_t Px4Lite_RemoteIdIsReady(void);
 
 /**
+ * @brief 查询本机 ESP32(RemoteID)硬件是否在位。
+ *
+ * @return 1 表示 ESP32 已插并上电(PC8 高)，0 表示未插/未上电或模块关闭。
+ *
+ * @note 该状态直接来自 PC8 硬件电平，是 RemoteID 自检灯色的唯一判据。
+ */
+uint8_t Px4Lite_RemoteIdIsPresent(void);
+
+/**
  * @brief 中止当前 RemoteID UART4 DMA 发送。
  *
  * @note 仅用于发送超时或恢复路径，调用者必须在 comm task 或初始化路径中使用。

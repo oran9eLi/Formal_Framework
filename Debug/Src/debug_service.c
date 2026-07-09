@@ -13,6 +13,7 @@
 #include "px4lite_config.h"
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
+#include "px4lite_time.h"
 #include "px4lite_topics.h"
 #if DEBUG_IMU_MONITOR_ENABLE
 #include "sensor_mpu6050.h"
@@ -38,10 +39,26 @@ static void DebugService_ReportGnss(uint32_t now_ms)
   if ((Px4Lite_CopyGnss(&gnss) == PX4LITE_OK) && (Px4Lite_GetModuleStatus(PX4LITE_MODULE_GNSS, &status) == PX4LITE_OK)) {
     report_ms = Px4Lite_PlatformGetMs();
     DBG_PRINT("GNSS: state=%u fix=%u sats=%u gps=%u/%u bds=%u/%u "
-              "lat=%ld lon=%ld age=%lu",
-              (unsigned int)status.state, (unsigned int)gnss.fix_type, (unsigned int)gnss.satellites_used, (unsigned int)gnss.gps_used, (unsigned int)gnss.gps_visible, (unsigned int)gnss.bds_used, (unsigned int)gnss.bds_visible, (long)gnss.latitude_e7, (long)gnss.longitude_e7, (unsigned long)Px4Lite_ElapsedMs(report_ms, status.last_rx_ms));
+              "lat=%ld lon=%ld utc_date=%lu utc_sec=%lu age=%lu",
+              (unsigned int)status.state, (unsigned int)gnss.fix_type, (unsigned int)gnss.satellites_used, (unsigned int)gnss.gps_used, (unsigned int)gnss.gps_visible, (unsigned int)gnss.bds_used, (unsigned int)gnss.bds_visible, (long)gnss.latitude_e7, (long)gnss.longitude_e7, (unsigned long)gnss.utc_date, (unsigned long)gnss.utc_sec, (unsigned long)Px4Lite_ElapsedMs(report_ms, status.last_rx_ms));
   } else {
     DBG_PRINT("GNSS: waiting for valid NMEA data");
+  }
+
+  {
+    /* 室内无 GPS 时用它判断 RTC 手表本身：src 0=NONE 1=RTC 2=GNSS；
+       sync 0=INVALID 1=RTC_VALID 2=GNSS_SYNCED 3=STALE。rc!=OK 表示 RTC 从未被有效校准。 */
+    Px4Lite_TimeSnapshot_t t;
+    Px4Lite_Result_t trc = Px4Lite_CopyTime(&t);
+
+    if (trc == PX4LITE_OK) {
+      DBG_PRINT("TIME: rc=OK src=%u sync=%u local=%04lu-%02lu-%02lu %06lu sync_age=%lus",
+                (unsigned int)t.source, (unsigned int)t.sync_state,
+                (unsigned long)(t.local_date_ymd / 10000UL), (unsigned long)((t.local_date_ymd / 100UL) % 100UL), (unsigned long)(t.local_date_ymd % 100UL),
+                (unsigned long)t.local_time_hhmmss, (unsigned long)t.sync_age_s);
+    } else {
+      DBG_PRINT("TIME: rc=%d no valid time yet (src=NONE, RTC never calibrated by GNSS)", (int)trc);
+    }
   }
 }
 #endif

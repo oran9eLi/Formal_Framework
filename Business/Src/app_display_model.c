@@ -116,6 +116,8 @@ Px4Lite_Result_t App_GetDisplayEnvironment(App_EnvironmentSnapshot_t *out, uint3
   out->relative_humidity_pct = remote.relative_humidity_pct;
   out->voltage_mv            = remote.voltage_mv;
   out->voltage2_mv           = remote.voltage2_mv;
+  out->current_ma            = remote.current_ma;
+  out->current2_ma           = remote.current2_ma;
   out->battery_percent       = remote.battery_percent;
   out->battery2_percent      = remote.battery2_percent;
   out->low_voltage           = remote.low_voltage;
@@ -175,14 +177,15 @@ Px4Lite_Result_t App_GetDisplayAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms)
   out->highest_source_id  = remote.highest_source_id;
   out->highest_severity   = remote.highest_severity;
   if (remote.alarm_active_mask != 0U) {
-    /* fj 方案远端告警走活动位图+最高摘要；逐来源展开为单行记录，详情由日志页补充。 */
+    /* 远端全量告警来自 LoRa TUNNEL 0x8001：逐来源展开，fault_code/severity 用该来源的真实值
+       (remote.alarm_fault_code/alarm_severity)，不再只有最高一条有详情、其余占位为 0。 */
     uint16_t source;
     uint16_t row = 0U;
     for (source = 0U; (source < (uint16_t)PX4LITE_MODULE_COUNT) && (row < (uint16_t)PX4LITE_MODULE_COUNT); ++source) {
       if ((remote.alarm_active_mask & (1UL << source)) == 0U) { continue; }
       out->records[row].source_id  = source;
-      out->records[row].fault_code = (source == remote.highest_source_id) ? remote.highest_fault_code : 0U;
-      out->records[row].severity   = (source == remote.highest_source_id) ? remote.highest_severity : 0U;
+      out->records[row].fault_code = remote.alarm_fault_code[source];
+      out->records[row].severity   = (Px4Lite_AlarmSeverity_t)remote.alarm_severity[source];
       out->records[row].active     = 1U;
       out->records[row].raised_ms  = remote.alarm_update_ms;
       out->records[row].updated_ms = now_ms;

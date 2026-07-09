@@ -34,6 +34,21 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     gpio.Pin       = BSP_DBG_RX_PIN;
     gpio.Alternate = BSP_DBG_RX_AF;
     HAL_GPIO_Init(BSP_DBG_RX_PORT, &gpio);
+#if (BSP_ENABLE_RPI_UART == 1U)
+  } else if (huart->Instance == BSP_RPI_UART) {
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_USART6_CLK_ENABLE();
+
+    gpio.Pin       = BSP_RPI_TX_PIN;
+    gpio.Pull      = GPIO_NOPULL;
+    gpio.Alternate = BSP_RPI_TX_AF;
+    HAL_GPIO_Init(BSP_RPI_TX_PORT, &gpio);
+
+    gpio.Pin       = BSP_RPI_RX_PIN;
+    gpio.Pull      = GPIO_PULLUP; /* UART RX 空闲为高，须上拉 */
+    gpio.Alternate = BSP_RPI_RX_AF;
+    HAL_GPIO_Init(BSP_RPI_RX_PORT, &gpio);
+#endif
   } else if (huart->Instance == BSP_GNSS_UART) {
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_USART2_CLK_ENABLE();
@@ -100,6 +115,11 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
   if (huart->Instance == BSP_DBG_UART) {
     __HAL_RCC_USART1_CLK_DISABLE();
     HAL_GPIO_DeInit(BSP_DBG_TX_PORT, BSP_DBG_TX_PIN | BSP_DBG_RX_PIN);
+#if (BSP_ENABLE_RPI_UART == 1U)
+  } else if (huart->Instance == BSP_RPI_UART) {
+    __HAL_RCC_USART6_CLK_DISABLE();
+    HAL_GPIO_DeInit(BSP_RPI_TX_PORT, BSP_RPI_TX_PIN | BSP_RPI_RX_PIN);
+#endif
   } else if (huart->Instance == BSP_GNSS_UART) {
     __HAL_RCC_USART2_CLK_DISABLE();
     HAL_NVIC_DisableIRQ(BSP_GNSS_IRQn);

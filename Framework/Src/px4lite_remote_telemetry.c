@@ -20,12 +20,12 @@
 static Px4Lite_RemoteMode_t s_mode;
 static Px4Lite_RemoteTelemetry_t s_remote[PX4LITE_REMOTE_NODE_MAX];
 static uint32_t s_remote_sequence[PX4LITE_REMOTE_NODE_MAX];
-static uint8_t s_slot_node[PX4LITE_REMOTE_NODE_MAX]; /* 每槽绑定的对端 node_id(=sysid,UID派生1..250)，0=空闲 */
+static uint8_t s_slot_node[PX4LITE_REMOTE_NODE_MAX]; /* 每槽绑定的对端 node_id(=sysid,1..250)，0=空闲 */
 static uint8_t s_selected_remote_node_id;
 static uint32_t s_mode_changed_ms;
 
 /*
- * node_id(对端 sysid) 由芯片 UID 派生，范围 1..250，无法直接索引 NODE_MAX 个槽的小表，
+ * node_id(对端 sysid) 范围 1..250，无法直接索引 NODE_MAX 个槽的小表，
  * 改为动态槽位分配：本函数仅查找已绑定该 node_id 的槽(读取/选择用，不分配)，找不到返回 0。
  */
 static uint8_t RemoteTelemetry_NodeIdToIndex(uint8_t node_id, uint8_t *index)

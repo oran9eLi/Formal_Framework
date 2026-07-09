@@ -252,6 +252,35 @@ static const char *Display_LvglStatusText(uint32_t value)
 }
 
 /**
+ * @brief 把 GNSS 解算 fix 等级映射为定位状态文字。
+ * @details
+ * 本地来自 Px4Lite_GnssDisplayFixState(0/2/3/4)，远端来自 GPS_RAW 的 MAVLink
+ * fix_type(0..8)。映射：0/1 无定位、2 2D定位、3 3D定位、4 差分(DGPS)、5/6 RTK。
+ * 注：字库缺 差/浮/固 三字，差分/RTK 用 ASCII 词(DGPS/RTK-F/RTK-X)避免显示为空框；
+ * 后续若要中文"差分/RTK浮动/RTK固定"，需按 lvgl-font-add-glyph 补字库再改这里。
+ * ATGM336H 常见只有 0/2/3(无/2D/3D)，DGPS 偶发，RTK 基本不出现。
+ */
+static const char *Display_LvglGnssFixText(uint32_t value)
+{
+  switch (value) {
+    case 0U:
+    case 1U:
+      return "\xE6""\x97""\xA0""\xE5""\xAE""\x9A""\xE4""\xBD""\x8D"; /* 无定位 */
+    case 2U:
+      return "2D\xE5""\xAE""\x9A""\xE4""\xBD""\x8D"; /* 2D定位 */
+    case 4U:
+      return "DGPS"; /* 差分(字库缺"差") */
+    case 5U:
+      return "RTK-F"; /* RTK 浮动 */
+    case 6U:
+      return "RTK-X"; /* RTK 固定 */
+    case 3U:
+    default:
+      return "3D\xE5""\xAE""\x9A""\xE4""\xBD""\x8D"; /* 3D定位 */
+  }
+}
+
+/**
  * @brief Clear active object pointers before rebuilding the current page.
  */
 static void Display_LvglClearActiveObjects(void)
@@ -455,11 +484,15 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu%%", (unsigned long)value);
       break;
     case DISPLAY_HMI_VAR_GNSS_FIX:
+      /* 定位状态显示解算 fix 等级(无定位/2D/3D/差分…)，与自检模块态文字区分开。 */
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s", Display_LvglGnssFixText(value));
+      break;
     case DISPLAY_HMI_VAR_SYSTEM_STATUS:
     case DISPLAY_HMI_VAR_SELF_CHECK_GNSS:
     case DISPLAY_HMI_VAR_SELF_CHECK_MPU6050:
     case DISPLAY_HMI_VAR_SELF_CHECK_BME280:
     case DISPLAY_HMI_VAR_SELF_CHECK_LORA:
+    case DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID:
     case DISPLAY_HMI_VAR_SELF_CHECK_SD:
     case DISPLAY_HMI_VAR_SELF_CHECK_MOTOR:
     case DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2:
@@ -506,6 +539,10 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
       break;
     case DISPLAY_HMI_VAR_PRESSURE:
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu""\xE5""\xB8""\x95", (unsigned long)value);
+      break;
+    case DISPLAY_HMI_VAR_GNSS_SPEED:
+      /* 值为地速 cm/s，转 m/s 显示一位小数(此前落到 default 直接打印原始 cm/s 数字)。 */
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu.%lum/s", (unsigned long)(value / 100U), (unsigned long)((value / 10U) % 10U));
       break;
     case DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE:
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu", (unsigned long)(value & 0xFFFFU));
@@ -668,6 +705,10 @@ static const char *Display_LvglLogMessageText(Display_LogMsg_t msg)
       return "\xE6""\x9C""\x89""\xE5""\x91""\x8A""\xE8""\xAD""\xA6";
     case DISPLAY_LOGMSG_ALARM_NONE:
       return "\xE6""\x97""\xA0""\xE5""\x91""\x8A""\xE8""\xAD""\xA6";
+    case DISPLAY_LOGMSG_REMOTEID_OK:
+      return "RemoteID""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
+    case DISPLAY_LOGMSG_REMOTEID_LOST:
+      return "RemoteID""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
     default:
       return "--";
   }
@@ -2073,11 +2114,15 @@ void Display_LvglRequestRecover(void)
 }
 
 /**
- * @brief LVGL needs the task to service timers regularly.
+ * @brief Check whether an immediate page rebuild is pending.
  */
 uint8_t Display_LvglNeedsRefresh(void)
 {
-  return (s_lvgl_display_ready != 0U) ? 1U : 0U;
+  if (s_lvgl_display_ready == 0U) {
+    return 0U;
+  }
+
+  return ((s_page_change_requested != 0U) || (s_page_rebuild_requested != 0U)) ? 1U : 0U;
 }
 
 /**

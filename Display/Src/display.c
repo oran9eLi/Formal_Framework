@@ -12,6 +12,7 @@
 #include "display_lvgl.h"
 #include "display_pages.h"
 #include "debug_console.h"
+#include <math.h>
 #include <string.h>
 
 #define DISPLAY_USE_LVGL_BACKEND 1U
@@ -173,6 +174,7 @@ static uint8_t s_display_initialized          = 0U;
 static volatile uint8_t s_recover_requested   = 0U;
 static uint8_t s_motor_bat_cutoff             = 0U; /* 电机电池电压不足：停机并锁定 PWM 滑块 */
 static uint8_t s_motor_band                   = 4U; /* 电机电池档位(带滞回)，初值=正常 */
+static uint8_t s_motor_cmd_percent[4]         = {0U, 0U, 0U, 0U}; /* 本机滑块最新油门意图，供保活重发喂控制层 200ms 看门狗 */
 static uint8_t s_main_band                    = 2U; /* 主控电池档位(带滞回)，初值=正常 */
 static uint16_t s_disp_main_dv                = 0U; /* 屏幕主控电压(去抖后)，单位 0.1V */
 static uint16_t s_disp_motor_dv               = 0U; /* 屏幕电机电压(去抖后)，单位 0.1V */
@@ -246,6 +248,7 @@ static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariabl
   if (throttle_percent > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { throttle_percent = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
 
   if (App_SetMotorThrottlePercent(motor_index, (uint8_t)throttle_percent) != PX4LITE_OK) { return DISPLAY_ERROR; }
+  if (motor_index < 4U) { s_motor_cmd_percent[motor_index] = (uint8_t)throttle_percent; }
 
   (void)Display_SetHmiValueU16(variable->id, throttle_percent);
 
@@ -262,6 +265,7 @@ static Display_Result_t Display_MotorEmergencyStop(void)
     const Display_HmiVariableConfig_t *variable = Display_FindMotorSliderByIndex(i);
 
     (void)App_SetMotorThrottlePercent(i, 0U);
+    s_motor_cmd_percent[i] = 0U;
     if (variable != 0) {
       (void)Display_SetHmiValueU16(variable->id, 0U);
     }
@@ -301,6 +305,7 @@ static void Display_ForceMotorsOff(void)
     const Display_HmiVariableConfig_t *variable = Display_FindMotorSliderByIndex(i);
 
     (void)App_SetMotorThrottlePercent(i, 0U);
+    s_motor_cmd_percent[i] = 0U;
     if (variable != 0) { (void)Display_SetHmiValueU16(variable->id, 0U); }
   }
 }
@@ -394,7 +399,7 @@ static void Display_LoadMockValues(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, 1200U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, 153U); /* 0.1A 单位，示例 15.3A */
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, 90U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, 3U); /* 示例数据：3D定位 */
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, 12U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, 95U);
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LATITUDE, 399084321);
@@ -427,13 +432,6 @@ static void Display_LoadMockValues(void)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW3_CODE, 0U);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW4_CODE, 0U);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW5_CODE, 0U);
-
-  /* LoRa 连接页演示数据：9 个在线节点，触发滚动翻页(占位，待真实节点发现接入) */
-  {
-    static const Display_LoraNode_t mock_nodes[] = {
-        {0x12U, 1U, 143158U}, {0x13U, 2U, 143202U}, {0x15U, 3U, 143010U}, {0x1AU, 5U, 142955U}, {0x21U, 7U, 143140U}, {0x24U, 8U, 143300U}, {0x2FU, 11U, 142847U}, {0x31U, 12U, 143312U}, {0x3AU, 15U, 143350U}};
-    Display_PagesSetLoraNodes(mock_nodes, (uint16_t)(sizeof(mock_nodes) / sizeof(mock_nodes[0])));
-  }
 }
 #endif
 
@@ -579,21 +577,17 @@ static uint16_t Display_MapCommStateValue(Px4Lite_State_t state)
 }
 
 /*
- * 将有符号厘米每秒转为用于显示的无符号速度量。
+ * 由北向/东向速度分量算地速大小(cm/s)：√(vN²+vE²)。
+ * 此前用 max(|vN|,|vE|) 近似，斜向运动会偏小(45° 时约少 29%)，这里改为真正的矢量模。
  */
-static uint16_t Display_AbsCmsToU16(int32_t value)
+static uint16_t Display_GroundSpeedCms(int32_t north_cms, int32_t east_cms)
 {
-  uint32_t magnitude;
+  float n   = (float)north_cms;
+  float e   = (float)east_cms;
+  float mag = sqrtf((n * n) + (e * e));
 
-  if (value < 0) {
-    magnitude = (uint32_t)(-value);
-  } else {
-    magnitude = (uint32_t)value;
-  }
-
-  if (magnitude > 65535U) { return 65535U; }
-
-  return (uint16_t)magnitude;
+  if (mag > 65535.0f) { return 65535U; }
+  return (uint16_t)(mag + 0.5f);
 }
 
 static int16_t Display_FloatToI16Tenths(float value)
@@ -627,11 +621,6 @@ static uint32_t Display_FloatPaToU32(float pressure_pa)
 static uint8_t Display_StateHasUsableData(Px4Lite_State_t state)
 {
   return ((state == PX4LITE_STATE_ONLINE) || (state == PX4LITE_STATE_DEGRADED)) ? 1U : 0U;
-}
-
-static uint16_t Display_GnssSignalValue(Px4Lite_State_t state)
-{
-  return (state == PX4LITE_STATE_ONLINE) ? 1U : 0U;
 }
 
 static void Display_ClearNavigationSnapshot(void)
@@ -714,8 +703,10 @@ static void Display_SetMotorSelfCheckLights(uint16_t value)
 static void Display_ClearBatteryFields(void)
 {
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_CURRENT, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, 0U);
   /* 复位电压去抖状态，重新接入/上线时按首帧重新播种。 */
   s_disp_main_dv_valid  = 0U;
@@ -751,9 +742,11 @@ static void Display_LoadNavigationSnapshot(const App_NavigationSnapshot_t *navig
 
   if (navigation == 0) { return; }
 
-  ground_speed_cms = Display_AbsCmsToU16(navigation->velocity_north_cms);
-  if (Display_AbsCmsToU16(navigation->velocity_east_cms) > ground_speed_cms) { ground_speed_cms = Display_AbsCmsToU16(navigation->velocity_east_cms); }
+  ground_speed_cms = Display_GroundSpeedCms(navigation->velocity_north_cms, navigation->velocity_east_cms);
 
+  /* 定位状态取 GNSS 解算 fix 等级(0 无定位 / 2 2D / 3 3D / 4 差分)，而非模块在线粗判。
+     本地来自 Px4Lite_GnssDisplayFixState；远端来自 GPS_RAW 的 MAVLink fix_type(0..6)。 */
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, (uint16_t)navigation->gnss_fix_type);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, (uint16_t)navigation->satellites_used);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, navigation->hdop_x100);
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LATITUDE, navigation->latitude_e7);
@@ -808,8 +801,9 @@ static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, system->warning_fault_mask | system->blocking_fault_mask);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW1_CODE, alarm_row);
 
+  /* 自检-定位模块仍反映 GNSS 模块在线态；"定位状态"(GNSS_FIX)改由导航快照的解算 fix 等级
+     驱动(见 Display_LoadNavigationSnapshot)，这里不再用模块态覆盖。 */
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, Display_MapStateValue(system->modules[PX4LITE_MODULE_GNSS].state));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, Display_GnssSignalValue(system->modules[PX4LITE_MODULE_GNSS].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, Display_MapStateValue(system->modules[PX4LITE_MODULE_IMU].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, Display_MapStateValue(system->modules[PX4LITE_MODULE_BARO].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, Display_MapCommStateValue(system->modules[PX4LITE_MODULE_LORA].state));
@@ -902,7 +896,6 @@ static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm, uint16_t
   uint16_t record_index;
   uint16_t row_index   = 0U;
   uint32_t active_mask = 0U;
-  uint32_t selfcheck_faults[PX4LITE_MODULE_COUNT + 2U];
   uint16_t selfcheck_count = 0U;
   uint32_t selfcheck_fp    = 0U;
   uint32_t motor_packed    = ((uint32_t)0xFFFFU << 16) | (uint32_t)motor_fault;
@@ -922,7 +915,6 @@ static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm, uint16_t
     if ((record->active != 0U) && (record->fault_code != 0U)) {
       uint32_t packed = ((uint32_t)record->source_id << 16) | (uint32_t)record->fault_code;
       if (selfcheck_count < (uint16_t)PX4LITE_MODULE_COUNT) {
-        selfcheck_faults[selfcheck_count] = packed;
         selfcheck_count++;
       }
       selfcheck_fp = (selfcheck_fp * 31U) + packed;
@@ -931,21 +923,18 @@ static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm, uint16_t
 
   /* 电机/主控电池告警由 ADC 电压推导，不在框架告警记录里，单独追加到两张表。 */
   if ((motor_fault != 0U) && (selfcheck_count < (uint16_t)(PX4LITE_MODULE_COUNT + 2U))) {
-    selfcheck_faults[selfcheck_count] = motor_packed;
     selfcheck_count++;
     selfcheck_fp = (selfcheck_fp * 31U) + motor_packed;
   }
   if ((main_fault != 0U) && (selfcheck_count < (uint16_t)(PX4LITE_MODULE_COUNT + 2U))) {
-    selfcheck_faults[selfcheck_count] = main_packed;
     selfcheck_count++;
     selfcheck_fp = (selfcheck_fp * 31U) + main_packed;
   }
 
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, active_mask);
 
-  /* 把当前激活故障列表交给绘制层，并用集合指纹驱动错误码表重绘：
+  /* 用激活故障集合的指纹驱动错误码表重绘：
      故障集合不变则指纹不变(不重绘)，新增/消除任一故障即触发刷新。 */
-  Display_PagesSetSelfCheckFaults(selfcheck_faults, selfcheck_count);
   selfcheck_fp = (selfcheck_fp ^ (selfcheck_fp >> 16)) + selfcheck_count;
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE, (uint16_t)selfcheck_fp);
 
@@ -990,7 +979,7 @@ static uint8_t Display_LoadModuleStatusFallback(void)
 
   if (App_GetModuleStatus(PX4LITE_MODULE_GNSS, &status) == PX4LITE_OK) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, Display_MapStateValue(status.state));
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, Display_GnssSignalValue(status.state));
+    /* 定位状态(GNSS_FIX)由导航快照的解算 fix 等级驱动，兜底路径不再用模块态覆盖。 */
     loaded = 1U;
   }
   if (App_GetModuleStatus(PX4LITE_MODULE_IMU, &status) == PX4LITE_OK) {
@@ -1017,6 +1006,8 @@ static uint8_t Display_LoadModuleStatusFallback(void)
 static void Display_ApplyOfflineDataPolicy(void)
 {
   Px4Lite_ModuleStatus_t status;
+
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return; }
 
   if ((App_GetModuleStatus(PX4LITE_MODULE_IMU, &status) != PX4LITE_OK) || (Display_StateHasUsableData(status.state) == 0U)) { Display_ClearAttitudeFields(); }
   if ((App_GetModuleStatus(PX4LITE_MODULE_BARO, &status) != PX4LITE_OK) || (Display_StateHasUsableData(status.state) == 0U)) { Display_ClearEnvironmentFields(); }
@@ -1304,9 +1295,31 @@ void Display_ShowBootCode(uint8_t code)
 /*
  * 轮询触摸状态并处理触摸事件。
  */
+/*
+ * 电机油门保活重发。控制层有 200ms 指令看门狗(PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS)：
+ * 滑块只在拖动事件下发一次目标，若不周期性重发，约 200ms 后失效保护会把电机清零，
+ * 表现为"滑上去后自己又掉下来"。这里每次 10ms 显示服务节拍把非零油门重发一次喂狗；
+ * 仅本机模式、非低压锁定时驱动。若显示/通信任务挂死则停止重发，失效保护仍会安全停机。
+ */
+static void Display_ServiceMotorKeepAlive(void)
+{
+  uint8_t i;
+
+  if (s_motor_bat_cutoff != 0U) { return; }
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return; }
+
+  for (i = 0U; i < 4U; i++) {
+    if (s_motor_cmd_percent[i] > 0U) {
+      (void)App_SetMotorThrottlePercent(i, s_motor_cmd_percent[i]);
+    }
+  }
+}
+
 Display_Result_t Display_PollTouch(void)
 {
-  return (s_display_ready != 0U) ? DISPLAY_OK : DISPLAY_NOT_READY;
+  if (s_display_ready == 0U) { return DISPLAY_NOT_READY; }
+  Display_ServiceMotorKeepAlive();
+  return DISPLAY_OK;
 }
 
 /*

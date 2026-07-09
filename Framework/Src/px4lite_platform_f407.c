@@ -626,7 +626,8 @@ Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len)
 Px4Lite_Result_t Px4Lite_RpiMavlinkInit(void)
 {
 #if PX4LITE_ENABLE_RPI_MAVLINK
-  return (BSP_UART_Init() == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  /* 树莓派链路走独立的 USART6(PC6/PC7)，与调试口 USART1 物理分离。 */
+  return (BSP_RpiUART_Init() == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
 #else
   return PX4LITE_OK;
 #endif
@@ -639,7 +640,7 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
 
   if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
 
-  status = BSP_UART_Send(data, len, PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS);
+  status = BSP_RpiUART_Send(data, len, PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS);
   if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
   if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
   return PX4LITE_IO_ERROR;
@@ -667,6 +668,15 @@ Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms)
 uint8_t Px4Lite_LoRaIsPresent(void)
 {
   return Lora_E22_IsPresent();
+}
+
+uint8_t Px4Lite_RemoteIdIsPresent(void)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  return BSP_RemoteId_IsPresent();
+#else
+  return 0U;
+#endif
 }
 
 void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out)

@@ -16,13 +16,6 @@ static uint16_t s_msglog_count;
 static uint8_t s_msglog_alarm_valid;
 static uint32_t s_msglog_version;
 
-static Display_LoraNode_t s_lora_nodes[DISPLAY_LORA_MAX_NODES];
-static uint16_t s_lora_count;
-static uint8_t s_lora_connected;
-static uint16_t s_lora_connected_node_id;
-static uint32_t s_lora_version;
-static Display_LoraConnectHandler_t s_lora_handler;
-
 static uint8_t Display_PagesIsAlarmLogMessage(Display_LogMsg_t msg)
 {
   return ((msg == DISPLAY_LOGMSG_ALARM_ACTIVE) || (msg == DISPLAY_LOGMSG_ALARM_NONE)) ? 1U : 0U;
@@ -81,60 +74,4 @@ uint16_t Display_PagesCopyLogMessages(Display_MessageLogEntry_t *entries, uint16
 uint32_t Display_PagesGetLogVersion(void)
 {
   return s_msglog_version;
-}
-
-void Display_PagesSetSelfCheckFaults(const uint32_t *faults, uint16_t count)
-{
-  (void)faults;
-  (void)count;
-}
-
-void Display_PagesSetLoraNodes(const Display_LoraNode_t *nodes, uint16_t count)
-{
-  uint16_t copy_count;
-
-  copy_count = (count > DISPLAY_LORA_MAX_NODES) ? DISPLAY_LORA_MAX_NODES : count;
-  if ((nodes != 0) && (copy_count > 0U)) {
-    memcpy(s_lora_nodes, nodes, (size_t)copy_count * sizeof(s_lora_nodes[0]));
-  }
-  s_lora_count = copy_count;
-  s_lora_version++;
-}
-
-void Display_PagesSetLoraConnected(uint8_t connected, uint16_t node_id)
-{
-  s_lora_connected        = (connected != 0U) ? 1U : 0U;
-  s_lora_connected_node_id = node_id;
-  s_lora_version++;
-}
-
-void Display_PagesSetLoraConnectHandler(Display_LoraConnectHandler_t handler)
-{
-  s_lora_handler = handler;
-}
-
-uint32_t Display_PagesGetLoraVersion(void)
-{
-  return s_lora_version;
-}
-
-Display_LoraTouchResult_t Display_PagesLoraHandleTouch(uint16_t x, uint16_t y)
-{
-  (void)x;
-  (void)y;
-  (void)s_lora_nodes;
-  (void)s_lora_count;
-  (void)s_lora_connected;
-  (void)s_lora_connected_node_id;
-  (void)s_lora_handler;
-  return DISPLAY_LORA_TOUCH_NONE;
-}
-
-void Display_PagesDrawLoraContent(void)
-{
-}
-
-uint8_t Display_PagesLoraContentDirty(void)
-{
-  return 0U;
 }

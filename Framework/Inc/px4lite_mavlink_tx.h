@@ -34,12 +34,9 @@ typedef struct {
   uint32_t stale_count;            /**< 因 topic 数据过期跳过发送的次数。 */
   uint32_t busy_count;             /**< 因 LoRa 发送忙跳过发送的次数。 */
   uint32_t error_count;            /**< 编码或发送提交错误次数。 */
-  uint32_t last_gps_sequence;      /**< 最近发送 GPS 数据对应的 topic sequence。 */
-  uint32_t last_detail_sequence;   /**< 最近发送 GNSS 详情对应的 topic sequence。 */
-  uint32_t last_attitude_sequence; /**< 最近发送姿态对应的 topic sequence。 */
-  uint32_t last_battery_sequence;  /**< 最近发送电池对应的 topic sequence。 */
-  uint32_t last_pressure_sequence; /**< 最近发送气压对应的 topic sequence。 */
-  uint32_t last_alarm_sequence;    /**< 最近发送告警对应的 topic sequence。 */
+  /* GPS/详情/姿态/电池/气压的去重序号已按发送目标(LoRa/RPi)拆到 px4lite_mavlink_tx.c
+     内的 s_last_*_sequence[2]，不再放本共享结构，避免两链路互相误判"已发"而漏帧。 */
+  uint32_t last_alarm_sequence;    /**< 最近发送告警对应的 topic sequence(仅 LoRa 出口用)。 */
   uint32_t last_message_id;        /**< 最近调度的 MAVLink message id。 */
 } Px4Lite_MavlinkTxStats_t;
 
@@ -68,6 +65,20 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms);
  * 会更新统计并尝试下一个调度 slot，通常不会直接把 NOT_READY/STALE 返回给调用方。
  */
 Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms);
+
+/**
+ * @brief 调度树莓派专属出口(LORASTAT/RIDSTAT/告警表/日志表)一帧。
+ *
+ * @param[in] now_ms 当前系统时间，单位 ms。
+ *
+ * @retval PX4LITE_OK 本周期提交了一帧 RPi 专属数据。
+ * @retval PX4LITE_IDLE 无到期 RPi 专属数据。
+ *
+ * @note 与 Px4Lite_MavlinkTxRun 分离：只写 USART6，不依赖 LoRa 服务状态或半双工
+ * 空闲，须由 comm 任务无条件周期调用，保证 LoRa 忙/掉线时 RPi 全量出口不断流。
+ * PX4LITE_ENABLE_RPI_MAVLINK 关闭时为空操作。
+ */
+Px4Lite_Result_t Px4Lite_MavlinkTxRunRpi(uint32_t now_ms);
 
 /**
  * @brief 复制当前 MAVLink 发送统计。

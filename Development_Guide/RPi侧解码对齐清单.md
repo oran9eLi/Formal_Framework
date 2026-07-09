@@ -155,6 +155,16 @@ if (name == "BAROALT") { store.UpdateBaroAltMm(value.value /*int32*/); return tr
 if (name == "GNSSUTC") { store.UpdateGnssUtc(static_cast<std::uint32_t>(value.value), value.time_boot_ms); return true; }
 ```
 
+### 2.5b 温度/气压/电池 —— 已回退/改用官方 MAVLink 通道（2026-07-08_22）
+
+> **本节的 BAROTEMP/BAROPRES 方案已作废**。依据《建议：部分自定义 NAMED_VALUE_INT 改走官方通道》，固件已把这些改回/收敛到官方 MAVLink 消息(见 Change_History/2026-07-08_22)：
+>
+> - **温度/气压** → 官方 `SCALED_PRESSURE`(msgID 29)：`temperature`(cdegC)、`press_abs`(hPa)。RPi 用现成 SCALED_PRESSURE 解码,**不再解 BAROTEMP/BAROPRES**。
+> - **电池1电流** `BAT1CUR` → **删除**(与 `BATTERY_STATUS.current_battery` 重复,RPi 以官方字段为准)。
+> - **电池2** `BAT2STAT`/`BAT2CUR` → 官方 `BATTERY_STATUS(id=1)`(多电池机制)。RPi 按 `battery_status.id` 分流:id=0 电池1、id=1 电池2,`BAT2STAT`/`BAT2CUR` 自定义解码与 `Battery2Status` 结构体可一并删除。
+>
+> 过渡:RPi M4 可先按真机当前格式接入,固件切官方通道后再删对应自定义分支、改读官方字段。
+
 ### 2.6 `LORASTAT`（RPi 专属新增：LoRa 链路状态）
 
 源码 `MavTx_SendRpiLoraStatus`（只发 USART1，不上 LoRa）。`time_boot_ms` = now_ms。

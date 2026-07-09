@@ -20,7 +20,7 @@
 #define DEBUG_BUSINESS_LOG_ENABLE     0U
 
 #define DEBUG_STACK_MONITOR_ENABLE    0U
-#define DEBUG_GNSS_MONITOR_ENABLE     0U
+#define DEBUG_GNSS_MONITOR_ENABLE     1U
 #define DEBUG_GNSS_BSP_MONITOR_ENABLE 0U
 
 /* Reserved independent module switches. */

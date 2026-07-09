@@ -468,10 +468,14 @@ typedef struct {
   float relative_humidity_pct;                        /**< 相对湿度，单位：%。 */
   uint32_t voltage_mv;                                /**< 电压，单位：mV。 */
   uint32_t voltage2_mv;                               /**< 第二电池或外设独立供电电压，单位：mV。 */
+  uint32_t current_ma;                                /**< 主电池电流，单位：mA；未测量时为 0。 */
+  uint32_t current2_ma;                               /**< 第二电池电流，单位：mA；未测量时为 0。 */
   uint32_t alarm_active_mask;                         /**< 远端活动告警来源位图，bit 对应 source_id。 */
   uint16_t highest_fault_code;                        /**< 远端最高告警码。 */
   uint16_t highest_source_id;                         /**< 远端最高告警来源。 */
   uint8_t highest_severity;                           /**< 远端最高告警严重度。 */
+  uint16_t alarm_fault_code[PX4LITE_MODULE_COUNT];    /**< 每个来源模块的故障码(alarm_active_mask 置位处有效)，由 LoRa TUNNEL 0x8001 全量告警表填充。 */
+  uint8_t alarm_severity[PX4LITE_MODULE_COUNT];       /**< 每个来源模块的告警严重度，同上。 */
   uint8_t battery_percent;                            /**< 电量百分比，范围 0 到 100。 */
   uint8_t battery2_percent;                           /**< 第二电池电量百分比，范围 0 到 100。 */
   uint8_t low_voltage;                                /**< 主电池低电压标志，1 表示低电压。 */
