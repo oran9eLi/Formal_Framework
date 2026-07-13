@@ -29,6 +29,7 @@ static uint8_t s_esc_armed;
 static uint8_t s_last_run_valid;
 static volatile uint8_t s_target_throttle_percent[PX4LITE_MOTOR_COUNT];
 static volatile uint32_t s_target_update_ms[PX4LITE_MOTOR_COUNT];
+static volatile uint8_t s_target_valid[PX4LITE_MOTOR_COUNT];
 static volatile uint8_t s_estop_latched;
 static uint32_t s_arm_start_ms;
 static uint32_t s_last_run_ms;
@@ -85,6 +86,7 @@ static void Px4Lite_ControlClearTargets(void)
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     s_target_throttle_percent[i] = 0U;
     s_target_update_ms[i]        = 0U;
+    s_target_valid[i]            = 0U;
   }
 }
 
@@ -167,7 +169,27 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uin
 
   s_target_throttle_percent[motor_index] = throttle_percent;
   s_target_update_ms[motor_index]        = Px4Lite_PlatformGetMs();
+  s_target_valid[motor_index]            = 1U;
   return PX4LITE_OK;
+}
+
+/**
+ * @brief 锁存急停状态、清零目标油门，并立即写入 ESC 最小脉宽。
+ */
+Px4Lite_Result_t Px4Lite_ControlEmergencyStop(uint32_t now_ms)
+{
+  Px4Lite_Result_t result;
+
+  s_estop_latched  = 1U;
+  s_esc_armed      = 0U;
+  s_arm_start_ms   = now_ms;
+  s_last_run_ms    = now_ms;
+  s_last_run_valid = 1U;
+  Px4Lite_ControlClearTargets();
+
+  result = Px4Lite_MotorDisarmAll();
+  Px4Lite_SetExternalModuleState(PX4LITE_MODULE_CONTROL, PX4LITE_STATE_DEGRADED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SYSTEM_SELF_CHECK, now_ms);
+  return result;
 }
 
 Px4Lite_Result_t Px4Lite_ControlModuleInit(void)
@@ -226,9 +248,10 @@ void Px4Lite_ControlRun(uint32_t now_ms)
   }
 
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
-    if ((s_estop_latched != 0U) || (s_target_update_ms[i] == 0U) || (Px4Lite_ElapsedMs(now_ms, s_target_update_ms[i]) > PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS)) {
+    if ((s_estop_latched != 0U) || (s_target_valid[i] == 0U)) {
       s_target_throttle_percent[i] = 0U;
       s_target_update_ms[i]        = 0U;
+      s_target_valid[i]            = 0U;
       duty_percent[i]              = 0U;
     } else {
       duty_percent[i] = s_target_throttle_percent[i];
@@ -248,6 +271,15 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uin
 {
   (void)motor_index;
   (void)throttle_percent;
+  return PX4LITE_OK;
+}
+
+/**
+ * @brief Control 模块关闭时的急停空实现。
+ */
+Px4Lite_Result_t Px4Lite_ControlEmergencyStop(uint32_t now_ms)
+{
+  (void)now_ms;
   return PX4LITE_OK;
 }
 

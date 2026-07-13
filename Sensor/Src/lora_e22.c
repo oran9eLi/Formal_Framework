@@ -74,6 +74,10 @@ static uint8_t s_rx_sequence_last[LORA_E22_MAVLINK_SYSID_MAX];
 #define LORA_E22_INIT_AUX_TIMEOUT_MS    500U
 #define LORA_E22_PARSE_IDLE_RESET_MS    200U
 #define LORA_E22_SEQUENCE_JUMP_MAX      64U
+/* AUX 主动探测周期与去抖阈值：连续 DEBOUNCE 次反向探测才翻转在位态，
+   拔出后约 PERIOD*DEBOUNCE ms 翻红。见 Lora_E22_UpdatePresence。 */
+#define LORA_E22_AUX_PROBE_PERIOD_MS    300U
+#define LORA_E22_AUX_PROBE_DEBOUNCE     3U
 /* 本机发射占空上限，与 px4lite_config.h 的 PX4LITE_LORA_TX_DUTY_LIMIT_PCT 预算一致。
    连续满占空发射会让 E22 持续大电流+发热，诱发模块内部死锁(只能断电恢复)，
    同时半双工链路也需要给对端和本机接收留出空口窗口。 */
@@ -94,6 +98,11 @@ static uint32_t s_tx_state_ms;
 /* 上一帧发完后强制静默到该时刻，保证发射占空 <= LORA_E22_TX_DUTY_LIMIT_PCT。 */
 static uint32_t s_tx_gap_until_ms;
 
+/* AUX 充放电主动探测维护的去抖在位标志(comm 任务单写)。见 Lora_E22_UpdatePresence。 */
+static uint8_t s_present_state;          /* 去抖后的在位标志：1=在位，0=拔出/不可用。 */
+static uint8_t s_present_pending_streak; /* 与当前去抖态相反的连续探测计数。 */
+static uint32_t s_present_next_probe_ms; /* 下次允许探测的时刻，单位：ms。 */
+
 static uint32_t Lora_E22_SaturatedAddU32(uint32_t a, uint32_t b);
 static uint16_t Lora_E22_CalcLossRateX10(uint32_t lost_count, uint32_t expected_count);
 static uint32_t Lora_E22_CalcTimeoutMs(uint16_t length_bytes, uint32_t bitrate_bps, uint32_t margin_ms);
@@ -105,6 +114,7 @@ static void Lora_E22_RecordAuxReady(uint32_t now_ms);
 static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms);
 static void Lora_E22_ResetParser(void);
 static void Lora_E22_TxStep(uint32_t now_ms);
+static void Lora_E22_UpdatePresence(uint32_t now_ms);
 
 static uint32_t Lora_E22_SaturatedAddU32(uint32_t a, uint32_t b)
 {
@@ -281,6 +291,12 @@ Lora_Result_t Lora_E22_Init(void)
   s_tx_gap_until_ms   = 0U;
   s_initialized       = 1U;
 
+  /* init 成功意味着刚确认过 AUX 就绪(模块在位)，在位标志以在位起步；
+     首次探测推迟一个周期，给模块留出稳定时间。 */
+  s_present_state          = 1U;
+  s_present_pending_streak = 0U;
+  s_present_next_probe_ms  = now_ms + LORA_E22_AUX_PROBE_PERIOD_MS;
+
   return LORA_RESULT_OK;
 }
 
@@ -391,6 +407,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
 
   Lora_E22_TxStep(now_ms);
   Lora_E22_RecordAuxReady(now_ms);
+  Lora_E22_UpdatePresence(now_ms);
   return LORA_RESULT_OK;
 }
 
@@ -439,15 +456,59 @@ Lora_State_t Lora_E22_GetState(uint32_t now_ms, uint32_t offline_timeout_ms)
   return LORA_STATE_ONLINE;
 }
 
+/**
+ * @brief 用 AUX 充放电主动探测维护去抖后的在位标志。
+ *
+ * @param[in] now_ms 当前 comm 周期时间，单位：ms。
+ *
+ * @details
+ * 悬空的 AUX 走线拔出后可能被残留电荷/电容钉在高电平，静态读电平区分不了"在位空闲高"
+ * 与"拔出悬空高"。本函数周期性调用 BSP 的推挽放电探测：在位模块(推挽强驱)会把 AUX 重新
+ * 拉高读到 1，拔出的悬空线放电后读到 0。仅在发送状态机空闲且过了占空静默期时探测，避免与
+ * E22 正常发送/空口接收时 AUX 被拉低(忙)冲突；结果连续 LORA_E22_AUX_PROBE_DEBOUNCE
+ * 次一致才翻转在位态，避免抖动误判。
+ */
+static void Lora_E22_UpdatePresence(uint32_t now_ms)
+{
+  uint8_t probed;
+
+  if (s_initialized == 0U) { return; }
+
+  /* 近期收到过对端帧 => 模块必然在位；直接维持在位并跳过探测，
+     避免空口接收期间 AUX 被模块拉低而被误探为拔出。 */
+  if ((s_last_rx_ms != 0U) && ((uint32_t)(now_ms - s_last_rx_ms) < LORA_E22_AUX_PROBE_PERIOD_MS)) {
+    s_present_state          = 1U;
+    s_present_pending_streak = 0U;
+    return;
+  }
+
+  /* 只在发送状态机空闲且过了占空静默期时探测：否则 AUX 本就可能因发送被拉低。 */
+  if (s_tx_state != LORA_TX_IDLE) { return; }
+  if ((int32_t)(now_ms - s_tx_gap_until_ms) < 0) { return; }
+  if ((s_present_next_probe_ms != 0U) && ((int32_t)(now_ms - s_present_next_probe_ms) < 0)) { return; }
+
+  s_present_next_probe_ms = now_ms + LORA_E22_AUX_PROBE_PERIOD_MS;
+
+  probed = BSP_LoRa_ProbeAuxPresent();
+  if (probed == s_present_state) {
+    s_present_pending_streak = 0U;
+    return;
+  }
+
+  s_present_pending_streak++;
+  if (s_present_pending_streak >= LORA_E22_AUX_PROBE_DEBOUNCE) {
+    s_present_state          = probed;
+    s_present_pending_streak = 0U;
+    if (probed != 0U) { s_last_aux_ready_ms = now_ms; }
+  }
+}
+
 uint8_t Lora_E22_IsPresent(void)
 {
-  uint32_t now_ms;
-
-  if (BSP_LoRa_IsReady() != 0U) { return 1U; }
+  /* 在位判据改用 AUX 充放电主动探测的去抖结果，不再直接活读 AUX 静态电平：
+     后者在模块拔出后会被悬空走线钉在高电平而误判为在位(拔了不变红)。 */
   if (s_initialized == 0U) { return 0U; }
-  now_ms = BSP_Time_GetTickMs();
-  Lora_E22_RecordAuxReady(now_ms);
-  return (Lora_E22_LocalUnavailable(now_ms) == 0U) ? 1U : 0U;
+  return s_present_state;
 }
 
 /* Advance the transmit state machine. Called every comm cycle from

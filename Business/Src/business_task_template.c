@@ -99,7 +99,7 @@ void Business_DisplayServiceTask(void *argument)
 #if BUSINESS_ENABLE_DISPLAY
   TickType_t last_wake;
   uint32_t next_refresh_ms;
-  uint8_t refresh_pending = 0U;
+  uint8_t report_due = 0U;
 
   (void)argument;
   last_wake       = xTaskGetTickCount();
@@ -121,30 +121,24 @@ void Business_DisplayServiceTask(void *argument)
     result = Business_DisplayPollKey(now_ms);
     if ((result != BUSINESS_SERVICE_OK) && (result != BUSINESS_SERVICE_IDLE)) { Business_DisplayReportResult(result, now_ms); }
 
+    /* 数据快照仍按 200ms 常规节拍准备(重取 Framework 数据、更新 HMI 值)。 */
     if (Business_TimeReached(now_ms, next_refresh_ms) != 0U) {
       result = Business_DisplayPrepareSnapshot(now_ms);
-      if (result == BUSINESS_SERVICE_OK) {
-        refresh_pending = 1U;
-      } else {
+      if (result != BUSINESS_SERVICE_OK) {
         Business_DisplayReportResult(result, now_ms);
       }
       next_refresh_ms = now_ms + BUSINESS_DISPLAY_REFRESH_PERIOD_MS;
+      report_due      = 1U;
     }
 
-    /* 切页等事件需要整页重绘时，不等 200ms 常规节拍，下一个 10ms tick 立即开始刷新。
-       静态骨架用现有缓存值绘制，数据仍由常规节拍的快照更新，故无需在此重取快照。 */
-    if (Business_DisplayNeedsImmediateRefresh() != 0U) {
-      refresh_pending = 1U;
-    }
-
-    if (refresh_pending != 0U) {
-      result = Business_DisplayRefreshStep(now_ms, BUSINESS_DISPLAY_REFRESH_BUDGET_US);
-      if (result == BUSINESS_SERVICE_OK) {
-        refresh_pending = 0U;
+    /* lv_timer_handler(触摸读取 + 脏区增量渲染)必须每个 10ms 节拍都推进：否则触摸只在
+       200ms 数据节拍时被采样，滑块/按键严重不跟手(约 5Hz)。静止无脏区时开销极小，切页整页
+       重绘与预算化多步渲染同样逐拍完成;刷新结果保持原 200ms 节拍上报，出错即时上报。 */
+    result = Business_DisplayRefreshStep(now_ms, BUSINESS_DISPLAY_REFRESH_BUDGET_US);
+    if (result != BUSINESS_SERVICE_BUSY) {
+      if ((report_due != 0U) || (result != BUSINESS_SERVICE_OK)) {
         Business_DisplayReportResult(result, now_ms);
-      } else if (result != BUSINESS_SERVICE_BUSY) {
-        refresh_pending = 0U;
-        Business_DisplayReportResult(result, now_ms);
+        report_due = 0U;
       }
     }
 

@@ -38,6 +38,14 @@ uint8_t BSP_LoRa_IsReady(void);
  */
 uint8_t BSP_LoRa_IsBusy(void);
 /**
+ * @brief 用充放电法主动探测 E22 AUX 是否被在位模块驱动。
+ *
+ * @return 1 表示模块在位(AUX 被推挽拉回高)，0 表示拔出(放电后维持低)。
+ *
+ * @note 探测期间会短暂把 AUX 驱成输出，只允许在 comm 任务上下文、模块非发送忙时调用。
+ */
+uint8_t BSP_LoRa_ProbeAuxPresent(void);
+/**
  * @brief 返回 LoRa 本地 UART 波特率，单位：bit/s。
  */
 uint32_t BSP_LoRa_GetUartBaud(void);

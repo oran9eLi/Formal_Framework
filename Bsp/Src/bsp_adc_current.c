@@ -8,10 +8,10 @@
 
 #include "bsp_adc_current.h"
 
+#include "bsp_adc.h" /* 复用 ADC1 的 VREFINT 实测 VDDA(VDDA 为 ADC1/ADC2/ADC3 公共供电) */
 #include "bsp_config.h"
 
 #define BSP_ADC_CURRENT_TIMEOUT_MS 10U
-#define BSP_ADC_CURRENT_REF_MV     3300U
 #define BSP_ADC_CURRENT_RAW_MAX    4095U
 
 static ADC_HandleTypeDef s_hadc_current;
@@ -180,15 +180,17 @@ static uint8_t BSP_ADC_Current_PinFloating(BSP_ADC_CurrentChannel_t channel)
 BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uint32_t *voltage_mv)
 {
   uint32_t raw;
+  uint32_t vdda;
 
   if (voltage_mv == 0) { return BSP_STATUS_ERROR; }
 
   /* 未接电流计(采集脚浮空)时直接判 0。 */
   if (BSP_ADC_Current_PinFloating(channel) != 0U) { *voltage_mv = 0U; return BSP_STATUS_OK; }
 
+  vdda = BSP_ADC_GetVddaMv(); /* 用 VREFINT 实测 VDDA 代替写死的 3.3V，消除电机负载导致的 VDDA 下陷误差 */
   if (BSP_ADC_Current_ReadAverage(channel, &raw, BSP_ADC_CURRENT_AVERAGE_COUNT) != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
   if (raw > BSP_ADC_CURRENT_RAW_MAX) { raw = BSP_ADC_CURRENT_RAW_MAX; }
 
-  *voltage_mv = ((raw * BSP_ADC_CURRENT_REF_MV) + (BSP_ADC_CURRENT_RAW_MAX / 2U)) / BSP_ADC_CURRENT_RAW_MAX;
+  *voltage_mv = ((raw * vdda) + (BSP_ADC_CURRENT_RAW_MAX / 2U)) / BSP_ADC_CURRENT_RAW_MAX;
   return BSP_STATUS_OK;
 }

@@ -5,6 +5,7 @@
 
 #include "sensor_bme280.h"
 
+#include "bsp_critical.h"
 #include "bsp_i2c.h"
 #include "bsp_time.h"
 
@@ -243,8 +244,11 @@ static Bme280_Result_t Bme280_ConfigureForcedMode(void)
 Bme280_Result_t Sensor_BME280_Init(void)
 {
   Bme280_Result_t result;
+  uint32_t primask;
 
+  primask = BSP_Critical_Enter();
   memset(&s_snapshot, 0, sizeof(s_snapshot));
+  BSP_Critical_Exit(primask);
   memset(&s_calib, 0, sizeof(s_calib));
   s_initialized       = 0U;
   s_addr              = BME280_I2C_ADDR_PRIMARY;
@@ -286,7 +290,11 @@ Bme280_Result_t Sensor_BME280_Init(void)
  */
 static void Bme280_NoteReadFailure(void)
 {
+  uint32_t primask;
+
+  primask = BSP_Critical_Enter();
   s_snapshot.error_count++;
+  BSP_Critical_Exit(primask);
   s_measure_state = BME280_MEASURE_IDLE;
   if (++s_read_fail_count >= BME280_REINIT_FAIL_LIMIT) {
     s_initialized      = 0U;
@@ -331,8 +339,12 @@ Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
     (void)BSP_I2C_Recover();
     result = Sensor_BME280_Init();
     if (result != BME280_RESULT_OK) {
+      uint32_t primask;
+
       s_next_init_ms = now_ms + BME280_INIT_RETRY_MS;
+      primask = BSP_Critical_Enter();
       s_snapshot.error_count++;
+      BSP_Critical_Exit(primask);
       return result;
     }
   }
@@ -373,32 +385,59 @@ Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
   adc_T = (int32_t)((((uint32_t)data[3]) << 12) | (((uint32_t)data[4]) << 4) | (((uint32_t)data[5]) >> 4));
   adc_H = (int32_t)((((uint32_t)data[6]) << 8) | data[7]);
 
+  {
+    Bme280_Snapshot_t candidate;
+    uint32_t primask;
+
+    primask = BSP_Critical_Enter();
+    candidate = s_snapshot;
+    BSP_Critical_Exit(primask);
+
+    candidate.rx_sequence++;
+    if (candidate.rx_sequence == 0U) { candidate.rx_sequence = 1U; }
+    candidate.sample_time_ms        = now_ms;
+    candidate.temperature_c         = Bme280_CompensateTemperature(adc_T);
+    candidate.pressure_pa           = Bme280_CompensatePressurePa(adc_P);
+    candidate.relative_humidity_pct = Bme280_CompensateHumidity(adc_H);
+
+    primask = BSP_Critical_Enter();
+    s_snapshot = candidate;
+    BSP_Critical_Exit(primask);
+  }
+
   s_read_fail_count = 0U;
   s_measure_state   = BME280_MEASURE_IDLE;
-  s_snapshot.rx_sequence++;
-  if (s_snapshot.rx_sequence == 0U) { s_snapshot.rx_sequence = 1U; }
-  s_snapshot.sample_time_ms        = now_ms;
-  s_snapshot.temperature_c         = Bme280_CompensateTemperature(adc_T);
-  s_snapshot.pressure_pa           = Bme280_CompensatePressurePa(adc_P);
-  s_snapshot.relative_humidity_pct = Bme280_CompensateHumidity(adc_H);
-
   return BME280_RESULT_OK;
 }
 
 Bme280_Result_t Sensor_BME280_CopySnapshot(Bme280_Snapshot_t *out)
 {
+  uint32_t primask;
+  uint32_t rx_sequence;
+
   if (out == 0) { return BME280_RESULT_INVALID_PARAM; }
 
+  primask = BSP_Critical_Enter();
   *out = s_snapshot;
-  return (s_snapshot.rx_sequence != 0U) ? BME280_RESULT_OK : BME280_RESULT_NO_DATA;
+  rx_sequence = out->rx_sequence;
+  BSP_Critical_Exit(primask);
+
+  return (rx_sequence != 0U) ? BME280_RESULT_OK : BME280_RESULT_NO_DATA;
 }
 
 Bme280_Result_t Sensor_BME280_GetStatus(Bme280_Status_t *out)
 {
+  uint32_t primask;
+  uint32_t rx_sequence;
+
   if (out == 0) { return BME280_RESULT_INVALID_PARAM; }
 
+  primask = BSP_Critical_Enter();
   out->rx_sequence    = s_snapshot.rx_sequence;
   out->sample_time_ms = s_snapshot.sample_time_ms;
   out->error_count    = s_snapshot.error_count;
-  return (s_snapshot.rx_sequence != 0U) ? BME280_RESULT_OK : BME280_RESULT_NO_DATA;
+  rx_sequence = out->rx_sequence;
+  BSP_Critical_Exit(primask);
+
+  return (rx_sequence != 0U) ? BME280_RESULT_OK : BME280_RESULT_NO_DATA;
 }

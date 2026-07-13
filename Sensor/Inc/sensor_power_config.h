@@ -57,13 +57,13 @@
 #endif
 
 #ifndef POWER_CURRENT_FILTER_OLD_WEIGHT
-/** @brief 第一电池电流滤波旧值权重。 */
-#define POWER_CURRENT_FILTER_OLD_WEIGHT 3U
+/** @brief 第一电池电流滤波旧值权重。15/16(旧)对应 1/16 新值；电流被 100mV/A 放大噪声更大，滤波比电压更重。 */
+#define POWER_CURRENT_FILTER_OLD_WEIGHT 15U
 #endif
 
 #ifndef POWER_CURRENT_FILTER_TOTAL
-/** @brief 第一电池电流滤波总权重，必须非 0。 */
-#define POWER_CURRENT_FILTER_TOTAL 4U
+/** @brief 第一电池电流滤波总权重，必须非 0。对应 15/16 旧值 + 1/16 新值。 */
+#define POWER_CURRENT_FILTER_TOTAL 16U
 #endif
 
 #ifndef POWER2_CURRENT_ZERO_MV
@@ -87,13 +87,13 @@
 #endif
 
 #ifndef POWER2_CURRENT_FILTER_OLD_WEIGHT
-/** @brief 第二电池电流滤波旧值权重。 */
-#define POWER2_CURRENT_FILTER_OLD_WEIGHT 3U
+/** @brief 第二电池电流滤波旧值权重。15/16(旧)对应 1/16 新值，与第一电池电流一致加重。 */
+#define POWER2_CURRENT_FILTER_OLD_WEIGHT 15U
 #endif
 
 #ifndef POWER2_CURRENT_FILTER_TOTAL
-/** @brief 第二电池电流滤波总权重，必须非 0。 */
-#define POWER2_CURRENT_FILTER_TOTAL 4U
+/** @brief 第二电池电流滤波总权重，必须非 0。对应 15/16 旧值 + 1/16 新值。 */
+#define POWER2_CURRENT_FILTER_TOTAL 16U
 #endif
 
 #ifndef POWER_PERCENT_TABLE_EMPTY_MV
@@ -262,13 +262,13 @@
 #endif
 
 #ifndef POWER_FILTER_OLD_WEIGHT
-/** @brief 电压滤波旧值权重，默认 3。 */
-#define POWER_FILTER_OLD_WEIGHT 3U
+/** @brief 电压滤波旧值权重。7/8(旧)对应 1/8 新值，比原 3/4 更平滑，降低电压显示抖动。 */
+#define POWER_FILTER_OLD_WEIGHT 7U
 #endif
 
 #ifndef POWER_FILTER_TOTAL
-/** @brief 电压滤波总权重，默认 4，对应 3/4 旧值 + 1/4 新值。 */
-#define POWER_FILTER_TOTAL 4U
+/** @brief 电压滤波总权重，必须非 0。对应 7/8 旧值 + 1/8 新值。 */
+#define POWER_FILTER_TOTAL 8U
 #endif
 
 #ifndef POWER_PERCENT_STEP

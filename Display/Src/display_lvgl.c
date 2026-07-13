@@ -54,7 +54,10 @@
 #define DISPLAY_LVGL_REMOTE_ROWS     16U   /* 通信连接页远端节点列表最大行数 */
 #define DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS 1000U /* 通信连接页节点列表周期重建间隔 */
 #define DISPLAY_LVGL_LOG_ROWS        9U
-#define DISPLAY_LVGL_ALARM_ROWS      5U
+/* 告警行容量：数据侧最多 PX4LITE_MODULE_COUNT + 电机/主控，取 16 与 APP_DISPLAY_ALARM_MAX 对齐。
+   超过可视高度时容器可竖向滚动(见 Display_LvglCreateAlarmTable/SummaryAlarmList)。 */
+#define DISPLAY_LVGL_ALARM_ROWS      16U
+#define DISPLAY_LVGL_ALARM_ROW_H     50
 #define DISPLAY_LVGL_VALUE_LABEL_EXTRA_COUNT 2U
 
 /*
@@ -74,6 +77,7 @@ typedef struct {
 } Display_LvglLogRow_t;
 
 typedef struct {
+  lv_obj_t *row;          /* 行容器(滚动体的子对象)；空行隐藏并停靠到 y=0 以收缩滚动范围。 */
   lv_obj_t *bar;
   lv_obj_t *code_label;
   lv_obj_t *module_label;
@@ -139,6 +143,10 @@ static int16_t s_attitude_pitch_deg10;
 static int16_t s_attitude_yaw_deg10;
 static Display_LvglLogRow_t s_log_rows[DISPLAY_LVGL_LOG_ROWS];
 static Display_LvglAlarmRow_t s_alarm_rows[DISPLAY_LVGL_ALARM_ROWS];
+/* 告警行数据(packed = (source_id<<16)|fault_code)，由 Display_LvglSetAlarmRows 批量写入，
+   取代原 ALARM_ROW1..5 五个 HMI 变量以支持最多 16 行滚动。 */
+static uint32_t s_alarm_packed[DISPLAY_LVGL_ALARM_ROWS];
+static uint16_t s_alarm_count;
 static uint8_t s_log_visible_rows;
 static Display_HmiPage_t s_current_lvgl_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static Display_HmiPage_t s_requested_page    = DISPLAY_HMI_PAGE_SELF_CHECK;
@@ -222,14 +230,13 @@ static const char *Display_LvglPageTitle(Display_HmiPage_t page)
  */
 static lv_color_t Display_LvglStatusColor(uint32_t value)
 {
+  /* 状态灯只保留红黄绿三态：在线=绿，启动/降级=黄，其余(离线/故障/未就绪/未初始化)=红。
+     原 value 0(未就绪)灰色已并入红色，不再出现第四种颜色。 */
   if (value == 2U) {
     return lv_palette_main(LV_PALETTE_GREEN);
   }
   if (value == 1U) {
     return lv_palette_main(LV_PALETTE_AMBER);
-  }
-  if (value == 0U) {
-    return lv_palette_main(LV_PALETTE_GREY);
   }
   return lv_palette_main(LV_PALETTE_RED);
 }
@@ -239,14 +246,12 @@ static lv_color_t Display_LvglStatusColor(uint32_t value)
  */
 static const char *Display_LvglStatusText(uint32_t value)
 {
+  /* 状态文字只保留 正常/警告/故障；原 value 0 的"未就绪"已并入"故障"(与红灯一致)。 */
   if (value == 2U) {
     return "\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
   }
   if (value == 1U) {
     return "\xE8""\xAD""\xA6""\xE5""\x91""\x8A";
-  }
-  if (value == 0U) {
-    return "\xE6""\x9C""\xAA""\xE5""\xB0""\xB1""\xE7""\xBB""\xAA";
   }
   return "\xE6""\x95""\x85""\xE9""\x9A""\x9C";
 }
@@ -305,6 +310,7 @@ static void Display_LvglClearActiveObjects(void)
     s_log_rows[i].msg_label  = 0;
   }
   for (i = 0U; i < DISPLAY_LVGL_ALARM_ROWS; i++) {
+    s_alarm_rows[i].row          = 0;
     s_alarm_rows[i].bar          = 0;
     s_alarm_rows[i].code_label   = 0;
     s_alarm_rows[i].module_label = 0;
@@ -588,8 +594,14 @@ static void Display_LvglCreateValueLabel(lv_obj_t *parent, Display_HmiVariableId
       }
     }
   }
-  if (id == DISPLAY_HMI_VAR_VIEW_NODE_ID) {
+  if ((id == DISPLAY_HMI_VAR_VIEW_NODE_ID) ||
+      (id == DISPLAY_HMI_VAR_DATE) ||
+      (id == DISPLAY_HMI_VAR_CLOCK_TIME) ||
+      (id == DISPLAY_HMI_VAR_GNSS_TIME) ||
+      (id == DISPLAY_HMI_VAR_FLIGHT_TIME_S)) {
     lv_obj_set_style_text_font(label, (font != 0) ? font : &lv_font_montserrat_14, 0);
+    /* DCDW-xxx 右对齐：文字贴右缘，使其与下方本地/远端按钮右缘对齐。 */
+    if (id == DISPLAY_HMI_VAR_VIEW_NODE_ID) { lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_RIGHT, 0); }
   } else {
     lv_obj_set_style_text_font(label, &display_lvgl_font_zh_16, 0);
   }
@@ -817,7 +829,8 @@ static const char *Display_LvglAlarmReasonText(uint16_t code)
     case PX4LITE_FAULT_SYSTEM_TASK_LOST:
       return "\xE4""\xBB""\xBB""\xE5""\x8A""\xA1""\xE4""\xB8""\xA2""\xE5""\xA4""\xB1";
     case PX4LITE_FAULT_SENSOR_INIT:
-      return "\xE4""\xBC""\xA0""\xE6""\x84""\x9F""\xE5""\x99""\xA8""\xE6""\x9C""\xAA""\xE5""\x88""\x9D""\xE5""\xA7""\x8B""\xE5""\x8C""\x96";
+      /* "传感器未初始化" → "传感器未就绪"。 */
+      return "\xE4""\xBC""\xA0""\xE6""\x84""\x9F""\xE5""\x99""\xA8""\xE6""\x9C""\xAA""\xE5""\xB0""\xB1""\xE7""\xBB""\xAA";
     case PX4LITE_FAULT_SENSOR_OFFLINE:
       return "\xE4""\xBC""\xA0""\xE6""\x84""\x9F""\xE5""\x99""\xA8""\xE7""\xA6""\xBB""\xE7""\xBA""\xBF";
     case PX4LITE_FAULT_SENSOR_INVALID:
@@ -866,10 +879,15 @@ static const char *Display_LvglAlarmReasonText(uint16_t code)
   }
 }
 
+/*
+ * 刷新一行告警。value=(source_id<<16)|fault_code；fault_code==0 表示空行。
+ * 空行(除"无记录"占位)隐藏并停靠到 y=0，使滚动范围收缩到实际告警条数。
+ */
 static void Display_LvglUpdateAlarmRow(uint8_t row, uint32_t value)
 {
   uint16_t source_id;
   uint16_t fault_code;
+  lv_coord_t home_y;
 
   if (row >= DISPLAY_LVGL_ALARM_ROWS) {
     return;
@@ -880,22 +898,42 @@ static void Display_LvglUpdateAlarmRow(uint8_t row, uint32_t value)
 
   source_id  = (uint16_t)(value >> 16);
   fault_code = (uint16_t)value;
+  home_y     = (lv_coord_t)(row * DISPLAY_LVGL_ALARM_ROW_H);
 
   if (fault_code == 0U) {
-    (void)snprintf(s_alarm_rows[row].code_text, sizeof(s_alarm_rows[row].code_text), "--");
-    lv_label_set_text_static(s_alarm_rows[row].code_label, s_alarm_rows[row].code_text);
-    lv_label_set_text_static(s_alarm_rows[row].module_label, "");
-    lv_label_set_text_static(s_alarm_rows[row].reason_label, (row == 0U) ? "\xE6""\x97""\xA0""\xE8""\xAE""\xB0""\xE5""\xBD""\x95" : "");
-    if (s_alarm_rows[row].bar != 0) {
-      lv_obj_set_style_bg_opa(s_alarm_rows[row].bar, LV_OPA_TRANSP, 0);
+    /* 无任何告警时用第 0 行显示"无记录"占位；其余空行隐藏并停靠 y=0 收缩滚动范围。 */
+    if ((row == 0U) && (s_alarm_count == 0U)) {
+      if (s_alarm_rows[row].row != 0) {
+        lv_obj_set_y(s_alarm_rows[row].row, home_y);
+        lv_obj_clear_flag(s_alarm_rows[row].row, LV_OBJ_FLAG_HIDDEN);
+      }
+      (void)snprintf(s_alarm_rows[row].code_text, sizeof(s_alarm_rows[row].code_text), "--");
+      lv_label_set_text_static(s_alarm_rows[row].code_label, s_alarm_rows[row].code_text);
+      lv_label_set_text_static(s_alarm_rows[row].module_label, "");
+      lv_label_set_text_static(s_alarm_rows[row].reason_label, "\xE6""\x97""\xA0""\xE8""\xAE""\xB0""\xE5""\xBD""\x95");
+      if (s_alarm_rows[row].bar != 0) {
+        lv_obj_set_style_bg_opa(s_alarm_rows[row].bar, LV_OPA_TRANSP, 0);
+      }
+    } else if (s_alarm_rows[row].row != 0) {
+      lv_obj_set_y(s_alarm_rows[row].row, 0);
+      lv_obj_add_flag(s_alarm_rows[row].row, LV_OBJ_FLAG_HIDDEN);
     }
     return;
   }
 
+  if (s_alarm_rows[row].row != 0) {
+    lv_obj_set_y(s_alarm_rows[row].row, home_y);
+    lv_obj_clear_flag(s_alarm_rows[row].row, LV_OBJ_FLAG_HIDDEN);
+  }
   Display_LvglFormatFaultCode(s_alarm_rows[row].code_text, fault_code);
   lv_label_set_text_static(s_alarm_rows[row].code_label, s_alarm_rows[row].code_text);
   lv_label_set_text_static(s_alarm_rows[row].module_label, Display_LvglAlarmModuleText(source_id, fault_code));
-  lv_label_set_text_static(s_alarm_rows[row].reason_label, Display_LvglAlarmReasonText(fault_code));
+  /* 通信离线原因按模块区分：LoRa 用"通信离线"，RemoteID 用"RemoteID离线"，两者分开显示。 */
+  if ((source_id == (uint16_t)PX4LITE_MODULE_REMOTE_ID) && (fault_code == (uint16_t)PX4LITE_FAULT_COMM_OFFLINE)) {
+    lv_label_set_text_static(s_alarm_rows[row].reason_label, "RemoteID""\xE7""\xA6""\xBB""\xE7""\xBA""\xBF");
+  } else {
+    lv_label_set_text_static(s_alarm_rows[row].reason_label, Display_LvglAlarmReasonText(fault_code));
+  }
   if (s_alarm_rows[row].bar != 0) {
     lv_obj_set_style_bg_opa(s_alarm_rows[row].bar, LV_OPA_COVER, 0);
   }
@@ -906,12 +944,31 @@ static void Display_LvglUpdateAlarmTable(void)
   uint8_t row;
 
   for (row = 0U; row < DISPLAY_LVGL_ALARM_ROWS; row++) {
-    Display_HmiVariableId_t id = (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_ALARM_ROW1_CODE + row);
-    if (s_value_valid[id] != 0U) {
-      Display_LvglUpdateAlarmRow(row, s_values[id]);
-    } else {
-      Display_LvglUpdateAlarmRow(row, 0U);
+    Display_LvglUpdateAlarmRow(row, (row < s_alarm_count) ? s_alarm_packed[row] : 0U);
+  }
+}
+
+void Display_LvglSetAlarmRows(const uint32_t *packed, uint16_t count)
+{
+  uint16_t i;
+  uint8_t changed = 0U;
+
+  if (count > (uint16_t)DISPLAY_LVGL_ALARM_ROWS) { count = (uint16_t)DISPLAY_LVGL_ALARM_ROWS; }
+
+  /* 仅在告警集合真正变化时才重排行：否则每个显示周期无条件重设 16 行的
+     位置/隐藏/文字会触发 LVGL 重排，与用户滚动手势打架，表现为滑动时刷新不稳定。 */
+  if (count != s_alarm_count) { changed = 1U; }
+  for (i = 0U; i < (uint16_t)DISPLAY_LVGL_ALARM_ROWS; i++) {
+    uint32_t v = ((packed != 0) && (i < count)) ? packed[i] : 0U;
+    if (v != s_alarm_packed[i]) {
+      s_alarm_packed[i] = v;
+      changed = 1U;
     }
+  }
+  s_alarm_count = count;
+
+  if (changed != 0U) {
+    Display_LvglUpdateAlarmTable();
   }
 }
 
@@ -985,7 +1042,11 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
 
   if ((id >= DISPLAY_HMI_VAR_MOTOR_PWM_1) && (id <= DISPLAY_HMI_VAR_MOTOR_PWM_4)) {
     motor_index = (uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1);
-    if ((motor_index < DISPLAY_LVGL_MOTOR_COUNT) && (s_motor_pwm_bars[motor_index] != 0)) {
+    /* 用户正在拖动该滑块时不回推控制层 duty：否则滞后的 duty(电机未解锁时甚至恒为 0)
+       会每帧把滑点往回拽，表现为拖动卡顿或干脆"滑不动"。松手后 is_dragged 变 false，
+       下一次 duty 变化会正常把滑块重新同步到实际油门。 */
+    if ((motor_index < DISPLAY_LVGL_MOTOR_COUNT) && (s_motor_pwm_bars[motor_index] != 0) &&
+        (lv_slider_is_dragged(s_motor_pwm_bars[motor_index]) == false)) {
       s_control_update_active = 1U;
       lv_slider_set_value(s_motor_pwm_bars[motor_index], Display_LvglClampPercent(value), LV_ANIM_OFF);
       s_control_update_active = 0U;
@@ -996,9 +1057,8 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
     Display_LvglUpdateMessageLog();
   }
 
-  if ((id >= DISPLAY_HMI_VAR_ALARM_ROW1_CODE) && (id <= DISPLAY_HMI_VAR_ALARM_ROW5_CODE)) {
-    Display_LvglUpdateAlarmRow((uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_ALARM_ROW1_CODE), value);
-  }
+  /* 告警行不再由 ALARM_ROW1..5 单值变量驱动，改由 Display_LvglSetAlarmRows 批量写入
+     (支持最多 16 行滚动)；此处不再分发到 Display_LvglUpdateAlarmRow。 */
 
   if ((id == DISPLAY_HMI_VAR_ROLL) || (id == DISPLAY_HMI_VAR_PITCH) || (id == DISPLAY_HMI_VAR_YAW)) {
     if (id == DISPLAY_HMI_VAR_ROLL) {
@@ -1119,9 +1179,14 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
     lv_img_set_src(logo_img, &s_logo_img_dsc);
     lv_obj_set_pos(logo_img, 0, 0);
   }
-  /* 公司名：第一行东创大为，第二行CNS飞控系统 */
+  /* 公司名：第一行东创大为，第二行 CNS 飞控系统。
+     CNS 为拉丁字母(点阵中文字库不含 ASCII，走 montserrat 回退)，与后面汉字基线不同，
+     故拆成两个标签分别定位。★可微调：CNS 的 y(与汉字基线对齐) 和 汉字起始 x(与 CNS 右缘衔接)。 */
   (void)Display_LvglCreateLabel(bar, "\xE4""\xB8""\x9C""\xE5""\x88""\x9B""\xE5""\xA4""\xA7""\xE4""\xB8""\xBA", 68, 10, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
-  (void)Display_LvglCreateLabel(bar, "CNS\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 68, 36, &display_lvgl_font_zh_16, lv_color_hex(0xB0C8D8));
+  /* y=36：montserrat 基线在 y+15(18-3)，与汉字 16px 字模墨迹底(约 y+15~16)齐平；
+     x=105：C+N+S advance 共 37px(12+13+12)，汉字紧随其后。 */
+  (void)Display_LvglCreateLabel(bar, "CNS", 68, 36, &lv_font_montserrat_16, lv_color_hex(0xB0C8D8));
+  (void)Display_LvglCreateLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 105, 36, &display_lvgl_font_zh_16, lv_color_hex(0xB0C8D8));
   /* 日期/时间/飞行时间竖排三行（表头 64px 内，行距 20px，标签 x=174 数值 x=208） */
   (void)Display_LvglCreateLabel(bar, "\xE6""\x97""\xA5""\xE6""\x9C""\x9F", 174, 4, &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
   Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_DATE, 208, 3, 90, &lv_font_montserrat_14);
@@ -1132,8 +1197,9 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
   /* 中间标题 */
   (void)Display_LvglCreateCenteredLabel(bar, "\xE9""\xA3""\x9E""\xE6""\x8E""\xA7""\xE6""\x98""\xBE""\xE7""\xA4""\xBA""\xE7""\xB3""\xBB""\xE7""\xBB""\x9F", 298, 9, 268, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
   (void)Display_LvglCreateCenteredLabel(bar, Display_LvglPageTitle(page), 298, 35, 268, &display_lvgl_font_zh_16, lv_color_hex(0x1DB7C9));
-  /* 本机/当前查看对象身份 DCDW-xxx：本地模式=本机 sysid(UID派生，两台应不同)，远端模式=选中节点。 */
-  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_VIEW_NODE_ID, 568, 1, 100, &lv_font_montserrat_14);
+  /* 本机/当前查看对象身份 DCDW-xxx：本地模式=本机 sysid(UID派生，两台应不同)，远端模式=选中节点。
+     右对齐(见 Display_LvglCreateValueLabel)，框右缘 566+100=666 与下方本地/远端按钮右缘(596+70)对齐。 */
+  Display_LvglCreateValueLabel(bar, DISPLAY_HMI_VAR_VIEW_NODE_ID, 566, 1, 100, &lv_font_montserrat_14);
   /* 本地/远端按钮：放在"系统"左侧，点按切换本地常规页 / 远端通信连接页；
      标题随当前页显示"本地"或"远端"，按在远端页时高亮。 */
   {
@@ -1301,10 +1367,26 @@ static void Display_LvglCreateMessageLogPanel(lv_obj_t *parent, lv_coord_t x, lv
   Display_LvglCreateMessageLogPanelAt(parent, x, DISPLAY_LVGL_BODY_Y, w, DISPLAY_LVGL_BODY_H, DISPLAY_LVGL_LOG_ROWS);
 }
 
+/*
+ * 让容器可竖向滚动并在右侧显示滚动条：内容(子对象)超过容器高度时自动出现滚动条，
+ * 在容器(含其子对象)上任意处按住拖动即可上下滚动。
+ */
+static void Display_LvglMakeScrollable(lv_obj_t *obj)
+{
+  lv_obj_add_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(obj, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_AUTO);
+  lv_obj_set_style_bg_color(obj, lv_color_hex(0x4A6076), LV_PART_SCROLLBAR);
+  lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_SCROLLBAR);
+  lv_obj_set_style_width(obj, 6, LV_PART_SCROLLBAR);
+  lv_obj_set_style_radius(obj, 3, LV_PART_SCROLLBAR);
+}
+
 static void Display_LvglCreateAlarmTable(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
 {
   lv_obj_t *table;
   lv_obj_t *header;
+  lv_obj_t *body;
   lv_coord_t code_col_w;
   lv_coord_t module_col_w;
   lv_coord_t reason_col_x;
@@ -1316,7 +1398,7 @@ static void Display_LvglCreateAlarmTable(lv_obj_t *parent, lv_coord_t x, lv_coor
   module_col_w = 170;
   reason_col_x = (lv_coord_t)(code_col_w + module_col_w);
   row_y0      = 40;
-  row_h       = 50;
+  row_h       = DISPLAY_LVGL_ALARM_ROW_H;
 
   table = lv_obj_create(parent);
   lv_obj_set_size(table, w, h);
@@ -1339,21 +1421,35 @@ static void Display_LvglCreateAlarmTable(lv_obj_t *parent, lv_coord_t x, lv_coor
   lv_obj_set_style_pad_all(header, 0, 0);
   lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
-  (void)Display_LvglCreateClipLabel(header, "\xE4""\xBB""\xA3""\xE7""\xA0""\x81", 59, 10, 50, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
-  (void)Display_LvglCreateClipLabel(header, "\xE6""\xA8""\xA1""\xE5""\x9D""\x97", (lv_coord_t)(code_col_w + 69), 10, 52, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
-  (void)Display_LvglCreateClipLabel(header, "\xE5""\x8E""\x9F""\xE5""\x9B""\xA0", (lv_coord_t)(reason_col_x + 184), 10, 52, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  /* 表头列标题与下方各列内容左缘对齐：代码 x=30、模块 x=code_col_w+20、原因 x=reason_col_x+20。 */
+  (void)Display_LvglCreateClipLabel(header, "\xE4""\xBB""\xA3""\xE7""\xA0""\x81", 30, 10, 60, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  (void)Display_LvglCreateClipLabel(header, "\xE6""\xA8""\xA1""\xE5""\x9D""\x97", (lv_coord_t)(code_col_w + 20), 10, 60, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+  (void)Display_LvglCreateClipLabel(header, "\xE5""\x8E""\x9F""\xE5""\x9B""\xA0", (lv_coord_t)(reason_col_x + 20), 10, 60, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+
+  /* 表头固定，行区放在可滚动 body 内(告警超过可视行数时右侧出滚动条)。 */
+  body = lv_obj_create(table);
+  lv_obj_set_size(body, w, (lv_coord_t)(h - row_y0));
+  lv_obj_set_pos(body, 0, row_y0);
+  lv_obj_set_style_radius(body, 0, 0);
+  lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(body, 0, 0);
+  lv_obj_set_style_pad_all(body, 0, 0);
+  Display_LvglMakeScrollable(body);
 
   for (i = 0U; i < DISPLAY_LVGL_ALARM_ROWS; i++) {
-    lv_coord_t row_y = (lv_coord_t)(row_y0 + (i * row_h));
-    lv_obj_t *row_bg = lv_obj_create(table);
+    lv_obj_t *row_bg = lv_obj_create(body);
+    s_alarm_rows[i].row = row_bg;
     lv_obj_set_size(row_bg, w, row_h);
-    lv_obj_set_pos(row_bg, 0, row_y);
+    lv_obj_set_pos(row_bg, 0, (lv_coord_t)(i * row_h));
     lv_obj_set_style_radius(row_bg, 0, 0);
     lv_obj_set_style_bg_color(row_bg, (i & 1U) ? lv_color_hex(0x172738) : lv_color_hex(0x101B27), 0);
     lv_obj_set_style_bg_opa(row_bg, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(row_bg, 0, 0);
+    lv_obj_set_style_border_color(row_bg, lv_color_hex(0x304357), 0);
+    lv_obj_set_style_border_side(row_bg, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(row_bg, 1, 0);
     lv_obj_set_style_pad_all(row_bg, 0, 0);
     lv_obj_clear_flag(row_bg, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row_bg, LV_OBJ_FLAG_HIDDEN);
 
     s_alarm_rows[i].bar = lv_obj_create(row_bg);
     lv_obj_set_size(s_alarm_rows[i].bar, 5, (lv_coord_t)(row_h - 1));
@@ -1370,57 +1466,46 @@ static void Display_LvglCreateAlarmTable(lv_obj_t *parent, lv_coord_t x, lv_coor
     s_alarm_rows[i].reason_label = Display_LvglCreateClipLabel(row_bg, "", (lv_coord_t)(reason_col_x + 20), 15, (lv_coord_t)(w - reason_col_x - 30), &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
   }
 
-  for (i = 1U; i < DISPLAY_LVGL_ALARM_ROWS; i++) {
-    lv_obj_t *line = lv_obj_create(table);
-    lv_obj_set_size(line, w, 1);
-    lv_obj_set_pos(line, 0, (lv_coord_t)(row_y0 + (i * row_h)));
-    lv_obj_set_style_radius(line, 0, 0);
-    lv_obj_set_style_bg_color(line, lv_color_hex(0x304357), 0);
-    lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-  }
-  for (i = 0U; i < 2U; i++) {
-    lv_obj_t *line = lv_obj_create(table);
-    lv_coord_t line_x = (i == 0U) ? code_col_w : reason_col_x;
-    lv_obj_set_size(line, 1, h);
-    lv_obj_set_pos(line, line_x, 0);
-    lv_obj_set_style_radius(line, 0, 0);
-    lv_obj_set_style_bg_color(line, lv_color_hex(0x304357), 0);
-    lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-  }
-
   Display_LvglUpdateAlarmTable();
 }
 
 /*
- * 自检汇总告警列表：与告警页同一数据源（DISPLAY_HMI_VAR_ALARM_ROW1..5），
- * 复用 s_alarm_rows[]，现有刷新机制（Display_LvglUpdateAlarmRow）自动保持同步。
- * 窄卡片内用两行紧凑布局：第一行 代码 + 模块，第二行 原因，完整显示三项。
+ * 自检汇总告警列表：与告警页同一数据源（s_alarm_packed，由 Display_LvglSetAlarmRows 批量写入）。
+ * 窄卡片内两行紧凑布局：第一行 代码 + 模块，第二行 原因。告警超过可视高度时 body 可竖向滚动，
+ * 右侧出滚动条，框内任意处拖动即可上下滑动。
  */
 static void Display_LvglCreateSummaryAlarmList(lv_obj_t *card)
 {
+  lv_obj_t *body;
+  lv_coord_t row_h = DISPLAY_LVGL_ALARM_ROW_H;
   uint16_t i;
 
+  body = lv_obj_create(card);
+  lv_obj_set_size(body, 224, 280);
+  lv_obj_set_pos(body, 2, 36);
+  lv_obj_set_style_radius(body, 0, 0);
+  lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(body, 0, 0);
+  lv_obj_set_style_pad_all(body, 0, 0);
+  Display_LvglMakeScrollable(body);
+
   for (i = 0U; i < DISPLAY_LVGL_ALARM_ROWS; i++) {
-    lv_coord_t row_y = (lv_coord_t)(44 + (i * 50));
+    lv_obj_t *row_bg = lv_obj_create(body);
+    s_alarm_rows[i].row = row_bg;
+    lv_obj_set_size(row_bg, 220, row_h);
+    lv_obj_set_pos(row_bg, 0, (lv_coord_t)(i * row_h));
+    lv_obj_set_style_radius(row_bg, 0, 0);
+    lv_obj_set_style_bg_opa(row_bg, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(row_bg, lv_color_hex(0x223547), 0);
+    lv_obj_set_style_border_side(row_bg, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(row_bg, 1, 0);
+    lv_obj_set_style_pad_all(row_bg, 0, 0);
+    lv_obj_clear_flag(row_bg, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row_bg, LV_OBJ_FLAG_HIDDEN);
 
-    if (i != 0U) {
-      lv_obj_t *line = lv_obj_create(card);
-      lv_obj_set_size(line, 204, 1);
-      lv_obj_set_pos(line, 12, (lv_coord_t)(row_y - 6));
-      lv_obj_set_style_radius(line, 0, 0);
-      lv_obj_set_style_bg_color(line, lv_color_hex(0x223547), 0);
-      lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
-      lv_obj_set_style_border_width(line, 0, 0);
-      lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-    }
-
-    s_alarm_rows[i].bar = lv_obj_create(card);
+    s_alarm_rows[i].bar = lv_obj_create(row_bg);
     lv_obj_set_size(s_alarm_rows[i].bar, 4, 40);
-    lv_obj_set_pos(s_alarm_rows[i].bar, 4, (lv_coord_t)(row_y + 2));
+    lv_obj_set_pos(s_alarm_rows[i].bar, 4, 4);
     lv_obj_set_style_radius(s_alarm_rows[i].bar, 0, 0);
     lv_obj_set_style_bg_color(s_alarm_rows[i].bar, lv_color_hex(0xF76D7E), 0);
     lv_obj_set_style_bg_opa(s_alarm_rows[i].bar, LV_OPA_TRANSP, 0);
@@ -1428,9 +1513,9 @@ static void Display_LvglCreateSummaryAlarmList(lv_obj_t *card)
     lv_obj_clear_flag(s_alarm_rows[i].bar, LV_OBJ_FLAG_SCROLLABLE);
 
     s_alarm_rows[i].code_text[0] = '\0';
-    s_alarm_rows[i].code_label   = Display_LvglCreateClipLabel(card, s_alarm_rows[i].code_text, 14, row_y, 78, &lv_font_montserrat_14, lv_color_hex(0xF76D7E));
-    s_alarm_rows[i].module_label = Display_LvglCreateClipLabel(card, "", 96, row_y, 118, &DISPLAY_LVGL_FONT_ZH_SMALL, lv_color_hex(0xDCE8F2));
-    s_alarm_rows[i].reason_label = Display_LvglCreateClipLabel(card, "", 14, (lv_coord_t)(row_y + 22), 200, &DISPLAY_LVGL_FONT_ZH_SMALL, lv_color_hex(0xDCE8F2));
+    s_alarm_rows[i].code_label   = Display_LvglCreateClipLabel(row_bg, s_alarm_rows[i].code_text, 14, 4, 78, &lv_font_montserrat_14, lv_color_hex(0xF76D7E));
+    s_alarm_rows[i].module_label = Display_LvglCreateClipLabel(row_bg, "", 96, 4, 118, &DISPLAY_LVGL_FONT_ZH_SMALL, lv_color_hex(0xDCE8F2));
+    s_alarm_rows[i].reason_label = Display_LvglCreateClipLabel(row_bg, "", 14, 26, 200, &DISPLAY_LVGL_FONT_ZH_SMALL, lv_color_hex(0xDCE8F2));
   }
 
   Display_LvglUpdateAlarmTable();
