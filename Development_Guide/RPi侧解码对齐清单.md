@@ -77,6 +77,20 @@ if (name == "MOTOR12" || name == "MOTOR34") {
 }
 ```
 
+### 2.3 `SERVO_OUTPUT_RAW`（新增四路 PWM 脉宽）
+
+固件同时发送标准 MAVLink `SERVO_OUTPUT_RAW`（msgid 36，`port=0`）：
+
+| 字段 | 含义 |
+|---|---|
+| `servo1_raw` | 电机 1 PWM 高电平脉宽，单位 us |
+| `servo2_raw` | 电机 2 PWM 高电平脉宽，单位 us |
+| `servo3_raw` | 电机 3 PWM 高电平脉宽，单位 us |
+| `servo4_raw` | 电机 4 PWM 高电平脉宽，单位 us |
+| `time_usec` | Control 电机快照采样时刻，单位 us |
+
+当前有效范围为 1000~2000 us，发送周期为 1000 ms。`MOTOR12/MOTOR34` 继续保留，RPi 可用前者显示精确脉宽，用后者读取百分比、`run_state` 和 `speed_level`。
+
 > 若不想在 `state_store` 加读回接口，可在 `MotorPwm` 里存 4 路，两帧各写自己那 2 路即可；关键是**别用单帧覆盖另一半**。原 `MOTORPWM` 分支可删除或保留兼容。
 
 ### 2.3 `ALRMHI` / `ALRMMSK`（告警摘要）—— ⚠️ 已作废（D1=全量表）

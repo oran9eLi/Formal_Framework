@@ -28,6 +28,7 @@
 #endif
 
 #define PX4LITE_CMD_SET_MOTOR_THROTTLE_PERCENT 31011U
+#define PX4LITE_CMD_SET_MOTOR_CONTROL_MODE     31012U
 #define PX4LITE_CMD_MOTOR_EMERGENCY_STOP       31090U
 
 #if PX4LITE_MOTOR_COUNT != 4U
@@ -53,6 +54,22 @@ static uint8_t Command_ParamToPercent(float value, uint8_t *out)
   if (!((value >= 0.0f) && (value <= 100.0f))) { return 0U; }
   *out = (uint8_t)(value + 0.5f);
   if (*out > 100U) { *out = 100U; }
+  return 1U;
+}
+
+/**
+ * @brief 按指定绝对角度上限把 MAVLink 浮点角度转换为 degree * 100。
+ */
+static uint8_t Command_ParamToDeg100(float value, float limit_deg, int32_t *out)
+{
+  if (out == 0) { return 0U; }
+  if (!((limit_deg >= 0.0f) && (value >= -limit_deg) && (value <= limit_deg))) { return 0U; }
+
+  if (value >= 0.0f) {
+    *out = (int32_t)((value * 100.0f) + 0.5f);
+  } else {
+    *out = (int32_t)((value * 100.0f) - 0.5f);
+  }
   return 1U;
 }
 
@@ -103,6 +120,27 @@ static uint8_t Command_HandleSetMotorThrottle(float param1, float param2, float 
   return (uint8_t)MAV_RESULT_ACCEPTED;
 }
 
+static uint8_t Command_HandleSetMotorControlMode(float param1, float param2, float param3, float param4)
+{
+  Px4Lite_ControlMode_t mode;
+  int32_t roll_target_deg100;
+  int32_t pitch_target_deg100;
+  int32_t yaw_target_deg100;
+
+  if ((param1 >= -0.01f) && (param1 <= 0.01f)) {
+    mode = PX4LITE_CONTROL_MODE_DIRECT;
+  } else if ((param1 >= 0.99f) && (param1 <= 1.01f)) {
+    mode = PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST;
+  } else {
+    return (uint8_t)MAV_RESULT_DENIED;
+  }
+  if (Command_ParamToDeg100(param2, (float)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 / 100.0f, &roll_target_deg100) == 0U) { return (uint8_t)MAV_RESULT_DENIED; }
+  if (Command_ParamToDeg100(param3, (float)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 / 100.0f, &pitch_target_deg100) == 0U) { return (uint8_t)MAV_RESULT_DENIED; }
+  if (Command_ParamToDeg100(param4, (float)PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100 / 100.0f, &yaw_target_deg100) == 0U) { return (uint8_t)MAV_RESULT_DENIED; }
+  if (Px4Lite_ControlSetAttitudeTarget(roll_target_deg100, pitch_target_deg100, yaw_target_deg100) != PX4LITE_OK) { return (uint8_t)MAV_RESULT_FAILED; }
+  return Command_MapControlResult(Px4Lite_ControlSetMode(mode));
+}
+
 Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, uint32_t now_ms)
 {
   uint8_t ack_result;
@@ -112,6 +150,9 @@ Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t sour
   switch (command) {
     case PX4LITE_CMD_SET_MOTOR_THROTTLE_PERCENT:
       ack_result = Command_HandleSetMotorThrottle(param1, param2, param3, param4);
+      break;
+    case PX4LITE_CMD_SET_MOTOR_CONTROL_MODE:
+      ack_result = Command_HandleSetMotorControlMode(param1, param2, param3, param4);
       break;
     case PX4LITE_CMD_MOTOR_EMERGENCY_STOP:
       (void)param1;

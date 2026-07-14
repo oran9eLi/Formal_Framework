@@ -32,12 +32,18 @@ Px4Lite_CommWorkRun()
 
 ## 3. LoRa 在位与热插拔
 
-LoRa 在位逻辑已按 `fj-lora` 思路恢复：
+LoRa 在位逻辑已按实板 AUX 电气特性完成修正：
 
 - 本机 LoRa 灯色只反映 E22 本地硬件可用性。
 - 是否收到远端帧只影响远端数据新鲜度和丢包统计，不把本机 LoRa 灯直接打红。
-- E22 未供电、AUX 长期不可用或驱动判定离线时，模块状态为离线。
-- 插上后由 LoRa 服务周期推进恢复，不额外阻塞收发路径。
+- `PF0/AUX` 常态使用无上下拉输入，避免内部下拉与模块弱上拉形成 `1.x V` 分压。
+- 在位探测只在输入模式下完成“短时下拉释放电荷 -> 无上下拉采样”，不再主动驱动 AUX。
+- E22 拔出后停止发送并变红；重新插入后由 LoRa 服务周期推进初始化、变绿并恢复发送。
+- 上电已插、上电未插、运行中拔出、运行中插入和重复热插拔均已实板验证。
+
+最终电气模型、状态流程、分层边界和验证记录见：
+
+- `Development_Guide/Change_History/2026-07-14_01_LoRa热插拔主动在位探测.md`
 
 涉及文件：
 
@@ -102,6 +108,7 @@ LoRa 发送保持 `fj-lora` 兼容格式：
 | 完整告警表 | `TUNNEL` | `payload_type=0x8001` | 每条告警的 source/fault/severity |
 | 电机 1/2 | `NAMED_VALUE_INT` | `MOTOR12` | 1、2 路油门、运行状态、速度等级 |
 | 电机 3/4 | `NAMED_VALUE_INT` | `MOTOR34` | 3、4 路油门、运行状态、速度等级 |
+| 电机脉宽 | `SERVO_OUTPUT_RAW` | `port=0` | `servo1_raw`~`servo4_raw` 为四路 PWM 高电平脉宽，单位 us |
 | 消息日志 | `NAMED_VALUE_INT` | `LOGSYNC` | 单条日志增量同步 |
 
 告警发送采用三段轮询：
@@ -204,16 +211,16 @@ ALRMHI -> ALRMMSK -> TUNNEL 0x8001 -> ALRMHI ...
 
 ## 11. 验证结果
 
-已执行 Keil 构建：
+已执行 Keil Rebuild All：
 
 ```text
-D:\keil5\UV4\UV4.exe -b MDK-ARM/formal_framework.uvprojx -t "Target 1"
+D:\keil5\UV4\UV4.exe -r MDK-ARM/formal_framework.uvprojx -t "Target 1" -j0
 ```
 
 构建结果：
 
 ```text
-Program Size: Code=280464 RO-data=96116 RW-data=1396 ZI-data=127476
+Program Size: Code=292372 RO-data=100556 RW-data=1544 ZI-data=129376
 0 Error(s), 0 Warning(s)
 ```
 

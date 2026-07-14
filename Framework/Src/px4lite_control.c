@@ -23,6 +23,14 @@
 #error "PX4LITE_CONTROL_ESC_MAX_PULSE_US must be greater than PX4LITE_CONTROL_ESC_MIN_PULSE_US"
 #endif
 
+#if PX4LITE_MOTOR_COUNT != 4U
+#error "Attitude assist mixer requires exactly four motor channels"
+#endif
+
+#if (PX4LITE_CONTROL_ATTITUDE_MIN_BASE_PERCENT < 1U) || (PX4LITE_CONTROL_ATTITUDE_MIN_BASE_PERCENT > 100U)
+#error "PX4LITE_CONTROL_ATTITUDE_MIN_BASE_PERCENT must be within 1..100"
+#endif
+
 #define PX4LITE_CONTROL_DEBOUNCE_CYCLES 2U
 
 static uint8_t s_esc_armed;
@@ -30,6 +38,10 @@ static uint8_t s_last_run_valid;
 static volatile uint8_t s_target_throttle_percent[PX4LITE_MOTOR_COUNT];
 static volatile uint32_t s_target_update_ms[PX4LITE_MOTOR_COUNT];
 static volatile uint8_t s_target_valid[PX4LITE_MOTOR_COUNT];
+static volatile Px4Lite_ControlMode_t s_control_mode;
+static volatile int32_t s_target_roll_deg100;
+static volatile int32_t s_target_pitch_deg100;
+static volatile int32_t s_target_yaw_deg100;
 static volatile uint8_t s_estop_latched;
 static uint32_t s_arm_start_ms;
 static uint32_t s_last_run_ms;
@@ -37,6 +49,14 @@ static uint32_t s_sequence;
 static uint8_t s_button_stable[PX4LITE_BUTTON_COUNT];
 static uint8_t s_button_last_raw[PX4LITE_BUTTON_COUNT];
 static uint8_t s_button_count[PX4LITE_BUTTON_COUNT];
+/*
+ * X 机架通道约定：1=前左、2=前右、3=后左、4=后右。
+ * 正 roll 表示右侧下沉，正 pitch 表示抬头，正 yaw 按 NED 约定为俯视顺时针。
+ * 俯视旋转方向约定为 1/4 顺时针、2/3 逆时针，但物理转向由电调配置或电机相线决定。
+ */
+static const int8_t s_attitude_roll_mix[PX4LITE_MOTOR_COUNT]  = {1, -1, 1, -1};
+static const int8_t s_attitude_pitch_mix[PX4LITE_MOTOR_COUNT] = {-1, -1, 1, 1};
+static const int8_t s_attitude_yaw_mix[PX4LITE_MOTOR_COUNT]   = {-1, 1, 1, -1};
 
 /**
  * @brief 将 0 到 100 的油门百分比映射为 ESC 高电平脉宽。
@@ -55,6 +75,118 @@ static uint16_t Px4Lite_ControlThrottleToPulseUs(uint8_t throttle_percent)
   range = (uint32_t)PX4LITE_CONTROL_ESC_MAX_PULSE_US - (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US;
   pulse = (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US + ((range * (uint32_t)throttle_percent) / 100U);
   return (uint16_t)pulse;
+}
+
+/**
+ * @brief 将有符号定点输入限制到闭区间，避免后续乘加越界。
+ */
+static int32_t Px4Lite_ControlClampI32(int32_t value, int32_t min_value, int32_t max_value)
+{
+  if (value < min_value) { return min_value; }
+  if (value > max_value) { return max_value; }
+  return value;
+}
+
+/**
+ * @brief 将混控结果限制到 0~100% 油门范围。
+ */
+static uint8_t Px4Lite_ControlClampDuty(int32_t duty_percent)
+{
+  if (duty_percent <= 0) { return 0U; }
+  if (duty_percent >= 100) { return 100U; }
+  return (uint8_t)duty_percent;
+}
+
+/**
+ * @brief 计算单轴定点 PD 修正量并按百分比限幅。
+ */
+static int32_t Px4Lite_ControlAttitudeCorrection(int32_t angle_error_deg100, int32_t rate_error_dps100)
+{
+  int32_t correction;
+  int32_t max_correction = (int32_t)PX4LITE_CONTROL_ATTITUDE_MAX_CORRECTION_PERCENT;
+
+  angle_error_deg100 = Px4Lite_ControlClampI32(angle_error_deg100, -36000, 36000);
+  rate_error_dps100 = Px4Lite_ControlClampI32(rate_error_dps100, -200000, 200000);
+  correction = ((angle_error_deg100 * (int32_t)PX4LITE_CONTROL_ATTITUDE_KP_X100) +
+                (rate_error_dps100 * (int32_t)PX4LITE_CONTROL_ATTITUDE_KD_X100)) / 10000;
+  return Px4Lite_ControlClampI32(correction, -max_correction, max_correction);
+}
+
+/**
+ * @brief 将偏航角误差折返到 -180~180 degree，避免跨越边界时走长路径。
+ */
+static int32_t Px4Lite_ControlWrapYawErrorDeg100(int32_t target_deg100, int32_t measured_deg100)
+{
+  int32_t error = target_deg100 - measured_deg100;
+
+  if (error > 18000) { error -= 36000; }
+  if (error < -18000) { error += 36000; }
+  return error;
+}
+
+/**
+ * @brief 复制新鲜且已标记有效的姿态快照。
+ */
+static uint8_t Px4Lite_ControlCopyFreshAttitude(Px4Lite_VehicleNavigation_t *navigation, uint32_t now_ms)
+{
+  if (navigation == 0) { return 0U; }
+  if (Px4Lite_CopyNavigation(navigation) != PX4LITE_OK) { return 0U; }
+  if (Px4Lite_IsFresh(&navigation->header, now_ms, PX4LITE_IMU_MAX_AGE_MS) == 0U) { return 0U; }
+  if ((navigation->valid_mask & PX4LITE_NAV_VALID_ATTITUDE) == 0U) { return 0U; }
+  return 1U;
+}
+
+/**
+ * @brief 在全部安全前提满足时把 roll/pitch/yaw 修正叠加到四路基础油门。
+ */
+static void Px4Lite_ControlApplyAttitudeAssist(uint32_t now_ms, uint8_t duty_percent[PX4LITE_MOTOR_COUNT])
+{
+  Px4Lite_VehicleNavigation_t navigation;
+  int32_t roll_correction;
+  int32_t pitch_correction;
+  int32_t yaw_correction;
+  int32_t measured_roll_deg100;
+  int32_t measured_pitch_deg100;
+  int32_t measured_yaw_deg100;
+  int32_t measured_roll_rate_dps100;
+  int32_t measured_pitch_rate_dps100;
+  int32_t measured_yaw_rate_dps100;
+  int32_t mixed;
+  uint8_t has_active_output = 0U;
+  uint8_t i;
+
+  if (s_control_mode != PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) { return; }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (duty_percent[i] >= PX4LITE_CONTROL_ATTITUDE_MIN_BASE_PERCENT) {
+      has_active_output = 1U;
+    }
+  }
+  if (has_active_output == 0U) { return; }
+  if (Px4Lite_ControlCopyFreshAttitude(&navigation, now_ms) == 0U) { return; }
+
+  measured_roll_deg100 = Px4Lite_ControlClampI32(navigation.roll_deg100, -18000, 18000);
+  measured_pitch_deg100 = Px4Lite_ControlClampI32(navigation.pitch_deg100, -9000, 9000);
+  measured_yaw_deg100 = Px4Lite_ControlClampI32(navigation.yaw_deg100, -18000, 18000);
+  measured_roll_rate_dps100 = Px4Lite_ControlClampI32(navigation.roll_rate_dps100, -200000, 200000);
+  measured_pitch_rate_dps100 = Px4Lite_ControlClampI32(navigation.pitch_rate_dps100, -200000, 200000);
+  measured_yaw_rate_dps100 = Px4Lite_ControlClampI32(navigation.yaw_rate_dps100, -200000, 200000);
+  roll_correction = Px4Lite_ControlAttitudeCorrection(s_target_roll_deg100 - measured_roll_deg100,
+                                                       -measured_roll_rate_dps100);
+  pitch_correction = Px4Lite_ControlAttitudeCorrection(s_target_pitch_deg100 - measured_pitch_deg100,
+                                                        -measured_pitch_rate_dps100);
+  yaw_correction = Px4Lite_ControlAttitudeCorrection(Px4Lite_ControlWrapYawErrorDeg100(s_target_yaw_deg100,
+                                                                                       measured_yaw_deg100),
+                                                      -measured_yaw_rate_dps100);
+
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    /* 仅修正已有基础油门的通道，避免单路台架测试时意外启动其余零油门电机。 */
+    if (duty_percent[i] < PX4LITE_CONTROL_ATTITUDE_MIN_BASE_PERCENT) { continue; }
+    mixed = (int32_t)duty_percent[i] +
+            ((int32_t)s_attitude_roll_mix[i] * roll_correction) +
+            ((int32_t)s_attitude_pitch_mix[i] * pitch_correction) +
+            ((int32_t)s_attitude_yaw_mix[i] * yaw_correction);
+    duty_percent[i] = Px4Lite_ControlClampDuty(mixed);
+  }
 }
 
 /**
@@ -100,6 +232,10 @@ static void Px4Lite_ControlReset(uint32_t now_ms)
   s_estop_latched  = 0U;
   s_arm_start_ms   = now_ms;
   s_last_run_ms    = now_ms;
+  s_control_mode    = (PX4LITE_CONTROL_ATTITUDE_ASSIST_DEFAULT != 0U) ? PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST : PX4LITE_CONTROL_MODE_DIRECT;
+  s_target_roll_deg100  = PX4LITE_CONTROL_ATTITUDE_TARGET_ROLL_DEG100;
+  s_target_pitch_deg100 = PX4LITE_CONTROL_ATTITUDE_TARGET_PITCH_DEG100;
+  s_target_yaw_deg100   = PX4LITE_CONTROL_ATTITUDE_TARGET_YAW_DEG100;
   Px4Lite_ControlClearTargets();
   memset(s_button_stable, 0, sizeof(s_button_stable));
   memset(s_button_last_raw, 0, sizeof(s_button_last_raw));
@@ -170,6 +306,49 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uin
   s_target_throttle_percent[motor_index] = throttle_percent;
   s_target_update_ms[motor_index]        = Px4Lite_PlatformGetMs();
   s_target_valid[motor_index]            = 1U;
+  return PX4LITE_OK;
+}
+
+/**
+ * @brief 设置直控或姿态辅助输出模式。
+ */
+Px4Lite_Result_t Px4Lite_ControlSetMode(Px4Lite_ControlMode_t mode)
+{
+  if ((mode != PX4LITE_CONTROL_MODE_DIRECT) && (mode != PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST)) {
+    return PX4LITE_INVALID_PARAM;
+  }
+
+  s_control_mode = mode;
+  return PX4LITE_OK;
+}
+
+/**
+ * @brief 复制当前输出模式。
+ */
+Px4Lite_Result_t Px4Lite_ControlGetMode(Px4Lite_ControlMode_t *mode)
+{
+  if (mode == 0) { return PX4LITE_INVALID_PARAM; }
+  *mode = s_control_mode;
+  return PX4LITE_OK;
+}
+
+/**
+ * @brief 校验并设置姿态辅助目标角。
+ */
+Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll_deg100, int32_t pitch_deg100, int32_t yaw_deg100)
+{
+  if ((roll_deg100 < -(int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100) ||
+      (roll_deg100 > (int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100) ||
+      (pitch_deg100 < -(int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100) ||
+      (pitch_deg100 > (int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100) ||
+      (yaw_deg100 < -(int32_t)PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100) ||
+      (yaw_deg100 > (int32_t)PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100)) {
+    return PX4LITE_INVALID_PARAM;
+  }
+
+  s_target_roll_deg100  = roll_deg100;
+  s_target_pitch_deg100 = pitch_deg100;
+  s_target_yaw_deg100   = yaw_deg100;
   return PX4LITE_OK;
 }
 
@@ -257,6 +436,10 @@ void Px4Lite_ControlRun(uint32_t now_ms)
       duty_percent[i] = s_target_throttle_percent[i];
       if (duty_percent[i] > 100U) { duty_percent[i] = 100U; }
     }
+  }
+
+  if (s_estop_latched == 0U) { Px4Lite_ControlApplyAttitudeAssist(now_ms, duty_percent); }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     pulse_us[i] = Px4Lite_ControlThrottleToPulseUs(duty_percent[i]);
   }
 
@@ -271,6 +454,36 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uin
 {
   (void)motor_index;
   (void)throttle_percent;
+  return PX4LITE_OK;
+}
+
+/**
+ * @brief Control 模块关闭时的模式设置空实现。
+ */
+Px4Lite_Result_t Px4Lite_ControlSetMode(Px4Lite_ControlMode_t mode)
+{
+  (void)mode;
+  return PX4LITE_OK;
+}
+
+/**
+ * @brief Control 模块关闭时返回直控模式。
+ */
+Px4Lite_Result_t Px4Lite_ControlGetMode(Px4Lite_ControlMode_t *mode)
+{
+  if (mode == 0) { return PX4LITE_INVALID_PARAM; }
+  *mode = PX4LITE_CONTROL_MODE_DIRECT;
+  return PX4LITE_OK;
+}
+
+/**
+ * @brief Control 模块关闭时的姿态目标设置空实现。
+ */
+Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll_deg100, int32_t pitch_deg100, int32_t yaw_deg100)
+{
+  (void)roll_deg100;
+  (void)pitch_deg100;
+  (void)yaw_deg100;
   return PX4LITE_OK;
 }
 

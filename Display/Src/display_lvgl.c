@@ -16,6 +16,7 @@
 #include "display_pages.h"
 #include "lv_port_disp.h"
 #include "lv_port_indev.h"
+#include "px4lite_config.h"
 #include "px4lite_platform.h"
 #include "px4lite_remote_telemetry.h"
 #include "lvgl.h"
@@ -137,6 +138,9 @@ static const lv_img_dsc_t s_logo_img_dsc = {
 static lv_obj_t *s_screen;
 static lv_obj_t *s_status_leds[DISPLAY_LVGL_STATUS_COUNT];
 static lv_obj_t *s_motor_pwm_bars[DISPLAY_LVGL_MOTOR_COUNT];
+static lv_obj_t *s_motor_pulse_labels[DISPLAY_LVGL_MOTOR_COUNT];
+static char s_motor_pulse_text[DISPLAY_LVGL_MOTOR_COUNT][16];
+static uint8_t s_motor_slider_dragging[DISPLAY_LVGL_MOTOR_COUNT];
 static lv_obj_t *s_log_alarm_label;
 static lv_obj_t *s_attitude_obj;
 static int16_t s_attitude_roll_deg10;
@@ -305,6 +309,9 @@ static void Display_LvglClearActiveObjects(void)
   }
   for (i = 0U; i < DISPLAY_LVGL_MOTOR_COUNT; i++) {
     s_motor_pwm_bars[i] = 0;
+    s_motor_pulse_labels[i] = 0;
+    s_motor_pulse_text[i][0] = '\0';
+    s_motor_slider_dragging[i] = 0U;
   }
   for (i = 0U; i < DISPLAY_LVGL_LOG_ROWS; i++) {
     s_log_rows[i].time_label = 0;
@@ -651,6 +658,31 @@ static int32_t Display_LvglClampPercent(uint32_t value)
   return (value > 100U) ? 100 : (int32_t)value;
 }
 
+static uint16_t Display_LvglMotorPulseUs(uint32_t percent)
+{
+  uint32_t range;
+  uint32_t pulse;
+
+  if (percent > 100U) {
+    percent = 100U;
+  }
+  range = (uint32_t)PX4LITE_CONTROL_ESC_MAX_PULSE_US - (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US;
+  pulse = (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US + ((range * percent) / 100U);
+  return (uint16_t)pulse;
+}
+
+static void Display_LvglUpdateMotorPulseLabel(uint8_t motor_index, uint32_t pulse_us)
+{
+  if (motor_index >= DISPLAY_LVGL_MOTOR_COUNT) {
+    return;
+  }
+
+  (void)snprintf(s_motor_pulse_text[motor_index], sizeof(s_motor_pulse_text[motor_index]), "%uus", (unsigned int)pulse_us);
+  if (s_motor_pulse_labels[motor_index] != 0) {
+    lv_label_set_text_static(s_motor_pulse_labels[motor_index], s_motor_pulse_text[motor_index]);
+  }
+}
+
 static void Display_LvglFormatClock(char *text, uint32_t hhmmss)
 {
   uint32_t hh = (hhmmss / 10000U) % 100U;
@@ -984,16 +1016,28 @@ void Display_LvglSetAlarmRows(const uint32_t *packed, uint16_t count)
 
 static void Display_LvglMotorSliderEventCb(lv_event_t *event)
 {
+  lv_event_code_t code;
   lv_obj_t *slider;
   Display_HmiVariableId_t id;
+  uint8_t motor_index;
   int32_t value;
 
-  if ((lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) || (s_control_update_active != 0U)) {
-    return;
-  }
-
+  code   = lv_event_get_code(event);
   slider = lv_event_get_target(event);
   id     = (Display_HmiVariableId_t)(uintptr_t)lv_event_get_user_data(event);
+  if ((id < DISPLAY_HMI_VAR_MOTOR_PWM_1) || (id > DISPLAY_HMI_VAR_MOTOR_PWM_4)) { return; }
+  motor_index = (uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1);
+
+  if (code == LV_EVENT_PRESSED) {
+    s_motor_slider_dragging[motor_index] = 1U;
+    return;
+  }
+  if ((code == LV_EVENT_RELEASED) || (code == LV_EVENT_PRESS_LOST)) {
+    s_motor_slider_dragging[motor_index] = 0U;
+    return;
+  }
+  if ((code != LV_EVENT_VALUE_CHANGED) || (s_control_update_active != 0U)) { return; }
+
   value  = lv_slider_get_value(slider);
   if (value < 0) {
     value = 0;
@@ -1056,11 +1100,13 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
        会每帧把滑点往回拽，表现为拖动卡顿或干脆"滑不动"。松手后 is_dragged 变 false，
        下一次 duty 变化会正常把滑块重新同步到实际油门。 */
     if ((motor_index < DISPLAY_LVGL_MOTOR_COUNT) && (s_motor_pwm_bars[motor_index] != 0) &&
+        (s_motor_slider_dragging[motor_index] == 0U) &&
         (lv_slider_is_dragged(s_motor_pwm_bars[motor_index]) == false)) {
       s_control_update_active = 1U;
       lv_slider_set_value(s_motor_pwm_bars[motor_index], Display_LvglClampPercent(value), LV_ANIM_OFF);
       s_control_update_active = 0U;
     }
+    Display_LvglUpdateMotorPulseLabel(motor_index, Display_LvglMotorPulseUs(value));
   }
 
   if (id == DISPLAY_HMI_VAR_MESSAGE_LOG) {
@@ -1939,6 +1985,7 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
     lv_coord_t x = track_x[i];
     lv_coord_t label_x = (lv_coord_t)(x - 10);
     Display_HmiVariableId_t id = (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1 + i);
+    uint32_t initial_pulse;
 
     (void)Display_LvglCreateLabel(card, motor_names[i], label_x, 34, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
     s_motor_pwm_bars[i] = lv_slider_create(card);
@@ -1952,12 +1999,18 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_motor_pwm_bars[i], lv_color_hex(0xFFFFFF), LV_PART_KNOB);
     lv_obj_set_style_width(s_motor_pwm_bars[i], 18, LV_PART_KNOB);
     lv_obj_set_style_height(s_motor_pwm_bars[i], 18, LV_PART_KNOB);
-    lv_obj_add_event_cb(s_motor_pwm_bars[i], Display_LvglMotorSliderEventCb, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)id);
-    Display_LvglCreateValueLabel(card, id, (lv_coord_t)(x - 22), 238, 76, &lv_font_montserrat_14);
+    lv_obj_add_event_cb(s_motor_pwm_bars[i], Display_LvglMotorSliderEventCb, LV_EVENT_ALL, (void *)(uintptr_t)id);
+    /* 数值区避开滑块旋钮：左列 PWM，右列脉宽，列间保留触摸与视觉间距。 */
+    (void)Display_LvglCreateClipLabel(card, "PWM", (lv_coord_t)(x - 25), 234, 30, &lv_font_montserrat_12, lv_color_hex(0x7D91A6));
+    (void)Display_LvglCreateClipLabel(card, "us", (lv_coord_t)(x + 13), 234, 45, &lv_font_montserrat_12, lv_color_hex(0x7D91A6));
+    Display_LvglCreateValueLabel(card, id, (lv_coord_t)(x - 25), 250, 30, &lv_font_montserrat_12);
     if (s_value_slots[id].label != 0) {
-      lv_obj_set_style_text_font(s_value_slots[id].label, &lv_font_montserrat_14, 0);
-      lv_obj_set_style_text_align(s_value_slots[id].label, LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_set_style_text_font(s_value_slots[id].label, &lv_font_montserrat_12, 0);
+      lv_obj_set_style_text_align(s_value_slots[id].label, LV_TEXT_ALIGN_RIGHT, 0);
     }
+    s_motor_pulse_labels[i] = Display_LvglCreateClipLabel(card, s_motor_pulse_text[i], (lv_coord_t)(x + 13), 250, 45, &lv_font_montserrat_12, lv_color_hex(0xDCE8F2));
+    initial_pulse = Display_LvglMotorPulseUs(((id < DISPLAY_HMI_VAR_COUNT) && (s_value_valid[id] != 0U)) ? s_values[id] : 0U);
+    Display_LvglUpdateMotorPulseLabel((uint8_t)i, initial_pulse);
   }
 
   estop = lv_obj_create(card);

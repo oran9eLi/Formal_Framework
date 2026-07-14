@@ -855,12 +855,17 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
 #if PX4LITE_ENABLE_LORA
   uint32_t now_ms         = Px4Lite_PlatformGetMs();
   Px4Lite_Result_t result = Px4Lite_LoRaInit();
+  Px4Lite_Result_t tx_init_result;
 
   Px4Lite_RemoteTelemetryInit(now_ms);
   s_lora_link_reset_pending = 0U;
   if (result == PX4LITE_BUSY) { Px4Lite_LoRaRequestReinit(); }
+  /*
+   * MAVLink TX 只是 Framework 调度状态，E22 启动时未插也必须初始化；
+   * 否则后续热插拔恢复 ONLINE 后，遥测发送器仍可能从未完成过初始化。
+   */
+  tx_init_result = Px4Lite_MavlinkTxInit(now_ms);
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
-    Px4Lite_Result_t tx_init_result = Px4Lite_MavlinkTxInit(now_ms);
     if (tx_init_result != PX4LITE_OK) { result = tx_init_result; }
   }
 
@@ -923,6 +928,7 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   Px4Lite_Result_t rx_result;
   Px4Lite_Result_t tx_result;
   uint32_t peer_rx_ms;
+  uint8_t lora_present;
   uint8_t lora_unavailable;
 
   (void)Px4Lite_RpiMavlinkService(now_ms);
@@ -946,7 +952,8 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
   state = Px4Lite_LoRaGetState(now_ms);
-  lora_unavailable = (((state == PX4LITE_STATE_FAILED) || (state == PX4LITE_STATE_OFFLINE) || ((result != PX4LITE_OK) && (result != PX4LITE_BUSY))) ? 1U : 0U);
+  lora_present = Px4Lite_LoRaIsPresent();
+  lora_unavailable = (((lora_present == 0U) || (state == PX4LITE_STATE_FAILED) || (state == PX4LITE_STATE_OFFLINE) || ((result != PX4LITE_OK) && (result != PX4LITE_BUSY))) ? 1U : 0U);
   peer_rx_ms = Px4Lite_MavlinkRxLastPeerMs();
 
   taskENTER_CRITICAL();
@@ -959,18 +966,23 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   taskEXIT_CRITICAL();
 
   /*
-   * LoRa 灯色/通信状态按 fj-lora 参考工程：本机硬件可用为 ONLINE(绿)，
-   * E22 未供电或 AUX 长期不可用为 OFFLINE(红)。
+   * LoRa 灯色/通信状态按本机物理在位事实发布：本机硬件可用为 ONLINE(绿)，
+   * E22 未供电、主动探测不在位或 AUX 长期不可用为 OFFLINE(红)。
    * 是否收到对端数据只进入统计与远端数据新鲜度，不影响本机 LoRa 灯。
    */
   if (lora_unavailable != 0U) {
+    Px4Lite_MavlinkSetTxEnabled(0U);
     if (s_lora_link_reset_pending == 0U) {
       Px4Lite_RemoteTelemetryResetLink(now_ms);
       s_lora_link_reset_pending = 1U;
     }
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   } else if (state == PX4LITE_STATE_ONLINE) {
-    s_lora_link_reset_pending = 0U;
+    if (s_lora_link_reset_pending != 0U) {
+      Px4Lite_RemoteTelemetryResetLink(now_ms);
+      Px4Lite_MavlinkSetTxEnabled(1U);
+      s_lora_link_reset_pending = 0U;
+    }
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   }
 #endif

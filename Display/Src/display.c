@@ -244,7 +244,7 @@ static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariabl
 
   if ((variable == 0) || (Display_MotorIndexFromId(variable->id, &motor_index) == 0U)) { return DISPLAY_ERROR; }
 
-  /* 电机电池<9.0V：锁定 PWM，滑动滑块无反应（电机已由快照强制停机）。 */
+  /* 电机电池<9.9V：沿用既有低压停机要求，锁定 PWM 并保持最小脉宽。 */
   if (s_motor_bat_cutoff != 0U) { return DISPLAY_OK; }
 
   if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_OK; }
@@ -852,13 +852,23 @@ static void Display_LoadDateTimeSnapshot(const App_DateTimeSnapshot_t *date_time
   if (date_time->local_date_ymd != 0U) { s_last_display_date_ymd = date_time->local_date_ymd; }
 }
 
-/*
- * 日期时间暂不可用时仍保持右上角有可读值。
+/**
+ * @brief 本机统一时间暂不可用时，仅使用本机导航或本机运行时间生成顶栏时钟。
+ *
+ * @details
+ * 本函数不得读取当前显示模式对应的导航快照，避免切换远端节点时把远端 GNSS 时间
+ * 写入顶栏，或因远端模式改用不同兜底源而造成日期时间跳变。
  */
-static void Display_LoadFallbackDateTime(uint32_t now_ms, const App_NavigationSnapshot_t *navigation)
+static void Display_LoadFallbackDateTime(uint32_t now_ms)
 {
-  uint32_t fallback_time = ((navigation != 0) && (navigation->gnss_utc_sec < 86400UL)) ? Display_GnssUtcSecondsToLocalHhmmss(navigation->gnss_utc_sec) : Display_TimeSecondsToHhmmss(now_ms / 1000UL);
-  uint32_t fallback_date = (navigation != 0) ? Display_GnssDateToLocalYmd(navigation->gnss_utc_date, navigation->gnss_utc_sec) : 0U;
+  App_NavigationSnapshot_t local_navigation;
+  const App_NavigationSnapshot_t *navigation = 0;
+  uint32_t fallback_time;
+  uint32_t fallback_date;
+
+  if (App_CopyNavigation(&local_navigation, now_ms) == PX4LITE_OK) { navigation = &local_navigation; }
+  fallback_time = ((navigation != 0) && (navigation->gnss_utc_sec < 86400UL)) ? Display_GnssUtcSecondsToLocalHhmmss(navigation->gnss_utc_sec) : Display_TimeSecondsToHhmmss(now_ms / 1000UL);
+  fallback_date = (navigation != 0) ? Display_GnssDateToLocalYmd(navigation->gnss_utc_date, navigation->gnss_utc_sec) : 0U;
 
   if (fallback_date == 0U) { fallback_date = (s_last_display_date_ymd != 0U) ? s_last_display_date_ymd : Display_BuildDateYmd(); }
 
@@ -1272,7 +1282,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   if ((date_time_result == PX4LITE_OK) && (date_time.local_date_ymd != 0U)) {
     Display_LoadDateTimeSnapshot(&date_time);
   } else {
-    Display_LoadFallbackDateTime(now_ms, (navigation_result == PX4LITE_OK) ? &navigation : 0);
+    Display_LoadFallbackDateTime(now_ms);
   }
 
   system_result = App_GetDisplaySystem(&system, now_ms);

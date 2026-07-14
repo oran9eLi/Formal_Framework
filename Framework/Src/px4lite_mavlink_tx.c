@@ -116,12 +116,14 @@ static uint32_t s_next_pressure_ms;
 static uint32_t s_next_env_humidity_ms;
 static uint32_t s_next_statustext_ms;
 static uint32_t s_next_motor_ms;
+static uint32_t s_next_motor_pulse_ms;
 static uint32_t s_next_alarm_status_ms;
 static uint32_t s_next_log_ms;
 static uint8_t s_catalog_index;
 static MavTx_PendingCommand_t s_pending_command;
 static MavTx_PendingAck_t s_pending_ack;
 static uint32_t s_motor_status_count;
+static uint32_t s_motor_pulse_count;
 static uint32_t s_message_log_count;
 static uint32_t s_last_battery2_status_sequence;
 static uint8_t s_alarm_status_part;
@@ -1298,6 +1300,44 @@ static Px4Lite_Result_t MavTx_SendMotorStatus(uint32_t now_ms)
   return result;
 }
 
+/**
+ * @brief 按 Control 的同一线性关系把油门百分比换算为 PWM 高电平脉宽。
+ */
+static uint16_t MavTx_MotorPulseUs(uint8_t duty_percent)
+{
+  uint32_t range;
+
+  duty_percent = MavTx_SaturatePercent(duty_percent);
+  range = (uint32_t)PX4LITE_CONTROL_ESC_MAX_PULSE_US - (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US;
+  return (uint16_t)((uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US + ((range * duty_percent) / 100U));
+}
+
+/**
+ * @brief 使用标准 SERVO_OUTPUT_RAW 发送四路实际 PWM 高电平脉宽。
+ *
+ * @details
+ * MOTOR12/MOTOR34 继续承载百分比、运行状态和兼容速度等级；本消息只补充 Control
+ * 使用同一线性关系写入 BSP 的精确脉宽，不把显示层的文本换算结果当作遥测事实。
+ */
+static Px4Lite_Result_t MavTx_SendMotorPulseStatus(uint32_t now_ms)
+{
+  Px4Lite_MotorOutputs_t motor;
+  mavlink_servo_output_raw_t packet;
+
+  if (Px4Lite_CopyMotor(&motor) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&motor.header, now_ms, PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS * 5U) == 0U) { return PX4LITE_STALE; }
+
+  memset(&packet, 0, sizeof(packet));
+  packet.time_usec  = motor.header.sample_time_ms * 1000U;
+  packet.port       = 0U;
+  packet.servo1_raw = MavTx_MotorPulseUs(motor.duty_percent[0]);
+  packet.servo2_raw = MavTx_MotorPulseUs(motor.duty_percent[1]);
+  packet.servo3_raw = MavTx_MotorPulseUs(motor.duty_percent[2]);
+  packet.servo4_raw = MavTx_MotorPulseUs(motor.duty_percent[3]);
+  (void)mavlink_msg_servo_output_raw_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
+  return MavTx_SendPrepared();
+}
+
 static Px4Lite_Result_t MavTx_RunMotorUrgent(uint32_t now_ms)
 {
   Px4Lite_MotorOutputs_t motor;
@@ -1638,6 +1678,7 @@ static const MavTx_Item_t s_mav_tx_catalog[] = {
     {"ALARM", PX4LITE_MAVLINK_ENABLE_ALARM_STATUS, PX4LITE_MAVLINK_ALARM_STATUS_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_alarm_status_ms, &s_alarm_status_count, MavTx_SendAlarmStatus, 0, MAV_TX_SCOPE_EXTENSION},
     {"STATUSTEXT", PX4LITE_MAVLINK_ENABLE_STATUSTEXT, PX4LITE_MAVLINK_STATUSTEXT_PERIOD_MS, MAVLINK_MSG_ID_STATUSTEXT, &s_next_statustext_ms, &s_stats.statustext_count, MavTx_SendStatusText, 0, MAV_TX_SCOPE_STANDARD},
     {"MOTOR", PX4LITE_MAVLINK_ENABLE_MOTOR_STATUS, PX4LITE_MAVLINK_MOTOR_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_motor_ms, &s_motor_status_count, MavTx_SendMotorStatus, 0, MAV_TX_SCOPE_EXTENSION},
+    {"MOTOR_PULSE", PX4LITE_MAVLINK_ENABLE_MOTOR_PULSE, PX4LITE_MAVLINK_MOTOR_PULSE_PERIOD_MS, MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, &s_next_motor_pulse_ms, &s_motor_pulse_count, MavTx_SendMotorPulseStatus, 0, MAV_TX_SCOPE_STANDARD},
     {"LOG", PX4LITE_MAVLINK_ENABLE_MESSAGE_LOG, PX4LITE_MAVLINK_MESSAGE_LOG_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_log_ms, &s_message_log_count, MavTx_SendMessageLog, 0, MAV_TX_SCOPE_EXTENSION},
 };
 
@@ -1681,6 +1722,7 @@ static const MavTx_Item_t s_mav_tx_rpi_telem_catalog[] = {
     {"PRESSURE", PX4LITE_MAVLINK_ENABLE_SCALED_PRESSURE, PX4LITE_MAVLINK_PRESSURE_PERIOD_MS, MAVLINK_MSG_ID_SCALED_PRESSURE, 0, 0, MavTx_SendScaledPressure, 0, MAV_TX_SCOPE_ALWAYS},
     {"ENV_HUM", PX4LITE_MAVLINK_ENABLE_ENV_HUMIDITY, PX4LITE_MAVLINK_ENV_HUMIDITY_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, 0, 0, MavTx_SendEnvHumidity, 0, MAV_TX_SCOPE_ALWAYS},
     {"MOTOR", PX4LITE_MAVLINK_ENABLE_MOTOR_STATUS, PX4LITE_MAVLINK_MOTOR_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, 0, 0, MavTx_SendMotorStatus, 0, MAV_TX_SCOPE_ALWAYS},
+    {"MOTOR_PULSE", PX4LITE_MAVLINK_ENABLE_MOTOR_PULSE, PX4LITE_MAVLINK_MOTOR_PULSE_PERIOD_MS, MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, 0, 0, MavTx_SendMotorPulseStatus, 0, MAV_TX_SCOPE_ALWAYS},
 };
 
 #define MAV_TX_RPI_TELEM_COUNT ((uint8_t)(sizeof(s_mav_tx_rpi_telem_catalog) / sizeof(s_mav_tx_rpi_telem_catalog[0])))
@@ -1702,6 +1744,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_datetime_count = 0U;
   s_baro_altitude_count = 0U;
   s_motor_status_count = 0U;
+  s_motor_pulse_count = 0U;
   s_message_log_count  = 0U;
   s_log_sync_cursor    = 0U;
   s_log_replay_cursor  = 0U;
@@ -1760,6 +1803,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_next_env_humidity_ms = now_ms + 430U;
   s_next_statustext_ms  = now_ms + 450U;
   s_next_motor_ms       = now_ms + 480U;
+  s_next_motor_pulse_ms = now_ms + 490U;
   s_next_alarm_status_ms = now_ms + 500U;
   s_next_log_ms         = now_ms + 2500U;
   s_catalog_index       = 0U;

@@ -376,6 +376,21 @@ static Px4Lite_State_t MavRx_NormalizeState(uint32_t value)
   return (Px4Lite_State_t)value;
 }
 
+/**
+ * @brief 把合法 ESC 脉宽换算为远端显示使用的油门百分比。
+ */
+static uint8_t MavRx_PulseToDutyPercent(uint16_t pulse_us)
+{
+  uint32_t range;
+  uint32_t offset;
+
+  if (pulse_us <= PX4LITE_CONTROL_ESC_MIN_PULSE_US) { return 0U; }
+  if (pulse_us >= PX4LITE_CONTROL_ESC_MAX_PULSE_US) { return 100U; }
+  range = (uint32_t)PX4LITE_CONTROL_ESC_MAX_PULSE_US - (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US;
+  offset = (uint32_t)pulse_us - (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US;
+  return (uint8_t)(((offset * 100U) + (range / 2U)) / range);
+}
+
 static void MavRx_ApplyCompactModuleState(Px4Lite_RemoteTelemetry_t *remote, uint32_t packed)
 {
   if (remote == 0) { return; }
@@ -412,8 +427,12 @@ static void MavRx_ApplyMotorPair(Px4Lite_RemoteTelemetry_t *remote, uint8_t pair
   if (duty0 > 100U) { duty0 = 100U; }
   if (duty1 > 100U) { duty1 = 100U; }
 
-  if (first < PX4LITE_MOTOR_COUNT) { remote->motor_duty_percent[first] = duty0; }
-  if ((uint8_t)(first + 1U) < PX4LITE_MOTOR_COUNT) { remote->motor_duty_percent[(uint8_t)(first + 1U)] = duty1; }
+  if (first < PX4LITE_MOTOR_COUNT) {
+    remote->motor_duty_percent[first] = duty0;
+  }
+  if ((uint8_t)(first + 1U) < PX4LITE_MOTOR_COUNT) {
+    remote->motor_duty_percent[(uint8_t)(first + 1U)] = duty1;
+  }
   remote->motor_run_state = (uint8_t)((packed >> 16U) & 0x01U);
   remote->motor_speed_level = (uint8_t)((packed >> 24U) & 0xFFU);
   if (remote->motor_speed_level > 100U) { remote->motor_speed_level = 100U; }
@@ -422,6 +441,40 @@ static void MavRx_ApplyMotorPair(Px4Lite_RemoteTelemetry_t *remote, uint8_t pair
   }
   remote->valid_mask |= PX4LITE_REMOTE_VALID_MOTOR;
   remote->motor_update_ms = remote->last_rx_ms;
+}
+
+/**
+ * @brief 解码主输出组的 SERVO_OUTPUT_RAW 四路 PWM 脉宽。
+ */
+static uint8_t MavRx_DecodeMotorPulse(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_servo_output_raw_t packet;
+  uint16_t pulse_us[PX4LITE_MOTOR_COUNT];
+  uint8_t any_valid = 0U;
+  uint8_t i;
+
+  if ((remote == 0) || (message == 0)) { return 0U; }
+  mavlink_msg_servo_output_raw_decode(message, &packet);
+  if (packet.port != 0U) { return 0U; }
+
+  pulse_us[0] = packet.servo1_raw;
+  pulse_us[1] = packet.servo2_raw;
+  pulse_us[2] = packet.servo3_raw;
+  pulse_us[3] = packet.servo4_raw;
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if ((pulse_us[i] < PX4LITE_CONTROL_ESC_MIN_PULSE_US) || (pulse_us[i] > PX4LITE_CONTROL_ESC_MAX_PULSE_US)) { continue; }
+    remote->motor_duty_percent[i] = MavRx_PulseToDutyPercent(pulse_us[i]);
+    any_valid = 1U;
+  }
+  if (any_valid == 0U) { return 0U; }
+
+  remote->motor_speed_level = 0U;
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (remote->motor_duty_percent[i] > remote->motor_speed_level) { remote->motor_speed_level = remote->motor_duty_percent[i]; }
+  }
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_MOTOR;
+  remote->motor_update_ms = remote->last_rx_ms;
+  return 1U;
 }
 
 static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message, uint32_t now_ms)
@@ -664,6 +717,8 @@ static uint8_t MavRx_DecodeMessage(Px4Lite_RemoteTelemetry_t *remote, const mavl
       return MavRx_DecodeBattery(remote, message);
     case MAVLINK_MSG_ID_SCALED_PRESSURE:
       return MavRx_DecodePressure(remote, message);
+    case MAVLINK_MSG_ID_SERVO_OUTPUT_RAW:
+      return MavRx_DecodeMotorPulse(remote, message);
     case MAVLINK_MSG_ID_NAMED_VALUE_INT:
       return MavRx_DecodeNamedValueInt(remote, message, now_ms);
     case MAVLINK_MSG_ID_TUNNEL:
