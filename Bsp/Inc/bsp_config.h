@@ -44,7 +44,7 @@
 
 /*
  * 树莓派 MAVLink UART：USART6，PC6(TX)/PC7(RX)，115200 8N1，经 3.3V USB-TTL 连接。
- * 只做阻塞 TX(飞控→RPi 全量出口)，不占用 DMA/中断；与调试口 USART1 物理分离。
+ * TX 仍使用阻塞发送；RX 使用 USART6 中断收字节环形缓冲，不占用 DMA；与调试口 USART1 物理分离。
  */
 #define BSP_RPI_UART          USART6
 #define BSP_RPI_UART_BAUD     115200U
@@ -54,12 +54,15 @@
 #define BSP_RPI_UART_MODE     UART_MODE_TX_RX
 #define BSP_RPI_UART_HWCTL    UART_HWCONTROL_NONE
 #define BSP_RPI_UART_OVERSAMP UART_OVERSAMPLING_16
+#define BSP_RPI_RX_BUF_SIZE   128U
 #define BSP_RPI_TX_PORT       GPIOC
 #define BSP_RPI_TX_PIN        GPIO_PIN_6
 #define BSP_RPI_TX_AF         GPIO_AF8_USART6
 #define BSP_RPI_RX_PORT       GPIOC
 #define BSP_RPI_RX_PIN        GPIO_PIN_7
 #define BSP_RPI_RX_AF         GPIO_AF8_USART6
+#define BSP_RPI_IRQn          USART6_IRQn
+#define BSP_RPI_IRQ_PRIORITY  6U
 
 /* ATGM336H GNSS：USART2，PA2/PA3，9600 8N1。 */
 #define BSP_GNSS_UART           USART2

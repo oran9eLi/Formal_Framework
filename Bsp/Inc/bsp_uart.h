@@ -80,6 +80,21 @@ BSP_Status_t BSP_RpiUART_Init(void);
  * @return BSP 通用返回码。
  */
 BSP_Status_t BSP_RpiUART_Send(const uint8_t *data, uint16_t length, uint32_t timeout_ms);
+
+/**
+ * @brief 从树莓派 UART RX 环形缓冲读取原始字节。
+ * @param[out] data 输出缓冲区，不能为 NULL。
+ * @param[in] max_length 最多读取字节数。
+ * @return 实际读取字节数。
+ * @note 本接口只暴露原始字节；MAVLink 解析必须在 Framework/Platform Adapter 层完成。
+ */
+uint16_t BSP_RpiUART_Read(uint8_t *data, uint16_t max_length);
+
+/**
+ * @brief USART6 中断入口转发函数。
+ * @note 仅供 `USART6_IRQHandler` 调用，ISR 内只清 HAL 状态并重新挂接单字节接收。
+ */
+void BSP_RpiUART_IrqHandler(void);
 #endif
 
 #endif

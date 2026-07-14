@@ -49,6 +49,8 @@ typedef enum {
   APP_LOGMSG_ALARM_NONE,       /* 无告警 */
   APP_LOGMSG_REMOTEID_OK,      /* RemoteID正常 */
   APP_LOGMSG_REMOTEID_LOST,    /* RemoteID断开 */
+  APP_LOGMSG_5G_OK,            /* 5G OK */
+  APP_LOGMSG_5G_LOST,          /* 5G LOST */
   APP_LOGMSG_COUNT
 } App_LogMessageId_t;
 

@@ -127,6 +127,17 @@ void Px4Lite_RemoteTelemetryInit(uint32_t now_ms)
   taskEXIT_CRITICAL();
 }
 
+void Px4Lite_RemoteTelemetryResetLink(uint32_t now_ms)
+{
+  taskENTER_CRITICAL();
+  memset(s_remote, 0, sizeof(s_remote));
+  memset(s_remote_sequence, 0, sizeof(s_remote_sequence));
+  memset(s_slot_node, 0, sizeof(s_slot_node));
+  s_selected_remote_node_id = RemoteTelemetry_DefaultNode();
+  s_mode_changed_ms = now_ms;
+  taskEXIT_CRITICAL();
+}
+
 Px4Lite_Result_t Px4Lite_RemoteTelemetrySetMode(Px4Lite_RemoteMode_t mode, uint32_t now_ms)
 {
   if ((mode != PX4LITE_REMOTE_MODE_LOCAL) && (mode != PX4LITE_REMOTE_MODE_REMOTE)) { return PX4LITE_INVALID_PARAM; }

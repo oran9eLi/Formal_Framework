@@ -38,6 +38,7 @@ static uint32_t s_health_sequence;
 static uint32_t s_start_ms;
 static volatile uint8_t s_remoteid_reinit_requested;
 static uint8_t s_remoteid_present_prev; /* PC8 在位上一拍，0xFF=未知(首拍)，用于热拔插边沿检测 */
+static uint8_t s_lora_link_reset_pending;
 static uint32_t s_last_imu_work_ms;
 static uint32_t s_last_baro_work_ms;
 static uint32_t s_last_battery_work_ms;
@@ -856,6 +857,7 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
   Px4Lite_Result_t result = Px4Lite_LoRaInit();
 
   Px4Lite_RemoteTelemetryInit(now_ms);
+  s_lora_link_reset_pending = 0U;
   if (result == PX4LITE_BUSY) { Px4Lite_LoRaRequestReinit(); }
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
     Px4Lite_Result_t tx_init_result = Px4Lite_MavlinkTxInit(now_ms);
@@ -916,15 +918,22 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 {
 #if PX4LITE_ENABLE_LORA
   Px4Lite_CommDebugInfo_t info;
+  Px4Lite_State_t state;
   Px4Lite_Result_t result;
   Px4Lite_Result_t rx_result;
   Px4Lite_Result_t tx_result;
   uint32_t peer_rx_ms;
+  uint8_t lora_unavailable;
+
+  (void)Px4Lite_RpiMavlinkService(now_ms);
+  (void)Px4Lite_MavlinkRxRunRpi(now_ms);
 
   result = Px4Lite_LoRaService(now_ms);
-  if (result == PX4LITE_OK) {
-    rx_result = Px4Lite_MavlinkRxRun(now_ms);
-    if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY)) { result = rx_result; }
+  rx_result = Px4Lite_MavlinkRxRun(now_ms);
+  if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY)) { result = rx_result; }
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
+    /* LoRa 半双工服务返回 BUSY 属于常态，发送器内部会再检查 DMA 是否空闲。
+       若这里只允许 OK，电机/日志/告警等后段扩展帧会长期排不上调度。 */
     tx_result = Px4Lite_MavlinkTxRun(now_ms);
     if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
   }
@@ -936,24 +945,32 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
-  (void)Px4Lite_LoRaGetState(now_ms); /* 仍调用以推进内部状态机；灯色只按硬件在位判定 */
-  (void)result;
+  state = Px4Lite_LoRaGetState(now_ms);
+  lora_unavailable = (((state == PX4LITE_STATE_FAILED) || (state == PX4LITE_STATE_OFFLINE) || ((result != PX4LITE_OK) && (result != PX4LITE_BUSY))) ? 1U : 0U);
   peer_rx_ms = Px4Lite_MavlinkRxLastPeerMs();
 
   taskENTER_CRITICAL();
   s_status[PX4LITE_MODULE_LORA].last_rx_ms    = peer_rx_ms;
   s_status[PX4LITE_MODULE_LORA].error_count   = info.parse_error_count + info.send_error_count;
   s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count + info.rx_sequence_lost_count;
+  if ((state == PX4LITE_STATE_ONLINE) && ((result == PX4LITE_OK) || (result == PX4LITE_BUSY))) {
+    s_status[PX4LITE_MODULE_LORA].last_valid_ms = now_ms;
+  }
   taskEXIT_CRITICAL();
 
   /*
-   * LoRa 灯色/通信状态按屏幕原版：本机模块在位(E22 插着)即 ONLINE(绿)，未接入为 FAILED(红)。
-   * 是否收到对端数据只进入统计与远端数据新鲜度，不影响本机 LoRa 灯，
-   * 避免 E22 已接上但因未收到对端帧被判非 ONLINE、消息日志误报"通信断开"。
+   * LoRa 灯色/通信状态按 fj-lora 参考工程：本机硬件可用为 ONLINE(绿)，
+   * E22 未供电或 AUX 长期不可用为 OFFLINE(红)。
+   * 是否收到对端数据只进入统计与远端数据新鲜度，不影响本机 LoRa 灯。
    */
-  if (Px4Lite_LoRaIsPresent() == 0U) {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_FAILED, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
-  } else {
+  if (lora_unavailable != 0U) {
+    if (s_lora_link_reset_pending == 0U) {
+      Px4Lite_RemoteTelemetryResetLink(now_ms);
+      s_lora_link_reset_pending = 1U;
+    }
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  } else if (state == PX4LITE_STATE_ONLINE) {
+    s_lora_link_reset_pending = 0U;
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   }
 #endif

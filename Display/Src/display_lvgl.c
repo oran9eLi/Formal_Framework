@@ -48,13 +48,13 @@
 #define DISPLAY_LVGL_FOOTER_H        56U
 #define DISPLAY_LVGL_CARD_RADIUS     6U
 #define DISPLAY_LVGL_VALUE_TEXT_LEN  32U
-#define DISPLAY_LVGL_STATUS_COUNT    10U
+#define DISPLAY_LVGL_STATUS_COUNT    11U
 #define DISPLAY_LVGL_TAB_COUNT       6U
 #define DISPLAY_LVGL_MOTOR_COUNT     4U
 #define DISPLAY_LVGL_REMOTE_ROWS     16U   /* 通信连接页远端节点列表最大行数 */
 #define DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS 1000U /* 通信连接页节点列表周期重建间隔 */
 #define DISPLAY_LVGL_LOG_ROWS        9U
-/* 告警行容量：数据侧最多 PX4LITE_MODULE_COUNT + 电机/主控，取 16 与 APP_DISPLAY_ALARM_MAX 对齐。
+/* 告警行容量：数据侧最多 PX4LITE_MODULE_COUNT + 5G占位/电机/主控，取 16 与 APP_DISPLAY_ALARM_MAX 对齐。
    超过可视高度时容器可竖向滚动(见 Display_LvglCreateAlarmTable/SummaryAlarmList)。 */
 #define DISPLAY_LVGL_ALARM_ROWS      16U
 #define DISPLAY_LVGL_ALARM_ROW_H     50
@@ -104,7 +104,8 @@ static const Display_LvglStatusItem_t s_status_items[DISPLAY_LVGL_STATUS_COUNT] 
     {DISPLAY_HMI_VAR_SELF_CHECK_GNSS, "\xE5""\xAE""\x9A""\xE4""\xBD""\x8D""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, "\xE5""\xA7""\xBF""\xE6""\x80""\x81""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
     {DISPLAY_HMI_VAR_SELF_CHECK_BME280, "\xE7""\x8E""\xAF""\xE5""\xA2""\x83""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
-    {DISPLAY_HMI_VAR_SELF_CHECK_LORA, "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_LORA, "LoRa""\xE9""\x80""\x9A""\xE4""\xBF""\xA1"},
+    {DISPLAY_HMI_VAR_SELF_CHECK_5GA, "5G""\xE9""\x80""\x9A""\xE4""\xBF""\xA1"},
     {DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, "RemoteID"},
     {DISPLAY_HMI_VAR_SELF_CHECK_SD, "\xE5""\xAD""\x98""\xE5""\x82""\xA8""\xE6""\xA8""\xA1""\xE5""\x9D""\x97"},
     {DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xB8""\x80"},
@@ -498,6 +499,7 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
     case DISPLAY_HMI_VAR_SELF_CHECK_MPU6050:
     case DISPLAY_HMI_VAR_SELF_CHECK_BME280:
     case DISPLAY_HMI_VAR_SELF_CHECK_LORA:
+    case DISPLAY_HMI_VAR_SELF_CHECK_5GA:
     case DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID:
     case DISPLAY_HMI_VAR_SELF_CHECK_SD:
     case DISPLAY_HMI_VAR_SELF_CHECK_MOTOR:
@@ -684,9 +686,9 @@ static const char *Display_LvglLogMessageText(Display_LogMsg_t msg)
     case DISPLAY_LOGMSG_ENV_LOST:
       return "\xE7""\x8E""\xAF""\xE5""\xA2""\x83""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
     case DISPLAY_LOGMSG_COMM_OK:
-      return "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
+      return "LoRa""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
     case DISPLAY_LOGMSG_COMM_LOST:
-      return "\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
+      return "LoRa""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
     case DISPLAY_LOGMSG_STORAGE_OK:
       return "\xE5""\xAD""\x98""\xE5""\x82""\xA8""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
     case DISPLAY_LOGMSG_STORAGE_LOST:
@@ -721,6 +723,10 @@ static const char *Display_LvglLogMessageText(Display_LogMsg_t msg)
       return "RemoteID""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
     case DISPLAY_LOGMSG_REMOTEID_LOST:
       return "RemoteID""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
+    case DISPLAY_LOGMSG_5G_OK:
+      return "5G""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
+    case DISPLAY_LOGMSG_5G_LOST:
+      return "5G""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
     default:
       return "--";
   }
@@ -795,11 +801,11 @@ static const char *Display_LvglAlarmModuleText(uint16_t source_id, uint16_t faul
     case PX4LITE_MODULE_LORA:
       return "\xE9""\x80""\x9A""\xE4""\xBF""\xA1";
     case PX4LITE_MODULE_5G:
-      return "5G";
+      return "\xE9""\x80""\x9A""\xE4""\xBF""\xA1";
     case PX4LITE_MODULE_STORAGE:
       return "\xE5""\xAD""\x98""\xE5""\x82""\xA8";
     case PX4LITE_MODULE_REMOTE_ID:
-      return "\xE8""\xBF""\x9C""\xE7""\xA8""\x8B";
+      return "\xE9""\x80""\x9A""\xE4""\xBF""\xA1";
     case PX4LITE_MODULE_DISPLAY:
       return "\xE6""\x98""\xBE""\xE7""\xA4""\xBA";
     case PX4LITE_MODULE_CONTROL:
@@ -929,7 +935,11 @@ static void Display_LvglUpdateAlarmRow(uint8_t row, uint32_t value)
   lv_label_set_text_static(s_alarm_rows[row].code_label, s_alarm_rows[row].code_text);
   lv_label_set_text_static(s_alarm_rows[row].module_label, Display_LvglAlarmModuleText(source_id, fault_code));
   /* 通信离线原因按模块区分：LoRa 用"通信离线"，RemoteID 用"RemoteID离线"，两者分开显示。 */
-  if ((source_id == (uint16_t)PX4LITE_MODULE_REMOTE_ID) && (fault_code == (uint16_t)PX4LITE_FAULT_COMM_OFFLINE)) {
+  if ((source_id == (uint16_t)PX4LITE_MODULE_LORA) && (fault_code == (uint16_t)PX4LITE_FAULT_COMM_OFFLINE)) {
+    lv_label_set_text_static(s_alarm_rows[row].reason_label, "LoRa""\xE7""\xA6""\xBB""\xE7""\xBA""\xBF");
+  } else if ((source_id == (uint16_t)PX4LITE_MODULE_5G) && (fault_code == (uint16_t)PX4LITE_FAULT_COMM_OFFLINE)) {
+    lv_label_set_text_static(s_alarm_rows[row].reason_label, "5G""\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE7""\xA6""\xBB""\xE7""\xBA""\xBF");
+  } else if ((source_id == (uint16_t)PX4LITE_MODULE_REMOTE_ID) && (fault_code == (uint16_t)PX4LITE_FAULT_COMM_OFFLINE)) {
     lv_label_set_text_static(s_alarm_rows[row].reason_label, "RemoteID""\xE7""\xA6""\xBB""\xE7""\xBA""\xBF");
   } else {
     lv_label_set_text_static(s_alarm_rows[row].reason_label, Display_LvglAlarmReasonText(fault_code));
@@ -1311,7 +1321,7 @@ static void Display_LvglCreateSystemColumnAt(lv_obj_t *parent, lv_coord_t x, lv_
   card = Display_LvglCreateCard(parent, x, DISPLAY_LVGL_BODY_Y, w, DISPLAY_LVGL_BODY_H, "\xE7""\xB3""\xBB""\xE7""\xBB""\x9F""\xE7""\x8A""\xB6""\xE6""\x80""\x81");
   /* 起始 44 + 行距 28：含 RemoteID 共 10 项，末项底部约 44+9*28+16=312，容于卡片高 330。 */
   for (i = 0U; i < DISPLAY_LVGL_STATUS_COUNT; i++) {
-    lv_coord_t y = (lv_coord_t)(44 + (i * 28U));
+    lv_coord_t y = (lv_coord_t)(42 + (i * 25U));
     s_status_leds[i] = Display_LvglCreateStatusDot(card, 18, y + 3);
     (void)Display_LvglCreateLabel(card, s_status_items[i].name, 42, y, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
   }
@@ -1531,7 +1541,7 @@ static void Display_LvglCreateSelfCheckPage(lv_obj_t *parent)
   uint16_t i;
 
   card = Display_LvglCreateCard(parent, 24, 82, 500, 320, "\xE4""\xB8""\x8A""\xE7""\x94""\xB5""\xE8""\x87""\xAA""\xE6""\xA3""\x80");
-  /* 3 列网格：含 RemoteID 共 10 项占 4 行；行距压到 66 让第 4 行容于卡片高 320。 */
+  /* 3 列网格：含 5G/RemoteID 共 11 项占 4 行；行距压到 66 让第 4 行容于卡片高 320。 */
   for (i = 0U; i < DISPLAY_LVGL_STATUS_COUNT; i++) {
     lv_coord_t col = (lv_coord_t)(i % 3U);
     lv_coord_t row = (lv_coord_t)(i / 3U);

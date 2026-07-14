@@ -17,6 +17,7 @@
 #include "px4lite_identity.h"
 #include "px4lite_mavlink_tx.h"
 #include "px4lite_modules.h"
+#include "px4lite_platform.h"
 #include "px4lite_remote_telemetry.h"
 
 #if defined(__CC_ARM)
@@ -460,8 +461,16 @@ static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, cons
     return 1U;
   }
 
-  /* 电池1电流(BAT1CUR)、电池2(BAT2STAT/BAT2CUR)已改用官方 BATTERY_STATUS：电池1 走 id=0、
-     电池2 走 id=1，由 MavRx_DecodeBattery 解码。故此处不再解这三条自定义 NAMED_VALUE。 */
+  /* LoRa 按 fj-lora 兼容格式继续接收第二电池摘要 BAT2STAT。 */
+
+  if (MavRx_NameEquals(packet.name, "BAT2STAT") != 0U) {
+    remote->voltage2_mv = (uint32_t)(value & 0xFFFFU);
+    remote->battery2_percent = (uint8_t)((value >> 16U) & 0xFFU);
+    remote->low_voltage2 = (uint8_t)((value >> 24U) & 0x01U);
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
+    remote->battery_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
 
   if (MavRx_NameEquals(packet.name, "GNSSUTC") != 0U) {
     remote->gnss_utc_date = value;
@@ -489,8 +498,23 @@ static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, cons
   /* 温度、气压已改回官方 SCALED_PRESSURE(msgID 29)，由 MavRx_DecodePressure 解码，
      不再走 BAROTEMP/BAROPRES 自定义 NAMED_VALUE。 */
 
-  /* 告警摘要 ALRMHI/ALRMMSK 已由 LoRa TUNNEL 0x8001 全量告警表取代(见 MavRx_DecodeTunnel)，
-     发送端不再发这两条 NAMED_VALUE，故此处不再解码。 */
+  /* LoRa 按 fj-lora 兼容格式继续接收告警摘要 ALRMHI/ALRMMSK。 */
+
+  if (MavRx_NameEquals(packet.name, "ALRMHI") != 0U) {
+    remote->highest_fault_code = (uint16_t)(value & 0xFFFFU);
+    remote->highest_source_id = (uint16_t)((value >> 16U) & 0xFFU);
+    remote->highest_severity = (Px4Lite_AlarmSeverity_t)((value >> 24U) & 0x0FU);
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_ALARM;
+    remote->alarm_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
+
+  if (MavRx_NameEquals(packet.name, "ALRMMSK") != 0U) {
+    remote->alarm_active_mask = value;
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_ALARM;
+    remote->alarm_update_ms = remote->last_rx_ms;
+    return 1U;
+  }
 
   if (MavRx_NameEquals(packet.name, "MOTOR12") != 0U) {
     MavRx_ApplyMotorPair(remote, 0U, value);
@@ -689,6 +713,34 @@ Px4Lite_Result_t Px4Lite_MavlinkRxRun(uint32_t now_ms)
   }
 
   return (decoded != 0U) ? PX4LITE_OK : PX4LITE_IDLE;
+}
+
+Px4Lite_Result_t Px4Lite_MavlinkRxRunRpi(uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  uint8_t decoded = 0U;
+
+  if (Px4Lite_RpiMavlinkCopyRxFrame(&s_rx_frame_scratch) != PX4LITE_OK) { return PX4LITE_IDLE; }
+  if (s_rx_frame_scratch.payload_len > PX4LITE_COMM_RX_PAYLOAD_MAX) { return PX4LITE_OVERFLOW; }
+
+  MavRx_MessageFromFrame(&s_rx_frame_scratch, &s_rx_message_scratch);
+  switch (s_rx_message_scratch.msgid) {
+    case MAVLINK_MSG_ID_COMMAND_LONG:
+      decoded = MavRx_DecodeCommandLong(&s_rx_message_scratch, now_ms);
+      break;
+    case MAVLINK_MSG_ID_COMMAND_ACK:
+      decoded = MavRx_DecodeCommandAck(0, &s_rx_message_scratch, now_ms);
+      break;
+    default:
+      decoded = 0U;
+      break;
+  }
+
+  return (decoded != 0U) ? PX4LITE_OK : PX4LITE_IDLE;
+#else
+  (void)now_ms;
+  return PX4LITE_IDLE;
+#endif
 }
 
 uint32_t Px4Lite_MavlinkRxLastPeerMs(void)

@@ -113,12 +113,9 @@ Lora_Result_t Lora_E22_CopyRxFrame(Lora_RxFrame_t *out);
 Lora_State_t Lora_E22_GetState(uint32_t now_ms, uint32_t offline_timeout_ms);
 
 /**
- * @brief 判断本机 E22 模块是否在位。
+ * @brief 判断本机 E22 模块是否存在且近期 AUX 有就绪事实。
  *
- * @return 1 表示本机 LoRa 硬件在位，0 表示尚未初始化或已判拔出。
- *
- * @note 在位由 AUX 充放电主动探测的去抖结果决定(见 Lora_E22_Service)，不再直接活读 AUX
- * 静态电平——后者在模块拔出后会被悬空走线钉在高电平而误判为在位。
+ * @return 1 表示本机 LoRa 硬件存在，0 表示尚未初始化或疑似不可用。
  */
 uint8_t Lora_E22_IsPresent(void);
 

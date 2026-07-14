@@ -717,13 +717,27 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   }
 
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ALARM) == 0U)) {
+    uint16_t source;
+    uint16_t row = 0U;
+
     out->alarm_valid               = 1U;
     out->highest_fault_code        = s_display_remote_scratch.highest_fault_code;
     out->highest_source_id         = s_display_remote_scratch.highest_source_id;
     out->warning_fault_mask        = s_display_remote_scratch.alarm_active_mask;
     out->alarm_active_count        = App_CountBits32(s_display_remote_scratch.alarm_active_mask);
     out->alarm_highest_fault_code  = s_display_remote_scratch.highest_fault_code;
-    if (s_display_remote_scratch.highest_fault_code != 0U) {
+    for (source = 0U; (source < (uint16_t)PX4LITE_MODULE_COUNT) && (row < (uint16_t)APP_DISPLAY_ALARM_MAX); ++source) {
+      if ((s_display_remote_scratch.alarm_active_mask & (1UL << source)) == 0U) { continue; }
+      if (s_display_remote_scratch.alarm_fault_code[source] == 0U) { continue; }
+      out->alarms[row].source_id  = source;
+      out->alarms[row].fault_code = s_display_remote_scratch.alarm_fault_code[source];
+      out->alarms[row].severity   = s_display_remote_scratch.alarm_severity[source];
+      out->alarms[row].active     = 1U;
+      out->alarms[row].updated_ms = s_display_remote_scratch.alarm_update_ms;
+      out->alarms[row].raised_ms  = s_display_remote_scratch.alarm_update_ms;
+      row++;
+    }
+    if ((row == 0U) && (s_display_remote_scratch.highest_fault_code != 0U)) {
       out->alarms[0].source_id  = s_display_remote_scratch.highest_source_id;
       out->alarms[0].fault_code = s_display_remote_scratch.highest_fault_code;
       out->alarms[0].severity   = s_display_remote_scratch.highest_severity;
