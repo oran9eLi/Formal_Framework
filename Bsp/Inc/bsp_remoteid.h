@@ -52,6 +52,15 @@ uint8_t BSP_RemoteId_IsTxBusy(void);
 uint8_t BSP_RemoteId_IsReady(void);
 
 /**
+ * @brief 查询 ESP32(RemoteID)硬件是否在位。
+ *
+ * @return 1 表示 PC8 检测到 ESP32 3.3V(已插并上电)，0 表示未插/未上电或模块被关闭。
+ *
+ * @note 该状态基于 PC8 下拉输入电平，直接反映 ESP32 是否供电，独立于本地 TX 通道。
+ */
+uint8_t BSP_RemoteId_IsPresent(void);
+
+/**
  * @brief 中止当前 RemoteID TX DMA 发送。
  */
 void BSP_RemoteId_AbortTx(void);

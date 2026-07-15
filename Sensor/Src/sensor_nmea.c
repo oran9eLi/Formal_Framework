@@ -214,7 +214,7 @@ void Nmea_ParseGGA(const Nmea_Sentence_t *sentence, Nmea_GeoData_t *geo)
 
   if ((sentence == NULL) || (geo == NULL) || (sentence->checksum_ok == 0U)) { return; }
 
-  if (Nmea_GetField(sentence->raw, 1U, field, sizeof(field)) != 0U) {
+  if ((geo->utc_date == 0U) && (Nmea_GetField(sentence->raw, 1U, field, sizeof(field)) != 0U)) {
     if (sscanf(field, "%2d%2d%2d", &hour, &minute, &second) == 3) { geo->utc_sec = (uint32_t)hour * 3600UL + (uint32_t)minute * 60UL + (uint32_t)second; }
   }
 
@@ -257,8 +257,30 @@ void Nmea_ParseGGA(const Nmea_Sentence_t *sentence, Nmea_GeoData_t *geo)
 void Nmea_ParseRMC(const Nmea_Sentence_t *sentence, Nmea_GeoData_t *geo)
 {
   char field[32];
+  uint8_t rmc_active = 0U;
+  uint8_t rmc_time_valid = 0U;
+  uint8_t rmc_date_valid = 0U;
+  uint32_t rmc_utc_sec = 0U;
+  uint32_t rmc_utc_date = 0U;
+  int hour;
+  int minute;
+  int second;
+  int day;
+  int month;
+  int year;
 
   if ((sentence == NULL) || (geo == NULL) || (sentence->checksum_ok == 0U)) { return; }
+
+  if (Nmea_GetField(sentence->raw, 2U, field, sizeof(field)) != 0U) {
+    rmc_active = (field[0] == 'A') ? 1U : 0U;
+  }
+
+  if ((rmc_active != 0U) && (Nmea_GetField(sentence->raw, 1U, field, sizeof(field)) != 0U)) {
+    if (sscanf(field, "%2d%2d%2d", &hour, &minute, &second) == 3) {
+      rmc_utc_sec = (uint32_t)hour * 3600UL + (uint32_t)minute * 60UL + (uint32_t)second;
+      rmc_time_valid = 1U;
+    }
+  }
 
   if (Nmea_GetField(sentence->raw, 7U, field, sizeof(field)) != 0U) {
     geo->speed_cms = (uint16_t)(atof(field) * 51.44f);
@@ -273,11 +295,15 @@ void Nmea_ParseRMC(const Nmea_Sentence_t *sentence, Nmea_GeoData_t *geo)
   }
 
   /* RMC field 9 carries the UTC date as ddmmyy; store it packed as yymmdd. */
-  if (Nmea_GetField(sentence->raw, 9U, field, sizeof(field)) != 0U) {
-    int day;
-    int month;
-    int year;
+  if ((rmc_active != 0U) && (Nmea_GetField(sentence->raw, 9U, field, sizeof(field)) != 0U)) {
+    if (sscanf(field, "%2d%2d%2d", &day, &month, &year) == 3) {
+      rmc_utc_date = (uint32_t)year * 10000UL + (uint32_t)month * 100UL + (uint32_t)day;
+      rmc_date_valid = 1U;
+    }
+  }
 
-    if (sscanf(field, "%2d%2d%2d", &day, &month, &year) == 3) { geo->utc_date = (uint32_t)year * 10000UL + (uint32_t)month * 100UL + (uint32_t)day; }
+  if ((rmc_time_valid != 0U) && (rmc_date_valid != 0U)) {
+    geo->utc_sec = rmc_utc_sec;
+    geo->utc_date = rmc_utc_date;
   }
 }

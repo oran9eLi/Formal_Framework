@@ -102,7 +102,7 @@ typedef struct {
   App_SystemSnapshot_t system;          /**< 系统/模块状态(模式解析后)。 */
   App_AlarmSnapshot_t alarm;            /**< 告警(模式解析后)。 */
   App_MotorSnapshot_t motor;            /**< 电机只读(模式解析后)。 */
-  App_DateTimeSnapshot_t date_time;     /**< 日期时间(模式解析后)。 */
+  App_DateTimeSnapshot_t date_time;     /**< 本机日期时间，固定使用本机统一时间快照。 */
   App_DisplayLogSnapshot_t message_log; /**< 消息日志(模式解析后)。 */
   App_DisplayLinkStatus_t link;         /**< 本机链路诊断(永远本机来源)。 */
   Px4Lite_RemoteMode_t mode;            /**< 当前显示数据源模式。 */
@@ -147,7 +147,9 @@ Px4Lite_Result_t App_GetDisplayAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms);
 Px4Lite_Result_t App_GetDisplayMotor(App_MotorSnapshot_t *out, uint32_t now_ms);
 
 /**
- * @brief 取当前应显示的日期时间(按模式自动选源)。语义同 `App_GetDisplayNavigation`。
+ * @brief 取本机日期时间，远端/本地模式切换不改变时间源。
+ *
+ * @note 顶栏时间属于本机界面状态，始终通过 `App_CopyDateTime()` 读取本机统一时间快照。
  */
 Px4Lite_Result_t App_GetDisplayDateTime(App_DateTimeSnapshot_t *out, uint32_t now_ms);
 

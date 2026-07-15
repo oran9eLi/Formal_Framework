@@ -207,7 +207,7 @@ static Px4Lite_Result_t RemoteId_SendPrepared(void)
   if ((length == 0U) || (length > (uint16_t)sizeof(s_remoteid_frame))) { return PX4LITE_IO_ERROR; }
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
-  /* D2：身份数据同时镜像到树莓派 USART1(compid 193, RPi 独立序号)，供 RPi 复用其
+  /* D2：身份数据同时镜像到树莓派 USART6(compid 193, RPi 独立序号)，供 RPi 复用其
      现成的 OPEN_DRONE_ID_* 解码。HEARTBEAT 不镜像(RPi 已有遥测链路心跳)。镜像只临时
      改写 s_remoteid_message 并即时恢复，不影响随后发往 UART4 的 s_remoteid_frame。 */
   if (s_remoteid_message.msgid != MAVLINK_MSG_ID_HEARTBEAT) {
@@ -282,10 +282,12 @@ static Px4Lite_Result_t RemoteId_SendLocation(uint32_t now_ms)
   if (s_remoteid_nav.header.sequence == s_remoteid_stats.last_location_seq) { return PX4LITE_IDLE; }
 
   RemoteId_UpdateHomeIfNeeded(&s_remoteid_nav);
+  /* altitude_m 是绝对融合高度：同时填 altitude_barometric 与 altitude_geodetic(绝对 WGS84)；
+     height 字段(height_reference=OVER_TAKEOFF)另填相对起飞点的高度差，勿与 geodetic 混淆。 */
   altitude_m = ((float)s_remoteid_nav.fused_altitude_mm) / 1000.0f;
   timestamp_s = (float)(s_remoteid_nav.gnss_utc_sec % 86400UL);
 
-  (void)mavlink_msg_open_drone_id_location_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_STATUS_AIRBORNE, RemoteId_DirectionDeg100(&s_remoteid_nav), RemoteId_HorizontalSpeedCms(&s_remoteid_nav), RemoteId_SpeedVerticalCms(&s_remoteid_nav), s_remoteid_nav.latitude_e7, s_remoteid_nav.longitude_e7, altitude_m, (s_home_valid != 0U) ? (altitude_m - s_home_altitude_m) : 0.0f, MAV_ODID_HEIGHT_REF_OVER_TAKEOFF, 0.0f, RemoteId_HorizontalAccuracy(&s_remoteid_nav), MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_SPEED_ACC_UNKNOWN, timestamp_s, MAV_ODID_TIME_ACC_UNKNOWN);
+  (void)mavlink_msg_open_drone_id_location_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_STATUS_AIRBORNE, RemoteId_DirectionDeg100(&s_remoteid_nav), RemoteId_HorizontalSpeedCms(&s_remoteid_nav), RemoteId_SpeedVerticalCms(&s_remoteid_nav), s_remoteid_nav.latitude_e7, s_remoteid_nav.longitude_e7, altitude_m, altitude_m, MAV_ODID_HEIGHT_REF_OVER_TAKEOFF, (s_home_valid != 0U) ? (altitude_m - s_home_altitude_m) : 0.0f, RemoteId_HorizontalAccuracy(&s_remoteid_nav), MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_SPEED_ACC_UNKNOWN, timestamp_s, MAV_ODID_TIME_ACC_UNKNOWN);
 
   result = RemoteId_SendPrepared();
   if (result == PX4LITE_OK) { s_remoteid_stats.last_location_seq = s_remoteid_nav.header.sequence; }
@@ -363,9 +365,32 @@ Px4Lite_Result_t Px4Lite_RemoteIdTxInit(uint32_t now_ms)
   RemoteId_FillHardwareUid();
   {
     char full_id[PX4LITE_IDENTITY_FULL_ID_MAX_LEN];
+    char vendor_id[PX4LITE_IDENTITY_VENDOR_ID_MAX_LEN];
+    char serial_number[PX4LITE_IDENTITY_SN_MAX_LEN];
+    char self_desc[MAVLINK_MSG_OPEN_DRONE_ID_SELF_ID_FIELD_DESCRIPTION_LEN + 1U];
+    uint8_t pos = 0U;
+    uint8_t i;
+
     Px4Lite_IdentityFormatFullId(full_id, (uint8_t)sizeof(full_id));
-    RemoteId_FillText(s_uas_id, (uint8_t)sizeof(s_uas_id), full_id);
-    RemoteId_FillCharText(s_self_id, (uint8_t)sizeof(s_self_id), full_id);
+    Px4Lite_IdentityFormatVendorProductId(vendor_id, (uint8_t)sizeof(vendor_id));
+    Px4Lite_IdentityFormatSerialNumber(serial_number, (uint8_t)sizeof(serial_number));
+    RemoteId_FillText(s_uas_id, (uint8_t)sizeof(s_uas_id), vendor_id);
+
+    /* SELF_ID 仅作现场可读描述；RemoteID 权威唯一身份在 BASIC_ID.uas_id。 */
+    memset(self_desc, 0, sizeof(self_desc));
+    while ((full_id[pos] != '\0') && (pos < (uint8_t)(sizeof(self_desc) - 16U))) {
+      self_desc[pos] = full_id[pos];
+      pos++;
+    }
+    self_desc[pos++] = ' ';
+    self_desc[pos++] = 'S';
+    self_desc[pos++] = ':';
+    for (i = 0U; (i < PX4LITE_IDENTITY_SN_LEN) && (pos < (uint8_t)(sizeof(self_desc) - 1U)); i++) {
+      self_desc[pos++] = serial_number[i];
+    }
+    self_desc[pos] = '\0';
+
+    RemoteId_FillCharText(s_self_id, (uint8_t)sizeof(s_self_id), self_desc);
   }
   RemoteId_FillCharText(s_operator_id, (uint8_t)sizeof(s_operator_id), PX4LITE_REMOTEID_OPERATOR_ID);
 

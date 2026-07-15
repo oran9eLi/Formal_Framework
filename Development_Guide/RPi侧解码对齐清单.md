@@ -77,6 +77,20 @@ if (name == "MOTOR12" || name == "MOTOR34") {
 }
 ```
 
+### 2.3 `SERVO_OUTPUT_RAW`（新增四路 PWM 脉宽）
+
+固件同时发送标准 MAVLink `SERVO_OUTPUT_RAW`（msgid 36，`port=0`）：
+
+| 字段 | 含义 |
+|---|---|
+| `servo1_raw` | 电机 1 PWM 高电平脉宽，单位 us |
+| `servo2_raw` | 电机 2 PWM 高电平脉宽，单位 us |
+| `servo3_raw` | 电机 3 PWM 高电平脉宽，单位 us |
+| `servo4_raw` | 电机 4 PWM 高电平脉宽，单位 us |
+| `time_usec` | Control 电机快照采样时刻，单位 us |
+
+当前有效范围为 1000~2000 us，发送周期为 1000 ms。`MOTOR12/MOTOR34` 继续保留，RPi 可用前者显示精确脉宽，用后者读取百分比、`run_state` 和 `speed_level`。
+
 > 若不想在 `state_store` 加读回接口，可在 `MotorPwm` 里存 4 路，两帧各写自己那 2 路即可；关键是**别用单帧覆盖另一半**。原 `MOTORPWM` 分支可删除或保留兼容。
 
 ### 2.3 `ALRMHI` / `ALRMMSK`（告警摘要）—— ⚠️ 已作废（D1=全量表）
@@ -154,6 +168,16 @@ if (name == "LOGSYNC") {
 if (name == "BAROALT") { store.UpdateBaroAltMm(value.value /*int32*/); return true; }
 if (name == "GNSSUTC") { store.UpdateGnssUtc(static_cast<std::uint32_t>(value.value), value.time_boot_ms); return true; }
 ```
+
+### 2.5b 温度/气压/电池 —— 已回退/改用官方 MAVLink 通道（2026-07-08_22）
+
+> **本节的 BAROTEMP/BAROPRES 方案已作废**。依据《建议：部分自定义 NAMED_VALUE_INT 改走官方通道》，固件已把这些改回/收敛到官方 MAVLink 消息(见 Change_History/2026-07-08_22)：
+>
+> - **温度/气压** → 官方 `SCALED_PRESSURE`(msgID 29)：`temperature`(cdegC)、`press_abs`(hPa)。RPi 用现成 SCALED_PRESSURE 解码,**不再解 BAROTEMP/BAROPRES**。
+> - **电池1电流** `BAT1CUR` → **删除**(与 `BATTERY_STATUS.current_battery` 重复,RPi 以官方字段为准)。
+> - **电池2** `BAT2STAT`/`BAT2CUR` → 官方 `BATTERY_STATUS(id=1)`(多电池机制)。RPi 按 `battery_status.id` 分流:id=0 电池1、id=1 电池2,`BAT2STAT`/`BAT2CUR` 自定义解码与 `Battery2Status` 结构体可一并删除。
+>
+> 过渡:RPi M4 可先按真机当前格式接入,固件切官方通道后再删对应自定义分支、改读官方字段。
 
 ### 2.6 `LORASTAT`（RPi 专属新增：LoRa 链路状态）
 

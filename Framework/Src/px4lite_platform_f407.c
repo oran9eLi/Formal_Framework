@@ -28,6 +28,18 @@
 #include "stm32f4xx_hal.h"
 #include "FreeRTOS.h"
 #include "task.h"
+
+#if defined(__CC_ARM)
+#define MAVLINK_ALIGNED_FIELDS   0
+#define MAVLINK_COMM_NUM_BUFFERS 1
+#pragma diag_suppress 66
+#endif
+
+#include "common/mavlink.h"
+#if defined(__CC_ARM)
+#pragma diag_default 66
+#endif
+
 #include <math.h>
 #include <string.h>
 
@@ -37,6 +49,15 @@ static uint32_t s_baro_last_sample_ms;
 static int32_t s_baro_last_altitude_mm;
 static int32_t s_baro_vertical_speed_cms;
 static uint8_t s_baro_altitude_valid;
+
+#if PX4LITE_ENABLE_RPI_MAVLINK
+#define PX4LITE_RPI_RX_SERVICE_BYTE_BUDGET 128U
+
+static mavlink_status_t s_rpi_parse_status;
+static mavlink_message_t s_rpi_parse_msg;
+static uint32_t s_rpi_pending_rx_ms;
+static uint8_t s_rpi_pending_frame;
+#endif
 
 /**
  * @brief 将 float 按四舍五入方式转换为 int32。
@@ -623,10 +644,22 @@ Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len)
   return PX4LITE_IO_ERROR;
 }
 
+#if PX4LITE_ENABLE_RPI_MAVLINK
+static void Px4Lite_RpiMavlinkResetRxState(void)
+{
+  memset(&s_rpi_parse_status, 0, sizeof(s_rpi_parse_status));
+  memset(&s_rpi_parse_msg, 0, sizeof(s_rpi_parse_msg));
+  s_rpi_pending_rx_ms = 0U;
+  s_rpi_pending_frame = 0U;
+}
+#endif
+
 Px4Lite_Result_t Px4Lite_RpiMavlinkInit(void)
 {
 #if PX4LITE_ENABLE_RPI_MAVLINK
-  return (BSP_UART_Init() == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  /* 树莓派链路走独立的 USART6(PC6/PC7)，与调试口 USART1 物理分离。 */
+  Px4Lite_RpiMavlinkResetRxState();
+  return (BSP_RpiUART_Init() == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
 #else
   return PX4LITE_OK;
 #endif
@@ -639,7 +672,7 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
 
   if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
 
-  status = BSP_UART_Send(data, len, PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS);
+  status = BSP_RpiUART_Send(data, len, PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS);
   if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
   if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
   return PX4LITE_IO_ERROR;
@@ -647,6 +680,54 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
   (void)data;
   (void)len;
   return PX4LITE_OK;
+#endif
+}
+
+Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  uint8_t byte;
+  uint16_t i;
+
+  if (s_rpi_pending_frame != 0U) { return PX4LITE_BUSY; }
+
+  for (i = 0U; i < PX4LITE_RPI_RX_SERVICE_BYTE_BUDGET; ++i) {
+    if (BSP_RpiUART_Read(&byte, 1U) == 0U) { return (i == 0U) ? PX4LITE_IDLE : PX4LITE_OK; }
+
+    if (mavlink_parse_char(MAVLINK_COMM_0, byte, &s_rpi_parse_msg, &s_rpi_parse_status) != 0) {
+      s_rpi_pending_rx_ms = now_ms;
+      s_rpi_pending_frame = 1U;
+      return PX4LITE_OK;
+    }
+  }
+
+  return PX4LITE_OK;
+#else
+  (void)now_ms;
+  return PX4LITE_IDLE;
+#endif
+}
+
+Px4Lite_Result_t Px4Lite_RpiMavlinkCopyRxFrame(Px4Lite_CommRxFrame_t *out)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+  if (s_rpi_pending_frame == 0U) { return PX4LITE_NOT_READY; }
+
+  memset(out, 0, sizeof(*out));
+  out->rx_time_ms   = s_rpi_pending_rx_ms;
+  out->msg_id       = s_rpi_parse_msg.msgid;
+  out->frame_len    = (uint16_t)(s_rpi_parse_msg.len + MAVLINK_NUM_HEADER_BYTES + MAVLINK_NUM_CHECKSUM_BYTES);
+  out->system_id    = s_rpi_parse_msg.sysid;
+  out->component_id = s_rpi_parse_msg.compid;
+  out->sequence     = s_rpi_parse_msg.seq;
+  out->payload_len  = (s_rpi_parse_msg.len > PX4LITE_COMM_RX_PAYLOAD_MAX) ? PX4LITE_COMM_RX_PAYLOAD_MAX : s_rpi_parse_msg.len;
+  if (out->payload_len > 0U) { memcpy(out->payload, _MAV_PAYLOAD(&s_rpi_parse_msg), out->payload_len); }
+  s_rpi_pending_frame = 0U;
+  return PX4LITE_OK;
+#else
+  (void)out;
+  return PX4LITE_NOT_READY;
 #endif
 }
 
@@ -667,6 +748,15 @@ Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms)
 uint8_t Px4Lite_LoRaIsPresent(void)
 {
   return Lora_E22_IsPresent();
+}
+
+uint8_t Px4Lite_RemoteIdIsPresent(void)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  return BSP_RemoteId_IsPresent();
+#else
+  return 0U;
+#endif
 }
 
 void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out)

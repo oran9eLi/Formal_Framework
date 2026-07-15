@@ -34,6 +34,13 @@ typedef enum {
 void Px4Lite_RemoteTelemetryInit(uint32_t now_ms);
 
 /**
+ * @brief LoRa 链路断开时清空远端节点和遥测缓存。
+ * @param[in] now_ms 当前系统时间，单位：ms。
+ * @note 链路断开后远端视图已经失效，复位时回到 LOCAL 模式并清除已发现节点、选中节点和远端数据。
+ */
+void Px4Lite_RemoteTelemetryResetLink(uint32_t now_ms);
+
+/**
  * @brief 设置本地/远程显示模式。
  *
  * @param[in] mode 目标模式。

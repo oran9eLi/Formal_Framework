@@ -17,6 +17,7 @@
 #include "px4lite_identity.h"
 #include "px4lite_mavlink_tx.h"
 #include "px4lite_modules.h"
+#include "px4lite_platform.h"
 #include "px4lite_remote_telemetry.h"
 
 #if defined(__CC_ARM)
@@ -94,7 +95,7 @@ static uint8_t MavRx_FrameToRemoteNode(const Px4Lite_CommRxFrame_t *frame, uint8
   if ((frame == 0) || (node_id_out == 0) || (frame->system_id == 0U)) { return 0U; }
   node_id = frame->system_id;
   if (node_id == (uint8_t)Px4Lite_IdentityGetNodeId()) { return 0U; }
-  /* node_id 现为 UID 派生 sysid(1..250)，不再按表容量截断；槽位由 RemoteTelemetry 动态分配。 */
+  /* node_id 为对端 sysid(1..250)，不再按表容量截断；槽位由 RemoteTelemetry 动态分配。 */
   *node_id_out = node_id;
   return 1U;
 }
@@ -301,6 +302,12 @@ static uint8_t MavRx_DecodeSysStatus(Px4Lite_RemoteTelemetry_t *remote, const ma
     remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
     remote->battery_update_ms = remote->last_rx_ms;
   }
+  /* current_battery 单位 cA(10mA)，-1 表示未测量；换算回 mA。 */
+  if (packet.current_battery >= 0) {
+    remote->current_ma = (uint32_t)packet.current_battery * 10U;
+    remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
+    remote->battery_update_ms = remote->last_rx_ms;
+  }
   if (packet.battery_remaining >= 0) {
     remote->battery_percent = (uint8_t)packet.battery_remaining;
     remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
@@ -315,9 +322,19 @@ static uint8_t MavRx_DecodeBattery(Px4Lite_RemoteTelemetry_t *remote, const mavl
   mavlink_battery_status_t packet;
 
   mavlink_msg_battery_status_decode(message, &packet);
-  if (packet.voltages[0] != UINT16_MAX) { remote->voltage_mv = packet.voltages[0]; }
-  if (packet.battery_remaining >= 0) { remote->battery_percent = (uint8_t)packet.battery_remaining; }
-  remote->low_voltage = (packet.charge_state == (uint8_t)MAV_BATTERY_CHARGE_STATE_LOW) ? 1U : 0U;
+  /* MAVLink 用 id 区分多块电池：id=1 电池2，其余(id=0)电池1。
+     current_battery 单位 cA(10mA)，-1 表示未测量；换算回 mA。 */
+  if (packet.id == 1U) {
+    if (packet.voltages[0] != UINT16_MAX) { remote->voltage2_mv = packet.voltages[0]; }
+    if (packet.current_battery >= 0) { remote->current2_ma = (uint32_t)packet.current_battery * 10U; }
+    if (packet.battery_remaining >= 0) { remote->battery2_percent = (uint8_t)packet.battery_remaining; }
+    remote->low_voltage2 = (packet.charge_state == (uint8_t)MAV_BATTERY_CHARGE_STATE_LOW) ? 1U : 0U;
+  } else {
+    if (packet.voltages[0] != UINT16_MAX) { remote->voltage_mv = packet.voltages[0]; }
+    if (packet.current_battery >= 0) { remote->current_ma = (uint32_t)packet.current_battery * 10U; }
+    if (packet.battery_remaining >= 0) { remote->battery_percent = (uint8_t)packet.battery_remaining; }
+    remote->low_voltage = (packet.charge_state == (uint8_t)MAV_BATTERY_CHARGE_STATE_LOW) ? 1U : 0U;
+  }
   remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
   remote->battery_update_ms = remote->last_rx_ms;
   return 1U;
@@ -328,9 +345,9 @@ static uint8_t MavRx_DecodePressure(Px4Lite_RemoteTelemetry_t *remote, const mav
   mavlink_scaled_pressure_t packet;
 
   mavlink_msg_scaled_pressure_decode(message, &packet);
-  remote->pressure_pa           = packet.press_abs * 100.0f;
-  remote->temperature_c         = ((float)packet.temperature) / 100.0f;
-  remote->relative_humidity_pct = 0.0f;
+  remote->pressure_pa   = packet.press_abs * 100.0f;          /* hPa → Pa */
+  remote->temperature_c = ((float)packet.temperature) / 100.0f; /* cdegC → degC */
+  /* 湿度不在 SCALED_PRESSURE 里，由独立的 HUMIDITY 帧维护，这里不得清零覆盖。 */
   remote->valid_mask |= PX4LITE_REMOTE_VALID_ENVIRONMENT;
   remote->environment_update_ms = remote->last_rx_ms;
   return 1U;
@@ -357,6 +374,21 @@ static Px4Lite_State_t MavRx_NormalizeState(uint32_t value)
 {
   if (value > (uint32_t)PX4LITE_STATE_DISABLED) { return PX4LITE_STATE_UNINITIALIZED; }
   return (Px4Lite_State_t)value;
+}
+
+/**
+ * @brief 把合法 ESC 脉宽换算为远端显示使用的油门百分比。
+ */
+static uint8_t MavRx_PulseToDutyPercent(uint16_t pulse_us)
+{
+  uint32_t range;
+  uint32_t offset;
+
+  if (pulse_us <= PX4LITE_CONTROL_ESC_MIN_PULSE_US) { return 0U; }
+  if (pulse_us >= PX4LITE_CONTROL_ESC_MAX_PULSE_US) { return 100U; }
+  range = (uint32_t)PX4LITE_CONTROL_ESC_MAX_PULSE_US - (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US;
+  offset = (uint32_t)pulse_us - (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US;
+  return (uint8_t)(((offset * 100U) + (range / 2U)) / range);
 }
 
 static void MavRx_ApplyCompactModuleState(Px4Lite_RemoteTelemetry_t *remote, uint32_t packed)
@@ -395,8 +427,12 @@ static void MavRx_ApplyMotorPair(Px4Lite_RemoteTelemetry_t *remote, uint8_t pair
   if (duty0 > 100U) { duty0 = 100U; }
   if (duty1 > 100U) { duty1 = 100U; }
 
-  if (first < PX4LITE_MOTOR_COUNT) { remote->motor_duty_percent[first] = duty0; }
-  if ((uint8_t)(first + 1U) < PX4LITE_MOTOR_COUNT) { remote->motor_duty_percent[(uint8_t)(first + 1U)] = duty1; }
+  if (first < PX4LITE_MOTOR_COUNT) {
+    remote->motor_duty_percent[first] = duty0;
+  }
+  if ((uint8_t)(first + 1U) < PX4LITE_MOTOR_COUNT) {
+    remote->motor_duty_percent[(uint8_t)(first + 1U)] = duty1;
+  }
   remote->motor_run_state = (uint8_t)((packed >> 16U) & 0x01U);
   remote->motor_speed_level = (uint8_t)((packed >> 24U) & 0xFFU);
   if (remote->motor_speed_level > 100U) { remote->motor_speed_level = 100U; }
@@ -405,6 +441,40 @@ static void MavRx_ApplyMotorPair(Px4Lite_RemoteTelemetry_t *remote, uint8_t pair
   }
   remote->valid_mask |= PX4LITE_REMOTE_VALID_MOTOR;
   remote->motor_update_ms = remote->last_rx_ms;
+}
+
+/**
+ * @brief 解码主输出组的 SERVO_OUTPUT_RAW 四路 PWM 脉宽。
+ */
+static uint8_t MavRx_DecodeMotorPulse(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_servo_output_raw_t packet;
+  uint16_t pulse_us[PX4LITE_MOTOR_COUNT];
+  uint8_t any_valid = 0U;
+  uint8_t i;
+
+  if ((remote == 0) || (message == 0)) { return 0U; }
+  mavlink_msg_servo_output_raw_decode(message, &packet);
+  if (packet.port != 0U) { return 0U; }
+
+  pulse_us[0] = packet.servo1_raw;
+  pulse_us[1] = packet.servo2_raw;
+  pulse_us[2] = packet.servo3_raw;
+  pulse_us[3] = packet.servo4_raw;
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if ((pulse_us[i] < PX4LITE_CONTROL_ESC_MIN_PULSE_US) || (pulse_us[i] > PX4LITE_CONTROL_ESC_MAX_PULSE_US)) { continue; }
+    remote->motor_duty_percent[i] = MavRx_PulseToDutyPercent(pulse_us[i]);
+    any_valid = 1U;
+  }
+  if (any_valid == 0U) { return 0U; }
+
+  remote->motor_speed_level = 0U;
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (remote->motor_duty_percent[i] > remote->motor_speed_level) { remote->motor_speed_level = remote->motor_duty_percent[i]; }
+  }
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_MOTOR;
+  remote->motor_update_ms = remote->last_rx_ms;
+  return 1U;
 }
 
 static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message, uint32_t now_ms)
@@ -444,6 +514,8 @@ static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, cons
     return 1U;
   }
 
+  /* LoRa 按 fj-lora 兼容格式继续接收第二电池摘要 BAT2STAT。 */
+
   if (MavRx_NameEquals(packet.name, "BAT2STAT") != 0U) {
     remote->voltage2_mv = (uint32_t)(value & 0xFFFFU);
     remote->battery2_percent = (uint8_t)((value >> 16U) & 0xFFU);
@@ -475,6 +547,11 @@ static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, cons
     remote->environment_update_ms = remote->last_rx_ms;
     return 1U;
   }
+
+  /* 温度、气压已改回官方 SCALED_PRESSURE(msgID 29)，由 MavRx_DecodePressure 解码，
+     不再走 BAROTEMP/BAROPRES 自定义 NAMED_VALUE。 */
+
+  /* LoRa 按 fj-lora 兼容格式继续接收告警摘要 ALRMHI/ALRMMSK。 */
 
   if (MavRx_NameEquals(packet.name, "ALRMHI") != 0U) {
     remote->highest_fault_code = (uint16_t)(value & 0xFFFFU);
@@ -531,15 +608,74 @@ static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, cons
 
   return 0U;
 }
+/**
+ * @brief 解码 LoRa 全量告警表 TUNNEL(payload_type=0x8001)。
+ * @details
+ * 布局与发送端 MavTx_PackAlarmTable 逐字段一致：表头 ver(1)+active_count(1)，每行 7 字节
+ * source_id(1)+fault_code(2,LE)+severity(1)+active(1)+age_s(2,LE)。据此重建远端活动位图、
+ * 逐来源 fault_code/severity 与最高告警。每帧全量重建，故告警清空(count=0)也能感知。
+ * LoRa 上只有 0x8001；0x8002 日志表仅 RPi 用，这里忽略。
+ */
+static uint8_t MavRx_DecodeTunnel(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
+{
+  mavlink_tunnel_t packet;
+  uint16_t off;
+  uint8_t n;
+  uint8_t i;
+  uint32_t mask = 0U;
+  uint16_t highest_fault = 0U;
+  uint16_t highest_src = (uint16_t)PX4LITE_MODULE_COUNT;
+  uint8_t highest_sev = 0U;
+  uint8_t have_highest = 0U;
+
+  mavlink_msg_tunnel_decode(message, &packet);
+  if (packet.payload_type != 0x8001U) { return 0U; }
+  if (packet.payload_length < 2U) { return 0U; }
+
+  n   = packet.payload[1];
+  off = 2U;
+  for (i = 0U; i < n; ++i) {
+    uint8_t src;
+    uint8_t sev;
+    uint16_t fault;
+
+    if ((uint16_t)(off + 7U) > (uint16_t)packet.payload_length) { break; }
+    src   = packet.payload[off];
+    fault = (uint16_t)((uint16_t)packet.payload[off + 1U] | ((uint16_t)packet.payload[off + 2U] << 8U));
+    sev   = packet.payload[off + 3U];
+    off   = (uint16_t)(off + 7U);
+
+    if (src >= (uint8_t)PX4LITE_MODULE_COUNT) { continue; }
+    remote->alarm_fault_code[src] = fault;
+    remote->alarm_severity[src]   = sev;
+    if (src < 32U) { mask |= (1UL << src); }
+    if ((have_highest == 0U) || (sev > highest_sev)) {
+      have_highest  = 1U;
+      highest_sev   = sev;
+      highest_fault = fault;
+      highest_src   = src;
+    }
+  }
+
+  remote->alarm_active_mask  = mask;
+  remote->highest_fault_code = highest_fault;
+  remote->highest_source_id  = highest_src;
+  remote->highest_severity   = highest_sev;
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_ALARM;
+  remote->alarm_update_ms = remote->last_rx_ms;
+  return 1U;
+}
+
 static uint8_t MavRx_DecodeStatusText(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
 {
   mavlink_statustext_t packet;
 
   mavlink_msg_statustext_decode(message, &packet);
+  /* STATUSTEXT 只更新"最高告警"横幅字段；活动位图与逐条详情由 TUNNEL 0x8001 全量表维护，
+     这里不得改写 alarm_active_mask，否则会把全量表的完整位图覆盖成"仅最高一条"。 */
   remote->highest_fault_code = packet.id;
   remote->highest_source_id  = MavRx_ParseAlarmSource(packet.text);
   remote->highest_severity   = packet.severity;
-  remote->alarm_active_mask  = (remote->highest_source_id < (uint16_t)PX4LITE_MODULE_COUNT) ? (1UL << remote->highest_source_id) : 0U;
   remote->valid_mask |= PX4LITE_REMOTE_VALID_ALARM;
   remote->alarm_update_ms = remote->last_rx_ms;
   return 1U;
@@ -581,8 +717,12 @@ static uint8_t MavRx_DecodeMessage(Px4Lite_RemoteTelemetry_t *remote, const mavl
       return MavRx_DecodeBattery(remote, message);
     case MAVLINK_MSG_ID_SCALED_PRESSURE:
       return MavRx_DecodePressure(remote, message);
+    case MAVLINK_MSG_ID_SERVO_OUTPUT_RAW:
+      return MavRx_DecodeMotorPulse(remote, message);
     case MAVLINK_MSG_ID_NAMED_VALUE_INT:
       return MavRx_DecodeNamedValueInt(remote, message, now_ms);
+    case MAVLINK_MSG_ID_TUNNEL:
+      return MavRx_DecodeTunnel(remote, message);
     case MAVLINK_MSG_ID_STATUSTEXT:
       return MavRx_DecodeStatusText(remote, message);
     case MAVLINK_MSG_ID_COMMAND_LONG:
@@ -628,6 +768,34 @@ Px4Lite_Result_t Px4Lite_MavlinkRxRun(uint32_t now_ms)
   }
 
   return (decoded != 0U) ? PX4LITE_OK : PX4LITE_IDLE;
+}
+
+Px4Lite_Result_t Px4Lite_MavlinkRxRunRpi(uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  uint8_t decoded = 0U;
+
+  if (Px4Lite_RpiMavlinkCopyRxFrame(&s_rx_frame_scratch) != PX4LITE_OK) { return PX4LITE_IDLE; }
+  if (s_rx_frame_scratch.payload_len > PX4LITE_COMM_RX_PAYLOAD_MAX) { return PX4LITE_OVERFLOW; }
+
+  MavRx_MessageFromFrame(&s_rx_frame_scratch, &s_rx_message_scratch);
+  switch (s_rx_message_scratch.msgid) {
+    case MAVLINK_MSG_ID_COMMAND_LONG:
+      decoded = MavRx_DecodeCommandLong(&s_rx_message_scratch, now_ms);
+      break;
+    case MAVLINK_MSG_ID_COMMAND_ACK:
+      decoded = MavRx_DecodeCommandAck(0, &s_rx_message_scratch, now_ms);
+      break;
+    default:
+      decoded = 0U;
+      break;
+  }
+
+  return (decoded != 0U) ? PX4LITE_OK : PX4LITE_IDLE;
+#else
+  (void)now_ms;
+  return PX4LITE_IDLE;
+#endif
 }
 
 uint32_t Px4Lite_MavlinkRxLastPeerMs(void)

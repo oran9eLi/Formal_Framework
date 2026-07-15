@@ -26,6 +26,7 @@
 #include "debug_config.h"
 #include "bsp_lora.h"
 #include "bsp_remoteid.h"
+#include "bsp_uart.h"
 
 /** @addtogroup STM32F4xx_HAL_Examples
  * @{
@@ -302,6 +303,13 @@ void UART4_IRQHandler(void)
   UART_HandleTypeDef *huart = BSP_RemoteId_GetUartHandle();
 
   if (huart != 0) { HAL_UART_IRQHandler(huart); }
+}
+
+void USART6_IRQHandler(void)
+{
+#if (BSP_ENABLE_RPI_UART == 1U)
+  BSP_RpiUART_IrqHandler();
+#endif
 }
 
 /**

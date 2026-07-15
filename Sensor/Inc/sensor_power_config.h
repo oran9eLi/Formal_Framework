@@ -37,12 +37,13 @@
 #endif
 
 #ifndef POWER_CURRENT_ZERO_MV
-/** @brief 第一电池电流计 0A 输出电压，单位：mV，需按实物标定。 */
-#define POWER_CURRENT_ZERO_MV 29U
+/** @brief 第一电池电流计 0A 输出电压，单位：mV。实测空载 adc≈4mV，配 100mV/A 时落入死区读 0A。 */
+#define POWER_CURRENT_ZERO_MV 0U
 #endif
 
 #ifndef POWER_CURRENT_MV_PER_A
-/** @brief 第一电池电流计每 1A 对应的输出电压变化，单位：mV/A，需按实物标定。 */
+/** @brief 第一电池电流计每 1A 对应的输出电压变化，单位：mV/A。
+ *  模块硬件设计值：0.5mΩ 分流 × ~200 增益 = 100mV/A。大电流精调需台架加已知电流补点。 */
 #define POWER_CURRENT_MV_PER_A 100U
 #endif
 
@@ -52,8 +53,8 @@
 #endif
 
 #ifndef POWER_CURRENT_DEADBAND_MA
-/** @brief 第一电池电流零点死区，单位：mA，小于该值时按 0A 处理。 */
-#define POWER_CURRENT_DEADBAND_MA 50U
+/** @brief 第一电池电流零点死区，单位：mA，小于该值时按 0A 处理。0=关闭死区，直读真实电流(含零点抖动)。 */
+#define POWER_CURRENT_DEADBAND_MA 0U
 #endif
 
 #ifndef POWER_CURRENT_FILTER_OLD_WEIGHT
@@ -67,12 +68,13 @@
 #endif
 
 #ifndef POWER2_CURRENT_ZERO_MV
-/** @brief 第二电池电流计 0A 输出电压，单位：mV，需按实物标定。 */
-#define POWER2_CURRENT_ZERO_MV 240U
+/** @brief 第二电池电流计 0A 输出电压，单位：mV。暂置 0：不减零点，直读引脚电压换算的原始电流。 */
+#define POWER2_CURRENT_ZERO_MV 0U
 #endif
 
 #ifndef POWER2_CURRENT_MV_PER_A
-/** @brief 第二电池电流计每 1A 对应的输出电压变化，单位：mV/A，需按实物标定。 */
+/** @brief 第二电池电流计每 1A 对应的输出电压变化，单位：mV/A。
+ *  模块硬件设计值：0.5mΩ 分流 × ~200 增益 = 100mV/A。大电流精调需台架加已知电流补点。 */
 #define POWER2_CURRENT_MV_PER_A 100U
 #endif
 
@@ -82,8 +84,8 @@
 #endif
 
 #ifndef POWER2_CURRENT_DEADBAND_MA
-/** @brief 第二电池电流零点死区，单位：mA，小于该值时按 0A 处理。 */
-#define POWER2_CURRENT_DEADBAND_MA 200U
+/** @brief 第二电池电流零点死区，单位：mA，小于该值时按 0A 处理。0=关闭死区，直读真实电流(含零点抖动)。 */
+#define POWER2_CURRENT_DEADBAND_MA 0U
 #endif
 
 #ifndef POWER2_CURRENT_FILTER_OLD_WEIGHT

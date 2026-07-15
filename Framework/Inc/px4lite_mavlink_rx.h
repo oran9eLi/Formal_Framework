@@ -23,6 +23,15 @@
 Px4Lite_Result_t Px4Lite_MavlinkRxRun(uint32_t now_ms);
 
 /**
+ * @brief 执行一次树莓派 MAVLink RX 调度。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 解码结果。
+ */
+Px4Lite_Result_t Px4Lite_MavlinkRxRunRpi(uint32_t now_ms);
+
+/**
  * @brief 获取最近一次通过本机 ID 过滤的对端有效 MAVLink 帧时间。
  *
  * @return 最近对端解码成功帧时间，单位：ms；0 表示尚未收到。

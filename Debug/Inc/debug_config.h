@@ -20,13 +20,13 @@
 #define DEBUG_BUSINESS_LOG_ENABLE     0U
 
 #define DEBUG_STACK_MONITOR_ENABLE    0U
-#define DEBUG_GNSS_MONITOR_ENABLE     0U
+#define DEBUG_GNSS_MONITOR_ENABLE     1U
 #define DEBUG_GNSS_BSP_MONITOR_ENABLE 0U
 
 /* Reserved independent module switches. */
 #define DEBUG_IMU_MONITOR_ENABLE       1U
 #define DEBUG_BARO_MONITOR_ENABLE      0U
-#define DEBUG_POWER_MONITOR_ENABLE     0U
+#define DEBUG_POWER_MONITOR_ENABLE     1U /* 临时诊断电流：打印两路 adc_mv/浮空/电流；定位后改回 0 */
 #define DEBUG_LORA_MONITOR_ENABLE      1U /* 临时诊断LoRa收不到：打印rx_byte/rx_frame；定位后改回0 */
 #define DEBUG_ALARM_MONITOR_ENABLE     0U
 #define DEBUG_STORAGE_MONITOR_ENABLE   0U

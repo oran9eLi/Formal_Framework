@@ -601,6 +601,8 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
     out->relative_humidity_pct = s_display_environment_scratch.relative_humidity_pct;
     out->voltage_mv            = s_display_environment_scratch.voltage_mv;
     out->voltage2_mv           = s_display_environment_scratch.voltage2_mv;
+    out->current_ma            = s_display_environment_scratch.current_ma;
+    out->current2_ma           = s_display_environment_scratch.current2_ma;
     out->battery_percent       = s_display_environment_scratch.battery_percent;
     out->battery2_percent      = s_display_environment_scratch.battery2_percent;
     out->low_voltage           = s_display_environment_scratch.low_voltage;
@@ -631,6 +633,8 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
     out->battery2_percent = 0U;
     out->voltage_mv = 0U;
     out->voltage2_mv = 0U;
+    out->current_ma = 0;
+    out->current2_ma = 0;
   }
 
   out->any_valid = ((out->navigation_valid != 0U) || (out->system_valid != 0U) || (out->environment_valid != 0U) || (module_loaded != 0U)) ? 1U : 0U;
@@ -704,6 +708,8 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
     out->environment_valid = 1U;
     out->voltage_mv        = s_display_remote_scratch.voltage_mv;
     out->voltage2_mv       = s_display_remote_scratch.voltage2_mv;
+    out->current_ma        = (int32_t)s_display_remote_scratch.current_ma;
+    out->current2_ma       = (int32_t)s_display_remote_scratch.current2_ma;
     out->battery_percent   = s_display_remote_scratch.battery_percent;
     out->battery2_percent  = s_display_remote_scratch.battery2_percent;
     out->low_voltage       = s_display_remote_scratch.low_voltage;
@@ -711,13 +717,27 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   }
 
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ALARM) == 0U)) {
+    uint16_t source;
+    uint16_t row = 0U;
+
     out->alarm_valid               = 1U;
     out->highest_fault_code        = s_display_remote_scratch.highest_fault_code;
     out->highest_source_id         = s_display_remote_scratch.highest_source_id;
     out->warning_fault_mask        = s_display_remote_scratch.alarm_active_mask;
     out->alarm_active_count        = App_CountBits32(s_display_remote_scratch.alarm_active_mask);
     out->alarm_highest_fault_code  = s_display_remote_scratch.highest_fault_code;
-    if (s_display_remote_scratch.highest_fault_code != 0U) {
+    for (source = 0U; (source < (uint16_t)PX4LITE_MODULE_COUNT) && (row < (uint16_t)APP_DISPLAY_ALARM_MAX); ++source) {
+      if ((s_display_remote_scratch.alarm_active_mask & (1UL << source)) == 0U) { continue; }
+      if (s_display_remote_scratch.alarm_fault_code[source] == 0U) { continue; }
+      out->alarms[row].source_id  = source;
+      out->alarms[row].fault_code = s_display_remote_scratch.alarm_fault_code[source];
+      out->alarms[row].severity   = s_display_remote_scratch.alarm_severity[source];
+      out->alarms[row].active     = 1U;
+      out->alarms[row].updated_ms = s_display_remote_scratch.alarm_update_ms;
+      out->alarms[row].raised_ms  = s_display_remote_scratch.alarm_update_ms;
+      row++;
+    }
+    if ((row == 0U) && (s_display_remote_scratch.highest_fault_code != 0U)) {
       out->alarms[0].source_id  = s_display_remote_scratch.highest_source_id;
       out->alarms[0].fault_code = s_display_remote_scratch.highest_fault_code;
       out->alarms[0].severity   = s_display_remote_scratch.highest_severity;
@@ -750,6 +770,8 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
     out->battery2_percent = 0U;
     out->voltage_mv = 0U;
     out->voltage2_mv = 0U;
+    out->current_ma = 0;
+    out->current2_ma = 0;
   }
 
   out->any_valid = ((out->navigation_valid != 0U) || (out->attitude_valid != 0U) || (out->system_valid != 0U) || (out->environment_valid != 0U) || (out->alarm_valid != 0U) || (out->motor_valid != 0U) || ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U)) ? 1U : 0U;

@@ -30,7 +30,11 @@ static const Storage_ModuleEventDef_t s_module_defs[] = {
   {PX4LITE_MODULE_BATTERY, "BATTERY", "battery_degraded", "battery_offline", "battery_failed", "battery_recovered"},
   {PX4LITE_MODULE_LORA, "LORA", "lora_degraded", "lora_offline", "lora_failed", "lora_recovered"},
   {PX4LITE_MODULE_STORAGE, "STORAGE", "storage_degraded", "storage_offline", "storage_failed", "storage_recovered"},
-  {PX4LITE_MODULE_DISPLAY, "DISPLAY", "display_degraded", "display_offline", "display_failed", "display_recovered"}
+  {PX4LITE_MODULE_REMOTE_ID, "REMOTEID", "remoteid_degraded", "remoteid_offline", "remoteid_failed", "remoteid_recovered"},
+  {PX4LITE_MODULE_DISPLAY, "DISPLAY", "display_degraded", "display_offline", "display_failed", "display_recovered"},
+  {PX4LITE_MODULE_CONTROL, "CONTROL", "control_degraded", "control_offline", "control_failed", "control_recovered"},
+  {PX4LITE_MODULE_ALARM, "ALARM", "alarm_degraded", "alarm_offline", "alarm_failed", "alarm_recovered"}
+  /* 5G(PX4LITE_MODULE_5G) 暂不登记：ENABLE_5G=0 为占位，无真实在线判定；待驱动接入后再补。 */
 };
 
 static Storage_ModuleEventState_t s_states[PX4LITE_MODULE_COUNT];

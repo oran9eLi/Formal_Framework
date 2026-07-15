@@ -16,6 +16,11 @@
 
 static ADC_HandleTypeDef s_hadc_current;
 
+/* 临时诊断缓存：ReadVoltageMv 每次采样后记录每路原始引脚电压与浮空标志，供调试打印。
+   下标 0=BATTERY1(PC0)，1=BATTERY2(PC1)。定位电流计接线后可连同 GetDiag 一起移除。 */
+static uint32_t s_diag_adc_mv[2];
+static uint8_t  s_diag_floating[2];
+
 /**
  * @brief 将 HAL ADC 返回状态映射为 BSP 通用返回码。
  */
@@ -34,6 +39,11 @@ static uint32_t BSP_ADC_Current_HalChannel(BSP_ADC_CurrentChannel_t channel)
 
 /* 浮空判定阈值(原始码)：见 BSP_ADC_Current_PinFloating。约 300 码≈0.24V(pin)。 */
 #define BSP_ADC_CURRENT_FLOAT_DELTA_RAW 300U
+
+/* 浮空检测开关。诊断证明:电流计 CURR 输出对"预置拉高"的下沉能力弱，低电流(~0.2V)
+   时会被浮空检测误判成高阻并清零(把真实小电流误杀)。传感器已实测接好，故关闭检测、
+   直接读真实电压。若以后要重新识别"未接传感器"，需改进检测策略后再置 1。 */
+#define BSP_ADC_CURRENT_FLOAT_CHECK_ENABLE 0U
 
 /* 采样前把电流计模拟脚预置到指定电平：high=0 拉低、high=1 拉高，数 µs 后切回模拟态。
    拉低=软件放电减小浮空漂高；配合拉高用于浮空检测(见 PinFloating)。 */
@@ -179,18 +189,37 @@ static uint8_t BSP_ADC_Current_PinFloating(BSP_ADC_CurrentChannel_t channel)
 
 BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uint32_t *voltage_mv)
 {
-  uint32_t raw;
+  uint32_t raw = 0U;
   uint32_t vdda;
+  uint32_t pin_mv;
+  uint8_t  floating;
+  uint8_t  idx = (channel == BSP_ADC_CURRENT_BATTERY2) ? 1U : 0U;
 
   if (voltage_mv == 0) { return BSP_STATUS_ERROR; }
 
-  /* 未接电流计(采集脚浮空)时直接判 0。 */
-  if (BSP_ADC_Current_PinFloating(channel) != 0U) { *voltage_mv = 0U; return BSP_STATUS_OK; }
+  /* 先做浮空判定，仅用于诊断标志；再无条件采一次真实引脚电压。 */
+  floating = BSP_ADC_Current_PinFloating(channel);
 
   vdda = BSP_ADC_GetVddaMv(); /* 用 VREFINT 实测 VDDA 代替写死的 3.3V，消除电机负载导致的 VDDA 下陷误差 */
   if (BSP_ADC_Current_ReadAverage(channel, &raw, BSP_ADC_CURRENT_AVERAGE_COUNT) != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
   if (raw > BSP_ADC_CURRENT_RAW_MAX) { raw = BSP_ADC_CURRENT_RAW_MAX; }
 
-  *voltage_mv = ((raw * vdda) + (BSP_ADC_CURRENT_RAW_MAX / 2U)) / BSP_ADC_CURRENT_RAW_MAX;
+  pin_mv = ((raw * vdda) + (BSP_ADC_CURRENT_RAW_MAX / 2U)) / BSP_ADC_CURRENT_RAW_MAX;
+  s_diag_adc_mv[idx]   = pin_mv;
+  s_diag_floating[idx] = floating;
+
+#if BSP_ADC_CURRENT_FLOAT_CHECK_ENABLE
+  *voltage_mv = (floating != 0U) ? 0U : pin_mv; /* 判浮空则对外清零 */
+#else
+  *voltage_mv = pin_mv; /* 浮空检测已关闭：CURR 为高阻源，直接用真实电压 */
+#endif
   return BSP_STATUS_OK;
+}
+
+void BSP_ADC_Current_GetDiag(BSP_ADC_CurrentChannel_t channel, uint32_t *adc_mv, uint8_t *floating)
+{
+  uint8_t idx = (channel == BSP_ADC_CURRENT_BATTERY2) ? 1U : 0U;
+
+  if (adc_mv != 0)   { *adc_mv = s_diag_adc_mv[idx]; }
+  if (floating != 0) { *floating = s_diag_floating[idx]; }
 }

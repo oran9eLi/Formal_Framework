@@ -40,6 +40,16 @@ typedef void (*MavTx_SuccessHook_t)(void);
 #define MAV_TX_SCOPE_EXTENSION 2U
 #define MAV_TX_DEG100_TO_RAD   (3.14159265358979323846f / 18000.0f)
 
+/*
+ * 发送目标：同一批遥测编码器被 LoRa 出口与 RPi 出口两趟复用。编码函数内部按本标志
+ * 决定 MavTx_SendPrepared 把帧发给谁，凡"按目标独立推进"的编码器状态(分片游标、
+ * 去重序号)都以本标志为下标分成两份，两条链路各自独立调度、互不串扰。
+ */
+#define MAV_TX_TARGET_LORA     0U
+#define MAV_TX_TARGET_RPI      1U
+#define MAV_TX_TARGET_COUNT    2U
+#define MAV_TX_LORA_CHANNEL    MAVLINK_COMM_0
+
 /**
  * @brief LoRa/MAVLink 外发数据目录项。
  * @details
@@ -106,13 +116,16 @@ static uint32_t s_next_pressure_ms;
 static uint32_t s_next_env_humidity_ms;
 static uint32_t s_next_statustext_ms;
 static uint32_t s_next_motor_ms;
+static uint32_t s_next_motor_pulse_ms;
 static uint32_t s_next_alarm_status_ms;
 static uint32_t s_next_log_ms;
 static uint8_t s_catalog_index;
 static MavTx_PendingCommand_t s_pending_command;
 static MavTx_PendingAck_t s_pending_ack;
 static uint32_t s_motor_status_count;
+static uint32_t s_motor_pulse_count;
 static uint32_t s_message_log_count;
+static uint32_t s_last_battery2_status_sequence;
 static uint8_t s_alarm_status_part;
 static uint16_t s_log_sync_cursor;
 static uint16_t s_log_replay_cursor;
@@ -120,18 +133,26 @@ static uint8_t s_log_replay_active;
 static uint32_t s_next_log_replay_ms;
 static Px4Lite_LogEntry_t s_log_sync_entry;
 static Px4Lite_MotorOutputs_t s_last_motor_snapshot;
-static uint32_t s_last_battery2_sequence;
+/* 按目标(LoRa/RPi)分离的去重序号与分片游标：两条链路各自独立调度，不能共用一份，
+   否则一条链路发过之后另一条会被去重/分片状态误判为"已发"而漏帧(GPS/姿态/电池等
+   曾因共用 s_stats 里的序号，被先跑的 LoRa 趟消费掉，RPi 趟永远拿不到)。 */
+static uint32_t s_last_gps_sequence[MAV_TX_TARGET_COUNT];
+static uint32_t s_last_detail_sequence[MAV_TX_TARGET_COUNT];
+static uint32_t s_last_attitude_sequence[MAV_TX_TARGET_COUNT];
+static uint32_t s_last_battery_sequence[MAV_TX_TARGET_COUNT];
+static uint32_t s_last_battery2_sequence[MAV_TX_TARGET_COUNT];
 static uint8_t s_last_motor_valid;
-static uint8_t s_motor_pair_part;
+static uint8_t s_motor_pair_part[MAV_TX_TARGET_COUNT];
 static uint8_t s_motor_urgent_part;
 static uint8_t s_motor_urgent_remaining;
 static uint8_t s_motor_urgent_hold;
-static uint8_t s_module_state_part;
+static uint8_t s_module_state_part[MAV_TX_TARGET_COUNT];
 static uint8_t s_tx_enabled;
+/* 当前发送目标(MAV_TX_TARGET_*)：由各发送趟在调用编码器前设置，MavTx_SendPrepared 据此路由。 */
+static uint8_t s_send_target;
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
-/* 树莓派链路独立发送序号。RPi 被视为一条独立 MAVLink 链路，其序号必须自成
-   连续序列(镜像帧 + RPi 专属扩展帧共用本计数器)，才能让树莓派侧正确统计丢包。 */
+/* RPi 链路独立发送序号。发送侧不启用第二个 MAVLink 全局通道 buffer，避免挤占 SRAM。 */
 static uint8_t s_rpi_tx_seq;
 static uint32_t s_next_rpi_lorastat_ms;
 static uint32_t s_next_rpi_ridstat_ms;
@@ -141,6 +162,7 @@ static uint32_t s_rpi_lorastat_count;
 static uint32_t s_rpi_ridstat_count;
 static uint32_t s_rpi_alarm_count;
 static uint32_t s_rpi_log_count;
+static uint8_t s_rpi_catalog_index;
 #endif
 
 #define MAV_TX_MOTOR_PAIR_COUNT     2U
@@ -153,6 +175,18 @@ static uint8_t MavTx_TimeReached(uint32_t now_ms, uint32_t deadline_ms)
 {
   return ((int32_t)(now_ms - deadline_ms) >= 0) ? 1U : 0U;
 }
+
+/**
+ * @brief 返回编码器使用的 MAVLink channel。
+ * @details 发送侧只保留一个 MAVLink 全局通道 buffer 以节省 SRAM。RPi 帧在
+ * MavTx_SendRpiExclusive() 内回退 COMM_0 序号并重贴 RPi 独立序号。
+ */
+static mavlink_channel_t MavTx_Channel(void)
+{
+  return MAV_TX_LORA_CHANNEL;
+}
+
+static uint16_t MavTx_PackAlarmTable(uint8_t ver, uint32_t now_ms, uint8_t *out, uint16_t cap);
 
 static uint32_t MavTx_ItemPeriodMs(const MavTx_Item_t *item, uint32_t now_ms)
 {
@@ -205,7 +239,11 @@ static void MavTx_RecomputeChecksum(mavlink_message_t *msg)
     header[9] = (uint8_t)((msg->msgid >> 16) & 0xFFU);
   }
 
-  checksum = crc_calculate(&header[1], (uint16_t)(header_len - 1U));
+  /* CRC 覆盖全部 header_len 个核心头字节 header[1..header_len](不含 STX)：
+     v2 为 len..msgid[2] 共 9 字节，v1 为 len..msgid 共 5 字节。此前误用 header_len-1U，
+     漏掉最后一个字节(v2 的 msgid 高字节、v1 的 msgid)，导致每一帧 CRC 都算错——
+     树莓派/pymavlink 按官方公式核验时全部 BAD_DATA(见排查报告 2026-07-08)。 */
+  checksum = crc_calculate(&header[1], (uint16_t)header_len);
   crc_accumulate_buffer(&checksum, _MAV_PAYLOAD(msg), msg->len);
   crc_accumulate(mavlink_get_crc_extra(msg), &checksum);
   msg->checksum = checksum;
@@ -214,11 +252,11 @@ static void MavTx_RecomputeChecksum(mavlink_message_t *msg)
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
 /**
- * @brief 把任意已编码 MAVLink 帧镜像一份到树莓派 USART1(公开接口，见头文件)。
+ * @brief 把任意已编码 MAVLink 帧镜像一份到树莓派 USART6(公开接口，见头文件)。
  * @details
- * 改写 compid=193、用 RPi 独立连续序号(s_rpi_tx_seq)重编号并重算 CRC，只写 USART1，
- * 返回前恢复原帧 compid/seq/checksum，不影响调用方。RPi 链路自成连续序列(镜像帧、
- * RPi 专属帧、RemoteID 身份镜像共用本计数器)，让树莓派侧丢包统计正确；LoRa/RemoteID
+ * 临时改写 compid=193 和 RPi 独立序号后只写 USART6，
+ * 返回前恢复调用方原帧。RPi 链路自成连续序列(镜像帧、
+ * RPi 专属帧、RemoteID 身份镜像共用 s_rpi_tx_seq)，让树莓派侧丢包统计正确；LoRa/RemoteID
  * 各自的 COMM_0 通道序号不受影响。
  */
 Px4Lite_Result_t Px4Lite_MavlinkTxMirrorToRpi(mavlink_message_t *msg)
@@ -249,21 +287,14 @@ Px4Lite_Result_t Px4Lite_MavlinkTxMirrorToRpi(mavlink_message_t *msg)
 }
 #endif
 
-static void MavTx_SendRpiCopy(void)
-{
-#if PX4LITE_ENABLE_RPI_MAVLINK
-  (void)Px4Lite_MavlinkTxMirrorToRpi(&s_message);
-#endif
-}
-
 #if PX4LITE_ENABLE_RPI_MAVLINK
 /**
- * @brief 将已编码(compid=193, COMM_0)的 s_message 仅发送到树莓派 USART1。
+ * @brief 将已编码(compid=193, COMM_0)的 s_message 仅发送到树莓派 USART6。
  * @details
  * 调用方用 encode_chan 在 COMM_0 上编码 RPi 专属扩展消息，这会占用一个 LoRa
  * 发送序号，但该帧不经 LoRa。这里先把 COMM_0 序号回退，避免远端 LoRa 接收方
  * 把这个"空洞"误判为丢包(见 Px4Lite_MavlinkTxRun 内相关注释)，再用 RPi 独立
- * 序号重新编号并重算 CRC，最后只写 USART1。
+ * 序号重新编号并重算 CRC，最后只写 USART6。
  */
 static Px4Lite_Result_t MavTx_SendRpiExclusive(void)
 {
@@ -273,7 +304,10 @@ static Px4Lite_Result_t MavTx_SendRpiExclusive(void)
   chan = mavlink_get_channel_status(MAVLINK_COMM_0);
   if (chan != 0) { chan->current_tx_seq = s_message.seq; }
 
-  s_message.seq = s_rpi_tx_seq++;
+  /* RPi frames reuse encoders on COMM_0, then restore COMM_0 and retag with
+     the lightweight RPi sequence so LoRa sequence numbers stay continuous. */
+  s_message.compid = PX4LITE_RPI_MAVLINK_COMPONENT_ID;
+  s_message.seq    = s_rpi_tx_seq++;
   MavTx_RecomputeChecksum(&s_message);
 
   length = mavlink_msg_to_send_buffer(s_frame, &s_message);
@@ -289,6 +323,15 @@ static void MavTx_QueueAck(uint16_t command, uint8_t result, uint8_t target_syst
   s_pending_ack.result           = result;
   s_pending_ack.target_system    = target_system;
   s_pending_ack.target_component = target_component;
+}
+
+static uint8_t MavTx_PendingAckTargetsRpi(void)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  return ((s_pending_ack.valid != 0U) && (s_pending_ack.target_component == (uint8_t)PX4LITE_RPI_MAVLINK_COMPONENT_ID)) ? 1U : 0U;
+#else
+  return 0U;
+#endif
 }
 
 
@@ -320,22 +363,24 @@ static uint8_t MavTx_SaturatePercent(uint8_t value)
   return (value > 100U) ? 100U : value;
 }
 
+static uint32_t MavTx_AbsI32(int32_t value)
+{
+  return (value < 0) ? (uint32_t)(-value) : (uint32_t)value;
+}
+
 /**
  * @brief 将 mA 电流转换为 MAVLink BATTERY_STATUS 使用的 10mA 单位。
  *
- * @param[in] current_ma 电流，单位 mA；0 表示未知。
+ * @param[in] current_ma 电流，单位 mA；显示链路只关心幅值。
  *
- * @return MAVLink current_battery 字段值，单位 10mA；-1 表示未知。
+ * @return MAVLink current_battery 字段值，单位 10mA。
  */
 static int16_t MavTx_SaturateCentiAmp(int32_t current_ma)
 {
-  int32_t centi_amp;
+  uint32_t centi_amp;
 
-  if (current_ma == 0) { return -1; }
-
-  centi_amp = current_ma / 10;
-  if (centi_amp > INT16_MAX) { return INT16_MAX; }
-  if (centi_amp < INT16_MIN) { return INT16_MIN; }
+  centi_amp = MavTx_AbsI32(current_ma) / 10U;
+  if (centi_amp > (uint32_t)INT16_MAX) { return INT16_MAX; }
   return (int16_t)centi_amp;
 }
 
@@ -410,22 +455,33 @@ static uint8_t MavTx_VisibleSatellites(const Px4Lite_SensorGnss_t *gnss)
 }
 
 /**
- * @brief 序列化当前 MAVLink 消息并提交给 LoRa 发送。
+ * @brief 序列化当前 MAVLink 消息并仅提交给 LoRa。
  */
-static Px4Lite_Result_t MavTx_SendPrepared(void)
+static Px4Lite_Result_t MavTx_SendToLora(void)
 {
-  Px4Lite_Result_t result;
   uint16_t length;
 
   length = mavlink_msg_to_send_buffer(s_frame, &s_message);
   if ((length == 0U) || (length > (uint16_t)sizeof(s_frame))) { return PX4LITE_IO_ERROR; }
 
-  result = PX4LITE_OK;
-  if (s_tx_enabled != 0U) {
-    result = Px4Lite_LoRaSend(s_frame, length);
-  }
-  MavTx_SendRpiCopy();
-  return result;
+  if (s_tx_enabled == 0U) { return PX4LITE_OK; }
+  return Px4Lite_LoRaSend(s_frame, length);
+}
+
+/**
+ * @brief 按当前发送目标(s_send_target)把已编码的 s_message 提交给对应链路。
+ * @details
+ * LoRa 趟(MAV_TX_TARGET_LORA)只发 USART3→E22；RPi 趟(MAV_TX_TARGET_RPI)经
+ * MavTx_SendRpiExclusive 只写 USART6(改 compid=193、使用轻量 RPi 独立序号)。
+ * 同一批编码器被两趟复用，各趟目标不同、状态各自独立(见 s_module_state_part 等)，
+ * 因此 RPi 遥测不再靠"搭 LoRa 便车的镜像"，LoRa 忙/掉线也能满调度送达 RPi。
+ */
+static Px4Lite_Result_t MavTx_SendPrepared(void)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  if (s_send_target == MAV_TX_TARGET_RPI) { return MavTx_SendRpiExclusive(); }
+#endif
+  return MavTx_SendToLora();
 }
 
 static Px4Lite_Result_t MavTx_SendPendingAck(uint32_t now_ms)
@@ -444,7 +500,7 @@ static Px4Lite_Result_t MavTx_SendPendingAck(uint32_t now_ms)
   packet.target_system    = s_pending_ack.target_system;
   packet.target_component = s_pending_ack.target_component;
 
-  (void)mavlink_msg_command_ack_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_command_ack_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   result = MavTx_SendPrepared();
   if (result == PX4LITE_OK) {
     s_pending_ack.valid = 0U;
@@ -462,6 +518,15 @@ static Px4Lite_Result_t MavTx_SendPendingCommand(uint32_t now_ms)
   if (s_pending_command.valid == 0U) { return PX4LITE_IDLE; }
   if (MavTx_TimeReached(now_ms, s_pending_command.next_try_ms) == 0U) { return PX4LITE_IDLE; }
 
+  /* 重试次数已耗尽：不再发送。此处到期意味着最后一次尝试的 ACK 等待窗口也已过去
+     (仍无 ACCEPTED 应答)，才真正放弃。放弃动作延后到这里，保证最后一次尝试的 ACK
+     若在窗口内到达，Px4Lite_MavlinkRecordCommandAck 仍能凭 valid=1 认领它。 */
+  if (s_pending_command.retry_count >= PX4LITE_MAVLINK_COMMAND_RETRY_MAX) {
+    s_pending_command.valid        = 0U;
+    s_pending_command.awaiting_ack = 0U;
+    return PX4LITE_IDLE;
+  }
+
   memset(&packet, 0, sizeof(packet));
   packet.target_system    = s_pending_command.target_system;
   packet.target_component = s_pending_command.target_component;
@@ -472,16 +537,14 @@ static Px4Lite_Result_t MavTx_SendPendingCommand(uint32_t now_ms)
   packet.param3           = s_pending_command.param3;
   packet.param4           = s_pending_command.param4;
 
-  (void)mavlink_msg_command_long_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_command_long_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   result = MavTx_SendPrepared();
   if (result == PX4LITE_OK) {
     s_pending_command.awaiting_ack = 1U;
     if (s_pending_command.retry_count < 255U) { s_pending_command.retry_count++; }
-    if (s_pending_command.retry_count >= PX4LITE_MAVLINK_COMMAND_RETRY_MAX) {
-      s_pending_command.valid = 0U;
-    } else {
-      s_pending_command.next_try_ms = now_ms + PX4LITE_MAVLINK_COMMAND_RETRY_MS;
-    }
+    /* 无论是否为最后一次尝试，都安排下一次唤醒：未达上限则重发，已达上限则由上面的
+       耗尽分支在这一窗口后放弃——这样最后一次尝试同样获得一个完整的 ACK 等待窗口。 */
+    s_pending_command.next_try_ms = now_ms + PX4LITE_MAVLINK_COMMAND_RETRY_MS;
     s_stats.command_count++;
     s_stats.last_message_id = MAVLINK_MSG_ID_COMMAND_LONG;
   } else if (result == PX4LITE_BUSY) {
@@ -496,7 +559,7 @@ static Px4Lite_Result_t MavTx_SendPendingCommand(uint32_t now_ms)
 static Px4Lite_Result_t MavTx_SendHeartbeat(uint32_t now_ms)
 {
   (void)now_ms;
-  (void)mavlink_msg_heartbeat_pack_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, MAV_TYPE_ONBOARD_CONTROLLER, MAV_AUTOPILOT_INVALID, 0U, 0U, MAV_STATE_ACTIVE);
+  (void)mavlink_msg_heartbeat_pack_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, MAV_TYPE_ONBOARD_CONTROLLER, MAV_AUTOPILOT_INVALID, 0U, 0U, MAV_STATE_ACTIVE);
 
   return MavTx_SendPrepared();
 }
@@ -516,7 +579,7 @@ static Px4Lite_Result_t MavTx_SendGpsRaw(uint32_t now_ms)
   /* 首次定位前抑制 GPS_RAW，避免持续发送 no-fix 位置帧。 */
   if (gnss.fix_type == 0U) { return PX4LITE_NOT_READY; }
   if (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
-  if (gnss.header.sequence == s_stats.last_gps_sequence) { return PX4LITE_IDLE; }
+  if (gnss.header.sequence == s_last_gps_sequence[s_send_target]) { return PX4LITE_IDLE; }
 
   memset(&packet, 0, sizeof(packet));
 
@@ -548,10 +611,10 @@ static Px4Lite_Result_t MavTx_SendGpsRaw(uint32_t now_ms)
   packet.hdg_acc       = UINT32_MAX;
   packet.yaw           = 0U;
 
-  (void)mavlink_msg_gps_raw_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_gps_raw_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
 
   result = MavTx_SendPrepared();
-  if (result == PX4LITE_OK) { s_stats.last_gps_sequence = gnss.header.sequence; }
+  if (result == PX4LITE_OK) { s_last_gps_sequence[s_send_target] = gnss.header.sequence; }
   return result;
 }
 
@@ -574,7 +637,7 @@ static Px4Lite_Result_t MavTx_SendGnssDetail(uint32_t now_ms)
   /* 卫星细节跟随 GPS_RAW 策略：定位成功后才发送。 */
   if (gnss.fix_type == 0U) { return PX4LITE_NOT_READY; }
   if (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
-  if (gnss.header.sequence == s_stats.last_detail_sequence) { return PX4LITE_IDLE; }
+  if (gnss.header.sequence == s_last_detail_sequence[s_send_target]) { return PX4LITE_IDLE; }
 
   packed = (uint32_t)gnss.gps_visible | ((uint32_t)gnss.bds_visible << 8U) | ((uint32_t)gnss.gps_used << 16U) | ((uint32_t)gnss.bds_used << 24U);
 
@@ -583,10 +646,10 @@ static Px4Lite_Result_t MavTx_SendGnssDetail(uint32_t now_ms)
   packet.value        = (int32_t)packed;
   memcpy(packet.name, "GNSS_SAT", 8U);
 
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
 
   result = MavTx_SendPrepared();
-  if (result == PX4LITE_OK) { s_stats.last_detail_sequence = gnss.header.sequence; }
+  if (result == PX4LITE_OK) { s_last_detail_sequence[s_send_target] = gnss.header.sequence; }
   return result;
 }
 
@@ -603,7 +666,7 @@ static Px4Lite_Result_t MavTx_SendAttitude(uint32_t now_ms)
   if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
   if (Px4Lite_IsFresh(&navigation.header, now_ms, PX4LITE_IMU_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
   if ((navigation.valid_mask & PX4LITE_NAV_VALID_ATTITUDE) == 0U) { return PX4LITE_NOT_READY; }
-  if (navigation.header.sequence == s_stats.last_attitude_sequence) { return PX4LITE_IDLE; }
+  if (navigation.header.sequence == s_last_attitude_sequence[s_send_target]) { return PX4LITE_IDLE; }
 
   memset(&packet, 0, sizeof(packet));
   packet.time_boot_ms = now_ms;
@@ -614,10 +677,10 @@ static Px4Lite_Result_t MavTx_SendAttitude(uint32_t now_ms)
   packet.pitchspeed   = MavTx_Deg100ToRad(navigation.pitch_rate_dps100);
   packet.yawspeed     = MavTx_Deg100ToRad(navigation.yaw_rate_dps100);
 
-  (void)mavlink_msg_attitude_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_attitude_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
 
   result = MavTx_SendPrepared();
-  if (result == PX4LITE_OK) { s_stats.last_attitude_sequence = navigation.header.sequence; }
+  if (result == PX4LITE_OK) { s_last_attitude_sequence[s_send_target] = navigation.header.sequence; }
   return result;
 }
 
@@ -650,7 +713,7 @@ static Px4Lite_Result_t MavTx_SendPosition(uint32_t now_ms)
 
   packet.hdg = ((navigation.valid_mask & PX4LITE_NAV_VALID_ATTITUDE) != 0U) ? MavTx_NormalizeHeading(navigation.yaw_deg100) : UINT16_MAX;
 
-  (void)mavlink_msg_global_position_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_global_position_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
 
   return MavTx_SendPrepared();
 }
@@ -676,7 +739,7 @@ static Px4Lite_Result_t MavTx_SendBaroAltitude(uint32_t now_ms)
   packet.value         = navigation.fused_altitude_mm;
   memcpy(packet.name, "BAROALT", 7U);
 
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
 
   return MavTx_SendPrepared();
 }
@@ -694,7 +757,7 @@ static Px4Lite_Result_t MavTx_SendBatteryStatus(uint32_t now_ms)
   result = Px4Lite_CopyBattery(&battery);
   if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
   if (Px4Lite_IsFresh(&battery.header, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
-  if (battery.header.sequence == s_stats.last_battery_sequence) { return PX4LITE_IDLE; }
+  if (battery.header.sequence == s_last_battery_sequence[s_send_target]) { return PX4LITE_IDLE; }
 
   memset(&packet, 0, sizeof(packet));
   packet.id               = 0U;
@@ -710,15 +773,19 @@ static Px4Lite_Result_t MavTx_SendBatteryStatus(uint32_t now_ms)
   packet.time_remaining    = 0;
   packet.charge_state      = (battery.low_voltage != 0U) ? (uint8_t)MAV_BATTERY_CHARGE_STATE_LOW : (uint8_t)MAV_BATTERY_CHARGE_STATE_OK;
 
-  (void)mavlink_msg_battery_status_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_battery_status_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
 
   result = MavTx_SendPrepared();
-  if (result == PX4LITE_OK) { s_stats.last_battery_sequence = battery.header.sequence; }
+  if (result == PX4LITE_OK) { s_last_battery_sequence[s_send_target] = battery.header.sequence; }
   return result;
 }
 
+/* 电池1电流(BAT1CUR)已由 BATTERY_STATUS.current_battery 覆盖，删去冗余的自定义帧。 */
+
 /**
- * @brief 将第二电池/外设独立供电 topic 编码为 BAT2STAT 扩展帧。
+ * @brief 按 fj-lora 格式将第二电池摘要编码为 BAT2STAT。
+ * @details
+ * value 低 16 位为电压 mV，16..23 位为百分比，24 位为低压标志。
  */
 static Px4Lite_Result_t MavTx_SendBattery2Status(uint32_t now_ms)
 {
@@ -730,19 +797,50 @@ static Px4Lite_Result_t MavTx_SendBattery2Status(uint32_t now_ms)
   result = Px4Lite_CopyBattery2(&battery);
   if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
   if (Px4Lite_IsFresh(&battery.header, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
-  if (battery.header.sequence == s_last_battery2_sequence) { return PX4LITE_IDLE; }
+  if (battery.header.sequence == s_last_battery2_status_sequence) { return PX4LITE_IDLE; }
 
   memset(&packet, 0, sizeof(packet));
   packed = (battery.voltage_mv & 0xFFFFUL) |
            (((uint32_t)battery.percent & 0xFFUL) << 16U) |
            (((uint32_t)battery.low_voltage & 0x01UL) << 24U);
-  packet.time_boot_ms =  battery.header.sample_time_ms;
+  packet.time_boot_ms = battery.header.sample_time_ms;
   packet.value        = (int32_t)packed;
   memcpy(packet.name, "BAT2STAT", 8U);
 
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   result = MavTx_SendPrepared();
-  if (result == PX4LITE_OK) { s_last_battery2_sequence = battery.header.sequence; }
+  if (result == PX4LITE_OK) { s_last_battery2_status_sequence = battery.header.sequence; }
+  return result;
+}
+
+static Px4Lite_Result_t MavTx_SendBattery2(uint32_t now_ms)
+{
+  Px4Lite_BatteryStatus_t battery;
+  mavlink_battery_status_t packet;
+  Px4Lite_Result_t result;
+  uint8_t i;
+
+  if (Px4Lite_CopyBattery2(&battery) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&battery.header, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
+  if (battery.header.sequence == s_last_battery2_sequence[s_send_target]) { return PX4LITE_IDLE; }
+
+  memset(&packet, 0, sizeof(packet));
+  packet.id               = 1U; /* 电池2 */
+  packet.battery_function = (uint8_t)MAV_BATTERY_FUNCTION_ALL;
+  packet.type             = (uint8_t)MAV_BATTERY_TYPE_UNKNOWN;
+  packet.temperature      = INT16_MAX;
+  for (i = 0U; i < 10U; ++i) { packet.voltages[i] = UINT16_MAX; }
+  packet.voltages[0]       = MavTx_SaturateUint16(battery.voltage_mv);
+  packet.current_battery   = MavTx_SaturateCentiAmp(battery.current_ma);
+  packet.current_consumed  = -1;
+  packet.energy_consumed   = -1;
+  packet.battery_remaining = (int8_t)battery.percent;
+  packet.time_remaining    = 0;
+  packet.charge_state      = (battery.low_voltage != 0U) ? (uint8_t)MAV_BATTERY_CHARGE_STATE_LOW : (uint8_t)MAV_BATTERY_CHARGE_STATE_OK;
+
+  (void)mavlink_msg_battery_status_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
+  result = MavTx_SendPrepared();
+  if (result == PX4LITE_OK) { s_last_battery2_sequence[s_send_target] = battery.header.sequence; }
   return result;
 }
 
@@ -765,23 +863,23 @@ static Px4Lite_Result_t MavTx_SendDateTime(uint32_t now_ms)
   packet.value        = (int32_t)navigation.gnss_utc_date;
   memcpy(packet.name, "GNSSUTC", 7U);
 
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   return MavTx_SendPrepared();
 }
 
 /**
- * @brief 将最新气压计 topic 编码为 MAVLink SCALED_PRESSURE。
+ * @brief 将最新气压计 topic 编码为官方 MAVLink SCALED_PRESSURE(msgID 29)。
+ * @details
+ * 一帧同时带 press_abs(hPa)+temperature(cdegC)，比拆成两个自定义 NAMED_VALUE 更标准更完整。
+ * press_diff 无来源置 0。不去重、每周期发(fresh 检查即可)。
  */
 static Px4Lite_Result_t MavTx_SendScaledPressure(uint32_t now_ms)
 {
   Px4Lite_SensorBaro_t baro;
   mavlink_scaled_pressure_t packet;
-  Px4Lite_Result_t result;
 
-  result = Px4Lite_CopyBaro(&baro);
-  if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_CopyBaro(&baro) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
   if (Px4Lite_IsFresh(&baro.header, now_ms, PX4LITE_BARO_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
-  if (baro.header.sequence == s_stats.last_pressure_sequence) { return PX4LITE_IDLE; }
 
   memset(&packet, 0, sizeof(packet));
   packet.time_boot_ms           = baro.header.sample_time_ms;
@@ -790,11 +888,8 @@ static Px4Lite_Result_t MavTx_SendScaledPressure(uint32_t now_ms)
   packet.temperature            = MavTx_SaturateCdegFromFloat(baro.temperature_c);
   packet.temperature_press_diff = 0;
 
-  (void)mavlink_msg_scaled_pressure_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
-
-  result = MavTx_SendPrepared();
-  if (result == PX4LITE_OK) { s_stats.last_pressure_sequence = baro.header.sequence; }
-  return result;
+  (void)mavlink_msg_scaled_pressure_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
+  return MavTx_SendPrepared();
 }
 
 /**
@@ -825,7 +920,7 @@ static Px4Lite_Result_t MavTx_SendEnvHumidity(uint32_t now_ms)
   packet.value = humidity_x10;
   (void)memcpy(packet.name, "HUMIDITY", 8U);
 
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   return MavTx_SendPrepared();
 }
 
@@ -965,7 +1060,7 @@ static Px4Lite_Result_t MavTx_SendStatusText(uint32_t now_ms)
     MavTx_CopyText(packet.text, "PX4LITE ALARM", MavTx_ModuleName(highest_source_id), highest_fault_code);
   }
 
-  (void)mavlink_msg_statustext_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_statustext_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
 
   result = MavTx_SendPrepared();
   if (result == PX4LITE_OK) { s_stats.last_alarm_sequence = alarm_sequence; }
@@ -1023,7 +1118,7 @@ static Px4Lite_Result_t MavTx_SendSystemStatus(uint32_t now_ms)
     packet.battery_remaining = (int8_t)battery.percent;
   }
 
-  (void)mavlink_msg_sys_status_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_sys_status_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
 
   return MavTx_SendPrepared();
 }
@@ -1047,7 +1142,7 @@ static Px4Lite_Result_t MavTx_SendModuleState(uint32_t now_ms)
   if (Px4Lite_CopyHealth(&health) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
   if (Px4Lite_IsFresh(&health.header, now_ms, PX4LITE_HEALTH_PERIOD_MS * 5U) == 0U) { return PX4LITE_STALE; }
 
-  part = (uint8_t)(s_module_state_part % 2U);
+  part = (uint8_t)(s_module_state_part[s_send_target] % 2U);
   for (i = 0U; i < 8U; i++) {
     module_index = (uint8_t)((part * 8U) + i);
     if (module_index < (uint8_t)PX4LITE_MODULE_COUNT) {
@@ -1064,23 +1159,17 @@ static Px4Lite_Result_t MavTx_SendModuleState(uint32_t now_ms)
     memcpy(packet.name, "MODSTAT1", 8U);
   }
 
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
 
   result = MavTx_SendPrepared();
-  if (result == PX4LITE_OK) { s_module_state_part = (uint8_t)((s_module_state_part + 1U) % 2U); }
+  if (result == PX4LITE_OK) { s_module_state_part[s_send_target] = (uint8_t)((s_module_state_part[s_send_target] + 1U) % 2U); }
   return result;
 }
 
-/**
- * @brief 模块状态分片成功发送后的分片推进。
- */
-
-/**
- * @brief 使用 NAMED_VALUE_INT 发送四路电机目标油门。
- */
 static Px4Lite_Result_t MavTx_SendAlarmStatus(uint32_t now_ms)
 {
   mavlink_named_value_int_t packet;
+  mavlink_tunnel_t tunnel;
   Px4Lite_AlarmRecord_t record;
   Px4Lite_Result_t result;
   uint32_t alarm_publish_ms;
@@ -1095,6 +1184,24 @@ static Px4Lite_Result_t MavTx_SendAlarmStatus(uint32_t now_ms)
   result = Px4Lite_CopyAlarmSummary(&alarm_publish_ms, 0, &active_count, &highest_fault_code, &highest_source_id, &highest_severity);
   if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
   if ((uint32_t)(now_ms - alarm_publish_ms) > (PX4LITE_HEALTH_PERIOD_MS * 10U)) { return PX4LITE_STALE; }
+
+  if (s_alarm_status_part == 2U) {
+    uint16_t len;
+
+    memset(&tunnel, 0, sizeof(tunnel));
+    len = MavTx_PackAlarmTable(1U, now_ms, tunnel.payload, (uint16_t)sizeof(tunnel.payload));
+    if (len < 2U) { return PX4LITE_NOT_READY; }
+
+    tunnel.target_system    = 0U;
+    tunnel.target_component = 0U;
+    tunnel.payload_type     = 0x8001U;
+    tunnel.payload_length   = (uint8_t)len;
+
+    (void)mavlink_msg_tunnel_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &tunnel);
+    result = MavTx_SendPrepared();
+    if (result == PX4LITE_OK) { s_alarm_status_part = 0U; }
+    return result;
+  }
 
   memset(&packet, 0, sizeof(packet));
   if (s_alarm_status_part == 0U) {
@@ -1112,9 +1219,9 @@ static Px4Lite_Result_t MavTx_SendAlarmStatus(uint32_t now_ms)
 
   packet.time_boot_ms = alarm_publish_ms;
   packet.value        = (int32_t)packed;
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   result = MavTx_SendPrepared();
-  if (result == PX4LITE_OK) { s_alarm_status_part ^= 1U; }
+  if (result == PX4LITE_OK) { s_alarm_status_part++; }
   return result;
 }
 
@@ -1180,7 +1287,7 @@ static Px4Lite_Result_t MavTx_SendMotorPair(uint32_t now_ms, uint8_t pair_part, 
     memcpy(packet.name, "MOTOR34", 7U);
   }
 
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   return MavTx_SendPrepared();
 }
 
@@ -1188,9 +1295,47 @@ static Px4Lite_Result_t MavTx_SendMotorStatus(uint32_t now_ms)
 {
   Px4Lite_Result_t result;
 
-  result = MavTx_SendMotorPair(now_ms, s_motor_pair_part, 0);
-  if (result == PX4LITE_OK) { s_motor_pair_part = (uint8_t)((s_motor_pair_part + 1U) % MAV_TX_MOTOR_PAIR_COUNT); }
+  result = MavTx_SendMotorPair(now_ms, s_motor_pair_part[s_send_target], 0);
+  if (result == PX4LITE_OK) { s_motor_pair_part[s_send_target] = (uint8_t)((s_motor_pair_part[s_send_target] + 1U) % MAV_TX_MOTOR_PAIR_COUNT); }
   return result;
+}
+
+/**
+ * @brief 按 Control 的同一线性关系把油门百分比换算为 PWM 高电平脉宽。
+ */
+static uint16_t MavTx_MotorPulseUs(uint8_t duty_percent)
+{
+  uint32_t range;
+
+  duty_percent = MavTx_SaturatePercent(duty_percent);
+  range = (uint32_t)PX4LITE_CONTROL_ESC_MAX_PULSE_US - (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US;
+  return (uint16_t)((uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US + ((range * duty_percent) / 100U));
+}
+
+/**
+ * @brief 使用标准 SERVO_OUTPUT_RAW 发送四路实际 PWM 高电平脉宽。
+ *
+ * @details
+ * MOTOR12/MOTOR34 继续承载百分比、运行状态和兼容速度等级；本消息只补充 Control
+ * 使用同一线性关系写入 BSP 的精确脉宽，不把显示层的文本换算结果当作遥测事实。
+ */
+static Px4Lite_Result_t MavTx_SendMotorPulseStatus(uint32_t now_ms)
+{
+  Px4Lite_MotorOutputs_t motor;
+  mavlink_servo_output_raw_t packet;
+
+  if (Px4Lite_CopyMotor(&motor) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_IsFresh(&motor.header, now_ms, PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS * 5U) == 0U) { return PX4LITE_STALE; }
+
+  memset(&packet, 0, sizeof(packet));
+  packet.time_usec  = motor.header.sample_time_ms * 1000U;
+  packet.port       = 0U;
+  packet.servo1_raw = MavTx_MotorPulseUs(motor.duty_percent[0]);
+  packet.servo2_raw = MavTx_MotorPulseUs(motor.duty_percent[1]);
+  packet.servo3_raw = MavTx_MotorPulseUs(motor.duty_percent[2]);
+  packet.servo4_raw = MavTx_MotorPulseUs(motor.duty_percent[3]);
+  (void)mavlink_msg_servo_output_raw_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
+  return MavTx_SendPrepared();
 }
 
 static Px4Lite_Result_t MavTx_RunMotorUrgent(uint32_t now_ms)
@@ -1272,8 +1417,9 @@ static Px4Lite_Result_t MavTx_SendMessageLog(uint32_t now_ms)
   packet.value        = (int32_t)packed;
   memcpy(packet.name, "LOGSYNC", 7U);
 
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
-  result = MavTx_SendPrepared();
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
+  /* LOGSYNC 单条增量只供 LoRa/屏幕；RPi 从 RPILOG(TUNNEL 批量日志)取用。直接走 LoRa。 */
+  result = MavTx_SendToLora();
   if (result == PX4LITE_OK) {
     if (s_log_replay_active != 0U) {
       s_log_replay_cursor = s_log_sync_entry.sequence;
@@ -1306,8 +1452,7 @@ static void MavTx_RecordResult(Px4Lite_Result_t result, uint32_t now_ms, uint32_
   }
 }
 
-#if PX4LITE_ENABLE_RPI_MAVLINK
-/* 小端写 16 位，TUNNEL payload 多字节字段统一小端(与 RPi 侧 ReadU16LE 对齐)。 */
+/* 小端写 16 位，TUNNEL payload 多字节字段统一小端(LoRa 全量告警表与 RPi 侧共用)。 */
 static void MavTx_TunPutU16(uint8_t *p, uint16_t v)
 {
   p[0] = (uint8_t)(v & 0xFFU);
@@ -1356,6 +1501,7 @@ static uint16_t MavTx_PackAlarmTable(uint8_t ver, uint32_t now_ms, uint8_t *out,
   return off;
 }
 
+#if PX4LITE_ENABLE_RPI_MAVLINK
 /**
  * @brief 打包当前完整消息日志为 TUNNEL payload(payload_type=0x8002)。
  * @details
@@ -1366,7 +1512,10 @@ static uint16_t MavTx_PackAlarmTable(uint8_t ver, uint32_t now_ms, uint8_t *out,
  */
 static uint16_t MavTx_PackMessageLogTable(uint8_t *out, uint16_t out_cap)
 {
-  Px4Lite_LogEntry_t entries[PX4LITE_LOCAL_LOG_CAP];
+  /* 全量日志暂存(~144B)用 static 而非栈局部：本函数只由 CommTask 单线程调用，
+     避免与调用方 MavTx_SendRpiMessageLogTable 的 mavlink_tunnel_t packet(133B)
+     同时占栈约 277B(CommTask 栈仅 1536B)。static 不可重入，但此处无重入。 */
+  static Px4Lite_LogEntry_t entries[PX4LITE_LOCAL_LOG_CAP];
   uint16_t latest_seq = 0U;
   uint16_t count;
   uint16_t off = 3U;
@@ -1407,7 +1556,7 @@ static uint16_t MavTx_PackMessageLogTable(uint8_t *out, uint16_t out_cap)
  *   [16:23] LoRa 节点 ID
  *   [24]    LoRa 模块在位标志
  *   [25:27] LoRa 链路状态枚举(Px4Lite_State_t)
- * 仅发 USART1，不进入 LoRa 目录。
+ * 仅发 USART6，不进入 LoRa 目录。
  */
 static Px4Lite_Result_t MavTx_SendRpiLoraStatus(uint32_t now_ms)
 {
@@ -1431,7 +1580,7 @@ static Px4Lite_Result_t MavTx_SendRpiLoraStatus(uint32_t now_ms)
   packet.value        = (int32_t)packed;
   memcpy(packet.name, "LORASTAT", 8U);
 
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   return MavTx_SendRpiExclusive();
 }
 
@@ -1440,7 +1589,7 @@ static Px4Lite_Result_t MavTx_SendRpiLoraStatus(uint32_t now_ms)
  * @details
  * value 位布局：[0:15] 位置广播成功计数低 16 位；[16:31] 编码/提交错误计数低 16 位。
  * time_boot_ms 复用 RemoteID 最近一次成功提交时间，树莓派据此判断广播是否仍在推进。
- * 仅发 USART1。
+ * 仅发 USART6。
  */
 static Px4Lite_Result_t MavTx_SendRpiRemoteIdStatus(uint32_t now_ms)
 {
@@ -1458,7 +1607,7 @@ static Px4Lite_Result_t MavTx_SendRpiRemoteIdStatus(uint32_t now_ms)
   memcpy(packet.name, "RIDSTAT", 7U);
 
   (void)now_ms;
-  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_named_value_int_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   return MavTx_SendRpiExclusive();
 }
 
@@ -1466,7 +1615,7 @@ static Px4Lite_Result_t MavTx_SendRpiRemoteIdStatus(uint32_t now_ms)
  * @brief RPi 专属：用 TUNNEL(payload_type=0x8001) 发送完整活动告警表。
  * @details
  * 替代 LoRa 上的 ALRMHI/ALRMMSK 摘要，给树莓派逐行完整告警表(D1=全量)。无活动告警
- * 时 count=0，让 RPi 侧感知告警已清空。仅发 USART1。
+ * 时 count=0，让 RPi 侧感知告警已清空。仅发 USART6。
  */
 static Px4Lite_Result_t MavTx_SendRpiAlarmTable(uint32_t now_ms)
 {
@@ -1482,7 +1631,7 @@ static Px4Lite_Result_t MavTx_SendRpiAlarmTable(uint32_t now_ms)
   packet.payload_type     = 0x8001U;
   packet.payload_length   = (uint8_t)len;
 
-  (void)mavlink_msg_tunnel_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_tunnel_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   return MavTx_SendRpiExclusive();
 }
 
@@ -1490,7 +1639,7 @@ static Px4Lite_Result_t MavTx_SendRpiAlarmTable(uint32_t now_ms)
  * @brief RPi 专属：用 TUNNEL(payload_type=0x8002) 发送完整消息日志快照。
  * @details
  * 替代 LoRa 上的单条 LOGSYNC，一帧带当前全部日志(最多 PX4LITE_LOCAL_LOG_CAP 条)，
- * RPi 侧按 sequence 去重。周期性重发即为全量重播。仅发 USART1。
+ * RPi 侧按 sequence 去重。周期性重发即为全量重播。仅发 USART6。
  */
 static Px4Lite_Result_t MavTx_SendRpiMessageLogTable(uint32_t now_ms)
 {
@@ -1507,7 +1656,7 @@ static Px4Lite_Result_t MavTx_SendRpiMessageLogTable(uint32_t now_ms)
   packet.payload_type     = 0x8002U;
   packet.payload_length   = (uint8_t)len;
 
-  (void)mavlink_msg_tunnel_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MAVLINK_COMM_0, &s_message, &packet);
+  (void)mavlink_msg_tunnel_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_RPI_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   return MavTx_SendRpiExclusive();
 }
 #endif
@@ -1529,18 +1678,58 @@ static const MavTx_Item_t s_mav_tx_catalog[] = {
     {"ALARM", PX4LITE_MAVLINK_ENABLE_ALARM_STATUS, PX4LITE_MAVLINK_ALARM_STATUS_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_alarm_status_ms, &s_alarm_status_count, MavTx_SendAlarmStatus, 0, MAV_TX_SCOPE_EXTENSION},
     {"STATUSTEXT", PX4LITE_MAVLINK_ENABLE_STATUSTEXT, PX4LITE_MAVLINK_STATUSTEXT_PERIOD_MS, MAVLINK_MSG_ID_STATUSTEXT, &s_next_statustext_ms, &s_stats.statustext_count, MavTx_SendStatusText, 0, MAV_TX_SCOPE_STANDARD},
     {"MOTOR", PX4LITE_MAVLINK_ENABLE_MOTOR_STATUS, PX4LITE_MAVLINK_MOTOR_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_motor_ms, &s_motor_status_count, MavTx_SendMotorStatus, 0, MAV_TX_SCOPE_EXTENSION},
+    {"MOTOR_PULSE", PX4LITE_MAVLINK_ENABLE_MOTOR_PULSE, PX4LITE_MAVLINK_MOTOR_PULSE_PERIOD_MS, MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, &s_next_motor_pulse_ms, &s_motor_pulse_count, MavTx_SendMotorPulseStatus, 0, MAV_TX_SCOPE_STANDARD},
     {"LOG", PX4LITE_MAVLINK_ENABLE_MESSAGE_LOG, PX4LITE_MAVLINK_MESSAGE_LOG_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_log_ms, &s_message_log_count, MavTx_SendMessageLog, 0, MAV_TX_SCOPE_EXTENSION},
+};
+
+#define MAV_TX_CATALOG_COUNT ((uint8_t)(sizeof(s_mav_tx_catalog) / sizeof(s_mav_tx_catalog[0])))
+
 #if PX4LITE_ENABLE_RPI_MAVLINK
-    /* 树莓派专属扩展：只发 USART1(compid 193)，不进入 LoRa 空口。scope 用 ALWAYS，
-       不受 LoRa NAMED_VALUE 扩展策略约束，因为它们是独立于 LoRa 的 RPi 出口数据。 */
+/*
+ * 树莓派专属出口目录。这些帧只写 USART6(compid 193)、不进入 LoRa 空口，构成 RPi 的
+ * "全量数据出口"。它们经 Px4Lite_MavlinkTxRunRpi 独立调度——不受 LoRa 服务状态、
+ * LoRa 半双工占空、s_tx_enabled(远端查看)约束，LoRa 忙/掉线时 RPi 仍持续收数据。
+ */
+static const MavTx_Item_t s_mav_tx_rpi_catalog[] = {
     {"RPILORA", 1U, PX4LITE_MAVLINK_RPI_LORASTAT_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_rpi_lorastat_ms, &s_rpi_lorastat_count, MavTx_SendRpiLoraStatus, 0, MAV_TX_SCOPE_ALWAYS},
     {"RPIRID", 1U, PX4LITE_MAVLINK_RPI_RIDSTAT_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, &s_next_rpi_ridstat_ms, &s_rpi_ridstat_count, MavTx_SendRpiRemoteIdStatus, 0, MAV_TX_SCOPE_ALWAYS},
     {"RPIALRM", 1U, PX4LITE_MAVLINK_RPI_ALARM_PERIOD_MS, MAVLINK_MSG_ID_TUNNEL, &s_next_rpi_alarm_ms, &s_rpi_alarm_count, MavTx_SendRpiAlarmTable, 0, MAV_TX_SCOPE_ALWAYS},
     {"RPILOG", 1U, PX4LITE_MAVLINK_RPI_LOG_PERIOD_MS, MAVLINK_MSG_ID_TUNNEL, &s_next_rpi_log_ms, &s_rpi_log_count, MavTx_SendRpiMessageLogTable, 0, MAV_TX_SCOPE_ALWAYS},
-#endif
 };
 
-#define MAV_TX_CATALOG_COUNT ((uint8_t)(sizeof(s_mav_tx_catalog) / sizeof(s_mav_tx_catalog[0])))
+#define MAV_TX_RPI_CATALOG_COUNT ((uint8_t)(sizeof(s_mav_tx_rpi_catalog) / sizeof(s_mav_tx_rpi_catalog[0])))
+
+/*
+ * 树莓派独立遥测目录：直接复用 LoRa 那批编码器，但以 target=RPI 走 USART6(compid 193)，
+ * 用自己的 next_ms/游标独立调度，不受 LoRa 服务状态/半双工占空约束——LoRa 忙或 E22
+ * 掉线时，RPi 仍能满调度拿到 GNSS/姿态/位置/电池/电机/系统健康等全量遥测。
+ * scope 一律 ALWAYS：RPi 出口不受 LoRa 的 NAMED_VALUE 扩展开关约束。
+ * 告警/日志不在此列——RPi 从 RPIALRM/RPILOG(TUNNEL 全量表)取用，避免同一数据两种格式。
+ * next_ms/success_count 指针置 0：本目录改用并行数组 s_rpi_telem_next_ms/success 计时计数。
+ */
+static const MavTx_Item_t s_mav_tx_rpi_telem_catalog[] = {
+    {"HEARTBEAT", PX4LITE_MAVLINK_ENABLE_HEARTBEAT, PX4LITE_MAVLINK_HEARTBEAT_PERIOD_MS, MAVLINK_MSG_ID_HEARTBEAT, 0, 0, MavTx_SendHeartbeat, 0, MAV_TX_SCOPE_ALWAYS},
+    {"GPS_RAW", PX4LITE_MAVLINK_ENABLE_GPS_RAW, PX4LITE_MAVLINK_GPS_RAW_PERIOD_MS, MAVLINK_MSG_ID_GPS_RAW_INT, 0, 0, MavTx_SendGpsRaw, 0, MAV_TX_SCOPE_ALWAYS},
+    {"GNSS_DETAIL", PX4LITE_MAVLINK_ENABLE_GNSS_DETAIL, PX4LITE_MAVLINK_GNSS_DETAIL_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, 0, 0, MavTx_SendGnssDetail, 0, MAV_TX_SCOPE_ALWAYS},
+    {"ATTITUDE", PX4LITE_MAVLINK_ENABLE_ATTITUDE, PX4LITE_MAVLINK_ATTITUDE_PERIOD_MS, MAVLINK_MSG_ID_ATTITUDE, 0, 0, MavTx_SendAttitude, 0, MAV_TX_SCOPE_ALWAYS},
+    {"POSITION", PX4LITE_MAVLINK_ENABLE_GLOBAL_POSITION, PX4LITE_MAVLINK_POSITION_PERIOD_MS, MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 0, 0, MavTx_SendPosition, 0, MAV_TX_SCOPE_ALWAYS},
+    {"BAROALT", PX4LITE_MAVLINK_ENABLE_GLOBAL_POSITION, PX4LITE_MAVLINK_POSITION_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, 0, 0, MavTx_SendBaroAltitude, 0, MAV_TX_SCOPE_ALWAYS},
+    {"SYS_STATUS", PX4LITE_MAVLINK_ENABLE_SYS_STATUS, PX4LITE_MAVLINK_SYS_STATUS_PERIOD_MS, MAVLINK_MSG_ID_SYS_STATUS, 0, 0, MavTx_SendSystemStatus, 0, MAV_TX_SCOPE_ALWAYS},
+    {"MODULE_STATE", PX4LITE_MAVLINK_ENABLE_MODULE_STATE, PX4LITE_MAVLINK_MODULE_STATE_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, 0, 0, MavTx_SendModuleState, 0, MAV_TX_SCOPE_ALWAYS},
+    {"BATTERY", PX4LITE_MAVLINK_ENABLE_BATTERY_STATUS, PX4LITE_MAVLINK_BATTERY_PERIOD_MS, MAVLINK_MSG_ID_BATTERY_STATUS, 0, 0, MavTx_SendBatteryStatus, 0, MAV_TX_SCOPE_ALWAYS},
+    {"BATTERY2", PX4LITE_MAVLINK_ENABLE_BATTERY_STATUS, PX4LITE_MAVLINK_BATTERY_PERIOD_MS, MAVLINK_MSG_ID_BATTERY_STATUS, 0, 0, MavTx_SendBattery2, 0, MAV_TX_SCOPE_ALWAYS},
+    {"GNSSUTC", PX4LITE_MAVLINK_ENABLE_DATETIME, PX4LITE_MAVLINK_DATETIME_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, 0, 0, MavTx_SendDateTime, 0, MAV_TX_SCOPE_ALWAYS},
+    {"PRESSURE", PX4LITE_MAVLINK_ENABLE_SCALED_PRESSURE, PX4LITE_MAVLINK_PRESSURE_PERIOD_MS, MAVLINK_MSG_ID_SCALED_PRESSURE, 0, 0, MavTx_SendScaledPressure, 0, MAV_TX_SCOPE_ALWAYS},
+    {"ENV_HUM", PX4LITE_MAVLINK_ENABLE_ENV_HUMIDITY, PX4LITE_MAVLINK_ENV_HUMIDITY_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, 0, 0, MavTx_SendEnvHumidity, 0, MAV_TX_SCOPE_ALWAYS},
+    {"MOTOR", PX4LITE_MAVLINK_ENABLE_MOTOR_STATUS, PX4LITE_MAVLINK_MOTOR_PERIOD_MS, MAVLINK_MSG_ID_NAMED_VALUE_INT, 0, 0, MavTx_SendMotorStatus, 0, MAV_TX_SCOPE_ALWAYS},
+    {"MOTOR_PULSE", PX4LITE_MAVLINK_ENABLE_MOTOR_PULSE, PX4LITE_MAVLINK_MOTOR_PULSE_PERIOD_MS, MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, 0, 0, MavTx_SendMotorPulseStatus, 0, MAV_TX_SCOPE_ALWAYS},
+};
+
+#define MAV_TX_RPI_TELEM_COUNT ((uint8_t)(sizeof(s_mav_tx_rpi_telem_catalog) / sizeof(s_mav_tx_rpi_telem_catalog[0])))
+static uint32_t s_rpi_telem_next_ms[MAV_TX_RPI_TELEM_COUNT];
+static uint32_t s_rpi_telem_success[MAV_TX_RPI_TELEM_COUNT];
+static uint8_t s_rpi_telem_index;
+#endif
 
 Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
 {
@@ -1550,29 +1739,37 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_env_humidity_count = 0U;
   s_alarm_status_count = 0U;
   s_battery2_status_count = 0U;
+  s_last_battery2_status_sequence = 0U;
+  s_alarm_status_part = 0U;
   s_datetime_count = 0U;
   s_baro_altitude_count = 0U;
   s_motor_status_count = 0U;
+  s_motor_pulse_count = 0U;
   s_message_log_count  = 0U;
-  s_alarm_status_part  = 0U;
   s_log_sync_cursor    = 0U;
   s_log_replay_cursor  = 0U;
   s_log_replay_active  = 0U;
   s_next_log_replay_ms = now_ms + PX4LITE_MAVLINK_LOG_REPLAY_PERIOD_MS;
   memset(&s_log_sync_entry, 0, sizeof(s_log_sync_entry));
   memset(&s_last_motor_snapshot, 0, sizeof(s_last_motor_snapshot));
-  s_last_battery2_sequence = 0U;
+  memset(s_last_gps_sequence, 0, sizeof(s_last_gps_sequence));
+  memset(s_last_detail_sequence, 0, sizeof(s_last_detail_sequence));
+  memset(s_last_attitude_sequence, 0, sizeof(s_last_attitude_sequence));
+  memset(s_last_battery_sequence, 0, sizeof(s_last_battery_sequence));
+  memset(s_last_battery2_sequence, 0, sizeof(s_last_battery2_sequence));
   s_last_motor_valid = 0U;
-  s_motor_pair_part = 0U;
+  memset(s_motor_pair_part, 0, sizeof(s_motor_pair_part));
   s_motor_urgent_part = 0U;
   s_motor_urgent_remaining = 0U;
   s_motor_urgent_hold = 0U;
-  s_module_state_part = 0U;
+  memset(s_module_state_part, 0, sizeof(s_module_state_part));
   s_tx_enabled = 1U;
+  s_send_target = MAV_TX_TARGET_LORA;
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
   if (Px4Lite_RpiMavlinkInit() != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
   s_rpi_tx_seq           = 0U;
+  s_rpi_catalog_index    = 0U;
   s_rpi_lorastat_count   = 0U;
   s_rpi_ridstat_count    = 0U;
   s_rpi_alarm_count      = 0U;
@@ -1581,6 +1778,15 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_next_rpi_ridstat_ms  = now_ms + 650U;
   s_next_rpi_alarm_ms    = now_ms + 700U;
   s_next_rpi_log_ms      = now_ms + 750U;
+  s_rpi_telem_index      = 0U;
+  {
+    uint8_t rpi_i;
+    /* RPi 遥测各项首发时间错开，避免同一 CommTask 周期挤在一起；周期沿用 LoRa 同值。 */
+    for (rpi_i = 0U; rpi_i < MAV_TX_RPI_TELEM_COUNT; ++rpi_i) {
+      s_rpi_telem_next_ms[rpi_i] = now_ms + 800U + ((uint32_t)rpi_i * 30U);
+      s_rpi_telem_success[rpi_i] = 0U;
+    }
+  }
 #endif
 
   s_next_heartbeat_ms   = now_ms + 100U;
@@ -1597,6 +1803,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_next_env_humidity_ms = now_ms + 430U;
   s_next_statustext_ms  = now_ms + 450U;
   s_next_motor_ms       = now_ms + 480U;
+  s_next_motor_pulse_ms = now_ms + 490U;
   s_next_alarm_status_ms = now_ms + 500U;
   s_next_log_ms         = now_ms + 2500U;
   s_catalog_index       = 0U;
@@ -1612,17 +1819,20 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
   Px4Lite_Result_t result;
   uint8_t checked;
 
-#if !PX4LITE_ENABLE_RPI_MAVLINK
+  /* 本趟所有编码器都发往 LoRa 出口。 */
+  s_send_target = MAV_TX_TARGET_LORA;
+
   if (s_tx_enabled == 0U) { return PX4LITE_IDLE; }
-#endif
 
   /* 上一帧仍在发送时，任何 encode_chan 调用都会白白消耗 MAVLink 通道序号
      (库内部自增)，但帧实际并未发出，接收端会把这个空洞误判为丢包。
      发送前先确认通道空闲，忙时直接跳过整轮编码，不做任何 encode 尝试。 */
   if ((s_tx_enabled != 0U) && (Px4Lite_LoRaIsTxIdle() == 0U)) { return PX4LITE_BUSY; }
 
-  result = MavTx_SendPendingAck(now_ms);
-  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
+  if (MavTx_PendingAckTargetsRpi() == 0U) {
+    result = MavTx_SendPendingAck(now_ms);
+    if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
+  }
 
   result = MavTx_SendPendingCommand(now_ms);
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
@@ -1643,6 +1853,57 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
   }
 
   return PX4LITE_IDLE;
+}
+
+Px4Lite_Result_t Px4Lite_MavlinkTxRunRpi(uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  const MavTx_Item_t *item;
+  Px4Lite_Result_t result;
+  uint8_t checked;
+  uint8_t idx;
+
+  /* 整趟都发往 RPi 出口(USART6)。RPi 帧先复用 COMM_0 编码，再由 SendRpiExclusive
+     回退 LoRa 序号并改 compid=193，故既不依赖 LoRa 空口/服务状态，也不消耗 LoRa 通道序号。 */
+  s_send_target = MAV_TX_TARGET_RPI;
+
+  if (MavTx_PendingAckTargetsRpi() != 0U) {
+    result = MavTx_SendPendingAck(now_ms);
+    if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
+  }
+
+  /* 第一趟：RPi 独立遥测(复用 LoRa 编码器，各项自带并行 next_ms/success 数组，
+     以 target=RPI 走 USART6)。最多提交一帧后转下一趟。 */
+  for (checked = 0U; checked < MAV_TX_RPI_TELEM_COUNT; ++checked) {
+    idx  = s_rpi_telem_index;
+    item = &s_mav_tx_rpi_telem_catalog[idx];
+    s_rpi_telem_index = (uint8_t)((idx + 1U) % MAV_TX_RPI_TELEM_COUNT);
+
+    if ((item->enabled == 0U) || (MavTx_ItemAllowed(item, now_ms) == 0U) || (MavTx_TimeReached(now_ms, s_rpi_telem_next_ms[idx]) == 0U)) { continue; }
+
+    result = item->encode(now_ms);
+    MavTx_RecordResult(result, now_ms, MavTx_ItemPeriodMs(item, now_ms), &s_rpi_telem_next_ms[idx], item->message_id, &s_rpi_telem_success[idx]);
+    if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { break; }
+  }
+
+  /* 第二趟：RPi 专属出口(LORASTAT/RIDSTAT/告警表/日志表)。轮询推进游标，最多提交一帧。 */
+  for (checked = 0U; checked < MAV_TX_RPI_CATALOG_COUNT; ++checked) {
+    item = &s_mav_tx_rpi_catalog[s_rpi_catalog_index];
+    s_rpi_catalog_index = (uint8_t)((s_rpi_catalog_index + 1U) % MAV_TX_RPI_CATALOG_COUNT);
+
+    if ((item->enabled == 0U) || (MavTx_ItemAllowed(item, now_ms) == 0U) || (MavTx_TimeReached(now_ms, *item->next_ms) == 0U)) { continue; }
+
+    result = item->encode(now_ms);
+    MavTx_RecordResult(result, now_ms, MavTx_ItemPeriodMs(item, now_ms), item->next_ms, item->message_id, item->success_count);
+    if ((result == PX4LITE_OK) && (item->on_success != 0)) { item->on_success(); }
+    if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { break; }
+  }
+
+  return PX4LITE_IDLE;
+#else
+  (void)now_ms;
+  return PX4LITE_IDLE;
+#endif
 }
 
 void Px4Lite_MavlinkTxGetStats(Px4Lite_MavlinkTxStats_t *out)

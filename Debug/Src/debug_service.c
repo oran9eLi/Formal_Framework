@@ -13,9 +13,13 @@
 #include "px4lite_config.h"
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
+#include "px4lite_time.h"
 #include "px4lite_topics.h"
 #if DEBUG_IMU_MONITOR_ENABLE
 #include "sensor_mpu6050.h"
+#endif
+#if DEBUG_POWER_MONITOR_ENABLE
+#include "bsp_adc_current.h" /* 临时诊断：读电流原始 adc_mv/浮空标志 */
 #endif
 #include "task.h"
 
@@ -38,10 +42,26 @@ static void DebugService_ReportGnss(uint32_t now_ms)
   if ((Px4Lite_CopyGnss(&gnss) == PX4LITE_OK) && (Px4Lite_GetModuleStatus(PX4LITE_MODULE_GNSS, &status) == PX4LITE_OK)) {
     report_ms = Px4Lite_PlatformGetMs();
     DBG_PRINT("GNSS: state=%u fix=%u sats=%u gps=%u/%u bds=%u/%u "
-              "lat=%ld lon=%ld age=%lu",
-              (unsigned int)status.state, (unsigned int)gnss.fix_type, (unsigned int)gnss.satellites_used, (unsigned int)gnss.gps_used, (unsigned int)gnss.gps_visible, (unsigned int)gnss.bds_used, (unsigned int)gnss.bds_visible, (long)gnss.latitude_e7, (long)gnss.longitude_e7, (unsigned long)Px4Lite_ElapsedMs(report_ms, status.last_rx_ms));
+              "lat=%ld lon=%ld utc_date=%lu utc_sec=%lu age=%lu",
+              (unsigned int)status.state, (unsigned int)gnss.fix_type, (unsigned int)gnss.satellites_used, (unsigned int)gnss.gps_used, (unsigned int)gnss.gps_visible, (unsigned int)gnss.bds_used, (unsigned int)gnss.bds_visible, (long)gnss.latitude_e7, (long)gnss.longitude_e7, (unsigned long)gnss.utc_date, (unsigned long)gnss.utc_sec, (unsigned long)Px4Lite_ElapsedMs(report_ms, status.last_rx_ms));
   } else {
     DBG_PRINT("GNSS: waiting for valid NMEA data");
+  }
+
+  {
+    /* 室内无 GPS 时用它判断 RTC 手表本身：src 0=NONE 1=RTC 2=GNSS；
+       sync 0=INVALID 1=RTC_VALID 2=GNSS_SYNCED 3=STALE。rc!=OK 表示 RTC 从未被有效校准。 */
+    Px4Lite_TimeSnapshot_t t;
+    Px4Lite_Result_t trc = Px4Lite_CopyTime(&t);
+
+    if (trc == PX4LITE_OK) {
+      DBG_PRINT("TIME: rc=OK src=%u sync=%u local=%04lu-%02lu-%02lu %06lu sync_age=%lus",
+                (unsigned int)t.source, (unsigned int)t.sync_state,
+                (unsigned long)(t.local_date_ymd / 10000UL), (unsigned long)((t.local_date_ymd / 100UL) % 100UL), (unsigned long)(t.local_date_ymd % 100UL),
+                (unsigned long)t.local_time_hhmmss, (unsigned long)t.sync_age_s);
+    } else {
+      DBG_PRINT("TIME: rc=%d no valid time yet (src=NONE, RTC never calibrated by GNSS)", (int)trc);
+    }
   }
 }
 #endif
@@ -121,18 +141,33 @@ static void DebugService_ReportBaro(uint32_t now_ms)
 static void DebugService_ReportPower(uint32_t now_ms)
 {
   Px4Lite_BatteryStatus_t battery;
+  Px4Lite_BatteryStatus_t battery2;
   Px4Lite_ModuleStatus_t status;
-  uint32_t report_ms;
+  uint32_t adc_mv1 = 0U;
+  uint32_t adc_mv2 = 0U;
+  uint8_t  float1  = 0U;
+  uint8_t  float2  = 0U;
+  Px4Lite_Result_t bat2_rc;
 
   (void)now_ms;
 
+  /* 临时诊断：两路电流的原始引脚电压 + 浮空标志(来自 BSP 缓存，不再碰 ADC)。
+     判读：adc_mv≈0 且 float=1 -> 判为浮空(没接/悬空)；adc_mv≈0 且 float=0 -> 引脚确实读到 0V；
+     加负载时 adc_mv 跟着涨 -> 信号进来了，接线正常，剩下的是零点/灵敏度标定。 */
+  BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY1, &adc_mv1, &float1);
+  BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY2, &adc_mv2, &float2);
+  bat2_rc = Px4Lite_CopyBattery2(&battery2);
+
   if ((Px4Lite_CopyBattery(&battery) == PX4LITE_OK) && (Px4Lite_GetModuleStatus(PX4LITE_MODULE_BATTERY, &status) == PX4LITE_OK)) {
-    report_ms = Px4Lite_PlatformGetMs();
-    DBG_PRINT("POWER: state=%u voltage_mv=%lu current_ma=%ld "
-              "percent=%u low=%u age=%lu",
-              (unsigned int)status.state, (unsigned long)battery.voltage_mv, (long)battery.current_ma, (unsigned int)battery.percent, (unsigned int)battery.low_voltage, (unsigned long)Px4Lite_ElapsedMs(report_ms, status.last_rx_ms));
+    DBG_PRINT("POWER: state=%u v_mv=%lu pct=%u low=%u | "
+              "I1(PC0) adc_mv=%lu float=%u cur_ma=%ld | "
+              "I2(PC1) adc_mv=%lu float=%u cur_ma=%ld",
+              (unsigned int)status.state, (unsigned long)battery.voltage_mv, (unsigned int)battery.percent, (unsigned int)battery.low_voltage,
+              (unsigned long)adc_mv1, (unsigned int)float1, (long)battery.current_ma,
+              (unsigned long)adc_mv2, (unsigned int)float2, (bat2_rc == PX4LITE_OK) ? (long)battery2.current_ma : 0L);
   } else {
-    DBG_PRINT("POWER: no valid data");
+    DBG_PRINT("POWER: no battery topic | I1(PC0) adc_mv=%lu float=%u | I2(PC1) adc_mv=%lu float=%u",
+              (unsigned long)adc_mv1, (unsigned int)float1, (unsigned long)adc_mv2, (unsigned int)float2);
   }
 }
 #endif

@@ -43,6 +43,16 @@ int32_t BSP_RemoteId_Init(void)
   __HAL_RCC_UART4_CLK_ENABLE();
   __HAL_RCC_DMA1_CLK_ENABLE();
 
+  /* PC8 ESP32 在位检测：下拉输入，ESP32 上电时其 3.3V 把该脚拉高。 */
+  {
+    GPIO_InitTypeDef detect_gpio;
+    detect_gpio.Pin   = BSP_ESP_DETECT_PIN;
+    detect_gpio.Mode  = GPIO_MODE_INPUT;
+    detect_gpio.Pull  = GPIO_PULLDOWN;
+    detect_gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(BSP_ESP_DETECT_PORT, &detect_gpio);
+  }
+
   s_remoteid_uart.Instance          = BSP_REMOTEID_UART;
   s_remoteid_uart.Init.BaudRate     = BSP_REMOTEID_UART_BAUD;
   s_remoteid_uart.Init.WordLength   = BSP_REMOTEID_UART_WORD;
@@ -109,6 +119,11 @@ uint8_t BSP_RemoteId_IsReady(void)
   return s_remoteid_initialized;
 }
 
+uint8_t BSP_RemoteId_IsPresent(void)
+{
+  return (HAL_GPIO_ReadPin(BSP_ESP_DETECT_PORT, BSP_ESP_DETECT_PIN) == GPIO_PIN_SET) ? 1U : 0U;
+}
+
 /**
  * @brief 中止当前 RemoteID TX DMA。
  */
@@ -141,6 +156,7 @@ int32_t BSP_RemoteId_Init(void) { return 0; }
 int32_t BSP_RemoteId_StartSend(const uint8_t *data, uint16_t len) { (void)data; (void)len; return -1; }
 uint8_t BSP_RemoteId_IsTxBusy(void) { return 0U; }
 uint8_t BSP_RemoteId_IsReady(void) { return 0U; }
+uint8_t BSP_RemoteId_IsPresent(void) { return 0U; }
 void BSP_RemoteId_AbortTx(void) {}
 void BSP_RemoteId_TxDmaIrqHandler(void) {}
 void BSP_RemoteId_TxCompleteCallback(UART_HandleTypeDef *huart) { (void)huart; }

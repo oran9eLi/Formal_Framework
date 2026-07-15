@@ -8,7 +8,7 @@
  *
  * fj-lora 融合后：远端数据来自 Framework `Px4Lite_RemoteTelemetry_t`(fj 多节点表选中
  * 节点的解码快照)，字段有效/过期位使用 `PX4LITE_REMOTE_VALID_*`(fj 定义集)。日期时间
- * 域复用 `App_CopyRemoteDisplaySnapshot` 的 GNSS UTC→本地换算结果。
+ * 属于本机界面状态，始终读取本机统一时间快照，不随远端/本地模式切换。
  *
  * 依赖边界：依赖 `app_data_api.h` 与 Framework 只读接口 `px4lite_mavlink_rx.h`，
  * 不包含 Display/LVGL/BSP/Sensor 头文件。
@@ -116,6 +116,8 @@ Px4Lite_Result_t App_GetDisplayEnvironment(App_EnvironmentSnapshot_t *out, uint3
   out->relative_humidity_pct = remote.relative_humidity_pct;
   out->voltage_mv            = remote.voltage_mv;
   out->voltage2_mv           = remote.voltage2_mv;
+  out->current_ma            = remote.current_ma;
+  out->current2_ma           = remote.current2_ma;
   out->battery_percent       = remote.battery_percent;
   out->battery2_percent      = remote.battery2_percent;
   out->low_voltage           = remote.low_voltage;
@@ -175,14 +177,15 @@ Px4Lite_Result_t App_GetDisplayAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms)
   out->highest_source_id  = remote.highest_source_id;
   out->highest_severity   = remote.highest_severity;
   if (remote.alarm_active_mask != 0U) {
-    /* fj 方案远端告警走活动位图+最高摘要；逐来源展开为单行记录，详情由日志页补充。 */
+    /* 远端全量告警来自 LoRa TUNNEL 0x8001：逐来源展开，fault_code/severity 用该来源的真实值
+       (remote.alarm_fault_code/alarm_severity)，不再只有最高一条有详情、其余占位为 0。 */
     uint16_t source;
     uint16_t row = 0U;
     for (source = 0U; (source < (uint16_t)PX4LITE_MODULE_COUNT) && (row < (uint16_t)PX4LITE_MODULE_COUNT); ++source) {
       if ((remote.alarm_active_mask & (1UL << source)) == 0U) { continue; }
       out->records[row].source_id  = source;
-      out->records[row].fault_code = (source == remote.highest_source_id) ? remote.highest_fault_code : 0U;
-      out->records[row].severity   = (source == remote.highest_source_id) ? remote.highest_severity : 0U;
+      out->records[row].fault_code = remote.alarm_fault_code[source];
+      out->records[row].severity   = (Px4Lite_AlarmSeverity_t)remote.alarm_severity[source];
       out->records[row].active     = 1U;
       out->records[row].raised_ms  = remote.alarm_update_ms;
       out->records[row].updated_ms = now_ms;
@@ -215,30 +218,18 @@ Px4Lite_Result_t App_GetDisplayMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
   out->header      = remote.header;
   out->run_state   = remote.motor_run_state;
   out->speed_level = remote.motor_speed_level;
-  for (i = 0U; i < PX4LITE_MOTOR_COUNT; ++i) { out->duty_percent[i] = remote.motor_duty_percent[i]; }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; ++i) {
+    out->duty_percent[i] = remote.motor_duty_percent[i];
+  }
   return fresh;
 }
 
 Px4Lite_Result_t App_GetDisplayDateTime(App_DateTimeSnapshot_t *out, uint32_t now_ms)
 {
-  static App_DisplaySnapshot_t s_remote_display_scratch;
-  Px4Lite_Result_t fresh;
-  Px4Lite_RemoteTelemetry_t remote;
-
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
-  if (App_GetRemoteDisplayMode() != PX4LITE_REMOTE_MODE_REMOTE) { return App_CopyDateTime(out, now_ms); }
 
-  memset(out, 0, sizeof(*out));
-  fresh = AppDisplay_RemoteDomain(&remote, PX4LITE_REMOTE_VALID_NAVIGATION, now_ms);
-  if (fresh == PX4LITE_NOT_READY) { return PX4LITE_NOT_READY; }
-
-  /* 远端时间由 GNSS UTC 推导；换算逻辑在 App 层统一实现，这里直接消费换算结果。 */
-  if (App_CopyRemoteDisplaySnapshot(&s_remote_display_scratch, now_ms) == 0U) { return PX4LITE_NOT_READY; }
-  if (s_remote_display_scratch.date_time_valid == 0U) { return PX4LITE_NOT_READY; }
-  out->header            = remote.header;
-  out->local_time_hhmmss = s_remote_display_scratch.local_time_hhmmss;
-  out->local_date_ymd    = s_remote_display_scratch.local_date_ymd;
-  return fresh;
+  /* 顶栏时钟属于本机界面状态，远端模式只切换业务遥测，不切换时间源。 */
+  return App_CopyDateTime(out, now_ms);
 }
 
 Px4Lite_Result_t App_GetDisplayMessageLog(App_DisplayLogSnapshot_t *out, uint32_t now_ms)

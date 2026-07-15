@@ -164,9 +164,11 @@ void BSP_LoRa_PreInit(void)
   gpio.Pin = BSP_LORA_M1_PIN;
   HAL_GPIO_Init(BSP_LORA_M1_PORT, &gpio);
 
-  /* AUX 引脚：PF0，输入。 */
+  /* AUX 引脚：PF0，输入且不启用内部上下拉。
+   * 实板 E22 空闲态为弱上拉；若启用 STM32 内部下拉会形成分压，使 AUX 仅为 1.x V，
+   * 落入 GPIO 输入不确定区。模块缺席时的低电平由主动在位探测短时下拉建立。 */
   gpio.Mode = GPIO_MODE_INPUT;
-  gpio.Pull = GPIO_PULLDOWN;
+  gpio.Pull = GPIO_NOPULL;
   gpio.Pin  = BSP_LORA_AUX_PIN;
   HAL_GPIO_Init(BSP_LORA_AUX_PORT, &gpio);
 }
@@ -195,6 +197,60 @@ uint8_t BSP_LoRa_IsReady(void)
 uint8_t BSP_LoRa_IsBusy(void)
 {
   return (BSP_LoRa_IsReady() != 0U) ? 0U : 1U;
+}
+
+/*
+ * AUX 主动探测参数。先以 GPIO 输入下拉排空悬空走线电荷，再取消上下拉：在位模块
+ * 的 AUX 弱上拉会把线路恢复为高，拔出后的线路则保持低。全程保持输入模式，避免
+ * MCU 输出与模块 AUX 输出发生电气冲突。两段均为微秒级 NOP 忙等，仅由 comm 任务低频调用。
+ */
+#define BSP_LORA_AUX_PROBE_DISCHARGE_ITERS 1000U
+#define BSP_LORA_AUX_PROBE_SETTLE_ITERS    5000U
+
+/**
+ * @brief AUX 探测专用微秒级短延时。
+ */
+static void BSP_LoRa_ProbeSpin(uint32_t iters)
+{
+  volatile uint32_t i;
+  for (i = 0U; i < iters; i++) { __NOP(); }
+}
+
+/**
+ * @brief 用输入下拉释放法主动探测 E22 AUX 是否被在位模块拉高。
+ *
+ * @return 1 表示取消下拉后 AUX 被重新拉高(模块在位)，0 表示维持低(模块拔出)。
+ *
+ * @details
+ * 悬空的 AUX 走线拔出后可能保留高电平，静态读取无法区分"在位空闲高"与"拔出悬空高"。
+ * 本函数先把 AUX 配成输入下拉完成放电，再切为无上下拉输入：在位模块的弱上拉会把线路
+ * 恢复为可靠高电平，拔出后的线路在短采样窗口内保持低电平。
+ *
+ * @note 探测期间 AUX 始终为输入，只允许在 comm 任务上下文、且模块非发送忙时调用；
+ *       返回后 AUX 保持无上下拉输入，与 BSP_LoRa_PreInit 一致。
+ */
+uint8_t BSP_LoRa_ProbeAuxPresent(void)
+{
+  GPIO_InitTypeDef gpio;
+  uint8_t level;
+
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  gpio.Pin   = BSP_LORA_AUX_PIN;
+
+  /* 阶段一：仅启用输入下拉，排空悬空走线上的残留电荷。 */
+  gpio.Mode = GPIO_MODE_INPUT;
+  gpio.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(BSP_LORA_AUX_PORT, &gpio);
+  BSP_LoRa_ProbeSpin(BSP_LORA_AUX_PROBE_DISCHARGE_ITERS);
+
+  /* 阶段二：取消内部上下拉。在位模块弱上拉会把 AUX 拉回高；
+     拔出时线路在短采样窗口内保持前一步建立的低电平。 */
+  gpio.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(BSP_LORA_AUX_PORT, &gpio);
+  BSP_LoRa_ProbeSpin(BSP_LORA_AUX_PROBE_SETTLE_ITERS);
+
+  level = (HAL_GPIO_ReadPin(BSP_LORA_AUX_PORT, BSP_LORA_AUX_PIN) != GPIO_PIN_RESET) ? 1U : 0U;
+  return level;
 }
 
 /**
