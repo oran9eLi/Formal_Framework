@@ -29,6 +29,8 @@ typedef struct {
   uint32_t rx_sequence;    /**< 样本序号，每次有效采样递增。 */
   uint32_t sample_time_ms; /**< 采样完成时间，单位：ms。 */
   float voltage_v;         /**< 电压，单位：V。 */
+  int32_t current_ma;      /**< 电流，单位：mA；电流计未接入或采样失败时为 0。 */
+  uint32_t power_mw;       /**< 功率，单位：mW，由电压和电流计算得到。 */
   uint8_t percent;         /**< 电量百分比，范围：0 到 100。 */
   uint8_t low_voltage;     /**< 低电压标志，1 表示低电压。 */
   uint16_t reserved;       /**< 保留字段，保持结构体对齐。 */
@@ -45,6 +47,8 @@ typedef struct {
   uint32_t rx_sequence;    /**< 最近有效样本序号。 */
   uint32_t sample_time_ms; /**< 最近有效采样时间，单位：ms。 */
   uint32_t error_count;    /**< 累计错误次数。 */
+  int32_t current_ma;      /**< 最近一次电流，单位：mA。 */
+  uint32_t power_mw;       /**< 最近一次功率，单位：mW。 */
   uint8_t percent;         /**< 电量百分比，范围：0 到 100。 */
   uint8_t low_voltage;     /**< 低电压标志，1 表示低电压。 */
   uint16_t reserved;       /**< 保留字段，保持结构体对齐。 */

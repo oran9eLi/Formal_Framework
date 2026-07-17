@@ -15,6 +15,7 @@
 static Px4Lite_TimeSnapshot_t s_time_snapshot;
 static uint32_t s_time_sequence;
 static uint32_t s_last_gnss_sync_ms;
+static uint32_t s_last_gnss_rtc_write_ms;
 static uint8_t s_time_ready;
 
 /**
@@ -50,43 +51,6 @@ static uint8_t Px4Lite_TimeIsDateTimeValid(const Px4Lite_UtcDateTime_t *date_tim
   if ((date_time->day < 1U) || (date_time->day > Px4Lite_TimeDaysInMonth(date_time->year, date_time->month))) { return 0U; }
   if ((date_time->hours > 23U) || (date_time->minutes > 59U) || (date_time->seconds > 59U)) { return 0U; }
   return 1U;
-}
-
-/**
- * @brief 计算从 2000-01-01 起经过的天数。
- */
-static uint32_t Px4Lite_TimeDaysSince2000(const Px4Lite_UtcDateTime_t *date_time)
-{
-  uint32_t days = 0U;
-  uint16_t year;
-  uint8_t month;
-
-  for (year = 2000U; year < date_time->year; year++) { days += (Px4Lite_TimeIsLeapYear(year) != 0U) ? 366U : 365U; }
-  for (month = 1U; month < date_time->month; month++) { days += Px4Lite_TimeDaysInMonth(date_time->year, month); }
-  days += (uint32_t)date_time->day - 1U;
-  return days;
-}
-
-/**
- * @brief 将 UTC 日期时间转换为 2000-01-01 起的秒数。
- */
-static uint32_t Px4Lite_TimeToEpochSeconds(const Px4Lite_UtcDateTime_t *date_time)
-{
-  uint32_t days;
-
-  days = Px4Lite_TimeDaysSince2000(date_time);
-  return (days * 86400UL) + ((uint32_t)date_time->hours * 3600UL) + ((uint32_t)date_time->minutes * 60UL) + date_time->seconds;
-}
-
-/**
- * @brief 计算两个 UTC 日期时间的绝对秒差。
- */
-static uint32_t Px4Lite_TimeAbsDeltaSeconds(const Px4Lite_UtcDateTime_t *a, const Px4Lite_UtcDateTime_t *b)
-{
-  uint32_t ea = Px4Lite_TimeToEpochSeconds(a);
-  uint32_t eb = Px4Lite_TimeToEpochSeconds(b);
-
-  return (ea >= eb) ? (ea - eb) : (eb - ea);
 }
 
 /**
@@ -215,7 +179,8 @@ static uint8_t Px4Lite_TimeCopyValidGnssTime(uint32_t now_ms, Px4Lite_UtcDateTim
   Px4Lite_SensorGnss_t gnss;
 
   if (Px4Lite_CopyGnss(&gnss) != PX4LITE_OK) { return 0U; }
-  if ((Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) == 0U) || (gnss.fix_type == 0U)) { return 0U; }
+  if (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) == 0U) { return 0U; }
+  if (gnss.fix_type == 0U) { return 0U; }
 
   return Px4Lite_TimeFromGnss(gnss.utc_date, gnss.utc_sec, out);
 }
@@ -225,9 +190,10 @@ Px4Lite_Result_t Px4Lite_TimeInit(void)
   Px4Lite_UtcDateTime_t rtc_time;
 
   memset(&s_time_snapshot, 0, sizeof(s_time_snapshot));
-  s_time_sequence     = 0U;
-  s_last_gnss_sync_ms = 0U;
-  s_time_ready        = 0U;
+  s_time_sequence            = 0U;
+  s_last_gnss_sync_ms        = 0U;
+  s_last_gnss_rtc_write_ms  = 0U;
+  s_time_ready               = 0U;
 
   if ((Px4Lite_PlatformRtcRead(&rtc_time) == PX4LITE_OK) && (Px4Lite_TimeIsDateTimeValid(&rtc_time) != 0U)) {
     Px4Lite_TimeFillSnapshot(&s_time_snapshot, &rtc_time, PX4LITE_TIME_SOURCE_RTC, PX4LITE_TIME_SYNC_RTC_VALID, Px4Lite_PlatformGetMs());
@@ -243,21 +209,23 @@ void Px4Lite_TimeRun(uint32_t now_ms)
   Px4Lite_TimeSyncState_t rtc_state;
   uint8_t rtc_valid;
   uint8_t gnss_valid;
-  uint8_t should_try_sync;
+  uint8_t should_write_rtc;
 
   rtc_valid  = ((Px4Lite_PlatformRtcRead(&rtc_time) == PX4LITE_OK) && (Px4Lite_TimeIsDateTimeValid(&rtc_time) != 0U)) ? 1U : 0U;
   gnss_valid = Px4Lite_TimeCopyValidGnssTime(now_ms, &gnss_time);
 
-  should_try_sync = ((s_last_gnss_sync_ms == 0U) || (Px4Lite_ElapsedMs(now_ms, s_last_gnss_sync_ms) >= PX4LITE_TIME_GNSS_SYNC_INTERVAL_MS)) ? 1U : 0U;
+  should_write_rtc = ((s_last_gnss_rtc_write_ms == 0U) || (Px4Lite_ElapsedMs(now_ms, s_last_gnss_rtc_write_ms) >= 1000U)) ? 1U : 0U;
 
-  if ((gnss_valid != 0U) && (should_try_sync != 0U)) {
-    uint8_t need_write = ((rtc_valid == 0U) || (Px4Lite_TimeAbsDeltaSeconds(&rtc_time, &gnss_time) > PX4LITE_TIME_SYNC_DELTA_S)) ? 1U : 0U;
-
-    if ((need_write == 0U) || (Px4Lite_PlatformRtcWrite(&gnss_time) == PX4LITE_OK)) {
+  if (gnss_valid != 0U) {
+    if ((should_write_rtc == 0U) || (Px4Lite_PlatformRtcWrite(&gnss_time) == PX4LITE_OK)) {
+      if (should_write_rtc != 0U) { s_last_gnss_rtc_write_ms = now_ms; }
       s_last_gnss_sync_ms = now_ms;
       Px4Lite_TimePublish(&gnss_time, PX4LITE_TIME_SOURCE_GNSS, PX4LITE_TIME_SYNC_GNSS_SYNCED, now_ms);
       return;
     }
+
+    Px4Lite_TimePublish(&gnss_time, PX4LITE_TIME_SOURCE_GNSS, PX4LITE_TIME_SYNC_INVALID, now_ms);
+    return;
   }
 
   if (rtc_valid == 0U) { return; }

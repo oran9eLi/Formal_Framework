@@ -38,6 +38,10 @@ void Display_Ssd1963_DrawPixel(uint16_t x, uint16_t y, uint16_t color);
  */
 void Display_Ssd1963_FillRect(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t color);
 /**
+ * @brief Write one clipped RGB565 pixel block to GRAM.
+ */
+void Display_Ssd1963_FlushPixels(uint16_t x, uint16_t y, uint16_t width, uint16_t height, const uint16_t *pixels);
+/**
  * @brief Fill the full display area with one RGB565 color.
  */
 void Display_Ssd1963_Clear(uint16_t color);

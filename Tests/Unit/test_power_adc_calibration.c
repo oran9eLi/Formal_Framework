@@ -63,9 +63,10 @@ static int TestDividerMatchesMeasuredCalibration(void)
   return ok;
 }
 
-static int TestPublishedVoltageKeepsMillivoltPrecision(void)
+static int TestPublishedVoltageUsesFilteredMillivolts(void)
 {
   static const uint32_t voltages_mv[] = {10750U, 10790U, 10740U, 10760U};
+  static const uint32_t expected_mv[] = {10750U, 10760U, 10755U, 10756U};
   uint32_t i;
   int ok = 1;
 
@@ -77,15 +78,16 @@ static int TestPublishedVoltageKeepsMillivoltPrecision(void)
       printf("service failed at sample %lu\n", (unsigned long)i);
       return 0;
     }
-    ok &= ExpectUint32("millivolt voltage output", SnapshotVoltageMv(), voltages_mv[i]);
+    ok &= ExpectUint32("filtered millivolt voltage output", SnapshotVoltageMv(), expected_mv[i]);
   }
   return ok;
 }
 
 static int TestBatteryPercentClampsAndUsesFivePercentSteps(void)
 {
+  /* 线性曲线 9.0V=0% ~ 12.6V=100%(5% 步进)：9.8/9.9/10.2/10.5/11.525/12.6V 对应档位。 */
   static const uint32_t voltages_mv[] = {9800U, 9900U, 10199U, 10200U, 10499U, 10500U, 11525U, 12600U};
-  static const uint8_t expected_pct[] = {0U, 5U, 5U, 10U, 10U, 10U, 55U, 100U};
+  static const uint8_t expected_pct[] = {20U, 25U, 35U, 35U, 40U, 40U, 70U, 100U};
   uint32_t i;
   int ok = 1;
 
@@ -104,7 +106,8 @@ static int TestBatteryPercentClampsAndUsesFivePercentSteps(void)
 
 static int TestBatteryLowVoltageFlagFollowsZeroBand(void)
 {
-  static const uint32_t voltages_mv[] = {9800U, 9900U};
+  /* low_voltage 门限改为 <9.0V，输入跨越 9.0V 边界。 */
+  static const uint32_t voltages_mv[] = {8900U, 9100U};
   static const uint8_t expected_low[] = {1U, 0U};
   uint32_t i;
   int ok = 1;
@@ -141,7 +144,7 @@ static int TestBatteryPercentRequiresTenConsecutiveNewSteps(void)
     printf("initial service failed\n");
     return 0;
   }
-  ok &= ExpectUint32("initial battery step", SnapshotPercent(), 55U);
+  ok &= ExpectUint32("initial battery step", SnapshotPercent(), 70U);
 
   LoadVoltageSequence(&higher_mv, 1U);
   for (i = 0U; i < 9U; ++i) {
@@ -149,7 +152,7 @@ static int TestBatteryPercentRequiresTenConsecutiveNewSteps(void)
       printf("pre-confirm service failed at sample %lu\n", (unsigned long)i);
       return 0;
     }
-    ok &= ExpectUint32("battery step before confirm", SnapshotPercent(), 55U);
+    ok &= ExpectUint32("battery step before confirm", SnapshotPercent(), 70U);
   }
 
   if (Sensor_Power_Service(11000U) != POWER_RESULT_OK) {
@@ -174,7 +177,7 @@ static int TestBatteryPercentIgnoresBoundaryNoise(void)
     printf("initial service failed for boundary noise test\n");
     return 0;
   }
-  ok &= ExpectUint32("initial boundary step", SnapshotPercent(), 55U);
+  ok &= ExpectUint32("initial boundary step", SnapshotPercent(), 70U);
 
   LoadVoltageSequence(&noisy_mv, 1U);
   for (i = 0U; i < 12U; ++i) {
@@ -182,8 +185,36 @@ static int TestBatteryPercentIgnoresBoundaryNoise(void)
       printf("noise service failed at sample %lu\n", (unsigned long)i);
       return 0;
     }
-    ok &= ExpectUint32("battery step should ignore boundary noise", SnapshotPercent(), 55U);
+    ok &= ExpectUint32("battery step should ignore boundary noise", SnapshotPercent(), 70U);
   }
+
+  return ok;
+}
+
+static int TestBatteryReinsertPublishesImmediately(void)
+{
+  static const uint32_t absent_mv   = 0U;     /* 拔出/未接入：电压远低于接入门限 */
+  static const uint32_t inserted_mv = 12550U; /* 热插入满电电池 */
+  uint32_t i;
+  int ok = 1;
+
+  LoadVoltageSequence(&absent_mv, 1U);
+  (void)Sensor_Power_Init();
+  for (i = 0U; i < 3U; ++i) {
+    if (Sensor_Power_Service((i + 1U) * 1000U) != POWER_RESULT_OK) {
+      printf("absent service failed at sample %lu\n", (unsigned long)i);
+      return 0;
+    }
+  }
+  ok &= ExpectUint32("absent battery percent", SnapshotPercent(), 0U);
+
+  /* 热插拔接入：下一拍就应直接给出真实电量，而不是从 0 经 10 次确认缓慢爬升。 */
+  LoadVoltageSequence(&inserted_mv, 1U);
+  if (Sensor_Power_Service(4000U) != POWER_RESULT_OK) {
+    printf("reinsert service failed\n");
+    return 0;
+  }
+  ok &= ExpectUint32("reinserted battery percent jumps immediately", SnapshotPercent(), 100U);
 
   return ok;
 }
@@ -193,11 +224,12 @@ int main(void)
   int ok = 1;
 
   ok &= TestDividerMatchesMeasuredCalibration();
-  ok &= TestPublishedVoltageKeepsMillivoltPrecision();
+  ok &= TestPublishedVoltageUsesFilteredMillivolts();
   ok &= TestBatteryPercentClampsAndUsesFivePercentSteps();
   ok &= TestBatteryLowVoltageFlagFollowsZeroBand();
   ok &= TestBatteryPercentRequiresTenConsecutiveNewSteps();
   ok &= TestBatteryPercentIgnoresBoundaryNoise();
+  ok &= TestBatteryReinsertPublishesImmediately();
 
   if (ok != 0) {
     printf("power adc calibration tests passed\n");

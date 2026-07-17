@@ -24,6 +24,7 @@ typedef enum {
   PX4LITE_HEARTBEAT_BUSINESS,   /**< biz_acq 业务采集任务心跳。 */
   PX4LITE_HEARTBEAT_DISPLAY,    /**< biz_display 显示业务任务心跳。 */
   PX4LITE_HEARTBEAT_COMM,       /**< comm 通信任务心跳。 */
+  PX4LITE_HEARTBEAT_CONTROL,    /**< control 电机控制任务心跳。 */
   PX4LITE_HEARTBEAT_COUNT       /**< 心跳数量，必须保持为最后一项。 */
 } Px4Lite_HeartbeatId_t;
 
@@ -45,6 +46,20 @@ uint32_t Px4Lite_PlatformGetMs(void);
  * @note 该时间戳由 HAL tick 与 TIM6 组合得到，用于短周期诊断和调试统计。
  */
 uint32_t Px4Lite_PlatformGetUs(void);
+
+/**
+ * @brief 读取 STM32 硬件唯一 ID。
+ *
+ * @param[out] uid_words 输出 3 个 32 位 UID word，不能为 NULL。
+ * @param[in] word_capacity 输出缓冲区 word 容量，必须大于等于 3。
+ *
+ * @return 读取结果。
+ * @retval PX4LITE_OK 读取成功。
+ * @retval PX4LITE_INVALID_PARAM 参数非法。
+ *
+ * @note UID 是硬件唯一身份，供 5G 云端绑定、RemoteID id_or_mac 和重复 DCDW 编号检测使用。
+ */
+Px4Lite_Result_t Px4Lite_PlatformGetHardwareUid(uint32_t *uid_words, uint8_t word_capacity);
 
 /**
  * @brief 记录一个必需任务最近一次成功执行时间。
@@ -168,6 +183,15 @@ Px4Lite_Result_t Px4Lite_BatteryInit(void);
 Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement);
 
 /**
+ * @brief 将最新第二电池驱动快照转换为 Framework 电池状态。
+ *
+ * @param[out] measurement 输出缓冲区，不能为 NULL。
+ *
+ * @return 转换结果。
+ */
+Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement);
+
+/**
  * @brief 初始化电机 PWM 输出并强制进入安全脉宽。
  *
  * @return 初始化结果。
@@ -249,6 +273,65 @@ Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms);
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
 
 /**
+ * @brief 查询 LoRa 发送通道当前是否空闲，可以立即提交下一帧。
+ * @return 1 表示空闲，0 表示上一帧仍在发送中。
+ */
+uint8_t Px4Lite_LoRaIsTxIdle(void);
+
+/**
+ * @brief 初始化 ESP32-S3 RemoteID UART4 发送通道。
+ *
+ * @return 初始化结果。
+ * @retval PX4LITE_OK 初始化成功。
+ * @retval PX4LITE_IO_ERROR BSP 初始化失败。
+ */
+Px4Lite_Result_t Px4Lite_RemoteIdInit(void);
+
+/**
+ * @brief 查询 RemoteID 本地 UART4/DMA 发送通道是否已初始化。
+ *
+ * @return 1 表示 STM32 本地发送通道可用，0 表示尚未初始化或初始化失败。
+ *
+ * @note 本函数不证明 ESP32-S3 已经接收数据或完成 BLE/Wi-Fi 广播。
+ */
+uint8_t Px4Lite_RemoteIdIsReady(void);
+
+/**
+ * @brief 查询本机 ESP32(RemoteID)硬件是否在位。
+ *
+ * @return 1 表示 ESP32 已插并上电(PC8 高)，0 表示未插/未上电或模块关闭。
+ *
+ * @note 该状态直接来自 PC8 硬件电平，是 RemoteID 自检灯色的唯一判据。
+ */
+uint8_t Px4Lite_RemoteIdIsPresent(void);
+
+/**
+ * @brief 中止当前 RemoteID UART4 DMA 发送。
+ *
+ * @note 仅用于发送超时或恢复路径，调用者必须在 comm task 或初始化路径中使用。
+ */
+void Px4Lite_RemoteIdAbortTx(void);
+
+/**
+ * @brief 通过平台适配层发送一帧 RemoteID MAVLink 数据。
+ *
+ * @param[in] data 待发送字节缓冲区，不能为 NULL。
+ * @param[in] len 待发送长度，单位 byte。
+ *
+ * @return 发送提交结果。
+ * @retval PX4LITE_OK 数据已被底层异步复制并进入发送流程。
+ * @retval PX4LITE_BUSY 上一帧仍在发送。
+ * @retval PX4LITE_INVALID_PARAM 参数非法。
+ * @retval PX4LITE_IO_ERROR 底层发送提交失败。
+ */
+Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len);
+
+Px4Lite_Result_t Px4Lite_RpiMavlinkInit(void);
+Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len);
+Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms);
+Px4Lite_Result_t Px4Lite_RpiMavlinkCopyRxFrame(Px4Lite_CommRxFrame_t *out);
+
+/**
  * @brief 获取 LoRa 模块当前公开状态。
  *
  * @param[in] now_ms 当前系统毫秒时间，用于超时判断。
@@ -258,6 +341,13 @@ Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len);
 Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms);
 
 /**
+ * @brief 查询本机 LoRa 硬件是否存在。
+ *
+ * @return 1 表示存在，0 表示尚未初始化或疑似不可用。
+ */
+uint8_t Px4Lite_LoRaIsPresent(void);
+
+/**
  * @brief 复制 LoRa/MAVLink 通信统计。
  *
  * @param[out] out 输出缓冲区，不能为 NULL。
@@ -265,6 +355,14 @@ Px4Lite_State_t Px4Lite_LoRaGetState(uint32_t now_ms);
  * @note 本函数不访问慢速总线，不阻塞。
  */
 void Px4Lite_LoRaGetDebugInfo(Px4Lite_CommDebugInfo_t *out);
+
+/**
+ * @brief 复制最近一帧 LoRa/MAVLink 接收数据。
+ * @param[out] out 输出缓冲区，不能为 NULL。
+ * @return 复制结果。
+ * @note 本接口只暴露协议帧事实，后续外设状态和值应在上层按 msg_id/sysid 解码。
+ */
+Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_CommRxFrame_t *out);
 
 /**
  * @brief 请求 GNSS 在所属 service 中重新初始化。

@@ -17,9 +17,13 @@
 #include "px4lite_recovery.h"
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
+#include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
+#include "px4lite_remote_telemetry.h"
+#include "px4lite_remoteid_tx.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include <math.h>
 #include <string.h>
 
 static Px4Lite_ModuleStatus_t s_status[PX4LITE_MODULE_COUNT];
@@ -28,13 +32,19 @@ static uint32_t s_gnss_sequence;
 static uint32_t s_imu_sequence;
 static uint32_t s_baro_sequence;
 static uint32_t s_battery_sequence;
+static uint32_t s_battery2_sequence;
 static uint32_t s_navigation_sequence;
 static uint32_t s_health_sequence;
 static uint32_t s_start_ms;
+static volatile uint8_t s_remoteid_reinit_requested;
+static uint8_t s_remoteid_present_prev; /* PC8 在位上一拍，0xFF=未知(首拍)，用于热拔插边沿检测 */
+static uint8_t s_lora_link_reset_pending;
 static uint32_t s_last_imu_work_ms;
 static uint32_t s_last_baro_work_ms;
 static uint32_t s_last_battery_work_ms;
+static uint32_t s_last_battery2_work_ms;
 static Px4Lite_AttitudeState_t s_attitude_state;
+static volatile uint8_t s_attitude_level_cal_request; /* 1=请求按当前姿态重做水平校准 */
 
 /**
  * @brief 根据定位类型、卫星数和 HDOP 计算有限范围 GNSS 质量分。
@@ -214,11 +224,13 @@ Px4Lite_Result_t Px4Lite_ModulesInit(void)
   s_imu_sequence         = 0U;
   s_baro_sequence        = 0U;
   s_battery_sequence     = 0U;
+  s_battery2_sequence    = 0U;
   s_navigation_sequence  = 0U;
   s_health_sequence      = 0U;
   s_last_imu_work_ms     = 0U;
   s_last_baro_work_ms    = 0U;
   s_last_battery_work_ms = 0U;
+  s_last_battery2_work_ms = 0U;
   s_start_ms             = Px4Lite_PlatformGetMs();
   return PX4LITE_OK;
 }
@@ -326,8 +338,16 @@ Px4Lite_Result_t Px4Lite_BatteryRecover(void)
 
 Px4Lite_Result_t Px4Lite_LoraRecover(void)
 {
-#if PX4LITE_ENABLE_LORA
+#if PX4LITE_ENABLE_LORA && PX4LITE_LORA_RECOVERY_ENABLE
   Px4Lite_LoRaRequestReinit();
+#endif
+  return PX4LITE_OK;
+}
+
+Px4Lite_Result_t Px4Lite_RemoteIdRecover(void)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  s_remoteid_reinit_requested = 1U;
 #endif
   return PX4LITE_OK;
 }
@@ -467,6 +487,28 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
       Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms);
     }
   }
+
+  /* 第二块电池(ADC2/PA4)：与电池 1 同周期采样并发布到 battery2 topic。
+     数据链路对等，但不接入模块注册表的健康/离线监控(无独立模块槽)。 */
+  if ((s_last_battery2_work_ms == 0U) || ((uint32_t)(now_ms - s_last_battery2_work_ms) >= PX4LITE_BATTERY_WORK_PERIOD_MS)) {
+    Px4Lite_BatteryStatus_t battery2;
+    Px4Lite_Result_t result;
+
+    s_last_battery2_work_ms = now_ms;
+    memset(&battery2, 0, sizeof(battery2));
+    result = Px4Lite_Battery2Read(&battery2);
+    if (result == PX4LITE_OK) {
+      battery2.header.sample_time_ms  = (battery2.header.sample_time_ms != 0U) ? battery2.header.sample_time_ms : now_ms;
+      battery2.header.publish_time_ms = now_ms;
+      battery2.header.sequence        = ++s_battery2_sequence;
+      battery2.header.device_id       = (uint16_t)PX4LITE_MODULE_BATTERY;
+      battery2.header.valid           = 1U;
+      battery2.header.quality         = (battery2.low_voltage != 0U) ? 50U : 100U;
+      battery2.header.flags           = PX4LITE_DATA_VALID;
+      if (battery2.low_voltage != 0U) { battery2.header.flags |= PX4LITE_DATA_DEGRADED; }
+      Px4Lite_PublishBattery2(&battery2);
+    }
+  }
 #endif
 
 #if !PX4LITE_ENABLE_GNSS && !PX4LITE_ENABLE_IMU && !PX4LITE_ENABLE_BARO && !PX4LITE_ENABLE_BATTERY
@@ -480,8 +522,14 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 Px4Lite_Result_t Px4Lite_EstimatorInit(void)
 {
   Px4Lite_AttitudeInit(&s_attitude_state);
+  s_attitude_level_cal_request = 0U;
   Px4Lite_SetStatus(PX4LITE_MODULE_ESTIMATOR, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, Px4Lite_PlatformGetMs());
   return PX4LITE_OK;
+}
+
+void Px4Lite_RequestAttitudeLevelCalibration(void)
+{
+  s_attitude_level_cal_request = 1U;
 }
 
 /**
@@ -505,6 +553,18 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
 
   memset(&navigation, 0, sizeof(navigation));
 
+  /* 水平校准请求：按下即以当前姿态为基准，把横滚/俯仰/偏航三轴都记为零位，
+     使三个数据从 0 开始(不依赖陀螺零偏标定状态)。估计器未出首帧时忽略本次请求。 */
+  if (s_attitude_level_cal_request != 0U) {
+    s_attitude_level_cal_request = 0U;
+    if (s_attitude_state.valid != 0U) {
+      s_attitude_state.roll_offset_deg    = s_attitude_state.roll_deg;
+      s_attitude_state.pitch_offset_deg   = s_attitude_state.pitch_deg;
+      s_attitude_state.yaw_offset_deg     = s_attitude_state.yaw_deg;
+      s_attitude_state.level_offset_valid = 1U;
+    }
+  }
+
   if ((Px4Lite_CopyGnss(&gnss) == PX4LITE_OK) && (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U)) {
     navigation.latitude_e7        = gnss.latitude_e7;
     navigation.longitude_e7       = gnss.longitude_e7;
@@ -517,7 +577,16 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
     navigation.navigation_quality = gnss.header.quality;
 
     if (gnss.fix_type != 0U) {
-      navigation.valid_mask = PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_ALTITUDE;
+      /* GNSS 只提供地速(ground_speed_cms)+地面航向 COG(heading_deg100)，这里按航向把
+         地速分解成北/东速度分量(NED)：vN = 地速·cos(航向)，vE = 地速·sin(航向)。
+         垂直速度 GNSS 不提供，置 0。填好 velocity 分量后，定位页速度、GLOBAL_POSITION_INT
+         的 vx/vy、RemoteID 水平速度才有正确来源(此前从未赋值，恒为 0)。 */
+      float course_rad = (float)gnss.heading_deg100 * (3.14159265358979323846f / 18000.0f);
+      float speed_cms  = (float)gnss.ground_speed_cms;
+      navigation.velocity_north_cms = (int32_t)(speed_cms * cosf(course_rad));
+      navigation.velocity_east_cms  = (int32_t)(speed_cms * sinf(course_rad));
+      navigation.velocity_down_cms  = 0;
+      navigation.valid_mask = PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_ALTITUDE | PX4LITE_NAV_VALID_VELOCITY;
     } else {
       navigation.header.flags |= PX4LITE_DATA_DEGRADED;
     }
@@ -587,6 +656,7 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   Px4Lite_State_t battery_state;
   Px4Lite_State_t lora_state;
   Px4Lite_State_t display_state;
+  Px4Lite_State_t fiveg_state;
   uint32_t i;
   uint32_t last_rx_ms;
   uint32_t imu_last_rx_ms;
@@ -594,6 +664,7 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   uint32_t battery_last_rx_ms;
   uint32_t lora_last_valid_ms;
   uint32_t display_last_valid_ms;
+  uint32_t fiveg_last_rx_ms;
   uint32_t status_version;
 
   taskENTER_CRITICAL();
@@ -609,11 +680,17 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   lora_state            = s_status[PX4LITE_MODULE_LORA].state;
   display_last_valid_ms = s_status[PX4LITE_MODULE_DISPLAY].last_valid_ms;
   display_state         = s_status[PX4LITE_MODULE_DISPLAY].state;
+  fiveg_last_rx_ms      = s_status[PX4LITE_MODULE_5G].last_rx_ms;
+  fiveg_state           = s_status[PX4LITE_MODULE_5G].state;
   taskEXIT_CRITICAL();
 
 #if PX4LITE_ENABLE_GNSS
-  if ((gnss_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, last_rx_ms) > PX4LITE_GNSS_OFFLINE_MS)) {
-    if ((last_rx_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_GNSS_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms); }
+  if (gnss_state != PX4LITE_STATE_FAILED) {
+    if ((last_rx_ms == 0U) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_GNSS_INSERT_CHECK_MS)) {
+      Px4Lite_SetStatus(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms);
+    } else if ((last_rx_ms != 0U) && (Px4Lite_ElapsedMs(now_ms, last_rx_ms) > PX4LITE_GNSS_OFFLINE_MS)) {
+      Px4Lite_SetStatus(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms);
+    }
   }
 #else
   (void)gnss_state;
@@ -647,16 +724,27 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   (void)battery_last_rx_ms;
 #endif
 
+#if PX4LITE_ENABLE_5G
+  if ((fiveg_state != PX4LITE_STATE_FAILED) &&
+      (((fiveg_last_rx_ms == 0U) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_5G_STARTUP_GRACE_MS)) ||
+       ((fiveg_last_rx_ms != 0U) && (Px4Lite_ElapsedMs(now_ms, fiveg_last_rx_ms) > PX4LITE_5G_HEARTBEAT_TIMEOUT_MS)))) {
+    Px4Lite_SetExternalModuleState(PX4LITE_MODULE_5G, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+    Px4Lite_MavlinkSetCellularLinkEnabled(0U);
+    Px4Lite_MavlinkSetRpiUplinkEnabled(0U);
+  }
+#else
+  (void)fiveg_state;
+  (void)fiveg_last_rx_ms;
+#endif
+
 #if PX4LITE_ENABLE_LORA
   /*
-   * Comm-module OFFLINE is owned by Health (single writer, spec 13.5),
-   * mirroring the sensor modules. The comm task only records activity and
-   * promotes ONLINE/DEGRADED; Health times the recorded activity
-   * (last_valid_ms = max of last RX and last TX) out to OFFLINE.
+   * LoRa 状态由 comm 任务按本机模块插电在位二态发布：
+   * 未接入/未上电=FAILED(红)，已接入并上电=ONLINE(绿)。
+   * Health 不再按远端链路或数据超时下调 LoRa 状态。
    */
-  if ((lora_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, lora_last_valid_ms) > PX4LITE_LORA_OFFLINE_MS)) {
-    if ((lora_last_valid_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_LORA_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms); }
-  }
+  (void)lora_state;
+  (void)lora_last_valid_ms;
 #else
   (void)lora_state;
   (void)lora_last_valid_ms;
@@ -767,6 +855,18 @@ void Px4Lite_SetExternalModuleState(Px4Lite_ModuleId_t module_id, Px4Lite_State_
 {
   if ((uint32_t)module_id >= (uint32_t)PX4LITE_MODULE_COUNT) { return; }
 
+  taskENTER_CRITICAL();
+  s_status[module_id].last_rx_ms = now_ms;
+  if (state == PX4LITE_STATE_ONLINE) {
+    s_status[module_id].consecutive_errors = 0U;
+    if (s_status[module_id].consecutive_valid < 65535U) { s_status[module_id].consecutive_valid++; }
+  } else {
+    s_status[module_id].consecutive_valid = 0U;
+    if (s_status[module_id].consecutive_errors < 65535U) { s_status[module_id].consecutive_errors++; }
+  }
+  s_status_version++;
+  taskEXIT_CRITICAL();
+
   if (state == PX4LITE_STATE_ONLINE) {
     taskENTER_CRITICAL();
     if (s_status[module_id].last_valid_ms != now_ms) {
@@ -784,12 +884,66 @@ Px4Lite_Result_t Px4Lite_CommModulesInit(void)
 #if PX4LITE_ENABLE_LORA
   uint32_t now_ms         = Px4Lite_PlatformGetMs();
   Px4Lite_Result_t result = Px4Lite_LoRaInit();
+  Px4Lite_Result_t tx_init_result;
 
-  if (result == PX4LITE_OK) { result = Px4Lite_MavlinkTxInit(now_ms); }
+  Px4Lite_RemoteTelemetryInit(now_ms);
+  s_lora_link_reset_pending = 0U;
+  if (result == PX4LITE_BUSY) { Px4Lite_LoRaRequestReinit(); }
+  /*
+   * MAVLink TX 只是 Framework 调度状态，E22 启动时未插也必须初始化；
+   * 否则后续热插拔恢复 ONLINE 后，遥测发送器仍可能从未完成过初始化。
+   */
+  tx_init_result = Px4Lite_MavlinkTxInit(now_ms);
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
+    if (tx_init_result != PX4LITE_OK) { result = tx_init_result; }
+  }
 
-  Px4Lite_SetStatus(PX4LITE_MODULE_LORA, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  Px4Lite_SetStatus(PX4LITE_MODULE_LORA,
+                    ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED,
+                    ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE,
+                    now_ms);
+  return (result == PX4LITE_BUSY) ? PX4LITE_OK : result;
+#else
+  return PX4LITE_OK;
+#endif
+}
+
+Px4Lite_Result_t Px4Lite_RemoteIdModuleInit(void)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  uint32_t now_ms;
+  Px4Lite_Result_t result;
+
+  now_ms = Px4Lite_PlatformGetMs();
+  result = Px4Lite_RemoteIdInit();
+
+  if (result == PX4LITE_OK) { result = Px4Lite_RemoteIdTxInit(now_ms); }
+  s_remoteid_reinit_requested = 0U;
+  s_remoteid_present_prev = 0xFFU;
+
+  Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   return result;
 #else
+  return PX4LITE_OK;
+#endif
+}
+
+static Px4Lite_Result_t Px4Lite_RemoteIdRunReinitIfRequested(uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_REMOTE_ID
+  Px4Lite_Result_t result;
+
+  if (s_remoteid_reinit_requested == 0U) { return PX4LITE_OK; }
+
+  s_remoteid_reinit_requested = 0U;
+  Px4Lite_RemoteIdAbortTx();
+  result = Px4Lite_RemoteIdInit();
+  if (result == PX4LITE_OK) { result = Px4Lite_RemoteIdTxInit(now_ms); }
+
+  Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+  return result;
+#else
+  (void)now_ms;
   return PX4LITE_OK;
 #endif
 }
@@ -800,39 +954,113 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   Px4Lite_CommDebugInfo_t info;
   Px4Lite_State_t state;
   Px4Lite_Result_t result;
+  Px4Lite_Result_t rx_result;
   Px4Lite_Result_t tx_result;
-  uint32_t last_valid_ms;
+  uint32_t peer_rx_ms;
+  uint8_t lora_present;
+  uint8_t lora_unavailable;
+
+  (void)Px4Lite_RpiMavlinkService(now_ms);
+  (void)Px4Lite_MavlinkRxRunRpi(now_ms);
 
   result = Px4Lite_LoRaService(now_ms);
-  if (result == PX4LITE_OK) {
+  rx_result = Px4Lite_MavlinkRxRun(now_ms);
+  if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY)) { result = rx_result; }
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
+    /* LoRa 半双工服务返回 BUSY 属于常态，发送器内部会再检查 DMA 是否空闲。
+       若这里只允许 OK，电机/日志/告警等后段扩展帧会长期排不上调度。 */
     tx_result = Px4Lite_MavlinkTxRun(now_ms);
     if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
   }
 
+  /* RPi 全量出口独立于 LoRa 服务状态：LoRa 忙(半双工常态)或 E22 未插时，
+     LoRa 镜像帧会停，但 RPi 专属遥测(LORASTAT/RIDSTAT/告警表/日志表)必须照发，
+     否则树莓派会出现"身份帧有、遥测帧无"的诡异局部失联。故放在 LoRa 门控之外。 */
+  (void)Px4Lite_MavlinkTxRunRpi(now_ms);
+
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
   state = Px4Lite_LoRaGetState(now_ms);
-
-  last_valid_ms = info.last_rx_ms;
-  if ((last_valid_ms == 0U) || ((info.last_tx_ms != 0U) && ((int32_t)(info.last_tx_ms - last_valid_ms) > 0))) { last_valid_ms = info.last_tx_ms; }
+  lora_present = Px4Lite_LoRaIsPresent();
+  lora_unavailable = (((lora_present == 0U) || (state == PX4LITE_STATE_FAILED) || (state == PX4LITE_STATE_OFFLINE) || ((result != PX4LITE_OK) && (result != PX4LITE_BUSY))) ? 1U : 0U);
+  peer_rx_ms = Px4Lite_MavlinkRxLastPeerMs();
 
   taskENTER_CRITICAL();
-  s_status[PX4LITE_MODULE_LORA].last_rx_ms    = info.last_rx_ms;
-  s_status[PX4LITE_MODULE_LORA].last_valid_ms = last_valid_ms;
+  s_status[PX4LITE_MODULE_LORA].last_rx_ms    = peer_rx_ms;
   s_status[PX4LITE_MODULE_LORA].error_count   = info.parse_error_count + info.send_error_count;
-  s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count;
+  s_status[PX4LITE_MODULE_LORA].drop_count    = info.rx_drop_count + info.rx_overflow_count + info.rx_sequence_lost_count;
+  if ((state == PX4LITE_STATE_ONLINE) && ((result == PX4LITE_OK) || (result == PX4LITE_BUSY))) {
+    s_status[PX4LITE_MODULE_LORA].last_valid_ms = now_ms;
+  }
   taskEXIT_CRITICAL();
 
   /*
-     * 状态单写者规则：comm 任务只记录活动事实，并发布 ONLINE/DEGRADED；
-     * OFFLINE 由 Health 根据 last_valid_ms 超时统一判定。
-     */
-  if (result != PX4LITE_OK) {
-    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+   * LoRa 灯色/通信状态按本机物理在位事实发布：本机硬件可用为 ONLINE(绿)，
+   * E22 未供电、主动探测不在位或 AUX 长期不可用为 OFFLINE(红)。
+   * 是否收到对端数据只进入统计与远端数据新鲜度，不影响本机 LoRa 灯。
+   */
+  if (lora_unavailable != 0U) {
+    Px4Lite_MavlinkSetTxEnabled(0U);
+    if (s_lora_link_reset_pending == 0U) {
+      Px4Lite_RemoteTelemetryResetLink(now_ms);
+      s_lora_link_reset_pending = 1U;
+    }
+    Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   } else if (state == PX4LITE_STATE_ONLINE) {
+    if (s_lora_link_reset_pending != 0U) {
+      Px4Lite_RemoteTelemetryResetLink(now_ms);
+      Px4Lite_MavlinkSetTxEnabled(1U);
+      s_lora_link_reset_pending = 0U;
+    }
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   }
-#else
+#endif
+
+#if PX4LITE_ENABLE_REMOTE_ID
+  {
+    /* 本机 ESP32(RemoteID)在位由 PC8 硬件电平判定：插着并上电(PC8 高)=ONLINE 绿，
+       未插/未上电(PC8 低)=FAILED 红。RemoteID 为盲发通道，发送必"成功"，无法据此
+       判断 ESP32 是否真的在，故灯色只按 PC8；在位时仍照常泵帧广播并自愈，发送结果不改灯色。 */
+    uint8_t remoteid_present = Px4Lite_RemoteIdIsPresent();
+
+    /* 热拔插边沿检测：插入(低→高)请求重初始化 UART4/DMA，保证 ESP32 重新插上后广播干净恢复；
+       拔出(高→低)中止 TX 并清忙，避免继续往已断通道 DMA。首拍(prev=0xFF)不算边沿。
+       插拔的正常/断开日志沿用消息日志既有 1.5s 去抖，此处不额外即时 push。 */
+    if (s_remoteid_present_prev != 0xFFU) {
+      if ((remoteid_present != 0U) && (s_remoteid_present_prev == 0U)) {
+        s_remoteid_reinit_requested = 1U;
+      } else if ((remoteid_present == 0U) && (s_remoteid_present_prev != 0U)) {
+        Px4Lite_RemoteIdAbortTx();
+      }
+    }
+    s_remoteid_present_prev = remoteid_present;
+
+    if (remoteid_present == 0U) {
+      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_FAILED, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
+    } else {
+      Px4Lite_RemoteIdTxStats_t remoteid_stats;
+
+      if (Px4Lite_RemoteIdRunReinitIfRequested(now_ms) == PX4LITE_OK) {
+        if (Px4Lite_RemoteIdIsReady() == 0U) {
+          s_remoteid_reinit_requested = 1U;
+          (void)Px4Lite_RemoteIdRunReinitIfRequested(now_ms);
+        }
+        (void)Px4Lite_RemoteIdTxRun(now_ms);
+        memset(&remoteid_stats, 0, sizeof(remoteid_stats));
+        Px4Lite_RemoteIdTxGetStats(&remoteid_stats);
+        taskENTER_CRITICAL();
+        s_status[PX4LITE_MODULE_REMOTE_ID].last_rx_ms    = remoteid_stats.last_success_ms;
+        s_status[PX4LITE_MODULE_REMOTE_ID].last_valid_ms = remoteid_stats.last_success_ms;
+        s_status[PX4LITE_MODULE_REMOTE_ID].error_count   = remoteid_stats.error_count;
+        s_status[PX4LITE_MODULE_REMOTE_ID].drop_count    = remoteid_stats.busy_count;
+        taskEXIT_CRITICAL();
+      }
+      Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
+    }
+  }
+#endif
+
+#if !PX4LITE_ENABLE_LORA && !PX4LITE_ENABLE_REMOTE_ID
   (void)now_ms;
 #endif
 }
@@ -852,11 +1080,20 @@ void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out)
   out->mav_attitude_count        = stats.attitude_count;
   out->mav_position_count        = stats.position_count;
   out->mav_sys_status_count      = stats.sys_status_count;
+  out->mav_module_state_count    = stats.module_state_count;
   out->mav_battery_status_count  = stats.battery_status_count;
   out->mav_scaled_pressure_count = stats.scaled_pressure_count;
   out->mav_statustext_count      = stats.statustext_count;
+  out->mav_command_count         = stats.command_count;
+  out->mav_command_ack_tx_count  = stats.command_ack_tx_count;
+  out->mav_command_ack_rx_count  = stats.command_ack_rx_count;
   out->mav_no_data_count         = stats.no_data_count;
   out->mav_stale_count           = stats.stale_count;
   out->mav_error_count           = stats.error_count;
   out->mav_last_tx_msg_id        = stats.last_message_id;
+}
+
+Px4Lite_Result_t Px4Lite_CopyCommRxFrame(Px4Lite_CommRxFrame_t *out)
+{
+  return Px4Lite_LoRaCopyRxFrame(out);
 }

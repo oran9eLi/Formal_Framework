@@ -22,13 +22,14 @@ typedef enum {
 } Display_HmiDataType_t;
 
 typedef enum {
-  DISPLAY_HMI_PAGE_LOGO = 0,   /* Logo 开机页：触屏任意位置进入自检页 */
-  DISPLAY_HMI_PAGE_SELF_CHECK, /* 上电自检页：进度、模块状态和故障码 */
+  DISPLAY_HMI_PAGE_LOGO = 0,   /* 已废弃：开机 Logo 页已移除，保留枚举值以维持路由 ID 稳定 */
+  DISPLAY_HMI_PAGE_SELF_CHECK, /* 上电首页/自检页：进度、模块状态和故障码 */
   DISPLAY_HMI_PAGE_FLIGHT,     /* 飞行数据页：系统栏、时间/电源/温湿度气压、消息日志*/
   DISPLAY_HMI_PAGE_AIRCRAFT,   /* 飞机情况页：系统栏、姿态/LoRa 通信、消息日志*/
   DISPLAY_HMI_PAGE_DATA,       /* 定位数据页：系统、GNSS 定位、消息日志*/
   DISPLAY_HMI_PAGE_MOTOR,      /* 电机控制页：四路油门滑条和急停入口 */
   DISPLAY_HMI_PAGE_ALARM,      /* 告警页：运行期告警码和原因表*/
+  DISPLAY_HMI_PAGE_HIDDEN,     /* 隐藏页：仅由 KEY0 弹出，只保留标题栏，正文留白；不参与翻页导航 */
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 
@@ -61,13 +62,18 @@ typedef enum {
   DISPLAY_HMI_VAR_SELF_CHECK_DEBUG,      /* 调试接口自检状态*/
   DISPLAY_HMI_VAR_SELF_CHECK_GNSS,       /* GNSS 自检状态*/
   DISPLAY_HMI_VAR_SELF_CHECK_LORA,       /* LoRa 自检状态*/
+  DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID,   /* RemoteID(UART4→ESP32-S3)本地发送通道自检状态*/
   DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE, /* 上电自检故障码*/
   DISPLAY_HMI_VAR_DATA_SELFCHECK_RESULT, /* 自检结果位图 (uint32) */
   DISPLAY_HMI_VAR_SYSTEM_STATUS,         /* 系统总状态，来源 CNS_State.system */
   DISPLAY_HMI_VAR_UPTIME_MS,             /* 系统运行时间，单位 ms */
-  DISPLAY_HMI_VAR_BATTERY_VOLTAGE,       /* 电池电压，单位 0.01V */
-  DISPLAY_HMI_VAR_BATTERY_PERCENT,       /* 电量百分比，单位 % */
-  DISPLAY_HMI_VAR_GNSS_FIX,              /* GNSS 定位状态*/
+  DISPLAY_HMI_VAR_BATTERY_VOLTAGE,       /* 主控电池电压(ADC1)，单位 0.01V */
+  DISPLAY_HMI_VAR_BATTERY_CURRENT,       /* 主控电流(ADC)，单位 0.1A */
+  DISPLAY_HMI_VAR_BATTERY_PERCENT,       /* 主控电池电量(ADC1)，单位 % */
+  DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE,     /* 电机电池电压(ADC2)，单位 0.01V */
+  DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT,     /* 电机电流(ADC)，单位 0.1A */
+  DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT,     /* 电机电池电量(ADC2)，单位 % */
+  DISPLAY_HMI_VAR_GNSS_FIX,              /* GNSS 信号状态：0=断开，非0=正常 */
   DISPLAY_HMI_VAR_GNSS_SAT_COUNT,        /* GNSS 使用卫星数量 */
   DISPLAY_HMI_VAR_GNSS_HDOP,             /* GNSS HDOP，单位 0.01 */
   DISPLAY_HMI_VAR_LATITUDE,              /* 纬度，单位 1e-7 度*/
@@ -102,6 +108,7 @@ typedef enum {
   DISPLAY_HMI_VAR_DATE,                  /* 本地显示日期，编码 YYYYMMDD，由业务层喂值*/
   DISPLAY_HMI_VAR_FLIGHT_TIME_S,         /* 飞行时间(上电后运行)，单位 s */
   DISPLAY_HMI_VAR_MESSAGE_LOG,           /* 消息日志缓冲版本号，变化即重绘日志区 */
+  DISPLAY_HMI_VAR_VIEW_NODE_ID,          /* 当前查看对象编号：本地=本机sysid(UID派生)，远端=选中节点，显示 DCDW-xxx */
   DISPLAY_HMI_VAR_COUNT                  /* HMI 变量数量 */
 } Display_HmiVariableId_t;
 
@@ -213,8 +220,6 @@ void Display_RequestRecover(void);
  * @param       now_ms: 当前系统时间，单位 ms
  * @retval      Display_Result_t: 刷新结果
  */
-Display_Result_t Display_Refresh(uint32_t now_ms);
-
 /**
  * @brief       从应用只读快照准备一版完整显示缓存
  * @param       now_ms: 当前系统时间，单位 ms
@@ -245,11 +250,27 @@ Display_Result_t Display_SetHmiPage(Display_HmiPage_t page);
 Display_HmiPage_t Display_GetCurrentHmiPage(void);
 
 /**
+ * @brief       查询是否有待处理的整页静态重绘(切页触发)
+ * @param       无
+ * @retval      uint8_t: 非 0 表示需要尽快重绘当前页
+ * @note        供显示任务在常规刷新周期之外立即触发一次刷新，缩短切页延迟
+ */
+uint8_t Display_HasPendingRedraw(void);
+
+/**
  * @brief       轮询触摸输入并处理页面导航或变量写入
  * @param       无
  * @retval      Display_Result_t: 处理结果
  */
 Display_Result_t Display_PollTouch(void);
+
+/**
+ * @brief       轮询 KEY0 按键，按下边沿切换隐藏页
+ * @param       无
+ * @retval      Display_Result_t: 处理结果
+ * @note        非隐藏页按下时记忆当前页并弹出隐藏页，隐藏页按下时返回原页面
+ */
+Display_Result_t Display_PollKey(void);
 
 /**
  * @brief       在屏幕底部显示启动阶段码
@@ -267,6 +288,16 @@ void Display_ShowBootCode(uint8_t code);
  * @retval      Display_Result_t: 处理结果
  */
 Display_Result_t Display_HandleTouch(uint16_t x, uint16_t y, Display_HmiVariableId_t *id, uint32_t *value);
+
+Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16_t throttle_percent);
+
+Display_Result_t Display_RequestMotorAutoTakeoff(void);
+
+Display_Result_t Display_RequestMotorEmergencyStop(void);
+
+Display_Result_t Display_RequestMotorAutoLanding(void);
+
+Display_Result_t Display_RequestAttitudeLevelCalibration(void);
 
 /**
  * @brief       获取页面配置表数量

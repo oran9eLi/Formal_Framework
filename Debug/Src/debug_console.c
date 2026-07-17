@@ -9,6 +9,7 @@
 
 #include "bsp_uart.h"
 #include "debug_trace.h"
+#include "px4lite_config.h"
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "task.h"
@@ -49,7 +50,13 @@ static void DebugConsole_Write(const char *data, uint16_t length)
 {
   if ((data == NULL) || (length == 0U)) { return; }
 
+#if PX4LITE_DEBUG_USART1_SILENT_FOR_RPI
+  (void)data;
+  (void)length;
+  return;
+#else
   (void)BSP_UART_Send((const uint8_t *)data, length, 1000U);
+#endif
 }
 
 /**

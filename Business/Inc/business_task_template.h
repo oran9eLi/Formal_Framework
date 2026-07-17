@@ -95,6 +95,22 @@ Business_ServiceResult_t Business_AcquisitionRunOnce(uint32_t now_ms);
 Business_ServiceResult_t Business_DisplayPollTouch(uint32_t now_ms);
 
 /**
+ * @brief 轮询显示按键输入(KEY0 弹出隐藏页)。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @return 执行结果。
+ */
+Business_ServiceResult_t Business_DisplayPollKey(uint32_t now_ms);
+
+/**
+ * @brief 查询显示层是否有待处理的整页重绘(切页触发)。
+ *
+ * @return 非 0 表示需要在常规刷新周期之外立即触发一次刷新。
+ */
+uint8_t Business_DisplayNeedsImmediateRefresh(void);
+
+/**
  * @brief 准备一份版本一致的显示快照。
  *
  * @param[in] now_ms 当前系统毫秒时间。

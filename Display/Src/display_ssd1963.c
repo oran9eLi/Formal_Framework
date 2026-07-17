@@ -9,6 +9,10 @@
 #include "bsp_lcd_fsmc.h"
 #include "stm32f4xx_hal.h"
 
+#define DISPLAY_SSD1963_ID_RETRY_COUNT 3U
+#define DISPLAY_SSD1963_ID_RETRY_MS    20U
+#define DISPLAY_SSD1963_PLL_LOCK_MS    100U
+
 static uint8_t s_ssd1963_ready;
 
 /**
@@ -60,7 +64,7 @@ static void Display_Ssd1963_InitController(void)
 
   Display_Ssd1963_WriteCommand(0xE0U);
   Display_Ssd1963_WriteData(0x01U);
-  HAL_Delay(10U);
+  HAL_Delay(DISPLAY_SSD1963_PLL_LOCK_MS);
 
   Display_Ssd1963_WriteCommand(0xE0U);
   Display_Ssd1963_WriteData(0x03U);
@@ -109,10 +113,10 @@ static void Display_Ssd1963_InitController(void)
   Display_Ssd1963_WriteCommand(0xD0U);
   Display_Ssd1963_WriteData(0x00U);
 
-  Display_Ssd1963_WriteCommand(0xBEU);
-  Display_Ssd1963_WriteData(0x05U);
-  Display_Ssd1963_WriteData(0xFEU);
-  Display_Ssd1963_WriteData(0x01U);
+  Display_Ssd1963_WriteCommand(0xBEU); /* SET_PWM_CONF：背光 PWM */
+  Display_Ssd1963_WriteData(0x05U);    /* PWM 频率 */
+  Display_Ssd1963_WriteData(0xFFU);    /* PWM 占空比=255，背光最高亮度 */
+  Display_Ssd1963_WriteData(0x01U);    /* PWM 使能、由主机控制 */
   Display_Ssd1963_WriteData(0x00U);
   Display_Ssd1963_WriteData(0x00U);
   Display_Ssd1963_WriteData(0x00U);
@@ -134,6 +138,7 @@ static void Display_Ssd1963_InitController(void)
 Display_Ssd1963Result_t Display_Ssd1963_Init(void)
 {
   BSP_LcdFsmcConfig_t config;
+  uint8_t attempt;
 
   config.bank                = 4U;
   config.address_setup       = BSP_LCD_FSMC_ADDRESS_SETUP;
@@ -147,14 +152,25 @@ Display_Ssd1963Result_t Display_Ssd1963_Init(void)
     return DISPLAY_SSD1963_ERROR;
   }
 
-  if (Display_Ssd1963_ReadId() != BSP_DISPLAY_EXPECTED_PID) {
+  /*
+   * A cold SSD1963 may not return a stable product ID before its PLL and
+   * configuration registers have been initialized.  Run the controller
+   * sequence first so a failed cold read cannot permanently gate recovery.
+   */
+  Display_Ssd1963_InitController();
+
+  for (attempt = 0U; attempt < DISPLAY_SSD1963_ID_RETRY_COUNT; attempt++) {
+    if (Display_Ssd1963_ReadId() == BSP_DISPLAY_EXPECTED_PID) { break; }
+    if ((attempt + 1U) < DISPLAY_SSD1963_ID_RETRY_COUNT) { HAL_Delay(DISPLAY_SSD1963_ID_RETRY_MS); }
+  }
+  if (attempt >= DISPLAY_SSD1963_ID_RETRY_COUNT) {
     s_ssd1963_ready = 0U;
     return DISPLAY_SSD1963_NOT_READY;
   }
 
-  Display_Ssd1963_InitController();
   s_ssd1963_ready = 1U;
   Display_Ssd1963_Clear(0xFFFFU);
+  BSP_LcdFsmc_SetBacklight(1U);
 
   return DISPLAY_SSD1963_OK;
 }
@@ -203,6 +219,37 @@ void Display_Ssd1963_FillRect(uint16_t x, uint16_t y, uint16_t width, uint16_t h
   while (pixel_count > 0U) {
     Display_Ssd1963_WriteData(color);
     pixel_count--;
+  }
+}
+
+/**
+ * @brief Write one clipped RGB565 pixel block to GRAM.
+ */
+void Display_Ssd1963_FlushPixels(uint16_t x, uint16_t y, uint16_t width, uint16_t height, const uint16_t *pixels)
+{
+  uint16_t clipped_width;
+  uint16_t clipped_height;
+  uint16_t row;
+  uint16_t col;
+  uint16_t skip;
+  const uint16_t *row_pixels;
+
+  if ((s_ssd1963_ready == 0U) || (pixels == 0) || (width == 0U) || (height == 0U) || (x >= DISPLAY_SSD1963_WIDTH) || (y >= DISPLAY_SSD1963_HEIGHT)) { return; }
+
+  clipped_width  = width;
+  clipped_height = height;
+  if (((uint32_t)x + clipped_width) > DISPLAY_SSD1963_WIDTH) { clipped_width = (uint16_t)(DISPLAY_SSD1963_WIDTH - x); }
+  if (((uint32_t)y + clipped_height) > DISPLAY_SSD1963_HEIGHT) { clipped_height = (uint16_t)(DISPLAY_SSD1963_HEIGHT - y); }
+
+  Display_Ssd1963_SetWindow(x, y, (uint16_t)(x + clipped_width - 1U), (uint16_t)(y + clipped_height - 1U));
+  skip = (uint16_t)(width - clipped_width);
+  row_pixels = pixels;
+  for (row = 0U; row < clipped_height; row++) {
+    for (col = 0U; col < clipped_width; col++) {
+      Display_Ssd1963_WriteData(*row_pixels);
+      row_pixels++;
+    }
+    row_pixels += skip;
   }
 }
 

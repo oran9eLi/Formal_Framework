@@ -5,6 +5,7 @@
 
 #include "sensor_mpu6050.h"
 
+#include "bsp_critical.h"
 #include "bsp_i2c.h"
 #include "bsp_time.h"
 
@@ -89,17 +90,25 @@ static uint8_t Mpu6050_IsAllZeroFrame(const int16_t accel_raw[3], int16_t temper
 #if MPU6050_DELTA_SPIKE_FILTER_ENABLE
 static uint8_t Mpu6050_HasSampleSpike(const Mpu6050_Snapshot_t *candidate)
 {
+  Mpu6050_Snapshot_t previous;
+  uint32_t primask;
   uint8_t i;
 
-  if ((candidate == 0) || (s_snapshot.rx_sequence == 0U)) { return 0U; }
+  if (candidate == 0) { return 0U; }
+
+  primask = BSP_Critical_Enter();
+  previous = s_snapshot;
+  BSP_Critical_Exit(primask);
+
+  if (previous.rx_sequence == 0U) { return 0U; }
 
   for (i = 0U; i < 3U; ++i) {
-    if (Mpu6050_AbsFloat(candidate->accel_g[i] - s_snapshot.accel_g[i]) > MPU6050_ACCEL_SPIKE_G) { return 1U; }
+    if (Mpu6050_AbsFloat(candidate->accel_g[i] - previous.accel_g[i]) > MPU6050_ACCEL_SPIKE_G) { return 1U; }
 
-    if (Mpu6050_AbsFloat(candidate->gyro_dps[i] - s_snapshot.gyro_dps[i]) > MPU6050_GYRO_SPIKE_DPS) { return 1U; }
+    if (Mpu6050_AbsFloat(candidate->gyro_dps[i] - previous.gyro_dps[i]) > MPU6050_GYRO_SPIKE_DPS) { return 1U; }
   }
 
-  return (Mpu6050_AbsFloat(candidate->temperature_c - s_snapshot.temperature_c) > MPU6050_TEMP_SPIKE_C) ? 1U : 0U;
+  return (Mpu6050_AbsFloat(candidate->temperature_c - previous.temperature_c) > MPU6050_TEMP_SPIKE_C) ? 1U : 0U;
 }
 #endif
 
@@ -115,25 +124,46 @@ static uint8_t Mpu6050_IsOutOfRange(const int16_t accel_raw[3], const int16_t gy
   return 0U;
 }
 
+/**
+ * @brief 判断当前采样失败是否应计入自动重初始化门限。
+ *
+ * 连续读失败、全零帧、超范围帧和尖峰帧都说明当前采样链路不可用。
+ * 达到门限后由 sensor task 在下一轮执行 I2C 恢复和 MPU6050 重新初始化。
+ */
+static uint8_t Mpu6050_ShouldCountForReinit(Mpu6050_Stage_t stage)
+{
+  return ((stage == MPU6050_STAGE_DATA_READ) ||
+          (stage == MPU6050_STAGE_ZERO_FRAME) ||
+          (stage == MPU6050_STAGE_RANGE_REJECT) ||
+          (stage == MPU6050_STAGE_SPIKE_REJECT)) ? 1U : 0U;
+}
+
 static void Mpu6050_ClearSnapshotPreserveErrors(void)
 {
-  uint32_t error_count = s_snapshot.error_count;
+  uint32_t primask;
+  uint32_t error_count;
 
+  primask = BSP_Critical_Enter();
+  error_count = s_snapshot.error_count;
   memset(&s_snapshot, 0, sizeof(s_snapshot));
   s_snapshot.error_count = error_count;
+  BSP_Critical_Exit(primask);
 }
 
 static void Mpu6050_NoteSampleFailure(uint32_t now_ms, Mpu6050_Stage_t stage, Mpu6050_Result_t result)
 {
+  uint32_t primask;
+
+  primask = BSP_Critical_Enter();
   s_snapshot.error_count++;
   s_last_stage  = stage;
   s_last_result = result;
+  BSP_Critical_Exit(primask);
 #if MPU6050_DELTA_SPIKE_FILTER_ENABLE
   s_accept_next_sample = 1U;
 #endif
 
-  if (stage == MPU6050_STAGE_DATA_READ) {
-
+  if (Mpu6050_ShouldCountForReinit(stage) != 0U) {
     if (s_read_fail_count < 255U) { s_read_fail_count++; }
     if (s_read_fail_count >= MPU6050_REINIT_FAIL_LIMIT) {
       s_initialized    = 0U;
@@ -141,16 +171,6 @@ static void Mpu6050_NoteSampleFailure(uint32_t now_ms, Mpu6050_Stage_t stage, Mp
       s_next_init_ms   = now_ms + MPU6050_INIT_RETRY_FAST_MS;
     }
   }
-  //    if (s_read_fail_count < 255U)
-  //    {
-  //        s_read_fail_count++;
-  //    }
-  //    if (s_read_fail_count >= MPU6050_REINIT_FAIL_LIMIT)
-  //    {
-  //        s_initialized = 0U;
-  //        s_reinit_request = 1U;
-  //        s_next_init_ms = now_ms + MPU6050_INIT_RETRY_FAST_MS;
-  //    }
 }
 
 static uint32_t Mpu6050_InitRetryDelayMs(void)
@@ -165,6 +185,7 @@ static Mpu6050_Result_t Mpu6050_TryReinit(uint32_t now_ms)
   if ((s_next_init_ms != 0U) && ((int32_t)(now_ms - s_next_init_ms) < 0)) { return MPU6050_RESULT_NO_DATA; }
 
   s_reinit_request = 0U;
+  (void)BSP_I2C_Recover();
   result           = Sensor_MPU6050_Init();
   if (result != MPU6050_RESULT_OK) {
     if (s_init_fail_count < 255U) { s_init_fail_count++; }
@@ -172,6 +193,8 @@ static Mpu6050_Result_t Mpu6050_TryReinit(uint32_t now_ms)
     s_next_init_ms   = now_ms + Mpu6050_InitRetryDelayMs();
   } else {
     s_init_fail_count = 0U;
+    s_next_init_ms    = 0U;
+    s_reinit_request  = 0U;
   }
   return result;
 }
@@ -264,6 +287,7 @@ Mpu6050_Result_t Sensor_MPU6050_Init(void)
 
   s_initialized     = 1U;
   s_next_init_ms    = 0U;
+  s_reinit_request  = 0U;
   s_init_fail_count = 0U;
   s_last_stage      = MPU6050_STAGE_NONE;
   s_last_result     = MPU6050_RESULT_OK;
@@ -283,6 +307,7 @@ Mpu6050_Result_t Sensor_MPU6050_Service(uint32_t now_ms)
   int16_t gyro_raw[3];
   Mpu6050_Result_t result;
   Mpu6050_Snapshot_t candidate;
+  uint32_t primask;
 
   if (s_reinit_request != 0U) {
     result = Mpu6050_TryReinit(now_ms);
@@ -315,7 +340,9 @@ Mpu6050_Result_t Sensor_MPU6050_Service(uint32_t now_ms)
     return MPU6050_RESULT_IO_ERROR;
   }
 
+  primask = BSP_Critical_Enter();
   candidate = s_snapshot;
+  BSP_Critical_Exit(primask);
   candidate.rx_sequence++;
   if (candidate.rx_sequence == 0U) { candidate.rx_sequence = 1U; }
   candidate.sample_time_ms = now_ms;
@@ -334,28 +361,42 @@ Mpu6050_Result_t Sensor_MPU6050_Service(uint32_t now_ms)
   }
 #endif
 
-  s_snapshot        = candidate;
+  primask = BSP_Critical_Enter();
+  s_snapshot = candidate;
+  s_last_stage  = MPU6050_STAGE_NONE;
+  s_last_result = MPU6050_RESULT_OK;
+  BSP_Critical_Exit(primask);
+
   s_read_fail_count = 0U;
 #if MPU6050_DELTA_SPIKE_FILTER_ENABLE
   s_accept_next_sample = 0U;
 #endif
-  s_last_stage  = MPU6050_STAGE_NONE;
-  s_last_result = MPU6050_RESULT_OK;
   return MPU6050_RESULT_OK;
 }
 
 Mpu6050_Result_t Sensor_MPU6050_CopySnapshot(Mpu6050_Snapshot_t *out)
 {
+  uint32_t primask;
+  uint32_t rx_sequence;
+
   if (out == 0) { return MPU6050_RESULT_INVALID_PARAM; }
 
+  primask = BSP_Critical_Enter();
   *out = s_snapshot;
-  return (s_snapshot.rx_sequence != 0U) ? MPU6050_RESULT_OK : MPU6050_RESULT_NO_DATA;
+  rx_sequence = out->rx_sequence;
+  BSP_Critical_Exit(primask);
+
+  return (rx_sequence != 0U) ? MPU6050_RESULT_OK : MPU6050_RESULT_NO_DATA;
 }
 
 Mpu6050_Result_t Sensor_MPU6050_GetStatus(Mpu6050_Status_t *out)
 {
+  uint32_t primask;
+  uint32_t rx_sequence;
+
   if (out == 0) { return MPU6050_RESULT_INVALID_PARAM; }
 
+  primask = BSP_Critical_Enter();
   out->rx_sequence     = s_snapshot.rx_sequence;
   out->sample_time_ms  = s_snapshot.sample_time_ms;
   out->error_count     = s_snapshot.error_count;
@@ -365,5 +406,8 @@ Mpu6050_Result_t Sensor_MPU6050_GetStatus(Mpu6050_Status_t *out)
   out->last_chip_id    = s_last_chip_id;
   out->i2c_addr_7bit   = (uint8_t)(s_addr >> 1);
   out->last_bsp_status = s_last_bsp_status;
-  return (s_snapshot.rx_sequence != 0U) ? MPU6050_RESULT_OK : MPU6050_RESULT_NO_DATA;
+  rx_sequence = out->rx_sequence;
+  BSP_Critical_Exit(primask);
+
+  return (rx_sequence != 0U) ? MPU6050_RESULT_OK : MPU6050_RESULT_NO_DATA;
 }

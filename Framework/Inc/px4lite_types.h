@@ -12,6 +12,9 @@
 #define PX4LITE_TYPES_H
 
 #include <stdint.h>
+#include "px4lite_local_msglog.h"
+
+#define PX4LITE_COMM_RX_PAYLOAD_MAX 255U /**< 通信接收帧 payload 最大长度，单位：byte。 */
 
 /**
  * @brief Framework 通用返回值。
@@ -55,9 +58,9 @@ typedef enum {
   PX4LITE_MODULE_BARO,      /**< 气压计/环境模块。 */
   PX4LITE_MODULE_BATTERY,   /**< 电源/电池模块。 */
   PX4LITE_MODULE_LORA,      /**< LoRa 通信模块。 */
-  PX4LITE_MODULE_5G,        /**< 5G 通信预留模块。 */
+  PX4LITE_MODULE_5G,        /**< 5G-A 连接管理模块，可发送 AT 指令查询/配置连接，不承载业务数据。 */
   PX4LITE_MODULE_STORAGE,   /**< SD/FatFs 存储模块。 */
-  PX4LITE_MODULE_REMOTE_ID, /**< Remote ID 预留模块。 */
+  PX4LITE_MODULE_REMOTE_ID, /**< Remote ID 模块，通过 UART4 向 ESP32-S3 提交 MAVLink/OpenDroneID 数据。 */
   PX4LITE_MODULE_DISPLAY,   /**< 显示模块。 */
   PX4LITE_MODULE_CONTROL,   /**< 控制命令预留模块。 */
   PX4LITE_MODULE_ALARM,     /**< 告警模块。 */
@@ -188,9 +191,18 @@ typedef struct {
  */
 typedef struct {
   Px4Lite_TopicHeader_t header;                  /**< topic 公共头。 */
-  uint8_t duty_percent[PX4LITE_MOTOR_COUNT];     /**< 每路电机目标油门百分比，范围 0 到 100。 */
+  uint8_t duty_percent[PX4LITE_MOTOR_COUNT];     /**< 每路电机实际输出油门百分比(已含姿态修正)，范围 0 到 100。 */
+  uint16_t pulse_us[PX4LITE_MOTOR_COUNT];        /**< Control 最终写入各路 PWM 的高电平脉宽，单位：us。 */
   uint8_t run_state;                             /**< 运行状态，1 表示 ESC 已完成预解锁并允许输出目标油门。 */
   uint8_t speed_level;                           /**< 兼容显示字段，当前等于四路目标油门最大值，范围 0 到 100。 */
+  /*
+   * 姿态修正前的基础油门，即用户滑块或下行命令锁存的目标，范围 0 到 100。
+   *
+   * 与 duty_percent 的差即为姿态修正量。本机电机页滑块跟随 duty_percent(实验要求从四路显示
+   * 上读出倾斜差异)，本字段作为"用户锁存目标"的真值供遥测与地面站使用；滑块不会把显示值回灌
+   * 成新目标，见 Display_LvglMotorSliderEventCb() 的触摸锁存。
+   */
+  uint8_t base_percent[PX4LITE_MOTOR_COUNT];
   uint16_t reserved;                             /**< 保留字段，保持结构体对齐。 */
 } Px4Lite_MotorOutputs_t;
 
@@ -324,7 +336,7 @@ typedef struct {
  */
 typedef struct {
   uint32_t rx_frame_count;            /**< 已接收完整帧数量。 */
-  uint32_t tx_frame_count;            /**< DMA 发送完成帧数量。 */
+  uint32_t tx_frame_count;            /**< 本机发送流程完成帧数量，不证明对端在线。 */
   uint32_t tx_busy_count;             /**< 发送忙导致未提交的次数。 */
   uint32_t mav_heartbeat_count;       /**< 已调度 HEARTBEAT 消息数量。 */
   uint32_t mav_gps_raw_count;         /**< 已调度 GPS_RAW_INT 消息数量。 */
@@ -332,9 +344,13 @@ typedef struct {
   uint32_t mav_attitude_count;        /**< 已调度 ATTITUDE 消息数量。 */
   uint32_t mav_position_count;        /**< 已调度 GLOBAL_POSITION_INT 消息数量。 */
   uint32_t mav_sys_status_count;      /**< 已调度 SYS_STATUS 消息数量。 */
+  uint32_t mav_module_state_count;    /**< 已调度 MODSTAT0/MODSTAT1 模块状态消息数量。 */
   uint32_t mav_battery_status_count;  /**< 已调度 BATTERY_STATUS 消息数量。 */
   uint32_t mav_scaled_pressure_count; /**< 已调度 SCALED_PRESSURE 消息数量。 */
   uint32_t mav_statustext_count;      /**< 已调度 STATUSTEXT 消息数量。 */
+  uint32_t mav_command_count;         /**< 已调度 COMMAND_LONG 控制消息数量。 */
+  uint32_t mav_command_ack_tx_count;  /**< 已发送 COMMAND_ACK 数量。 */
+  uint32_t mav_command_ack_rx_count;  /**< 已接收 COMMAND_ACK 数量。 */
   uint32_t mav_no_data_count;         /**< 因无数据未发送的次数。 */
   uint32_t mav_stale_count;           /**< 因数据过期未发送的次数。 */
   uint32_t mav_error_count;           /**< MAVLink 编码或发送错误次数。 */
@@ -345,10 +361,144 @@ typedef struct {
   uint32_t rx_byte_count;             /**< 接收字节累计数。 */
   uint32_t rx_overflow_count;         /**< 接收缓冲溢出次数。 */
   uint32_t rx_drop_count;             /**< 接收丢弃次数。 */
-  uint32_t last_rx_ms;                /**< 最近接收帧时间，单位：ms。 */
-  uint32_t last_tx_ms;                /**< 最近发送完成时间，单位：ms。 */
+  uint32_t rx_sequence_expected_count; /**< MAVLink 序号估算的应收帧总数，含已收和跳号丢帧。 */
+  uint32_t rx_sequence_lost_count;     /**< MAVLink 序号跳号估算的丢帧数量。 */
+  uint32_t last_rx_ms;                /**< 最近收到对端合法 MAVLink 帧时间，单位：ms。 */
+  uint32_t last_tx_ms;                /**< 最近本机发送流程完成时间，单位：ms，不证明对端在线。 */
   uint32_t last_msg_id;               /**< 最近接收的 MAVLink message id。 */
+  uint16_t rx_loss_rate_x10;          /**< 接收侧估算丢包率，单位：0.1%，1000 表示 100.0%。 */
+  uint16_t reserved;                  /**< 保留字段，保持结构体对齐。 */
 } Px4Lite_CommDebugInfo_t;
+
+/**
+ * @brief 通信层最近接收的一帧 MAVLink 数据副本。
+ * @details
+ * 该结构只描述协议帧事实，不解释业务含义。后续从机状态、外设数值或 Remote ID
+ * 数据应在独立解码层按 msg_id/sysid 路由，不得在 LoRa 驱动内写业务逻辑。
+ */
+typedef struct {
+  uint32_t rx_time_ms;                         /**< 接收完成时间，单位：ms。 */
+  uint32_t msg_id;                             /**< MAVLink message id。 */
+  uint16_t frame_len;                          /**< 完整 MAVLink 帧长度，单位：byte。 */
+  uint8_t system_id;                           /**< MAVLink system id，后续可映射临时节点号。 */
+  uint8_t component_id;                        /**< MAVLink component id。 */
+  uint8_t sequence;                            /**< MAVLink packet sequence。 */
+  uint8_t payload_len;                         /**< payload 长度，单位：byte。 */
+  uint8_t payload[PX4LITE_COMM_RX_PAYLOAD_MAX]; /**< MAVLink payload 副本。 */
+} Px4Lite_CommRxFrame_t;
+
+#define PX4LITE_REMOTE_VALID_HEARTBEAT   (1UL << 0) /**< 已收到远端 HEARTBEAT。 */
+#define PX4LITE_REMOTE_VALID_MODULES     (1UL << 1) /**< 已收到远端模块状态。 */
+#define PX4LITE_REMOTE_VALID_NAVIGATION  (1UL << 2) /**< 已收到远端导航数据。 */
+#define PX4LITE_REMOTE_VALID_ATTITUDE    (1UL << 3) /**< 已收到远端姿态数据。 */
+#define PX4LITE_REMOTE_VALID_ENVIRONMENT (1UL << 4) /**< 已收到远端环境数据。 */
+#define PX4LITE_REMOTE_VALID_BATTERY     (1UL << 5) /**< 已收到远端电源数据。 */
+#define PX4LITE_REMOTE_VALID_ALARM       (1UL << 6) /**< 已收到远端告警数据。 */
+#define PX4LITE_REMOTE_VALID_MOTOR       (1UL << 7) /**< 已收到远端电机目标油门数据。 */
+#define PX4LITE_REMOTE_VALID_LOG         (1UL << 8) /**< 已收到远端消息日志数据。 */
+
+typedef enum {
+  PX4LITE_REMOTE_NODE_EMPTY = 0,
+  PX4LITE_REMOTE_NODE_DISCOVERED,
+  PX4LITE_REMOTE_NODE_ACTIVE,
+  PX4LITE_REMOTE_NODE_STALE
+} Px4Lite_RemoteNodeState_t;
+
+typedef struct {
+  uint8_t node_id;
+  uint8_t system_id;
+  uint8_t component_id;
+  uint8_t heartbeat_type;
+  Px4Lite_RemoteNodeState_t state;
+  uint32_t last_heartbeat_ms;
+  uint32_t last_data_ms;
+  uint32_t rx_frame_count;
+  uint32_t rx_sequence_lost_count;
+  uint16_t rx_loss_rate_x10;
+  uint8_t heartbeat_system_status;
+} Px4Lite_RemoteNodeStatus_t;
+
+/**
+ * @brief 远端节点解码后的显示遥测快照。
+ * @details
+ * Comm task 从 LoRa 收到的 MAVLink 帧中逐字段解码本结构，Business/Display 只消费该快照。
+ * LoRa 驱动仍只负责帧事实，不承载业务解释。
+ */
+typedef struct {
+  Px4Lite_TopicHeader_t header;                       /**< topic 公共头。 */
+  uint32_t valid_mask;                                /**< 远端数据有效位，使用 `PX4LITE_REMOTE_VALID_*`。 */
+  uint32_t stale_mask;                                /**< 远端数据过期位，使用 `PX4LITE_REMOTE_VALID_*`。 */
+  uint32_t last_rx_ms;                                /**< 最近收到远端合法 MAVLink 帧时间，单位：ms。 */
+  uint32_t heartbeat_update_ms;                       /**< 最近收到 HEARTBEAT 的时间，单位：ms。 */
+  uint32_t navigation_update_ms;                      /**< 最近收到导航数据的时间，单位：ms。 */
+  uint32_t attitude_update_ms;                        /**< 最近收到姿态数据的时间，单位：ms。 */
+  uint32_t environment_update_ms;                     /**< 最近收到环境数据的时间，单位：ms。 */
+  uint32_t battery_update_ms;                         /**< 最近收到电源数据的时间，单位：ms。 */
+  uint32_t modules_update_ms;                         /**< 最近收到模块状态数据的时间，单位：ms。 */
+  uint32_t alarm_update_ms;                           /**< 最近收到告警数据的时间，单位：ms。 */
+  uint32_t motor_update_ms;                           /**< 最近收到电机目标油门数据的时间，单位：ms。 */
+  uint32_t log_update_ms;                             /**< 最近收到消息日志数据的时间，单位：ms。 */
+  uint32_t last_msg_id;                               /**< 最近解码的 MAVLink message id。 */
+  uint32_t rx_frame_count;                            /**< 已接收合法 MAVLink 帧计数。 */
+  uint32_t decoded_frame_count;                       /**< 已成功映射到远端快照的帧计数。 */
+  uint32_t rx_sequence_expected_count;                /**< 当前远端节点按 MAVLink 序号估算的应收帧总数。 */
+  uint32_t rx_sequence_lost_count;                    /**< 当前远端节点按 MAVLink 序号跳号估算的丢帧数量。 */
+  uint16_t rx_loss_rate_x10;                          /**< 当前远端节点接收侧估算丢包率，单位：0.1%。 */
+  uint8_t last_packet_sequence;                       /**< 当前远端节点最近 MAVLink packet sequence。 */
+  uint8_t sequence_seen;                              /**< 当前远端节点是否已有序号基准。 */
+  uint8_t heartbeat_type;                             /**< HEARTBEAT type 字段，用于区分飞控、GCS、伴侣等节点类型。 */
+  uint8_t heartbeat_autopilot;                        /**< HEARTBEAT autopilot 字段。 */
+  uint8_t heartbeat_base_mode;                        /**< HEARTBEAT base_mode 字段。 */
+  uint8_t heartbeat_system_status;                    /**< HEARTBEAT system_status 字段。 */
+  uint8_t heartbeat_mavlink_version;                  /**< HEARTBEAT mavlink_version 字段。 */
+  uint8_t reserved_heartbeat[3];                      /**< 保留字段，保持结构体对齐。 */
+  uint32_t module_state_valid_mask;                   /**< 远端模块状态有效位，bit 对应 `Px4Lite_ModuleId_t`。 */
+  Px4Lite_State_t module_state[PX4LITE_MODULE_COUNT]; /**< 远端模块公开状态。 */
+  uint32_t gnss_utc_sec;                              /**< GNSS UTC 当日秒数，单位：s；未提供时为 0。 */
+  uint32_t gnss_utc_date;                             /**< GNSS 日期，压缩格式 yymmdd；未提供时为 0。 */
+  int32_t latitude_e7;                                /**< 纬度，单位：degree * 1e7。 */
+  int32_t longitude_e7;                               /**< 经度，单位：degree * 1e7。 */
+  int32_t altitude_mm;                                /**< 高度，单位：mm。 */
+  int32_t velocity_north_cms;                         /**< 北向速度，单位：cm/s。 */
+  int32_t velocity_east_cms;                          /**< 东向速度，单位：cm/s。 */
+  int32_t velocity_down_cms;                          /**< 地向速度，单位：cm/s。 */
+  int32_t roll_deg100;                                /**< 横滚角，单位：degree * 100。 */
+  int32_t pitch_deg100;                               /**< 俯仰角，单位：degree * 100。 */
+  int32_t yaw_deg100;                                 /**< 航向角，单位：degree * 100。 */
+  int32_t roll_rate_dps100;                           /**< 横滚角速度，单位：(degree/s) * 100。 */
+  int32_t pitch_rate_dps100;                          /**< 俯仰角速度，单位：(degree/s) * 100。 */
+  int32_t yaw_rate_dps100;                            /**< 航向角速度，单位：(degree/s) * 100。 */
+  uint16_t hdop_x100;                                 /**< HDOP * 100。 */
+  uint8_t satellites_used;                            /**< 远端定位卫星数量。 */
+  uint8_t gnss_fix_type;                              /**< 远端 GNSS 定位类型。 */
+  uint16_t reserved0;                                 /**< 保留字段，保持对齐。 */
+  float pressure_pa;                                  /**< 气压，单位：Pa。 */
+  float temperature_c;                                /**< 温度，单位：摄氏度。 */
+  float relative_humidity_pct;                        /**< 相对湿度，单位：%。 */
+  uint32_t voltage_mv;                                /**< 电压，单位：mV。 */
+  uint32_t voltage2_mv;                               /**< 第二电池或外设独立供电电压，单位：mV。 */
+  uint32_t current_ma;                                /**< 主电池电流，单位：mA；未测量时为 0。 */
+  uint32_t current2_ma;                               /**< 第二电池电流，单位：mA；未测量时为 0。 */
+  uint32_t alarm_active_mask;                         /**< 远端活动告警来源位图，bit 对应 source_id。 */
+  uint16_t highest_fault_code;                        /**< 远端最高告警码。 */
+  uint16_t highest_source_id;                         /**< 远端最高告警来源。 */
+  uint8_t highest_severity;                           /**< 远端最高告警严重度。 */
+  uint16_t alarm_fault_code[PX4LITE_MODULE_COUNT];    /**< 每个来源模块的故障码(alarm_active_mask 置位处有效)，由 LoRa TUNNEL 0x8001 全量告警表填充。 */
+  uint8_t alarm_severity[PX4LITE_MODULE_COUNT];       /**< 每个来源模块的告警严重度，同上。 */
+  uint8_t battery_percent;                            /**< 电量百分比，范围 0 到 100。 */
+  uint8_t battery2_percent;                           /**< 第二电池电量百分比，范围 0 到 100。 */
+  uint8_t low_voltage;                                /**< 主电池低电压标志，1 表示低电压。 */
+  uint8_t low_voltage2;                               /**< 第二电池低电压标志，1 表示低电压。 */
+  uint8_t motor_duty_percent[PX4LITE_MOTOR_COUNT];    /**< 远端四路目标油门百分比。 */
+  uint16_t motor_pulse_us[PX4LITE_MOTOR_COUNT];       /**< 远端 Control 实际输出的四路 PWM 高电平脉宽，单位：us。 */
+  uint8_t motor_run_state;                            /**< 远端电机运行状态，1 表示允许输出目标油门。 */
+  uint8_t motor_speed_level;                          /**< 远端四路目标油门最大值，范围 0 到 100。 */
+  uint8_t remote_log_count;                           /**< 远端消息日志缓存条目数量。 */
+  uint16_t remote_log_latest_seq;                     /**< 远端消息日志最新序号。 */
+  Px4Lite_LogEntry_t remote_log_entries[PX4LITE_LOCAL_LOG_CAP]; /**< 远端消息日志固定环形显示缓存。 */
+  uint8_t system_id;                                  /**< 远端 MAVLink system id。 */
+  uint8_t component_id;                               /**< 远端 MAVLink component id。 */
+} Px4Lite_RemoteTelemetry_t;
 
 /**
  * @brief 计算毫秒时间差，对轻微跨任务未来时间样本饱和为 0。

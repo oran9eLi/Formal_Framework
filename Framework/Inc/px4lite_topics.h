@@ -127,6 +127,25 @@ void Px4Lite_PublishBattery(const Px4Lite_BatteryStatus_t *data);
 Px4Lite_Result_t Px4Lite_CopyBattery(Px4Lite_BatteryStatus_t *data);
 
 /**
+ * @brief 原子发布一份完整的第二块电池状态快照。
+ *
+ * @param[in] data 电池状态快照指针，不能为 NULL。
+ */
+void Px4Lite_PublishBattery2(const Px4Lite_BatteryStatus_t *data);
+
+/**
+ * @brief 复制最新的第二块电池状态快照。
+ *
+ * @param[out] data 输出缓冲区，不能为 NULL。
+ *
+ * @return 复制结果。
+ * @retval PX4LITE_OK 复制成功。
+ * @retval PX4LITE_INVALID_PARAM 参数为空。
+ * @retval PX4LITE_NOT_READY 尚未发布有效快照。
+ */
+Px4Lite_Result_t Px4Lite_CopyBattery2(Px4Lite_BatteryStatus_t *data);
+
+/**
  * @brief 原子发布一份完整导航域快照。
  *
  * @param[in] data 导航域快照指针，不能为 NULL。

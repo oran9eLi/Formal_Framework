@@ -99,12 +99,23 @@ void Business_DisplayServiceTask(void *argument)
 #if BUSINESS_ENABLE_DISPLAY
   TickType_t last_wake;
   uint32_t next_refresh_ms;
-  uint8_t refresh_pending = 0U;
+  uint8_t report_due = 0U;
 
   (void)argument;
+
+  /* Let the independently powered LCD controller complete its cold-start ramp. */
+  vTaskDelay(pdMS_TO_TICKS(BUSINESS_DISPLAY_STARTUP_DELAY_MS));
+
+  for (;;) {
+    uint32_t init_ms = Business_PlatformGetMs();
+
+    if (Px4Lite_RegistryStart(PX4LITE_MODULE_DISPLAY, init_ms) == PX4LITE_OK) { break; }
+    Business_StatusHeartbeat(BUSINESS_COMPONENT_DISPLAY);
+    vTaskDelay(pdMS_TO_TICKS(BUSINESS_DISPLAY_INIT_RETRY_MS));
+  }
+
   last_wake       = xTaskGetTickCount();
   next_refresh_ms = Business_PlatformGetMs();
-  (void)Px4Lite_RegistryStart(PX4LITE_MODULE_DISPLAY, next_refresh_ms);
 
   for (;;) {
     Business_ServiceResult_t result;
@@ -117,24 +128,28 @@ void Business_DisplayServiceTask(void *argument)
     result = Business_DisplayPollTouch(now_ms);
     if ((result != BUSINESS_SERVICE_OK) && (result != BUSINESS_SERVICE_IDLE)) { Business_DisplayReportResult(result, now_ms); }
 
+    /* KEY0 弹出隐藏页：按下边沿即切页，整页重绘由下方立即刷新路径处理 */
+    result = Business_DisplayPollKey(now_ms);
+    if ((result != BUSINESS_SERVICE_OK) && (result != BUSINESS_SERVICE_IDLE)) { Business_DisplayReportResult(result, now_ms); }
+
+    /* 数据快照仍按 200ms 常规节拍准备(重取 Framework 数据、更新 HMI 值)。 */
     if (Business_TimeReached(now_ms, next_refresh_ms) != 0U) {
       result = Business_DisplayPrepareSnapshot(now_ms);
-      if (result == BUSINESS_SERVICE_OK) {
-        refresh_pending = 1U;
-      } else {
+      if (result != BUSINESS_SERVICE_OK) {
         Business_DisplayReportResult(result, now_ms);
       }
       next_refresh_ms = now_ms + BUSINESS_DISPLAY_REFRESH_PERIOD_MS;
+      report_due      = 1U;
     }
 
-    if (refresh_pending != 0U) {
-      result = Business_DisplayRefreshStep(now_ms, BUSINESS_DISPLAY_REFRESH_BUDGET_US);
-      if (result == BUSINESS_SERVICE_OK) {
-        refresh_pending = 0U;
+    /* lv_timer_handler(触摸读取 + 脏区增量渲染)必须每个 10ms 节拍都推进：否则触摸只在
+       200ms 数据节拍时被采样，滑块/按键严重不跟手(约 5Hz)。静止无脏区时开销极小，切页整页
+       重绘与预算化多步渲染同样逐拍完成;刷新结果保持原 200ms 节拍上报，出错即时上报。 */
+    result = Business_DisplayRefreshStep(now_ms, BUSINESS_DISPLAY_REFRESH_BUDGET_US);
+    if (result != BUSINESS_SERVICE_BUSY) {
+      if ((report_due != 0U) || (result != BUSINESS_SERVICE_OK)) {
         Business_DisplayReportResult(result, now_ms);
-      } else if (result != BUSINESS_SERVICE_BUSY) {
-        refresh_pending = 0U;
-        Business_DisplayReportResult(result, now_ms);
+        report_due = 0U;
       }
     }
 

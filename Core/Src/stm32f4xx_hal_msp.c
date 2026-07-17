@@ -34,6 +34,24 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     gpio.Pin       = BSP_DBG_RX_PIN;
     gpio.Alternate = BSP_DBG_RX_AF;
     HAL_GPIO_Init(BSP_DBG_RX_PORT, &gpio);
+#if (BSP_ENABLE_RPI_UART == 1U)
+  } else if (huart->Instance == BSP_RPI_UART) {
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_USART6_CLK_ENABLE();
+
+    gpio.Pin       = BSP_RPI_TX_PIN;
+    gpio.Pull      = GPIO_NOPULL;
+    gpio.Alternate = BSP_RPI_TX_AF;
+    HAL_GPIO_Init(BSP_RPI_TX_PORT, &gpio);
+
+    gpio.Pin       = BSP_RPI_RX_PIN;
+    gpio.Pull      = GPIO_PULLUP; /* UART RX 空闲为高，须上拉 */
+    gpio.Alternate = BSP_RPI_RX_AF;
+    HAL_GPIO_Init(BSP_RPI_RX_PORT, &gpio);
+
+    HAL_NVIC_SetPriority(BSP_RPI_IRQn, BSP_RPI_IRQ_PRIORITY, 0U);
+    HAL_NVIC_EnableIRQ(BSP_RPI_IRQn);
+#endif
   } else if (huart->Instance == BSP_GNSS_UART) {
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_USART2_CLK_ENABLE();
@@ -61,7 +79,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     HAL_GPIO_Init(BSP_LORA_TX_PORT, &gpio);
 
     gpio.Pin       = BSP_LORA_RX_PIN;
-    gpio.Pull      = GPIO_PULLUP;
+    gpio.Pull      = GPIO_PULLUP; /* UART RX 空闲为高，须上拉；不能用下拉(会被当作起始位/break，收不到) */
     gpio.Alternate = BSP_LORA_RX_AF;
     HAL_GPIO_Init(BSP_LORA_RX_PORT, &gpio);
 
@@ -71,6 +89,27 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     HAL_NVIC_EnableIRQ(BSP_LORA_RX_DMA_IRQn);
     HAL_NVIC_SetPriority(BSP_LORA_TX_DMA_IRQn, BSP_LORA_IRQ_PRIORITY, 0U);
     HAL_NVIC_EnableIRQ(BSP_LORA_TX_DMA_IRQn);
+  } else if (huart->Instance == BSP_REMOTEID_UART) {
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_UART4_CLK_ENABLE();
+    __HAL_RCC_DMA1_CLK_ENABLE();
+
+    gpio.Mode      = GPIO_MODE_AF_PP;
+    gpio.Speed     = GPIO_SPEED_FREQ_HIGH;
+    gpio.Pull      = GPIO_NOPULL;
+    gpio.Pin       = BSP_REMOTEID_TX_PIN;
+    gpio.Alternate = BSP_REMOTEID_TX_AF;
+    HAL_GPIO_Init(BSP_REMOTEID_TX_PORT, &gpio);
+
+    gpio.Pin       = BSP_REMOTEID_RX_PIN;
+    gpio.Pull      = GPIO_PULLUP;
+    gpio.Alternate = BSP_REMOTEID_RX_AF;
+    HAL_GPIO_Init(BSP_REMOTEID_RX_PORT, &gpio);
+
+    HAL_NVIC_SetPriority(BSP_REMOTEID_IRQn, BSP_REMOTEID_IRQ_PRIORITY, 0U);
+    HAL_NVIC_EnableIRQ(BSP_REMOTEID_IRQn);
+    HAL_NVIC_SetPriority(BSP_REMOTEID_TX_DMA_IRQn, BSP_REMOTEID_IRQ_PRIORITY, 0U);
+    HAL_NVIC_EnableIRQ(BSP_REMOTEID_TX_DMA_IRQn);
   }
 }
 
@@ -79,6 +118,12 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
   if (huart->Instance == BSP_DBG_UART) {
     __HAL_RCC_USART1_CLK_DISABLE();
     HAL_GPIO_DeInit(BSP_DBG_TX_PORT, BSP_DBG_TX_PIN | BSP_DBG_RX_PIN);
+#if (BSP_ENABLE_RPI_UART == 1U)
+  } else if (huart->Instance == BSP_RPI_UART) {
+    __HAL_RCC_USART6_CLK_DISABLE();
+    HAL_NVIC_DisableIRQ(BSP_RPI_IRQn);
+    HAL_GPIO_DeInit(BSP_RPI_TX_PORT, BSP_RPI_TX_PIN | BSP_RPI_RX_PIN);
+#endif
   } else if (huart->Instance == BSP_GNSS_UART) {
     __HAL_RCC_USART2_CLK_DISABLE();
     HAL_NVIC_DisableIRQ(BSP_GNSS_IRQn);
@@ -90,6 +135,11 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
     HAL_NVIC_DisableIRQ(BSP_LORA_RX_DMA_IRQn);
     HAL_NVIC_DisableIRQ(BSP_LORA_TX_DMA_IRQn);
     HAL_GPIO_DeInit(BSP_LORA_TX_PORT, BSP_LORA_TX_PIN | BSP_LORA_RX_PIN);
+  } else if (huart->Instance == BSP_REMOTEID_UART) {
+    __HAL_RCC_UART4_CLK_DISABLE();
+    HAL_NVIC_DisableIRQ(BSP_REMOTEID_IRQn);
+    HAL_NVIC_DisableIRQ(BSP_REMOTEID_TX_DMA_IRQn);
+    HAL_GPIO_DeInit(BSP_REMOTEID_TX_PORT, BSP_REMOTEID_TX_PIN | BSP_REMOTEID_RX_PIN);
   }
 }
 
@@ -180,24 +230,47 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef *hadc)
 {
   GPIO_InitTypeDef gpio;
 
-  if (hadc->Instance != BSP_ADC_INS) { return; }
-
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_ADC1_CLK_ENABLE();
-
-  gpio.Pin   = BSP_ADC_PIN;
   gpio.Mode  = GPIO_MODE_ANALOG;
   gpio.Pull  = GPIO_NOPULL;
   gpio.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(BSP_ADC_PORT, &gpio);
+
+  if (hadc->Instance == BSP_ADC_INS) {
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_ADC1_CLK_ENABLE();
+
+    gpio.Pin = BSP_ADC_PIN;
+    HAL_GPIO_Init(BSP_ADC_PORT, &gpio);
+  } else if (hadc->Instance == BSP_ADC2_INS) {
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_ADC2_CLK_ENABLE();
+
+    gpio.Pin = BSP_ADC2_PIN;
+    HAL_GPIO_Init(BSP_ADC2_PORT, &gpio);
+  } else if (hadc->Instance == BSP_ADC_CURRENT_INS) {
+    /* 两路电流计 PC0/PC1 走 ADC3，模拟输入。 */
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_ADC3_CLK_ENABLE();
+
+    gpio.Pin = BSP_ADC_CURRENT1_PIN;
+    HAL_GPIO_Init(BSP_ADC_CURRENT1_PORT, &gpio);
+    gpio.Pin = BSP_ADC_CURRENT2_PIN;
+    HAL_GPIO_Init(BSP_ADC_CURRENT2_PORT, &gpio);
+  }
 }
 
 void HAL_ADC_MspDeInit(ADC_HandleTypeDef *hadc)
 {
-  if (hadc->Instance != BSP_ADC_INS) { return; }
-
-  __HAL_RCC_ADC1_CLK_DISABLE();
-  HAL_GPIO_DeInit(BSP_ADC_PORT, BSP_ADC_PIN);
+  if (hadc->Instance == BSP_ADC_INS) {
+    __HAL_RCC_ADC1_CLK_DISABLE();
+    HAL_GPIO_DeInit(BSP_ADC_PORT, BSP_ADC_PIN);
+  } else if (hadc->Instance == BSP_ADC2_INS) {
+    __HAL_RCC_ADC2_CLK_DISABLE();
+    HAL_GPIO_DeInit(BSP_ADC2_PORT, BSP_ADC2_PIN);
+  } else if (hadc->Instance == BSP_ADC_CURRENT_INS) {
+    __HAL_RCC_ADC3_CLK_DISABLE();
+    HAL_GPIO_DeInit(BSP_ADC_CURRENT1_PORT, BSP_ADC_CURRENT1_PIN);
+    HAL_GPIO_DeInit(BSP_ADC_CURRENT2_PORT, BSP_ADC_CURRENT2_PIN);
+  }
 }
 
 /**
@@ -252,7 +325,9 @@ void HAL_DisplayLcdMspInit(void)
   gpio.Pull  = GPIO_PULLUP;
   gpio.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(BSP_LCD_BL_PORT, &gpio);
-  HAL_GPIO_WritePin(BSP_LCD_BL_PORT, BSP_LCD_BL_PIN, BSP_LCD_BL_ACTIVE_LEVEL);
+  HAL_GPIO_WritePin(BSP_LCD_BL_PORT,
+                    BSP_LCD_BL_PIN,
+                    (BSP_LCD_BL_ACTIVE_LEVEL == GPIO_PIN_SET) ? GPIO_PIN_RESET : GPIO_PIN_SET);
 #endif
 }
 

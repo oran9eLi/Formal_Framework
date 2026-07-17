@@ -10,25 +10,155 @@
 #include "sensor_power.h"
 
 #include "bsp_adc.h"
+#include "bsp_adc_current.h"
+#include "sensor_power_config.h"
 
 #include <string.h>
 
-#define POWER_ZERO_MV               9900U
-#define POWER_STEP5_MV              10200U
-#define POWER_STEP10_MV             10500U
-#define POWER_FULL_MV               12550U
-#define POWER_FILTER_OLD_WEIGHT     3U
-#define POWER_FILTER_TOTAL          4U
-#define POWER_PERCENT_STEP          5U
-#define POWER_PERCENT_CONFIRM_COUNT 10U
-#define POWER_PERCENT_HYSTERESIS_MV 200U
+/**
+ * @brief 电池电量曲线上的一个标定点。
+ *
+ * @details
+ * Sensor_Power 使用有序曲线点把已校准电压换算为电量百分比。表内电压必须从低到高排列，
+ * 百分比必须从低到高排列，避免插值和滞回中心点计算出现反向区间。
+ */
+typedef struct {
+  uint32_t voltage_mv; /**< 曲线点对应的电池电压，单位：mV。 */
+  uint8_t percent;     /**< 曲线点对应的电量百分比，范围：0 到 100。 */
+} Power_PercentPoint_t;
+
+static const Power_PercentPoint_t s_percent_curve[] = {
+  {POWER_PERCENT_TABLE_EMPTY_MV, 0U},
+  {POWER_PERCENT_TABLE_5_MV, 5U},
+  {POWER_PERCENT_TABLE_10_MV, 10U},
+  {POWER_PERCENT_TABLE_20_MV, 20U},
+  {POWER_PERCENT_TABLE_30_MV, 30U},
+  {POWER_PERCENT_TABLE_40_MV, 40U},
+  {POWER_PERCENT_TABLE_50_MV, 50U},
+  {POWER_PERCENT_TABLE_60_MV, 60U},
+  {POWER_PERCENT_TABLE_70_MV, 70U},
+  {POWER_PERCENT_TABLE_80_MV, 80U},
+  {POWER_PERCENT_TABLE_90_MV, 90U},
+  {POWER_PERCENT_TABLE_FULL_MV, 100U}
+};
 
 static Power_Snapshot_t s_snapshot;
 static uint32_t s_filtered_voltage_mv;
+static int32_t s_filtered_current_ma;
 static uint8_t s_pending_percent_count;
+static uint8_t s_pending_low_voltage_count;
 static uint8_t s_initialized;
 static uint8_t s_filter_valid;
+static uint8_t s_current_filter_valid;
 static volatile uint8_t s_reinit_request;
+
+/**
+ * @brief 对 BSP 输出的电池电压做二次校准。
+ *
+ * @details
+ * BSP_ADC 负责原始 ADC 到电池电压的基础分压换算。本函数只处理现场标定参数：
+ * 比例增益、固定偏移以及可选的负载补偿。默认配置为 1:1、0mV 偏移、关闭负载补偿，
+ * 因此不改变既有电压读数。若现场确认开发板工作状态稳定低约 0.2V，可在配置中开启
+ * `POWER_LOAD_COMPENSATION_ENABLE` 并设置 `POWER_LOAD_COMPENSATION_MV`。
+ *
+ * @param[in] measured_mv BSP 层换算出的电池电压，单位：mV。
+ *
+ * @return 校准后的电池电压，单位：mV；负偏移不会导致返回负值，最低钳位到 0mV。
+ */
+static uint32_t Power_ApplyCalibration(uint32_t measured_mv)
+{
+  uint32_t scaled_mv;
+  int32_t calibrated_mv;
+
+#if POWER_CAL_GAIN_DEN == 0
+#error "POWER_CAL_GAIN_DEN must not be zero"
+#endif
+
+  scaled_mv = ((measured_mv * POWER_CAL_GAIN_NUM) + (POWER_CAL_GAIN_DEN / 2U)) / POWER_CAL_GAIN_DEN;
+  calibrated_mv = (int32_t)scaled_mv + (int32_t)POWER_CAL_OFFSET_MV;
+#if POWER_LOAD_COMPENSATION_ENABLE
+  calibrated_mv += (int32_t)POWER_LOAD_COMPENSATION_MV;
+#endif
+
+  return (calibrated_mv > 0) ? (uint32_t)calibrated_mv : 0U;
+}
+
+/**
+ * @brief 取有符号整数绝对值并返回无符号幅值。
+ * @param[in] value 输入值。
+ * @return 输入值的绝对值。
+ */
+static uint32_t Power_AbsI32(int32_t value)
+{
+  return (value < 0) ? (uint32_t)(-value) : (uint32_t)value;
+}
+
+/**
+ * @brief 将第一电池电流计 ADC 引脚电压换算为电流。
+ * @param[in] adc_mv 电流计输出到 MCU ADC 的引脚电压，单位 mV。
+ * @return 校准并应用零点死区后的电流，单位 mA。
+ */
+static int32_t Power_CalcCurrentMa(uint32_t adc_mv)
+{
+  int32_t delta_mv;
+  int32_t current_ma;
+
+#if POWER_CURRENT_MV_PER_A == 0
+#error "POWER_CURRENT_MV_PER_A must not be zero"
+#endif
+
+  delta_mv   = (int32_t)adc_mv - (int32_t)POWER_CURRENT_ZERO_MV;
+  current_ma = (int32_t)(((int64_t)delta_mv * 1000LL) / (int64_t)POWER_CURRENT_MV_PER_A);
+  current_ma += (int32_t)POWER_CURRENT_OFFSET_MA;
+
+  return (Power_AbsI32(current_ma) <= POWER_CURRENT_DEADBAND_MA) ? 0 : current_ma;
+}
+
+/**
+ * @brief 对第一电池电流做一阶低通滤波。
+ * @param[in] current_ma 新电流样本，单位 mA。
+ * @return 滤波后的电流，单位 mA。
+ */
+static int32_t Power_FilterCurrent(int32_t current_ma)
+{
+#if POWER_CURRENT_FILTER_TOTAL == 0
+#error "POWER_CURRENT_FILTER_TOTAL must not be zero"
+#endif
+
+  if (s_current_filter_valid == 0U) {
+    s_filtered_current_ma    = current_ma;
+    s_current_filter_valid   = 1U;
+  } else {
+    s_filtered_current_ma = (int32_t)((((int64_t)s_filtered_current_ma * POWER_CURRENT_FILTER_OLD_WEIGHT) + current_ma + (POWER_CURRENT_FILTER_TOTAL / 2U)) / POWER_CURRENT_FILTER_TOTAL);
+  }
+
+  return s_filtered_current_ma;
+}
+
+/**
+ * @brief 计算电池输出功率。
+ * @param[in] voltage_mv 电压，单位 mV。
+ * @param[in] current_ma 电流，单位 mA。
+ * @return 功率，单位 mW；负电流按 0 处理。
+ */
+static uint32_t Power_CalcPowerMw(uint32_t voltage_mv, int32_t current_ma)
+{
+  if (current_ma <= 0) { return 0U; }
+  return (uint32_t)((((uint64_t)voltage_mv) * (uint32_t)current_ma) / 1000ULL);
+}
+
+/**
+ * @brief 将百分比约束到配置的显示步进。
+ *
+ * @param[in] percent 插值计算得到的原始百分比，范围通常为 0 到 100。
+ *
+ * @return 按 `POWER_PERCENT_STEP` 四舍五入后的百分比，最大钳位到 100。
+ */
+static uint8_t Power_RoundToStep(uint32_t percent)
+{
+  percent = ((percent + (POWER_PERCENT_STEP / 2U)) / POWER_PERCENT_STEP) * POWER_PERCENT_STEP;
+  return (percent > 100U) ? 100U : (uint8_t)percent;
+}
 
 /**
  * @brief 根据电压毫伏值计算 5% 步进的电量百分比。
@@ -39,19 +169,28 @@ static volatile uint8_t s_reinit_request;
  */
 static uint8_t Power_CalcPercent(uint32_t voltage_mv)
 {
-  uint32_t range_mv;
+  uint32_t i;
   uint32_t percent;
 
-  if (voltage_mv < POWER_ZERO_MV) { return 0U; }
-  if (voltage_mv < POWER_STEP5_MV) { return 5U; }
-  if (voltage_mv < POWER_STEP10_MV) { return 10U; }
-  if (voltage_mv >= POWER_FULL_MV) { return 100U; }
+  if (voltage_mv <= s_percent_curve[0].voltage_mv) { return s_percent_curve[0].percent; }
 
-  range_mv = POWER_FULL_MV - POWER_STEP10_MV;
-  percent  = 10U + ((((voltage_mv - POWER_STEP10_MV) * 90U) + (range_mv / 2U)) / range_mv);
-  percent  = ((percent + (POWER_PERCENT_STEP / 2U)) / POWER_PERCENT_STEP) * POWER_PERCENT_STEP;
-  if (percent > 100U) { percent = 100U; }
-  return (uint8_t)percent;
+  for (i = 1U; i < (uint32_t)(sizeof(s_percent_curve) / sizeof(s_percent_curve[0])); i++) {
+    const Power_PercentPoint_t *low = &s_percent_curve[i - 1U];
+    const Power_PercentPoint_t *high = &s_percent_curve[i];
+    uint32_t range_mv;
+    uint32_t range_pct;
+
+    if (voltage_mv > high->voltage_mv) { continue; }
+
+    range_mv = high->voltage_mv - low->voltage_mv;
+    range_pct = (uint32_t)high->percent - (uint32_t)low->percent;
+    if (range_mv == 0U) { return high->percent; }
+
+    percent = (uint32_t)low->percent + ((((voltage_mv - low->voltage_mv) * range_pct) + (range_mv / 2U)) / range_mv);
+    return Power_RoundToStep(percent);
+  }
+
+  return s_percent_curve[(sizeof(s_percent_curve) / sizeof(s_percent_curve[0])) - 1U].percent;
 }
 
 /**
@@ -82,17 +221,26 @@ static uint32_t Power_FilterVoltage(uint32_t voltage_mv)
  */
 static uint32_t Power_PercentCenterMv(uint8_t percent)
 {
-  uint32_t range_mv;
-  uint32_t scaled_mv;
+  uint32_t i;
 
-  if (percent == 0U) { return POWER_ZERO_MV; }
-  if (percent == 5U) { return (POWER_ZERO_MV + POWER_STEP5_MV) / 2U; }
-  if (percent <= 10U) { return POWER_STEP10_MV; }
-  if (percent >= 100U) { return POWER_FULL_MV; }
+  if (percent <= s_percent_curve[0].percent) { return s_percent_curve[0].voltage_mv; }
 
-  range_mv  = POWER_FULL_MV - POWER_STEP10_MV;
-  scaled_mv = (((uint32_t)(percent - 10U)) * range_mv) / 90U;
-  return POWER_STEP10_MV + scaled_mv;
+  for (i = 1U; i < (uint32_t)(sizeof(s_percent_curve) / sizeof(s_percent_curve[0])); i++) {
+    const Power_PercentPoint_t *low = &s_percent_curve[i - 1U];
+    const Power_PercentPoint_t *high = &s_percent_curve[i];
+    uint32_t range_mv;
+    uint32_t range_pct;
+
+    if (percent > high->percent) { continue; }
+
+    range_mv = high->voltage_mv - low->voltage_mv;
+    range_pct = (uint32_t)high->percent - (uint32_t)low->percent;
+    if (range_pct == 0U) { return high->voltage_mv; }
+
+    return low->voltage_mv + ((((uint32_t)(percent - low->percent) * range_mv) + (range_pct / 2U)) / range_pct);
+  }
+
+  return s_percent_curve[(sizeof(s_percent_curve) / sizeof(s_percent_curve[0])) - 1U].voltage_mv;
 }
 
 /**
@@ -142,13 +290,46 @@ static uint8_t Power_ApplyPercentConfirm(uint8_t previous, uint8_t candidate, ui
   return previous;
 }
 
+/**
+ * @brief 根据滤波电压和连续确认次数更新第一电池低压状态。
+ * @param[in] previous 当前已发布的低压状态，1 表示低压。
+ * @param[in] filtered_voltage_mv 已滤波电池电压，单位：mV。
+ * @return 应发布的低压状态，低于 `POWER_LOW_WARNING_MV` 连续确认后置位，
+ *         高于 `POWER_LOW_RECOVER_MV` 连续确认后清除，中间回差区保持原状态。
+ */
+static uint8_t Power_ApplyLowVoltageConfirm(uint8_t previous, uint32_t filtered_voltage_mv)
+{
+  if (previous != 0U) {
+    if (filtered_voltage_mv <= POWER_LOW_RECOVER_MV) {
+      s_pending_low_voltage_count = 0U;
+      return 1U;
+    }
+  } else {
+    if (filtered_voltage_mv >= POWER_LOW_WARNING_MV) {
+      s_pending_low_voltage_count = 0U;
+      return 0U;
+    }
+  }
+
+  if (s_pending_low_voltage_count < POWER_LOW_CONFIRM_COUNT) { s_pending_low_voltage_count++; }
+  if (s_pending_low_voltage_count >= POWER_LOW_CONFIRM_COUNT) {
+    s_pending_low_voltage_count = 0U;
+    return (previous == 0U) ? 1U : 0U;
+  }
+
+  return previous;
+}
+
 Power_Result_t Sensor_Power_Init(void)
 {
   memset(&s_snapshot, 0, sizeof(s_snapshot));
-  s_filtered_voltage_mv   = 0U;
-  s_pending_percent_count = 0U;
-  s_filter_valid          = 0U;
-  s_initialized           = 1U;
+  s_filtered_voltage_mv       = 0U;
+  s_filtered_current_ma       = 0;
+  s_pending_percent_count     = 0U;
+  s_pending_low_voltage_count = 0U;
+  s_filter_valid              = 0U;
+  s_current_filter_valid      = 0U;
+  s_initialized               = 1U;
   return POWER_RESULT_OK;
 }
 
@@ -159,8 +340,11 @@ void Sensor_Power_RequestReinit(void)
 
 Power_Result_t Sensor_Power_Service(uint32_t now_ms)
 {
-  uint32_t voltage_mv = 0U;
+  uint32_t measured_voltage_mv = 0U;
+  uint32_t current_adc_mv      = 0U;
+  uint32_t voltage_mv;
   uint32_t filtered_voltage_mv;
+  int32_t current_ma;
   uint8_t candidate_percent;
 
   if (s_reinit_request != 0U) {
@@ -169,11 +353,12 @@ Power_Result_t Sensor_Power_Service(uint32_t now_ms)
   }
   if (s_initialized == 0U) { return POWER_RESULT_NO_DATA; }
 
-  if (BSP_ADC_ReadVoltageMv(&voltage_mv) != BSP_STATUS_OK) {
+  if (BSP_ADC_ReadVoltageMv(&measured_voltage_mv) != BSP_STATUS_OK) {
     s_snapshot.error_count++;
     return POWER_RESULT_IO_ERROR;
   }
 
+  voltage_mv = Power_ApplyCalibration(measured_voltage_mv);
   s_snapshot.rx_sequence++;
   if (s_snapshot.rx_sequence == 0U) { s_snapshot.rx_sequence = 1U; }
   s_snapshot.sample_time_ms = now_ms;
@@ -181,7 +366,17 @@ Power_Result_t Sensor_Power_Service(uint32_t now_ms)
   filtered_voltage_mv       = Power_FilterVoltage(voltage_mv);
   candidate_percent         = Power_CalcPercent(filtered_voltage_mv);
   s_snapshot.percent        = (s_snapshot.rx_sequence == 1U) ? candidate_percent : Power_ApplyPercentConfirm(s_snapshot.percent, candidate_percent, filtered_voltage_mv);
-  s_snapshot.low_voltage    = (voltage_mv < POWER_ZERO_MV) ? 1U : 0U;
+  s_snapshot.low_voltage    = Power_ApplyLowVoltageConfirm(s_snapshot.low_voltage, filtered_voltage_mv);
+
+  if (BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CURRENT_BATTERY1, &current_adc_mv) == BSP_STATUS_OK) {
+    current_ma            = Power_FilterCurrent(Power_CalcCurrentMa(current_adc_mv));
+    s_snapshot.current_ma = current_ma;
+    s_snapshot.power_mw   = Power_CalcPowerMw(voltage_mv, current_ma);
+  } else {
+    s_snapshot.error_count++;
+    s_snapshot.current_ma = 0;
+    s_snapshot.power_mw   = 0U;
+  }
 
   return POWER_RESULT_OK;
 }
@@ -201,6 +396,8 @@ Power_Result_t Sensor_Power_GetStatus(Power_Status_t *out)
   out->rx_sequence    = s_snapshot.rx_sequence;
   out->sample_time_ms = s_snapshot.sample_time_ms;
   out->error_count    = s_snapshot.error_count;
+  out->current_ma     = s_snapshot.current_ma;
+  out->power_mw       = s_snapshot.power_mw;
   out->percent        = s_snapshot.percent;
   out->low_voltage    = s_snapshot.low_voltage;
   out->reserved       = 0U;

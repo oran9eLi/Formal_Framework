@@ -2,19 +2,16 @@
 #define DISPLAY_LOGO_H
 
 #include <stdint.h>
-#include "display.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define DISPLAY_LOGO_WIDTH             550U
-#define DISPLAY_LOGO_HEIGHT            326U
-#define DISPLAY_LOGO_TRANSPARENT_COLOR 0x0000U
+#define DISPLAY_HEADER_LOGO_WIDTH             64U
+#define DISPLAY_HEADER_LOGO_HEIGHT            64U
+#define DISPLAY_HEADER_LOGO_TRANSPARENT_COLOR 0x0000U
 
-extern const uint8_t s_logo_data[];
-
-Display_Result_t Display_PagesDrawLogoLayout(void);
+/* Raw RGB565 (little-endian) pixel data — 0x0000 is the transparent colour. */
+extern const uint8_t display_logo_rgb565_data[DISPLAY_HEADER_LOGO_WIDTH * DISPLAY_HEADER_LOGO_HEIGHT * 2U];
 
 #ifdef __cplusplus
 }

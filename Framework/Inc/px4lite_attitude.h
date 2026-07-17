@@ -13,12 +13,22 @@
  * @brief 姿态估计器内部状态。
  */
 typedef struct {
-  float roll_deg;               /**< 当前横滚角，单位 degree。 */
-  float pitch_deg;              /**< 当前俯仰角，单位 degree。 */
-  float yaw_deg;                /**< 当前相对航向角，单位 degree。 */
-  uint32_t last_sample_time_ms; /**< 上一次使用的 IMU 样本时间，单位 ms。 */
-  uint8_t valid;                /**< 1 表示估计器已完成首帧初始化。 */
-  uint8_t reserved[3];          /**< 对齐预留。 */
+  float roll_deg;                /**< 当前横滚角，单位 degree。 */
+  float pitch_deg;               /**< 当前俯仰角，单位 degree。 */
+  float yaw_deg;                 /**< 当前相对航向角，单位 degree。 */
+  float gyro_bias_dps[3];        /**< 静止校准得到的陀螺零偏，单位 degree/s。 */
+  float gyro_bias_sum_dps[3];    /**< 静止校准阶段的陀螺零偏累加值，单位 degree/s。 */
+  float accel_prev_g[3];         /**< 上一帧加速度，用于静止检测，单位 g。 */
+  float gyro_prev_dps[3];        /**< 上一帧角速度，用于静止检测，单位 degree/s。 */
+  float roll_offset_deg;         /**< 水平校准得到的横滚零位偏移，单位 degree。 */
+  float pitch_offset_deg;        /**< 水平校准得到的俯仰零位偏移，单位 degree。 */
+  float yaw_offset_deg;          /**< 水平校准得到的偏航零位偏移，单位 degree。 */
+  uint32_t last_sample_time_ms;  /**< 上一次使用的 IMU 样本时间，单位 ms。 */
+  uint16_t gyro_bias_sample_count; /**< 当前零偏校准累计样本数。 */
+  uint8_t valid;                 /**< 1 表示估计器已完成首帧初始化。 */
+  uint8_t gyro_bias_valid;       /**< 1 表示陀螺零偏已完成静止校准。 */
+  uint8_t motion_ref_valid;      /**< 1 表示 accel_prev/gyro_prev 已有上一帧数据。 */
+  uint8_t level_offset_valid;    /**< 1 表示水平零位偏移已采集。 */
 } Px4Lite_AttitudeState_t;
 
 /**

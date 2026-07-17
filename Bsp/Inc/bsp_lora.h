@@ -14,6 +14,10 @@
 #include "stm32f4xx_hal.h"
 
 /**
+ * @brief 尽早配置 E22 模式/AUX 引脚并驱动到正常模式，须在 BSP_Init 最先调用。
+ */
+void BSP_LoRa_PreInit(void);
+/**
  * @brief 初始化 LoRa E22 使用的 UART、DMA 和控制 GPIO。
  */
 int32_t BSP_LoRa_Init(void);
@@ -33,6 +37,22 @@ uint8_t BSP_LoRa_IsReady(void);
  * @brief 判断 E22 是否正忙。
  */
 uint8_t BSP_LoRa_IsBusy(void);
+/**
+ * @brief 用输入下拉释放法主动探测 E22 AUX 是否被在位模块拉高。
+ *
+ * @return 1 表示模块在位(取消下拉后 AUX 被模块拉高)，0 表示拔出(线路维持低)。
+ *
+ * @note 探测期间 AUX 始终为输入，只允许在 comm 任务上下文、模块非发送忙时调用。
+ */
+uint8_t BSP_LoRa_ProbeAuxPresent(void);
+/**
+ * @brief 返回 LoRa 本地 UART 波特率，单位：bit/s。
+ */
+uint32_t BSP_LoRa_GetUartBaud(void);
+/**
+ * @brief 返回 LoRa E22 当前空中速率，单位：bit/s。
+ */
+uint32_t BSP_LoRa_GetAirBps(void);
 /**
  * @brief 从 LoRa 接收环形缓冲复制可用字节。
  */
@@ -77,5 +97,21 @@ void BSP_LoRa_DmaIrqHandler(void);
  * @brief 恢复 LoRa UART 和 RX DMA 接收路径。
  */
 void BSP_LoRa_RecoverRx(void);
+/**
+ * @brief Request LoRa RX recovery from USART3 ISR; only sets a flag in ISR.
+ */
+void BSP_LoRa_RequestRecoverRx(void);
+/**
+ * @brief 在 USART3 错误中断中清错误并请求 LoRa RX 恢复。
+ *
+ * @param[in] sr_snapshot USART3 SR 快照。
+ */
+void BSP_LoRa_UartErrorIrqHandler(uint32_t sr_snapshot);
+/**
+ * @brief Consume one pending LoRa RX recovery request from the owner service.
+ *
+ * @return 1 if a request was pending, 0 otherwise.
+ */
+uint8_t BSP_LoRa_ConsumeRecoverRxRequest(void);
 
 #endif

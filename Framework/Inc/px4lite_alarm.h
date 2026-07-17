@@ -37,4 +37,31 @@ void Px4Lite_AlarmUpdateFromStatuses(const Px4Lite_ModuleStatus_t *status, uint1
  */
 Px4Lite_Result_t Px4Lite_CopyAlarmSnapshot(Px4Lite_AlarmSnapshot_t *out);
 
+/**
+ * @brief 复制告警表轻量摘要，避免周期任务在栈上放完整告警表。
+ *
+ * @param[out] publish_time_ms 告警摘要发布时间，单位：ms，允许为 NULL。
+ * @param[out] sequence 告警表序号，允许为 NULL。
+ * @param[out] active_count 当前活动告警数量，允许为 NULL。
+ * @param[out] highest_fault_code 当前最高严重度故障码，允许为 NULL。
+ * @param[out] highest_source_id 当前最高严重度来源 ID，允许为 NULL。
+ * @param[out] highest_severity 当前最高告警严重度，允许为 NULL。
+ *
+ * @retval PX4LITE_OK 摘要有效。
+ * @retval PX4LITE_NOT_READY 告警表尚未有效。
+ */
+Px4Lite_Result_t Px4Lite_CopyAlarmSummary(uint32_t *publish_time_ms, uint32_t *sequence, uint16_t *active_count, uint16_t *highest_fault_code, uint16_t *highest_source_id, Px4Lite_AlarmSeverity_t *highest_severity);
+
+/**
+ * @brief 复制指定索引的单条告警记录。
+ *
+ * @param[in] index 告警记录索引，范围 0 到 `PX4LITE_MODULE_COUNT - 1`。
+ * @param[out] out 输出记录，不能为 NULL。
+ *
+ * @retval PX4LITE_OK 复制成功。
+ * @retval PX4LITE_INVALID_PARAM 参数非法。
+ * @retval PX4LITE_NOT_READY 告警表尚未有效。
+ */
+Px4Lite_Result_t Px4Lite_CopyAlarmRecord(uint16_t index, Px4Lite_AlarmRecord_t *out);
+
 #endif

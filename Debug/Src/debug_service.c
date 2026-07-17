@@ -7,12 +7,20 @@
 
 #include "debug_config.h"
 #include "debug_console.h"
+#include "debug_selftest.h"
 #include "debug_task_monitor.h"
 #include "app_data_api.h"
 #include "px4lite_config.h"
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
+#include "px4lite_time.h"
 #include "px4lite_topics.h"
+#if DEBUG_IMU_MONITOR_ENABLE
+#include "sensor_mpu6050.h"
+#endif
+#if DEBUG_POWER_MONITOR_ENABLE
+#include "bsp_adc_current.h" /* 临时诊断：读电流原始 adc_mv/浮空标志 */
+#endif
 #include "task.h"
 
 #if DEBUG_PERIODIC_SERVICE_ENABLE
@@ -34,10 +42,26 @@ static void DebugService_ReportGnss(uint32_t now_ms)
   if ((Px4Lite_CopyGnss(&gnss) == PX4LITE_OK) && (Px4Lite_GetModuleStatus(PX4LITE_MODULE_GNSS, &status) == PX4LITE_OK)) {
     report_ms = Px4Lite_PlatformGetMs();
     DBG_PRINT("GNSS: state=%u fix=%u sats=%u gps=%u/%u bds=%u/%u "
-              "lat=%ld lon=%ld age=%lu",
-              (unsigned int)status.state, (unsigned int)gnss.fix_type, (unsigned int)gnss.satellites_used, (unsigned int)gnss.gps_used, (unsigned int)gnss.gps_visible, (unsigned int)gnss.bds_used, (unsigned int)gnss.bds_visible, (long)gnss.latitude_e7, (long)gnss.longitude_e7, (unsigned long)Px4Lite_ElapsedMs(report_ms, status.last_rx_ms));
+              "lat=%ld lon=%ld utc_date=%lu utc_sec=%lu age=%lu",
+              (unsigned int)status.state, (unsigned int)gnss.fix_type, (unsigned int)gnss.satellites_used, (unsigned int)gnss.gps_used, (unsigned int)gnss.gps_visible, (unsigned int)gnss.bds_used, (unsigned int)gnss.bds_visible, (long)gnss.latitude_e7, (long)gnss.longitude_e7, (unsigned long)gnss.utc_date, (unsigned long)gnss.utc_sec, (unsigned long)Px4Lite_ElapsedMs(report_ms, status.last_rx_ms));
   } else {
     DBG_PRINT("GNSS: waiting for valid NMEA data");
+  }
+
+  {
+    /* 室内无 GPS 时用它判断 RTC 手表本身：src 0=NONE 1=RTC 2=GNSS；
+       sync 0=INVALID 1=RTC_VALID 2=GNSS_SYNCED 3=STALE。rc!=OK 表示 RTC 从未被有效校准。 */
+    Px4Lite_TimeSnapshot_t t;
+    Px4Lite_Result_t trc = Px4Lite_CopyTime(&t);
+
+    if (trc == PX4LITE_OK) {
+      DBG_PRINT("TIME: rc=OK src=%u sync=%u local=%04lu-%02lu-%02lu %06lu sync_age=%lus",
+                (unsigned int)t.source, (unsigned int)t.sync_state,
+                (unsigned long)(t.local_date_ymd / 10000UL), (unsigned long)((t.local_date_ymd / 100UL) % 100UL), (unsigned long)(t.local_date_ymd % 100UL),
+                (unsigned long)t.local_time_hhmmss, (unsigned long)t.sync_age_s);
+    } else {
+      DBG_PRINT("TIME: rc=%d no valid time yet (src=NONE, RTC never calibrated by GNSS)", (int)trc);
+    }
   }
 }
 #endif
@@ -53,6 +77,7 @@ static void DebugService_ReportImu(uint32_t now_ms)
 {
   App_NavigationSnapshot_t nav;
   Px4Lite_ModuleStatus_t status;
+  Mpu6050_Status_t driver_status;
   Px4Lite_Result_t status_rc;
   Px4Lite_Result_t nav_rc;
   uint32_t report_ms;
@@ -61,7 +86,9 @@ static void DebugService_ReportImu(uint32_t now_ms)
 
   (void)now_ms;
 
+  /* Debug 特例：Framework 状态用于诊断模块健康，App 快照用于查看业务可见姿态。 */
   status_rc = Px4Lite_GetModuleStatus(PX4LITE_MODULE_IMU, &status);
+  (void)Sensor_MPU6050_GetStatus(&driver_status);
   report_ms = Px4Lite_PlatformGetMs();
   nav_rc    = App_CopyNavigation(&nav, report_ms);
 
@@ -69,14 +96,20 @@ static void DebugService_ReportImu(uint32_t now_ms)
     imu_age_ms = Px4Lite_ElapsedMs(report_ms, status.last_rx_ms);
     imu_fresh  = ((status.state == PX4LITE_STATE_ONLINE) && (imu_age_ms <= PX4LITE_IMU_MAX_AGE_MS)) ? 1U : 0U;
     if ((nav_rc == PX4LITE_OK) && ((nav.valid_mask & PX4LITE_NAV_VALID_ATTITUDE) != 0U)) {
-      DBG_PRINT("IMU: state=%u err=%lu age=%lu fresh=%u "
+      DBG_PRINT("IMU: state=%u err=%lu age=%lu fresh=%u drv_stage=%u drv_rc=%u reinit=%lu chip=0x%02X bsp=%u "
                 "roll_cdeg=%ld pitch_cdeg=%ld yaw_cdeg=%ld "
                 "rate_cdps=%ld,%ld,%ld",
-                (unsigned int)status.state, (unsigned long)status.error_count, (unsigned long)imu_age_ms, (unsigned int)imu_fresh, (long)nav.roll_deg100, (long)nav.pitch_deg100, (long)nav.yaw_deg100, (long)nav.roll_rate_dps100, (long)nav.pitch_rate_dps100, (long)nav.yaw_rate_dps100);
+                (unsigned int)status.state, (unsigned long)status.error_count, (unsigned long)imu_age_ms, (unsigned int)imu_fresh,
+                (unsigned int)driver_status.last_stage, (unsigned int)driver_status.last_result, (unsigned long)driver_status.reinit_count,
+                (unsigned int)driver_status.last_chip_id, (unsigned int)driver_status.last_bsp_status,
+                (long)nav.roll_deg100, (long)nav.pitch_deg100, (long)nav.yaw_deg100, (long)nav.roll_rate_dps100, (long)nav.pitch_rate_dps100, (long)nav.yaw_rate_dps100);
     } else {
-      DBG_PRINT("IMU: state=%u fault=%u err=%lu age=%lu fresh=%u "
+      DBG_PRINT("IMU: state=%u fault=%u err=%lu age=%lu fresh=%u drv_stage=%u drv_rc=%u reinit=%lu chip=0x%02X bsp=%u "
                 "no valid attitude rc=%d mask=0x%08lX",
-                (unsigned int)status.state, (unsigned int)status.fault_code, (unsigned long)status.error_count, (unsigned long)imu_age_ms, (unsigned int)imu_fresh, (int)nav_rc, (nav_rc == PX4LITE_OK) ? (unsigned long)nav.valid_mask : 0UL);
+                (unsigned int)status.state, (unsigned int)status.fault_code, (unsigned long)status.error_count, (unsigned long)imu_age_ms, (unsigned int)imu_fresh,
+                (unsigned int)driver_status.last_stage, (unsigned int)driver_status.last_result, (unsigned long)driver_status.reinit_count,
+                (unsigned int)driver_status.last_chip_id, (unsigned int)driver_status.last_bsp_status,
+                (int)nav_rc, (nav_rc == PX4LITE_OK) ? (unsigned long)nav.valid_mask : 0UL);
     }
   } else {
     DBG_PRINT("IMU: framework status unavailable rc=%d", (int)status_rc);
@@ -108,18 +141,33 @@ static void DebugService_ReportBaro(uint32_t now_ms)
 static void DebugService_ReportPower(uint32_t now_ms)
 {
   Px4Lite_BatteryStatus_t battery;
+  Px4Lite_BatteryStatus_t battery2;
   Px4Lite_ModuleStatus_t status;
-  uint32_t report_ms;
+  uint32_t adc_mv1 = 0U;
+  uint32_t adc_mv2 = 0U;
+  uint8_t  float1  = 0U;
+  uint8_t  float2  = 0U;
+  Px4Lite_Result_t bat2_rc;
 
   (void)now_ms;
 
+  /* 临时诊断：两路电流的原始引脚电压 + 浮空标志(来自 BSP 缓存，不再碰 ADC)。
+     判读：adc_mv≈0 且 float=1 -> 判为浮空(没接/悬空)；adc_mv≈0 且 float=0 -> 引脚确实读到 0V；
+     加负载时 adc_mv 跟着涨 -> 信号进来了，接线正常，剩下的是零点/灵敏度标定。 */
+  BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY1, &adc_mv1, &float1);
+  BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY2, &adc_mv2, &float2);
+  bat2_rc = Px4Lite_CopyBattery2(&battery2);
+
   if ((Px4Lite_CopyBattery(&battery) == PX4LITE_OK) && (Px4Lite_GetModuleStatus(PX4LITE_MODULE_BATTERY, &status) == PX4LITE_OK)) {
-    report_ms = Px4Lite_PlatformGetMs();
-    DBG_PRINT("POWER: state=%u voltage_mv=%lu current_ma=%ld "
-              "percent=%u low=%u age=%lu",
-              (unsigned int)status.state, (unsigned long)battery.voltage_mv, (long)battery.current_ma, (unsigned int)battery.percent, (unsigned int)battery.low_voltage, (unsigned long)Px4Lite_ElapsedMs(report_ms, status.last_rx_ms));
+    DBG_PRINT("POWER: state=%u v_mv=%lu pct=%u low=%u | "
+              "I1(PC0) adc_mv=%lu float=%u cur_ma=%ld | "
+              "I2(PC1) adc_mv=%lu float=%u cur_ma=%ld",
+              (unsigned int)status.state, (unsigned long)battery.voltage_mv, (unsigned int)battery.percent, (unsigned int)battery.low_voltage,
+              (unsigned long)adc_mv1, (unsigned int)float1, (long)battery.current_ma,
+              (unsigned long)adc_mv2, (unsigned int)float2, (bat2_rc == PX4LITE_OK) ? (long)battery2.current_ma : 0L);
   } else {
-    DBG_PRINT("POWER: no valid data");
+    DBG_PRINT("POWER: no battery topic | I1(PC0) adc_mv=%lu float=%u | I2(PC1) adc_mv=%lu float=%u",
+              (unsigned long)adc_mv1, (unsigned int)float1, (unsigned long)adc_mv2, (unsigned int)float2);
   }
 }
 #endif
@@ -174,16 +222,23 @@ static void DebugService_ReportLoRa(uint32_t now_ms)
             "age_rx=%lu age_tx=%lu msg=%lu",
             (unsigned int)status.state, (unsigned long)info.rx_frame_count, (unsigned long)info.tx_frame_count, (unsigned long)(rx_loss_permille / 10U), (unsigned long)(rx_loss_permille % 10U), (unsigned long)(tx_fail_permille / 10U), (unsigned long)(tx_fail_permille % 10U), (unsigned long)info.tx_busy_count, (unsigned long)info.crc_error_count, (unsigned long)info.parse_error_count, (unsigned long)info.rx_drop_count, (unsigned long)info.rx_overflow_count, (unsigned long)info.mav_heartbeat_count, (unsigned long)info.mav_gps_raw_count, (unsigned long)info.mav_gnss_detail_count, (unsigned long)info.mav_attitude_count, (unsigned long)info.mav_sys_status_count, (unsigned long)info.mav_battery_status_count, (unsigned long)info.mav_scaled_pressure_count, (unsigned long)info.mav_statustext_count, (unsigned long)info.mav_stale_count, (unsigned long)info.mav_no_data_count, (unsigned long)Px4Lite_ElapsedMs(report_ms, info.last_rx_ms), (unsigned long)Px4Lite_ElapsedMs(report_ms, info.last_tx_ms),
             (unsigned long)info.last_msg_id);
+
+  /* 关键诊断：rx_byte=DMA收到的原始字节数，rx_frame=解析出的完整MAVLink帧数。
+     rx_byte=0        -> E22 根本没收到任何RF字节(RF不通:天线/E22参数/接线/供电/对端没发)
+     rx_byte>0,rx=0   -> 收到字节但解析不出帧(空口速率/波特率致数据损坏, 或帧格式) */
+  DBG_PRINT("LORA-RX: rx_byte=%lu rx_frame=%lu crc_err=%lu parse_err=%lu",
+            (unsigned long)info.rx_byte_count, (unsigned long)info.rx_frame_count,
+            (unsigned long)info.crc_error_count, (unsigned long)info.parse_error_count);
 }
 #endif
 
 #if DEBUG_ALARM_MONITOR_ENABLE
 static void DebugService_ReportAlarm(uint32_t now_ms)
 {
-  App_AlarmSnapshot_t alarm;
+  App_AlarmSummary_t alarm;
   Px4Lite_Result_t result;
 
-  result = App_CopyAlarm(&alarm, now_ms);
+  result = App_CopyAlarmSummary(&alarm, now_ms);
   if (result == PX4LITE_OK) {
     DBG_PRINT("ALARM: count=%u highest_src=%u fault=0x%04X sev=%u", (unsigned int)alarm.active_count, (unsigned int)alarm.highest_source_id, (unsigned int)alarm.highest_fault_code, (unsigned int)alarm.highest_severity);
   } else {
@@ -219,6 +274,9 @@ static void DebugService_Task(void *argument)
 #endif
 #if DEBUG_ALARM_MONITOR_ENABLE
   uint32_t last_alarm_report_ms = 0U;
+#endif
+#if DEBUG_SELFTEST_ACTIVE_ENABLE
+  uint32_t last_selftest_report_ms = 0U;
 #endif
 
   (void)argument;
@@ -273,6 +331,13 @@ static void DebugService_Task(void *argument)
     if ((uint32_t)(now_ms - last_alarm_report_ms) >= DEBUG_ALARM_REPORT_PERIOD_MS) {
       DebugService_ReportAlarm(now_ms);
       last_alarm_report_ms = now_ms;
+    }
+#endif
+
+#if DEBUG_SELFTEST_ACTIVE_ENABLE
+    if ((uint32_t)(now_ms - last_selftest_report_ms) >= DEBUG_SELFTEST_REPORT_PERIOD_MS) {
+      DebugSelfTest_Run(now_ms);
+      last_selftest_report_ms = now_ms;
     }
 #endif
 
