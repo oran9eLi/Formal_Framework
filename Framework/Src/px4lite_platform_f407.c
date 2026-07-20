@@ -392,7 +392,10 @@ Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *measurement)
   now_ms = Px4Lite_PlatformGetMs();
   result = Sensor_MPU6050_Service(now_ms);
   if (result != MPU6050_RESULT_OK) {
-    stable_valid_count = 0U;
+    /* 单帧采样失败只代表"本轮没有新样本"，不重置稳定计数：稳定计数的唯一用途是
+       在重初始化之后等待若干帧再发布(见下方 reinit_count 判定)。若在这里一并清零，
+       任何一次瞬时拒绝都会让计数在 0..MIN-1 之间反复横跳而永远到不了门限，
+       last_rx_ms 随之冻结，Health 在 PX4LITE_IMU_OFFLINE_MS 后误判 IMU 离线。 */
     return (result == MPU6050_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR;
   }
 

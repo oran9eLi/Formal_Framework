@@ -728,9 +728,8 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   if ((fiveg_state != PX4LITE_STATE_FAILED) &&
       (((fiveg_last_rx_ms == 0U) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_5G_STARTUP_GRACE_MS)) ||
        ((fiveg_last_rx_ms != 0U) && (Px4Lite_ElapsedMs(now_ms, fiveg_last_rx_ms) > PX4LITE_5G_HEARTBEAT_TIMEOUT_MS)))) {
+    /* RPICELL 断流只说明树莓派侧网络状态不可知，与 USART6 遥测出口无关：只置 5G 显示状态。 */
     Px4Lite_SetExternalModuleState(PX4LITE_MODULE_5G, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
-    Px4Lite_MavlinkSetCellularLinkEnabled(0U);
-    Px4Lite_MavlinkSetRpiUplinkEnabled(0U);
   }
 #else
   (void)fiveg_state;

@@ -49,6 +49,12 @@ typedef void (*MavTx_SuccessHook_t)(void);
 #define MAV_TX_TARGET_LORA     0U
 #define MAV_TX_TARGET_RPI      1U
 #define MAV_TX_TARGET_COUNT    2U
+
+/* 待发 COMMAND_ACK 按来源链路分槽：两条链路各自持有一条待发应答，互不覆盖。
+   共用单槽时，一条链路的应答会被另一条链路的新命令挤掉，表现为应答凭空丢失。 */
+#define MAV_TX_ACK_SLOT_LORA   0U
+#define MAV_TX_ACK_SLOT_RPI    1U
+#define MAV_TX_ACK_SLOT_COUNT  2U
 #define MAV_TX_LORA_CHANNEL    MAVLINK_COMM_0
 
 /**
@@ -122,7 +128,7 @@ static uint32_t s_next_alarm_status_ms;
 static uint32_t s_next_log_ms;
 static uint8_t s_catalog_index;
 static MavTx_PendingCommand_t s_pending_command;
-static MavTx_PendingAck_t s_pending_ack;
+static MavTx_PendingAck_t s_pending_ack[MAV_TX_ACK_SLOT_COUNT];
 static uint32_t s_motor_status_count;
 static uint32_t s_motor_pulse_count;
 static uint32_t s_message_log_count;
@@ -149,8 +155,6 @@ static uint8_t s_motor_urgent_remaining;
 static uint8_t s_motor_urgent_hold;
 static uint8_t s_module_state_part[MAV_TX_TARGET_COUNT];
 static uint8_t s_tx_enabled;
-static uint8_t s_cellular_link_enabled;
-static uint8_t s_rpi_uplink_enabled;
 /* 当前发送目标(MAV_TX_TARGET_*)：由各发送趟在调用编码器前设置，MavTx_SendPrepared 据此路由。 */
 static uint8_t s_send_target;
 
@@ -211,6 +215,19 @@ static uint8_t MavTx_ItemAllowed(const MavTx_Item_t *item, uint32_t now_ms)
 }
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
+/**
+ * @brief RPi(USART6)发送趟的周期，对每项取 1Hz 下限。
+ * @details
+ * RPi 遥测复用 LoRa 编码器与同一批周期宏，直接改宏会连累 LoRa 空口。这里对 USART6 单独
+ * 施加 PX4LITE_MAVLINK_RPI_TELEM_MIN_PERIOD_MS 下限，把整条上行统一压到不快于 1Hz，
+ * 而 LoRa 侧调度仍用 MavTx_ItemPeriodMs 的原周期。
+ */
+static uint32_t MavTx_RpiItemPeriodMs(const MavTx_Item_t *item, uint32_t now_ms)
+{
+  uint32_t period = MavTx_ItemPeriodMs(item, now_ms);
+  return (period < PX4LITE_MAVLINK_RPI_TELEM_MIN_PERIOD_MS) ? PX4LITE_MAVLINK_RPI_TELEM_MIN_PERIOD_MS : period;
+}
+
 /**
  * @brief 依据当前 magic/len/seq/sysid/compid/msgid 与载荷重算 MAVLink CRC。
  * @details
@@ -323,22 +340,23 @@ static Px4Lite_Result_t MavTx_SendRpiExclusive(void)
 }
 #endif
 
-static void MavTx_QueueAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component)
+/**
+ * @brief 把命令来源链路映射到待发 ACK 槽位。
+ */
+static uint8_t MavTx_LinkToAckSlot(Px4Lite_MavlinkLink_t link)
 {
-  s_pending_ack.valid            = 1U;
-  s_pending_ack.command          = command;
-  s_pending_ack.result           = result;
-  s_pending_ack.target_system    = target_system;
-  s_pending_ack.target_component = target_component;
+  return (link == PX4LITE_MAVLINK_LINK_RPI) ? MAV_TX_ACK_SLOT_RPI : MAV_TX_ACK_SLOT_LORA;
 }
 
-static uint8_t MavTx_PendingAckTargetsRpi(void)
+static void MavTx_QueueAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component, Px4Lite_MavlinkLink_t link)
 {
-#if PX4LITE_ENABLE_RPI_MAVLINK
-  return ((s_pending_ack.valid != 0U) && (s_pending_ack.target_component == (uint8_t)PX4LITE_RPI_MAVLINK_COMPONENT_ID)) ? 1U : 0U;
-#else
-  return 0U;
-#endif
+  MavTx_PendingAck_t *slot = &s_pending_ack[MavTx_LinkToAckSlot(link)];
+
+  slot->valid            = 1U;
+  slot->command          = command;
+  slot->result           = result;
+  slot->target_system    = target_system;
+  slot->target_component = target_component;
 }
 
 
@@ -522,26 +540,36 @@ static Px4Lite_Result_t MavTx_SendPrepared(void)
   return MavTx_SendToLora();
 }
 
-static Px4Lite_Result_t MavTx_SendPendingAck(uint32_t now_ms)
+/**
+ * @brief 发送指定槽位的待发 COMMAND_ACK。
+ *
+ * @param[in] slot 待发槽位(MAV_TX_ACK_SLOT_*)，由命令来源链路决定，需与当前发送趟一致。
+ * @param[in] now_ms 当前系统毫秒时间。
+ */
+static Px4Lite_Result_t MavTx_SendPendingAck(uint8_t slot, uint32_t now_ms)
 {
   mavlink_command_ack_t packet;
+  MavTx_PendingAck_t *pending;
   Px4Lite_Result_t result;
 
   (void)now_ms;
-  if (s_pending_ack.valid == 0U) { return PX4LITE_IDLE; }
+  if (slot >= MAV_TX_ACK_SLOT_COUNT) { return PX4LITE_INVALID_PARAM; }
+  pending = &s_pending_ack[slot];
+  if (pending->valid == 0U) { return PX4LITE_IDLE; }
 
   memset(&packet, 0, sizeof(packet));
-  packet.command          = s_pending_ack.command;
-  packet.result           = s_pending_ack.result;
+  packet.command          = pending->command;
+  packet.result           = pending->result;
   packet.progress         = UINT8_MAX;
   packet.result_param2    = 0;
-  packet.target_system    = s_pending_ack.target_system;
-  packet.target_component = s_pending_ack.target_component;
+  /* target 原样回填命令来源 sysid/compid；出口由 slot 对应的发送趟决定，不由 target 反推。 */
+  packet.target_system    = pending->target_system;
+  packet.target_component = pending->target_component;
 
   (void)mavlink_msg_command_ack_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
   result = MavTx_SendPrepared();
   if (result == PX4LITE_OK) {
-    s_pending_ack.valid = 0U;
+    pending->valid = 0U;
     s_stats.command_ack_tx_count++;
     s_stats.last_message_id = MAVLINK_MSG_ID_COMMAND_ACK;
   }
@@ -1842,13 +1870,6 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_motor_urgent_hold = 0U;
   memset(s_module_state_part, 0, sizeof(s_module_state_part));
   s_tx_enabled = 1U;
-#if PX4LITE_ENABLE_5G
-  s_cellular_link_enabled = 0U;
-  s_rpi_uplink_enabled = 0U;
-#else
-  s_cellular_link_enabled = 1U;
-  s_rpi_uplink_enabled = 1U;
-#endif
   s_send_target = MAV_TX_TARGET_LORA;
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
@@ -1897,7 +1918,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_next_log_ms         = now_ms + 2500U;
   s_catalog_index       = 0U;
   memset(&s_pending_command, 0, sizeof(s_pending_command));
-  memset(&s_pending_ack, 0, sizeof(s_pending_ack));
+  memset(s_pending_ack, 0, sizeof(s_pending_ack));
   Px4Lite_LocalMsgLogReset();
   return PX4LITE_OK;
 }
@@ -1918,10 +1939,9 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRun(uint32_t now_ms)
      发送前先确认通道空闲，忙时直接跳过整轮编码，不做任何 encode 尝试。 */
   if ((s_tx_enabled != 0U) && (Px4Lite_LoRaIsTxIdle() == 0U)) { return PX4LITE_BUSY; }
 
-  if (MavTx_PendingAckTargetsRpi() == 0U) {
-    result = MavTx_SendPendingAck(now_ms);
-    if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
-  }
+  /* 本趟只发 LoRa 槽；RPi 槽由 Px4Lite_MavlinkTxRunRpi 独立发送，两者互不阻塞。 */
+  result = MavTx_SendPendingAck(MAV_TX_ACK_SLOT_LORA, now_ms);
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
 
   result = MavTx_SendPendingCommand(now_ms);
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
@@ -1956,12 +1976,11 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRunRpi(uint32_t now_ms)
      回退 LoRa 序号并改 compid=193，故既不依赖 LoRa 空口/服务状态，也不消耗 LoRa 通道序号。 */
   s_send_target = MAV_TX_TARGET_RPI;
 
-  if (MavTx_PendingAckTargetsRpi() != 0U) {
-    result = MavTx_SendPendingAck(now_ms);
-    if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
-  }
+  result = MavTx_SendPendingAck(MAV_TX_ACK_SLOT_RPI, now_ms);
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { return result; }
 
-  if (s_rpi_uplink_enabled == 0U) { return PX4LITE_IDLE; }
+  /* USART6 出口不受 5G/RPICELL 状态门控：两端周期帧相互独立，5G 状态只驱动显示，遥测持续发送。
+     树莓派 5G 未通/断流时也不停(见《STM32与树莓派链路周期通信约定》§2/§4/§7、§8.6)。 */
 
   /* 第一趟：RPi 独立遥测(复用 LoRa 编码器，各项自带并行 next_ms/success 数组，
      以 target=RPI 走 USART6)。最多提交一帧后转下一趟。 */
@@ -1973,7 +1992,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRunRpi(uint32_t now_ms)
     if ((item->enabled == 0U) || (MavTx_ItemAllowed(item, now_ms) == 0U) || (MavTx_TimeReached(now_ms, s_rpi_telem_next_ms[idx]) == 0U)) { continue; }
 
     result = item->encode(now_ms);
-    MavTx_RecordResult(result, now_ms, MavTx_ItemPeriodMs(item, now_ms), &s_rpi_telem_next_ms[idx], item->message_id, &s_rpi_telem_success[idx]);
+    MavTx_RecordResult(result, now_ms, MavTx_RpiItemPeriodMs(item, now_ms), &s_rpi_telem_next_ms[idx], item->message_id, &s_rpi_telem_success[idx]);
     if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { break; }
   }
 
@@ -1985,7 +2004,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRunRpi(uint32_t now_ms)
     if ((item->enabled == 0U) || (MavTx_ItemAllowed(item, now_ms) == 0U) || (MavTx_TimeReached(now_ms, *item->next_ms) == 0U)) { continue; }
 
     result = item->encode(now_ms);
-    MavTx_RecordResult(result, now_ms, MavTx_ItemPeriodMs(item, now_ms), item->next_ms, item->message_id, item->success_count);
+    MavTx_RecordResult(result, now_ms, MavTx_RpiItemPeriodMs(item, now_ms), item->next_ms, item->message_id, item->success_count);
     if ((result == PX4LITE_OK) && (item->on_success != 0)) { item->on_success(); }
     if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) || (result == PX4LITE_IO_ERROR)) { break; }
   }
@@ -2042,29 +2061,9 @@ uint8_t Px4Lite_MavlinkGetTxEnabled(void)
   return s_tx_enabled;
 }
 
-void Px4Lite_MavlinkSetCellularLinkEnabled(uint8_t enabled)
+void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component, Px4Lite_MavlinkLink_t link)
 {
-  s_cellular_link_enabled = (enabled != 0U) ? 1U : 0U;
-}
-
-uint8_t Px4Lite_MavlinkGetCellularLinkEnabled(void)
-{
-  return s_cellular_link_enabled;
-}
-
-void Px4Lite_MavlinkSetRpiUplinkEnabled(uint8_t enabled)
-{
-  s_rpi_uplink_enabled = (enabled != 0U) ? 1U : 0U;
-}
-
-uint8_t Px4Lite_MavlinkGetRpiUplinkEnabled(void)
-{
-  return s_rpi_uplink_enabled;
-}
-
-void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component)
-{
-  MavTx_QueueAck(command, result, target_system, target_component);
+  MavTx_QueueAck(command, result, target_system, target_component, link);
 }
 
 void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result, uint32_t now_ms)

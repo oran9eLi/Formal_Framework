@@ -39,9 +39,9 @@ STM32 引脚：PC6(TX) / PC7(RX)
 |---|---:|---|
 | `msgid` | `76` | `COMMAND_LONG`。 |
 | `source_system` / `sysid` | `250` 或其他非 0 值 | 必须与 STM32 本机 `system_id` 不同；若冲突，换一个 1..250 的值。 |
-| `source_component` / `compid` | `193` | 建议使用 `PX4LITE_RPI_MAVLINK_COMPONENT_ID`。 |
+| `source_component` / `compid` | `193` | 推荐 `PX4LITE_RPI_MAVLINK_COMPONENT_ID`(= `MAV_COMP_ID_ONBOARD_COMPUTER3`)。注意不是 `MAV_COMP_ID_ONBOARD_COMPUTER`，后者等于 `191`。ACK 出口按接收链路判定，填 `191` 也能收到应答，但会与 STM32 主 component id 同号，不利于抓包区分。 |
 | `target_system` | `0` 或 STM32 本机 `system_id` | `0` 表示广播，固件会接受；精确控制时填本机 system id。 |
-| `target_component` | `0` 或 `191` | `0` 表示广播，`191` 是 STM32 主 MAVLink component id。 |
+| `target_component` | `0`、`193` 或 `191` | 三者固件都接受。`0` 广播；`193` 是 STM32 在 USART6 心跳里对外呈现的 compid（推荐直接沿用从心跳学到的值）；`191` 是其 LoRa 侧 compid。 |
 | `confirmation` | `0` | 首次发送填 0；重复同一命令可递增，但当前固件不依赖该字段。 |
 
 重要规则：
@@ -49,8 +49,23 @@ STM32 引脚：PC6(TX) / PC7(RX)
 1. `source_system` 不能为 `0`。
 2. `source_system` 不能等于 STM32 本机 `system_id`，否则接收层会把它当成本机帧忽略。
 3. `target_system=0,target_component=0` 是最省事的广播写法。
-4. 若要点名控制某块板，`target_system` 必须等于该板由 UID 派生出的 MAVLink system id，`target_component` 填 `191`。
-5. 若希望 `COMMAND_ACK` 从 USART6 回到树莓派，`source_component` 应使用 `193`；固件按该 component id 将 ACK 路由到 RPi 专属出口。
+4. 若要点名控制某块板，`target_system` 必须等于该板由 UID 派生出的 MAVLink system id，`target_component` 直接沿用心跳里学到的 `193` 即可（`191` 与 `0` 同样被接受）。
+5. `COMMAND_ACK` 原路返回：从 USART6 收到的命令，应答一定从 USART6 发回，与 `source_component` 填什么无关。`COMMAND_ACK.target_system`/`target_component` 原样回填该命令的 `sysid`/`compid`，供树莓派做请求-应答配对。
+
+## 3.1 树莓派如何识别 STM32 端点
+
+STM32 的 `HEARTBEAT` 字段取值如下，树莓派据此识别端点：
+
+| 字段 | 值 | 说明 |
+|---|---:|---|
+| 帧头 `sysid` | UID 派生，`1 + (UID 哈希 % 250)`，范围 1..250 | 每块板不同，树莓派不得硬编码，必须从收到的 HEARTBEAT 学习。 |
+| 帧头 `compid` | `193` | USART6 出口上所有 STM32 帧的 compid 都被改写为 `193`。LoRa 空口上同一帧是 `191`。 |
+| `type` | `18` (`MAV_TYPE_ONBOARD_CONTROLLER`) | 识别 STM32 端点请用该字段。 |
+| `autopilot` | `8` (`MAV_AUTOPILOT_INVALID`) | **不要用 `autopilot != MAV_AUTOPILOT_INVALID` 判定端点**。本机是机载控制器而非 autopilot，按 MAVLink 语义此处填 `INVALID` 是正确的，该判据会把 STM32 全部误判为未知端点。 |
+| `base_mode` / `custom_mode` | `0` | 当前不承载模式信息。 |
+| `system_status` | `4` (`MAV_STATE_ACTIVE`) | |
+
+`COMMAND_ACK` 与 `HEARTBEAT` 使用同一组帧头 `sysid`/`compid`，即 USART6 上同为 `<UID 派生 sysid>` / `193`。
 
 ## 4. 命令 31011：设置四路电机油门
 

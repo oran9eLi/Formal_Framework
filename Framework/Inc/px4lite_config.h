@@ -102,7 +102,9 @@
 #define PX4LITE_DISPLAY_STARTUP_GRACE_MS 5000U
 #define PX4LITE_DISPLAY_OFFLINE_MS       3000U
 #define PX4LITE_5G_STARTUP_GRACE_MS      5000U
-#define PX4LITE_5G_HEARTBEAT_TIMEOUT_MS  3000U
+/* RPICELL 接收超时。按《STM32与树莓派链路周期通信约定》§5 取 5000ms：RPICELL 默认 1Hz，
+   5s 容忍 4 帧调度抖动，又能在树莓派退出/掉电/UART 中断后及时把 5G 显示置为未知。 */
+#define PX4LITE_5G_HEARTBEAT_TIMEOUT_MS  5000U
 
 /*
  * GNSS 专用恢复路径已经挂到 HealthRun，但在 BSP 恢复路径完成硬件故障注入测试前
@@ -231,6 +233,13 @@
 #define PX4LITE_MAVLINK_RPI_RIDSTAT_PERIOD_MS  1000U
 #define PX4LITE_MAVLINK_RPI_ALARM_PERIOD_MS    1000U
 #define PX4LITE_MAVLINK_RPI_LOG_PERIOD_MS      2000U
+
+/*
+ * USART6 上行统一 1Hz 上限。RPi 遥测复用 LoRa 编码器，周期宏与 LoRa 共用，改宏会连累
+ * LoRa 空口，故不改宏，而在 RPi 发送趟对每项周期取此下限：只放慢 USART6，LoRa 侧仍按原周期。
+ * 心跳与多数项本就 1000ms，仅 ATTITUDE/POSITION/MOTOR(500ms)、MODULE_STATE(700ms)被抬到 1000ms。
+ */
+#define PX4LITE_MAVLINK_RPI_TELEM_MIN_PERIOD_MS 1000U
 
 /*
  * ESP32-S3 RemoteID 发送配置。身份字段是生产默认值，后续可由 5G/网口命令写入配置存储后统一加载。

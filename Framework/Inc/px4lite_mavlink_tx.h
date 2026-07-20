@@ -95,11 +95,16 @@ Px4Lite_Result_t Px4Lite_MavlinkAcceptRemoteViewRequest(uint8_t requester_node_i
 void Px4Lite_MavlinkAcceptRemoteViewStop(uint8_t requester_node_id, uint32_t now_ms);
 void Px4Lite_MavlinkSetTxEnabled(uint8_t enabled);
 uint8_t Px4Lite_MavlinkGetTxEnabled(void);
-void Px4Lite_MavlinkSetCellularLinkEnabled(uint8_t enabled);
-uint8_t Px4Lite_MavlinkGetCellularLinkEnabled(void);
-void Px4Lite_MavlinkSetRpiUplinkEnabled(uint8_t enabled);
-uint8_t Px4Lite_MavlinkGetRpiUplinkEnabled(void);
-void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component);
+/**
+ * @brief 排队一条 COMMAND_ACK。
+ *
+ * @param[in] command ACK 对应的 MAVLink 命令号。
+ * @param[in] result MAVLink ACK 结果枚举值。
+ * @param[in] target_system ACK 目标 system id，取命令来源 sysid。
+ * @param[in] target_component ACK 目标 component id，取命令来源 compid。
+ * @param[in] link ACK 出口链路，取收到命令的链路。
+ */
+void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component, Px4Lite_MavlinkLink_t link);
 void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result, uint32_t now_ms);
 
 /* 前向声明 MAVLink 消息结构标签，避免在本头引入 common/mavlink.h(保持与 types.h 同层)。 */

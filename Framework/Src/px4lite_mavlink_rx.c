@@ -16,7 +16,6 @@
 #include "px4lite_command.h"
 #include "px4lite_faults.h"
 #include "px4lite_identity.h"
-#include "px4lite_mavlink_tx.h"
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
 #include "px4lite_remote_telemetry.h"
@@ -684,12 +683,12 @@ static uint8_t MavRx_DecodeStatusText(Px4Lite_RemoteTelemetry_t *remote, const m
   return 1U;
 }
 
-static uint8_t MavRx_DecodeCommandLong(const mavlink_message_t *message, uint32_t now_ms)
+static uint8_t MavRx_DecodeCommandLong(const mavlink_message_t *message, Px4Lite_MavlinkLink_t link, uint32_t now_ms)
 {
   mavlink_command_long_t packet;
 
   mavlink_msg_command_long_decode(message, &packet);
-  return (Px4Lite_CommandHandleMavlinkLong(packet.command, message->sysid, message->compid, packet.target_system, packet.target_component, packet.param1, packet.param2, packet.param3, packet.param4, now_ms) == PX4LITE_OK) ? 1U : 0U;
+  return (Px4Lite_CommandHandleMavlinkLong(packet.command, message->sysid, message->compid, packet.target_system, packet.target_component, packet.param1, packet.param2, packet.param3, packet.param4, link, now_ms) == PX4LITE_OK) ? 1U : 0U;
 }
 
 static uint8_t MavRx_DecodeCommandAck(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message, uint32_t now_ms)
@@ -712,16 +711,15 @@ static uint8_t MavRx_DecodeRpiNamedValueInt(const mavlink_message_t *message, ui
   mavlink_msg_named_value_int_decode(message, &packet);
   if (MavRx_NameEquals(packet.name, "RPICELL") == 0U) { return 0U; }
 
+  /* 只取 bit0(ONLINE)，由树莓派统一计算；bit1..4 是故障细分，保留位必须忽略。
+     RPICELL 只反映树莓派 Linux 侧网络链路状态，不代表 USART6 物理链路，
+     因此只驱动 5G 模块显示状态，不得据此门控本机对 RPi 的遥测出口。 */
   value = (uint32_t)packet.value;
   online = ((value & MAV_RX_RPI_CELLULAR_ONLINE_MASK) != 0U) ? 1U : 0U;
   if (online != 0U) {
     Px4Lite_SetExternalModuleState(PX4LITE_MODULE_5G, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
-    Px4Lite_MavlinkSetCellularLinkEnabled(1U);
-    Px4Lite_MavlinkSetRpiUplinkEnabled(1U);
   } else {
     Px4Lite_SetExternalModuleState(PX4LITE_MODULE_5G, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_OFFLINE, now_ms);
-    Px4Lite_MavlinkSetCellularLinkEnabled(0U);
-    Px4Lite_MavlinkSetRpiUplinkEnabled(0U);
   }
   return 1U;
 }
@@ -752,7 +750,7 @@ static uint8_t MavRx_DecodeMessage(Px4Lite_RemoteTelemetry_t *remote, const mavl
     case MAVLINK_MSG_ID_STATUSTEXT:
       return MavRx_DecodeStatusText(remote, message);
     case MAVLINK_MSG_ID_COMMAND_LONG:
-      return MavRx_DecodeCommandLong(message, now_ms);
+      return MavRx_DecodeCommandLong(message, PX4LITE_MAVLINK_LINK_LORA, now_ms);
     case MAVLINK_MSG_ID_COMMAND_ACK:
       return MavRx_DecodeCommandAck(remote, message, now_ms);
     default:
@@ -807,7 +805,7 @@ Px4Lite_Result_t Px4Lite_MavlinkRxRunRpi(uint32_t now_ms)
   MavRx_MessageFromFrame(&s_rx_frame_scratch, &s_rx_message_scratch);
   switch (s_rx_message_scratch.msgid) {
     case MAVLINK_MSG_ID_COMMAND_LONG:
-      decoded = MavRx_DecodeCommandLong(&s_rx_message_scratch, now_ms);
+      decoded = MavRx_DecodeCommandLong(&s_rx_message_scratch, PX4LITE_MAVLINK_LINK_RPI, now_ms);
       break;
     case MAVLINK_MSG_ID_COMMAND_ACK:
       decoded = MavRx_DecodeCommandAck(0, &s_rx_message_scratch, now_ms);

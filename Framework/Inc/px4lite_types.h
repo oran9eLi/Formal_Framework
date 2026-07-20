@@ -17,6 +17,18 @@
 #define PX4LITE_COMM_RX_PAYLOAD_MAX 255U /**< 通信接收帧 payload 最大长度，单位：byte。 */
 
 /**
+ * @brief MAVLink 帧所属的物理链路。
+ *
+ * @details
+ * 应答必须原路返回：ACK 的出口由收到命令的链路决定，不得从 sysid/compid 反推。
+ * 对端可以自行选择任意合法 compid，据此猜测出口会在对端换用别的 compid 时静默丢应答。
+ */
+typedef enum {
+  PX4LITE_MAVLINK_LINK_LORA = 0, /**< USART3 经 E22 的 LoRa 空口。 */
+  PX4LITE_MAVLINK_LINK_RPI       /**< USART6 直连树莓派。 */
+} Px4Lite_MavlinkLink_t;
+
+/**
  * @brief Framework 通用返回值。
  */
 typedef enum {

@@ -41,12 +41,32 @@
 #endif
 
 /**
+ * @brief 判断 MAVLink component 是否指向本机。
+ *
+ * @details
+ * 本机是单一逻辑 component，但在两条链路上以不同 compid 对外呈现：LoRa 空口用 191
+ * (PX4LITE_MAVLINK_COMPONENT_ID)，USART6 出口在发送时被改写为 193
+ * (PX4LITE_RPI_MAVLINK_COMPONENT_ID)。树莓派从心跳学到的正是 193，并据此寻址命令。
+ * 因此两个 compid 都必须视为"发给本机"，否则树莓派用它心跳里看到的 193 寻址会被静默拒绝、
+ * 连 COMMAND_ACK 都收不到。0 为广播。
+ */
+static uint8_t Command_IsForThisComponent(uint8_t target_component)
+{
+  if (target_component == 0U) { return 1U; }
+  if (target_component == (uint8_t)PX4LITE_MAVLINK_COMPONENT_ID) { return 1U; }
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  if (target_component == (uint8_t)PX4LITE_RPI_MAVLINK_COMPONENT_ID) { return 1U; }
+#endif
+  return 0U;
+}
+
+/**
  * @brief 判断 MAVLink 目标是否指向本机。
  */
 static uint8_t Command_IsForThisSystem(uint8_t target_system, uint8_t target_component)
 {
   if ((target_system != 0U) && (target_system != (uint8_t)Px4Lite_IdentityGetMavlinkSystemId())) { return 0U; }
-  if ((target_component != 0U) && (target_component != (uint8_t)PX4LITE_MAVLINK_COMPONENT_ID)) { return 0U; }
+  if (Command_IsForThisComponent(target_component) == 0U) { return 0U; }
   return 1U;
 }
 
@@ -195,7 +215,7 @@ static uint8_t Command_HandleAutoTakeoff(uint32_t now_ms)
   return Command_MapControlResult(result);
 }
 
-Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, uint32_t now_ms)
+Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, Px4Lite_MavlinkLink_t link, uint32_t now_ms)
 {
   uint8_t ack_result;
 
@@ -229,7 +249,8 @@ Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t sour
       break;
   }
 
-  Px4Lite_MavlinkQueueCommandAck(command, ack_result, source_system, source_component);
+  /* target 原样回填命令来源，link 决定出口：对端用哪个 compid 发来的都能收到应答。 */
+  Px4Lite_MavlinkQueueCommandAck(command, ack_result, source_system, source_component, link);
   return PX4LITE_OK;
 }
 
