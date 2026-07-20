@@ -1022,6 +1022,10 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
        判断 ESP32 是否真的在，故灯色只按 PC8；在位时仍照常泵帧广播并自愈，发送结果不改灯色。 */
     uint8_t remoteid_present = Px4Lite_RemoteIdIsPresent();
 
+    /* 树莓派身份帧先于在位判定发送：BASIC_ID 是 RPi 提取 vendor_id 建 MQTT 客户端的唯一来源，
+       ESP32 未插时也必须持续供给，否则拔掉 RemoteID 广播模块会连带上不了云。 */
+    (void)Px4Lite_RemoteIdTxRunRpiIdentity(now_ms);
+
     /* 热拔插边沿检测：插入(低→高)请求重初始化 UART4/DMA，保证 ESP32 重新插上后广播干净恢复；
        拔出(高→低)中止 TX 并清忙，避免继续往已断通道 DMA。首拍(prev=0xFF)不算边沿。
        插拔的正常/断开日志沿用消息日志既有 1.5s 去抖，此处不额外即时 push。 */

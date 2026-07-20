@@ -49,6 +49,17 @@ Px4Lite_Result_t Px4Lite_RemoteIdTxInit(uint32_t now_ms);
 Px4Lite_Result_t Px4Lite_RemoteIdTxRun(uint32_t now_ms);
 
 /**
+ * @brief 向树莓派 USART6 发送 OPEN_DRONE_ID_BASIC_ID，1Hz，与 ESP32 在位无关。
+ *
+ * @param[in] now_ms 当前系统毫秒时间。
+ *
+ * @note 必须在 ESP32 在位判定之外无条件调用：树莓派靠 BASIC_ID.uas_id 提取 vendor_id
+ *       建 MQTT 客户端，该身份通路不得依赖 RemoteID 广播模块是否插着。ESP32 出口的
+ *       BASIC_ID 仍由 Px4Lite_RemoteIdTxRun 负责，两者载荷一致、互不重复。
+ */
+Px4Lite_Result_t Px4Lite_RemoteIdTxRunRpiIdentity(uint32_t now_ms);
+
+/**
  * @brief 复制 RemoteID 发送统计。
  */
 void Px4Lite_RemoteIdTxGetStats(Px4Lite_RemoteIdTxStats_t *out);
