@@ -69,10 +69,14 @@
 #define PX4LITE_PRIORITY_STORAGE (tskIDLE_PRIORITY)
 
 /*
- * 硬件 watchdog 刷新入口实现前保持关闭；若未实现 BSP_WatchdogRefresh() 就打开，
- * 链接错误是预期保护。
+ * 硬件 watchdog。BSP_WatchdogRefresh()/BSP_Watchdog_Start() 已在 bsp_watchdog.c
+ * 实现，故此处开启。超时参数见 BSP_WATCHDOG_PRESCALER_CODE/RELOAD。
+ *
+ * 喂狗只允许经 Px4Lite_PlatformWatchdogFeed()，它以全部必需任务心跳健康为前提；
+ * 任一必需任务卡死或饿死超过 PX4LITE_TASK_HEARTBEAT_TIMEOUT_MS 即停止喂狗，
+ * 由 IWDG 复位整机。复位后 PWM 初值为 0 占空、ESC 走预解锁流程，电机保持停转。
  */
-#define PX4LITE_ENABLE_HARDWARE_WATCHDOG 0U
+#define PX4LITE_ENABLE_HARDWARE_WATCHDOG 1U
 
 #define PX4LITE_GNSS_STARTUP_GRACE_MS    5000U
 #define PX4LITE_GNSS_INSERT_CHECK_MS     1500U

@@ -26,6 +26,23 @@
 #define BSP_ENABLE_REMOTEID 1U
 #define BSP_ENABLE_RPI_UART 1U
 
+/*
+ * 独立看门狗(IWDG)。IWDG 由 LSI 驱动，STM32F407 的 LSI 标称 32 kHz，数据手册给出
+ * 的实际范围是 17~47 kHz，因此超时选型必须按最快的 47 kHz 校核"最短超时"，否则
+ * 会出现偶发误复位。
+ *
+ * 当前取值：PR=4(64 分频)、RLR=1249，超时 = 64 * (RLR + 1) / f_LSI
+ *   f_LSI = 47 kHz(最快) -> 1.70 s  <- 安全下限
+ *   f_LSI = 32 kHz(标称) -> 2.50 s
+ *   f_LSI = 17 kHz(最慢) -> 4.71 s
+ *
+ * Health 任务每 100 ms 喂一次，最短超时仍有 17 倍余量。任务卡死到复位的总时延约为
+ * 500 ms(心跳超时) + 100 ms(health 周期) + IWDG 超时。
+ */
+#define BSP_WATCHDOG_PRESCALER_CODE 4U    /**< IWDG_PR：4 表示 64 分频。 */
+#define BSP_WATCHDOG_RELOAD         1249U /**< IWDG_RLR：12 位重装值，上限 4095。 */
+#define BSP_WATCHDOG_FREEZE_ON_DEBUG 1U   /**< 调试器挂起内核时冻结 IWDG，便于单步。 */
+
 /* 调试 UART：USART1，PA9/PA10，115200 8N1。仅供 DebugConsole 使用，不再复用给树莓派。 */
 #define BSP_DBG_UART          USART1
 #define BSP_DBG_UART_BAUD     115200U

@@ -64,6 +64,7 @@ virtualFolder:
       files:
         - path: Bsp/Src/bsp.c
         - path: Bsp/Src/bsp_uart.c
+        - path: Bsp/Src/bsp_watchdog.c
         - path: Bsp/Src/bsp_gnss.c
         - path: Bsp/Src/bsp_rtc.c
         - path: Bsp/Src/bsp_lora.c

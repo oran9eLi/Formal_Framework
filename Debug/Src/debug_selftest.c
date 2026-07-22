@@ -21,6 +21,7 @@
 #if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_BSP_INIT_ENABLE
 #include "bsp.h"
 #include "bsp_uart.h"
+#include "bsp_watchdog.h"
 #endif
 
 #if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_DISPLAY_BUDGET_ENABLE
@@ -113,6 +114,14 @@ static void DebugSelfTest_ReportBspInit(void)
   DBG_PRINT("SELFTEST BSP: result=%u enabled=0x%08lX attempted=0x%08lX failed=0x%08lX "
             "uart_init=%u inst=0x%08lX baud=%lu word=0x%08lX stop=0x%08lX parity=0x%08lX mode=0x%08lX",
             (unsigned int)init_info.result, (unsigned long)init_info.enabled_mask, (unsigned long)init_info.attempted_mask, (unsigned long)init_info.failed_mask, (unsigned int)uart_info.initialized, (unsigned long)uart_info.instance, (unsigned long)uart_info.baud_rate, (unsigned long)uart_info.word_length, (unsigned long)uart_info.stop_bits, (unsigned long)uart_info.parity, (unsigned long)uart_info.mode);
+
+  /* 复位原因必须能在现场读出，否则无法区分"看门狗咬死"与"掉电/按复位键"。
+     bit0=IWDG bit1=WWDG bit2=SOFT bit3=POR bit4=PIN bit5=BOR bit6=LPWR。
+     wdg=1 表示 IWDG 已启动并正在被喂。 */
+  DBG_PRINT("SELFTEST RESET: cause=0x%02X iwdg_reset=%u wdg_started=%u",
+            (unsigned int)BSP_Watchdog_GetResetCause(),
+            (unsigned int)((BSP_Watchdog_GetResetCause() & BSP_RESET_CAUSE_IWDG) != 0U),
+            (unsigned int)BSP_Watchdog_IsStarted());
 }
 #endif
 
