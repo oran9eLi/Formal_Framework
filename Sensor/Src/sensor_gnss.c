@@ -12,7 +12,7 @@
 
 #include <string.h>
 
-#define GNSS_FIX_MIN_SATS 4U
+#define GNSS_FIX_MIN_SATS 3U
 #define GNSS_RECOVER_RETRY_MS 100U
 
 static Nmea_GeoData_t s_geo;

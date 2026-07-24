@@ -586,7 +586,10 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
       navigation.velocity_north_cms = (int32_t)(speed_cms * cosf(course_rad));
       navigation.velocity_east_cms  = (int32_t)(speed_cms * sinf(course_rad));
       navigation.velocity_down_cms  = 0;
-      navigation.valid_mask = PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_ALTITUDE | PX4LITE_NAV_VALID_VELOCITY;
+      navigation.valid_mask = PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY;
+      if (gnss.fix_dimension == 3U) {
+        navigation.valid_mask |= PX4LITE_NAV_VALID_ALTITUDE;
+      }
     } else {
       navigation.header.flags |= PX4LITE_DATA_DEGRADED;
     }
