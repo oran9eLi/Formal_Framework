@@ -29,6 +29,7 @@ RPi 现状（`src/main.cpp` + `extension_decoder.cpp`）：每条 CRC 通过的�
 | `BAROALT` | ❌ 未解 | 可选新增（见 §2.5） |
 | `GNSSUTC` | ❌ 未解 | 可选新增（见 §2.5） |
 | `LORASTAT` | ❌ 未解（RPi 专属新消息） | **新增分支**（见 §2.6） |
+| `LORATX` / `LORARX` | ❌ 未解（RPi 专属新消息） | **新增分支**（见 §2.6b） |
 | `RIDSTAT` | ❌ 未解（RPi 专属新消息） | **新增分支**（见 §2.7） |
 | `RPIIDENT`(STATUSTEXT) | ❌ 未解（RPi 专属新消息） | 可选（见 §3，建议改用 OPEN_DRONE_ID_*） |
 
@@ -162,7 +163,7 @@ if (name == "LOGSYNC") {
 | name | value | time_boot_ms | 说明 |
 |---|---|---|---|
 | `BAROALT` | 融合高度 mm（**int32 有符号**） | now_ms | 不依赖 GPS 定位，GPS 未锁星时也有值；RPi 若已从 GLOBAL_POSITION_INT 取高度可不接 |
-| `GNSSUTC` | GNSS 日期，压缩 `yymmdd`（如 260707=2026-07-07；无效为 0） | 当日 UTC 秒数 gnss_utc_sec | 日期在 value、当日秒数在 time_boot_ms |
+| `GNSSUTC` | UTC 日期，压缩 `yymmdd`（如 260707=2026-07-07；无效为 0） | 当日 UTC 秒数 | 日期在 value、当日秒数在 time_boot_ms；来源为统一时间服务，GNSS 已同步时来自 GNSS，未定位时可由 RTC 兜底 |
 
 ```cpp
 if (name == "BAROALT") { store.UpdateBaroAltMm(value.value /*int32*/); return true; }
@@ -198,6 +199,26 @@ if (name == "LORASTAT") {
   s.present       = ((bits >> 24) & 0x1) != 0;
   s.link_state    = static_cast<std::uint8_t>((bits >> 25) & 0x7);
   store.UpdateLoraStatus(s);
+  return true;
+}
+```
+
+### 2.6b `LORATX` / `LORARX`（RPi 专属：LoRa 收发计数）
+
+源码 `MavTx_SendRpiLoraTxCount` / `MavTx_SendRpiLoraRxCount`，均为 `NAMED_VALUE_INT`，只发 USART6，不上 LoRa，也不改变 `LORASTAT` 原有位布局。
+
+| name | value | time_boot_ms | 说明 |
+|---|---|---|---|
+| `LORATX` | `tx_frame_count`，本机 LoRa 发送流程完成帧计数 | `last_tx_ms` | 发送完成以 UART DMA TC 回调统计为准，不代表对端收到 |
+| `LORARX` | `rx_frame_count`，本机 LoRa 接收完整合法 MAVLink 帧计数 | `last_rx_ms` | 接收侧完整帧计数 |
+
+```cpp
+if (name == "LORATX") {
+  store.UpdateLoraTxCount(static_cast<std::uint32_t>(value.value), value.time_boot_ms);
+  return true;
+}
+if (name == "LORARX") {
+  store.UpdateLoraRxCount(static_cast<std::uint32_t>(value.value), value.time_boot_ms);
   return true;
 }
 ```
@@ -263,7 +284,7 @@ struct AlarmSummary   { std::uint16_t highest_fault_code; std::uint8_t highest_s
 - [ ] `MOTOR12`/`MOTOR34`：替换 `MOTORPWM` 分支，两帧各写 2 路、勿互相覆盖。
 - [ ] `ALRMHI`/`ALRMMSK`：新增摘要解码；确认服务器是否只要摘要（否则告警全量表另立需求）。
 - [ ] `LOGSYNC`：新增单条增量解码 + 按 sequence 去重环；确认是否接受增量+重播模型。
-- [ ] `LORASTAT`/`RIDSTAT`：新增两分支 + 两个 state 结构。
+- [ ] `LORASTAT`/`LORATX`/`LORARX`/`RIDSTAT`：新增分支 + 对应 state/update 接口。
 - [ ] （可选）`BAROALT`/`GNSSUTC`。
 - [ ] **身份**：不改 RPi 解码（M3c 已就绪），改由**固件**把 OPEN_DRONE_ID_* 镜像到 USART1；`RPIIDENT` STATUSTEXT 仅作过渡兜底。
 - [ ] 回归：确认新增/改名分支不影响已验证的 `GNSS_SAT/BAT2STAT/MODSTAT0/1`。

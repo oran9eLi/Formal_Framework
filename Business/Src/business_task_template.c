@@ -102,9 +102,20 @@ void Business_DisplayServiceTask(void *argument)
   uint8_t report_due = 0U;
 
   (void)argument;
+
+  /* Let the independently powered LCD controller complete its cold-start ramp. */
+  vTaskDelay(pdMS_TO_TICKS(BUSINESS_DISPLAY_STARTUP_DELAY_MS));
+
+  for (;;) {
+    uint32_t init_ms = Business_PlatformGetMs();
+
+    if (Px4Lite_RegistryStart(PX4LITE_MODULE_DISPLAY, init_ms) == PX4LITE_OK) { break; }
+    Business_StatusHeartbeat(BUSINESS_COMPONENT_DISPLAY);
+    vTaskDelay(pdMS_TO_TICKS(BUSINESS_DISPLAY_INIT_RETRY_MS));
+  }
+
   last_wake       = xTaskGetTickCount();
   next_refresh_ms = Business_PlatformGetMs();
-  (void)Px4Lite_RegistryStart(PX4LITE_MODULE_DISPLAY, next_refresh_ms);
 
   for (;;) {
     Business_ServiceResult_t result;

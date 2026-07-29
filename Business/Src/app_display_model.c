@@ -27,6 +27,19 @@
 #define APP_DISPLAY_REMOTE_MAX_AGE_MS PX4LITE_REMOTE_DATA_STALE_MS
 
 /**
+ * @brief 在远端尚未收到精确脉宽帧时，用百分比生成兼容显示值。
+ */
+static uint16_t AppDisplay_MotorPulseUs(uint8_t duty_percent)
+{
+  uint32_t range;
+
+  if (duty_percent > 100U) { duty_percent = 100U; }
+  range = (uint32_t)PX4LITE_CONTROL_ESC_MAX_PULSE_US - (uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US;
+  return (uint16_t)((uint32_t)PX4LITE_CONTROL_ESC_MIN_PULSE_US +
+                    ((range * (uint32_t)duty_percent) / 100U));
+}
+
+/**
  * @brief 把远端某显示域的字段有效/过期位映射为统一新鲜度返回值。
  *
  * @param[in] valid_mask 远端快照 valid_mask(曾收到的字段)。
@@ -220,6 +233,15 @@ Px4Lite_Result_t App_GetDisplayMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
   out->speed_level = remote.motor_speed_level;
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; ++i) {
     out->duty_percent[i] = remote.motor_duty_percent[i];
+    /* 远端遥测帧只携带最终输出，不区分基础油门；远端页面的滑块本就不允许写油门
+       (Display_SetMotorThrottleCommand 在 REMOTE 模式直接返回)，退化为同值不影响显示。 */
+    out->base_percent[i] = remote.motor_duty_percent[i];
+    if ((remote.motor_pulse_us[i] >= PX4LITE_CONTROL_ESC_MIN_PULSE_US) &&
+        (remote.motor_pulse_us[i] <= PX4LITE_CONTROL_ESC_MAX_PULSE_US)) {
+      out->pulse_us[i] = remote.motor_pulse_us[i];
+    } else {
+      out->pulse_us[i] = AppDisplay_MotorPulseUs(out->duty_percent[i]);
+    }
   }
   return fresh;
 }

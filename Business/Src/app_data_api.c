@@ -19,6 +19,7 @@
 #include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
 #include "px4lite_modules.h"
+#include "px4lite_platform.h"
 #include "px4lite_remote_telemetry.h"
 #include "px4lite_topics.h"
 
@@ -323,6 +324,8 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
   out->speed_level = source.speed_level;
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     out->duty_percent[i] = source.duty_percent[i];
+    out->pulse_us[i]     = source.pulse_us[i];
+    out->base_percent[i] = source.base_percent[i];
   }
   return PX4LITE_OK;
 }
@@ -330,6 +333,31 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
 Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
 {
   return Px4Lite_ControlSetMotorThrottlePercent(motor_index, throttle_percent);
+}
+
+Px4Lite_Result_t App_StartMotorAutoTakeoff(void)
+{
+  return Px4Lite_ControlStartAutoTakeoff();
+}
+
+Px4Lite_Result_t App_StartMotorAutoLanding(void)
+{
+  return Px4Lite_ControlStartAutoLanding();
+}
+
+Px4Lite_Result_t App_EmergencyStopMotors(void)
+{
+  return Px4Lite_ControlEmergencyStop(Px4Lite_PlatformGetMs());
+}
+
+Px4Lite_Result_t App_SetMotorPowerInhibit(uint8_t inhibit)
+{
+  return Px4Lite_ControlSetPowerInhibit(inhibit);
+}
+
+uint8_t App_IsMotorPowerInhibited(void)
+{
+  return Px4Lite_ControlIsPowerInhibited();
 }
 
 uint8_t App_CommandMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
@@ -613,6 +641,8 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
     out->motor_valid = 1U;
     for (i = 0U; (i < APP_DISPLAY_MOTOR_COUNT) && (i < PX4LITE_MOTOR_COUNT); i++) {
       out->motor_duty_percent[i] = s_display_motor_scratch.duty_percent[i];
+      out->motor_pulse_us[i]     = s_display_motor_scratch.pulse_us[i];
+      out->motor_base_percent[i] = s_display_motor_scratch.base_percent[i];
     }
     out->motor_run_state   = s_display_motor_scratch.run_state;
     out->motor_speed_level = s_display_motor_scratch.speed_level;

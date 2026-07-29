@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file display_lvgl.c
  * @brief LVGL renderer backend for the Display facade.
  *
@@ -140,7 +140,13 @@ static lv_obj_t *s_status_leds[DISPLAY_LVGL_STATUS_COUNT];
 static lv_obj_t *s_motor_pwm_bars[DISPLAY_LVGL_MOTOR_COUNT];
 static lv_obj_t *s_motor_pulse_labels[DISPLAY_LVGL_MOTOR_COUNT];
 static char s_motor_pulse_text[DISPLAY_LVGL_MOTOR_COUNT][16];
+static uint16_t s_motor_pulse_us[DISPLAY_LVGL_MOTOR_COUNT];
+static uint8_t s_motor_pulse_valid[DISPLAY_LVGL_MOTOR_COUNT];
 static uint8_t s_motor_slider_dragging[DISPLAY_LVGL_MOTOR_COUNT];
+/* 本次按压期间手指实际拖出来的滑轨值。滑轨显示的是含姿态修正的输出，只有这个值可以被提交
+   为新的基础油门，见 Display_LvglMotorSliderEventCb()。 */
+static uint8_t s_motor_touch_value[DISPLAY_LVGL_MOTOR_COUNT];
+static uint8_t s_motor_touch_valid[DISPLAY_LVGL_MOTOR_COUNT];
 static lv_obj_t *s_log_alarm_label;
 static lv_obj_t *s_attitude_obj;
 static int16_t s_attitude_roll_deg10;
@@ -310,8 +316,10 @@ static void Display_LvglClearActiveObjects(void)
   for (i = 0U; i < DISPLAY_LVGL_MOTOR_COUNT; i++) {
     s_motor_pwm_bars[i] = 0;
     s_motor_pulse_labels[i] = 0;
-    s_motor_pulse_text[i][0] = '\0';
     s_motor_slider_dragging[i] = 0U;
+    /* 滑轨对象已销毁，未完成的按压不能留下可提交的触摸值。 */
+    s_motor_touch_valid[i] = 0U;
+    s_motor_touch_value[i] = 0U;
   }
   for (i = 0U; i < DISPLAY_LVGL_LOG_ROWS; i++) {
     s_log_rows[i].time_label = 0;
@@ -671,15 +679,30 @@ static uint16_t Display_LvglMotorPulseUs(uint32_t percent)
   return (uint16_t)pulse;
 }
 
+/**
+ * @brief 更新 Control 最终写入的 PWM 脉宽文本。
+ *
+ * @details 脉宽仅用于精确数值显示，不反推滑轨。滑轨沿用旧工程口径，只跟随 Control
+ * 发布的 `duty_percent`，避免 ESC 预解锁期间的 1000us 把已接受的手动目标拉回 0%。
+ */
 static void Display_LvglUpdateMotorPulseLabel(uint8_t motor_index, uint32_t pulse_us)
 {
+  uint8_t changed;
+
   if (motor_index >= DISPLAY_LVGL_MOTOR_COUNT) {
     return;
   }
 
-  (void)snprintf(s_motor_pulse_text[motor_index], sizeof(s_motor_pulse_text[motor_index]), "%uus", (unsigned int)pulse_us);
-  if (s_motor_pulse_labels[motor_index] != 0) {
-    lv_label_set_text_static(s_motor_pulse_labels[motor_index], s_motor_pulse_text[motor_index]);
+  changed = ((s_motor_pulse_valid[motor_index] == 0U) ||
+             (s_motor_pulse_us[motor_index] != (uint16_t)pulse_us)) ? 1U : 0U;
+
+  s_motor_pulse_us[motor_index]    = (uint16_t)pulse_us;
+  s_motor_pulse_valid[motor_index] = 1U;
+  if (changed != 0U) {
+    (void)snprintf(s_motor_pulse_text[motor_index], sizeof(s_motor_pulse_text[motor_index]), "%uus", (unsigned int)pulse_us);
+    if (s_motor_pulse_labels[motor_index] != 0) {
+      lv_label_set_text_static(s_motor_pulse_labels[motor_index], s_motor_pulse_text[motor_index]);
+    }
   }
 }
 
@@ -759,8 +782,46 @@ static const char *Display_LvglLogMessageText(Display_LogMsg_t msg)
       return "5G""\xE6""\xAD""\xA3""\xE5""\xB8""\xB8";
     case DISPLAY_LOGMSG_5G_LOST:
       return "5G""\xE6""\x96""\xAD""\xE5""\xBC""\x80";
+    case DISPLAY_LOGMSG_TAKEOFF_SENSOR_FAIL:
+      return "\xE5""\xA7""\xBF""\xE6""\x80""\x81""\xE6""\x88""\x96""\xE7""\x8E""\xAF""\xE5""\xA2""\x83""\xE5""\xBC""\x82""\xE5""\xB8""\xB8"" ""\xE4""\xB8""\x80""\xE9""\x94""\xAE""\xE8""\xB5""\xB7""\xE9""\xA3""\x9E""\xE5""\xA4""\xB1""\xE8""\xB4""\xA5";
+    case DISPLAY_LOGMSG_TAKEOFF_POWER_FAIL:
+      /* 电机供电不足 一键起飞失败 */
+      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xBE""\x9B""\xE7""\x94""\xB5""\xE4""\xB8""\x8D""\xE8""\xB6""\xB3"" ""\xE4""\xB8""\x80""\xE9""\x94""\xAE""\xE8""\xB5""\xB7""\xE9""\xA3""\x9E""\xE5""\xA4""\xB1""\xE8""\xB4""\xA5";
+    case DISPLAY_LOGMSG_THROTTLE_POWER_FAIL:
+      /* 电机供电不足 油门失败 */
+      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xBE""\x9B""\xE7""\x94""\xB5""\xE4""\xB8""\x8D""\xE8""\xB6""\xB3"" ""\xE6""\xB2""\xB9""\xE9""\x97""\xA8""\xE5""\xA4""\xB1""\xE8""\xB4""\xA5";
+    case DISPLAY_LOGMSG_LANDING_FAIL:
+      /* 一键降落失败 */
+      return "\xE4""\xB8""\x80""\xE9""\x94""\xAE""\xE9""\x99""\x8D""\xE8""\x90""\xBD""\xE5""\xA4""\xB1""\xE8""\xB4""\xA5";
+    case DISPLAY_LOGMSG_MOTOR_POWER_CUTOFF:
+      /* 电机供电不足 自动停机 */
+      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xBE""\x9B""\xE7""\x94""\xB5""\xE4""\xB8""\x8D""\xE8""\xB6""\xB3"" ""\xE8""\x87""\xAA""\xE5""\x8A""\xA8""\xE5""\x81""\x9C""\xE6""\x9C""\xBA";
+    case DISPLAY_LOGMSG_LANDING_THROTTLE_REJECT:
+      /* 降落中 油门失败 */
+      return "\xE9""\x99""\x8D""\xE8""\x90""\xBD""\xE4""\xB8""\xAD"" ""\xE6""\xB2""\xB9""\xE9""\x97""\xA8""\xE5""\xA4""\xB1""\xE8""\xB4""\xA5";
     default:
       return "--";
+  }
+}
+
+/**
+ * @brief 判断该日志是否为电机命令被拒事件。
+ *
+ * @details 这类条目文案较长且必须让用户看清拒绝原因，统一用红色 + 循环滚动显示，
+ * 与周期状态日志区分开。
+ */
+static uint8_t Display_LvglLogMessageIsAction(Display_LogMsg_t msg)
+{
+  switch (msg) {
+    case DISPLAY_LOGMSG_TAKEOFF_SENSOR_FAIL:
+    case DISPLAY_LOGMSG_TAKEOFF_POWER_FAIL:
+    case DISPLAY_LOGMSG_THROTTLE_POWER_FAIL:
+    case DISPLAY_LOGMSG_LANDING_FAIL:
+    case DISPLAY_LOGMSG_MOTOR_POWER_CUTOFF:
+    case DISPLAY_LOGMSG_LANDING_THROTTLE_REJECT:
+      return 1U;
+    default:
+      return 0U;
   }
 }
 
@@ -800,10 +861,16 @@ static void Display_LvglUpdateMessageLog(void)
     if (i < count) {
       Display_LvglFormatClock(s_log_rows[i].time_text, entries[i].time_hhmmss);
       lv_label_set_text_static(s_log_rows[i].time_label, s_log_rows[i].time_text);
+      lv_label_set_long_mode(s_log_rows[i].msg_label,
+                             (Display_LvglLogMessageIsAction(entries[i].msg) != 0U) ? LV_LABEL_LONG_SCROLL_CIRCULAR : LV_LABEL_LONG_CLIP);
+      lv_obj_set_style_text_color(s_log_rows[i].msg_label,
+                                  (Display_LvglLogMessageIsAction(entries[i].msg) != 0U) ? lv_color_hex(0xF76D7E) : lv_color_hex(0xDCE8F2), 0);
       lv_label_set_text_static(s_log_rows[i].msg_label, Display_LvglLogMessageText(entries[i].msg));
     } else {
       s_log_rows[i].time_text[0] = '\0';
       lv_label_set_text_static(s_log_rows[i].time_label, s_log_rows[i].time_text);
+      lv_label_set_long_mode(s_log_rows[i].msg_label, LV_LABEL_LONG_CLIP);
+      lv_obj_set_style_text_color(s_log_rows[i].msg_label, lv_color_hex(0xDCE8F2), 0);
       lv_label_set_text_static(s_log_rows[i].msg_label, "");
     }
   }
@@ -966,10 +1033,12 @@ static void Display_LvglUpdateAlarmRow(uint8_t row, uint32_t value)
   Display_LvglFormatFaultCode(s_alarm_rows[row].code_text, fault_code);
   lv_label_set_text_static(s_alarm_rows[row].code_label, s_alarm_rows[row].code_text);
   lv_label_set_text_static(s_alarm_rows[row].module_label, Display_LvglAlarmModuleText(source_id, fault_code));
-  /* 通信离线原因按模块区分：LoRa 用"通信离线"，RemoteID 用"RemoteID离线"，两者分开显示。 */
+  /* 通信类告警按来源模块区分显示，避免 5G/RemoteID/LoRa 都落到通用文案。 */
   if ((source_id == (uint16_t)PX4LITE_MODULE_LORA) && (fault_code == (uint16_t)PX4LITE_FAULT_COMM_OFFLINE)) {
     lv_label_set_text_static(s_alarm_rows[row].reason_label, "LoRa""\xE7""\xA6""\xBB""\xE7""\xBA""\xBF");
-  } else if ((source_id == (uint16_t)PX4LITE_MODULE_5G) && (fault_code == (uint16_t)PX4LITE_FAULT_COMM_OFFLINE)) {
+  } else if ((source_id == (uint16_t)PX4LITE_MODULE_5G) &&
+             ((fault_code == (uint16_t)PX4LITE_FAULT_COMM_OFFLINE) ||
+              (fault_code == (uint16_t)PX4LITE_FAULT_COMM_TIMEOUT))) {
     lv_label_set_text_static(s_alarm_rows[row].reason_label, "5G""\xE9""\x80""\x9A""\xE4""\xBF""\xA1""\xE7""\xA6""\xBB""\xE7""\xBA""\xBF");
   } else if ((source_id == (uint16_t)PX4LITE_MODULE_REMOTE_ID) && (fault_code == (uint16_t)PX4LITE_FAULT_COMM_OFFLINE)) {
     lv_label_set_text_static(s_alarm_rows[row].reason_label, "RemoteID""\xE7""\xA6""\xBB""\xE7""\xBA""\xBF");
@@ -1014,6 +1083,20 @@ void Display_LvglSetAlarmRows(const uint32_t *packed, uint16_t count)
   }
 }
 
+/**
+ * @brief 电机页滑轨触摸事件处理。
+ *
+ * @details 只提交用户手指实际产生的值。滑轨跟随 Control 发布的 duty_percent(含姿态修正)，
+ * 因此它显示的值未必等于用户拖出来的目标；若把滑轨当前值无条件提交，修正量就会在每次触摸时
+ * 被吃进基础油门，逐次棘轮到 0，即历史上"油门自己掉下来"的成因。
+ *
+ * LVGL 只在旋钮位置真正改变时才发 LV_EVENT_VALUE_CHANGED，因此"手指按下后没有移动旋钮"
+ * 的点按不会产生 touch_valid，本回调也就不提交任何目标——显示值不会回灌成新目标。松手时
+ * 重发的是最后一次手指产生的值(s_motor_touch_value)，而不是滑轨当前显示值，既堵住棘轮，
+ * 又保留了电阻触摸快速松手漏掉最后一次 VALUE_CHANGED 的补偿。
+ *
+ * 与 Display_LoadMotorSnapshot() 的 duty_percent 口径成对存在，改一处必须同时改另一处。
+ */
 static void Display_LvglMotorSliderEventCb(lv_event_t *event)
 {
   lv_event_code_t code;
@@ -1029,21 +1112,28 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
   motor_index = (uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1);
 
   if (code == LV_EVENT_PRESSED) {
-    s_motor_slider_dragging[motor_index] = 1U;
+    s_motor_slider_dragging[motor_index]   = 1U;
+    s_motor_touch_valid[motor_index]       = 0U;
     return;
   }
   if ((code == LV_EVENT_RELEASED) || (code == LV_EVENT_PRESS_LOST)) {
     s_motor_slider_dragging[motor_index] = 0U;
+  } else if (code != LV_EVENT_VALUE_CHANGED) {
     return;
   }
-  if ((code != LV_EVENT_VALUE_CHANGED) || (s_control_update_active != 0U)) { return; }
+  if (s_control_update_active != 0U) { return; }
 
-  value  = lv_slider_get_value(slider);
-  if (value < 0) {
-    value = 0;
-  }
-  if (value > 100) {
-    value = 100;
+  if (code == LV_EVENT_VALUE_CHANGED) {
+    /* 旋钮被手指移动了：本次位置才是用户的新目标。 */
+    value = lv_slider_get_value(slider);
+    if (value < 0) { value = 0; }
+    if (value > 100) { value = 100; }
+    s_motor_touch_value[motor_index] = (uint8_t)value;
+    s_motor_touch_valid[motor_index] = 1U;
+  } else {
+    /* 松手：本次按压期间手指没动过旋钮就什么都不提交，避免把显示值当成新目标。 */
+    if (s_motor_touch_valid[motor_index] == 0U) { return; }
+    value = (int32_t)s_motor_touch_value[motor_index];
   }
 
   if (Display_RequestMotorThrottle(id, (uint16_t)value) != DISPLAY_OK) {
@@ -1055,20 +1145,37 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
     return;
   }
 
-  if ((id < DISPLAY_HMI_VAR_COUNT) && (s_value_valid[id] != 0U) && (s_values[id] != (uint32_t)value)) {
-    s_control_update_active = 1U;
-    lv_slider_set_value(slider, Display_LvglClampPercent(s_values[id]), LV_ANIM_OFF);
-    s_control_update_active = 0U;
+  if (id < DISPLAY_HMI_VAR_COUNT) {
+    s_values[id]      = (uint32_t)value;
+    s_value_valid[id] = 1U;
   }
+}
+
+static void Display_LvglTakeoffEventCb(lv_event_t *event)
+{
+  if (lv_event_get_code(event) != LV_EVENT_RELEASED) {
+    return;
+  }
+
+  (void)Display_RequestMotorAutoTakeoff();
 }
 
 static void Display_LvglEstopEventCb(lv_event_t *event)
 {
-  if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
+  if (lv_event_get_code(event) != LV_EVENT_PRESSED) {
     return;
   }
 
   (void)Display_RequestMotorEmergencyStop();
+}
+
+static void Display_LvglLandingEventCb(lv_event_t *event)
+{
+  if (lv_event_get_code(event) != LV_EVENT_RELEASED) {
+    return;
+  }
+
+  (void)Display_RequestMotorAutoLanding();
 }
 
 static void Display_LvglAttitudeCalEventCb(lv_event_t *event)
@@ -1096,9 +1203,9 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
 
   if ((id >= DISPLAY_HMI_VAR_MOTOR_PWM_1) && (id <= DISPLAY_HMI_VAR_MOTOR_PWM_4)) {
     motor_index = (uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1);
-    /* 用户正在拖动该滑块时不回推控制层 duty：否则滞后的 duty(电机未解锁时甚至恒为 0)
-       会每帧把滑点往回拽，表现为拖动卡顿或干脆"滑不动"。松手后 is_dragged 变 false，
-       下一次 duty 变化会正常把滑块重新同步到实际油门。 */
+    /* 用户拖动时不覆盖触摸位置；松手后滑轨跟随 Control 发布的 duty_percent。
+       Control 在 ESC 预解锁期间发布已接受的目标百分比，因此手动目标不会被 1000us
+       安全脉宽错误拉回 0%。 */
     if ((motor_index < DISPLAY_LVGL_MOTOR_COUNT) && (s_motor_pwm_bars[motor_index] != 0) &&
         (s_motor_slider_dragging[motor_index] == 0U) &&
         (lv_slider_is_dragged(s_motor_pwm_bars[motor_index]) == false)) {
@@ -1106,7 +1213,6 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
       lv_slider_set_value(s_motor_pwm_bars[motor_index], Display_LvglClampPercent(value), LV_ANIM_OFF);
       s_control_update_active = 0U;
     }
-    Display_LvglUpdateMotorPulseLabel(motor_index, Display_LvglMotorPulseUs(value));
   }
 
   if (id == DISPLAY_HMI_VAR_MESSAGE_LOG) {
@@ -1941,6 +2047,8 @@ static void Display_LvglCreateAircraftPage(lv_obj_t *parent)
     lv_obj_clear_flag(cal, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(cal, Display_LvglAttitudeCalEventCb, LV_EVENT_CLICKED, 0);
     cal_label = Display_LvglCreateLabel(cal, "\xE6""\xA0""\xA1""\xE5""\x87""\x86", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+    lv_obj_add_flag(cal_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(cal_label, Display_LvglAttitudeCalEventCb, LV_EVENT_CLICKED, 0);
     lv_obj_center(cal_label);
   }
 
@@ -1972,11 +2080,21 @@ static void Display_LvglCreateGnssPage(lv_obj_t *parent)
 static void Display_LvglCreateMotorPage(lv_obj_t *parent)
 {
   lv_obj_t *card;
-  lv_obj_t *estop;
-  lv_obj_t *estop_label;
+  lv_obj_t *action;
+  lv_obj_t *action_label;
   uint16_t i;
   static const char *motor_names[DISPLAY_LVGL_MOTOR_COUNT] = {"\xE4""\xB8""\x80""\xE5""\x8F""\xB7", "\xE4""\xBA""\x8C""\xE5""\x8F""\xB7", "\xE4""\xB8""\x89""\xE5""\x8F""\xB7", "\xE5""\x9B""\x9B""\xE5""\x8F""\xB7"};
   static const lv_coord_t track_x[DISPLAY_LVGL_MOTOR_COUNT] = {50, 135, 220, 305};
+  static const char *action_text[3] = {
+      "\xE4""\xB8""\x80""\xE9""\x94""\xAE""\xE8""\xB5""\xB7""\xE9""\xA3""\x9E",
+      "\xE6""\x80""\xA5""\xE5""\x81""\x9C",
+      "\xE4""\xB8""\x80""\xE9""\x94""\xAE""\xE9""\x99""\x8D""\xE8""\x90""\xBD"};
+  static const uint32_t action_bg[3] = {0x173E4C, 0x4E1B25, 0x1C3B2A};
+  static const uint32_t action_border[3] = {0x35C3D6, 0xE85D75, 0x5AC97A};
+  const lv_coord_t action_gap = 4;
+  const lv_coord_t action_base_x = (lv_coord_t)((388U - DISPLAY_MOTOR_ESTOP_W) / 2U);
+  const lv_coord_t action_y = (lv_coord_t)(DISPLAY_MOTOR_ESTOP_Y - DISPLAY_LVGL_BODY_Y);
+  const lv_coord_t action_w = (lv_coord_t)((DISPLAY_MOTOR_ESTOP_W - (2U * 4U)) / 3U);
 
   /* 系统栏收窄 204->150，油门卡片左移，消息日志加宽到 230（原 176 太窄，文字被时间列挡住）。 */
   Display_LvglCreateSystemColumnAt(parent, 8, 150);
@@ -2009,24 +2127,45 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
       lv_obj_set_style_text_align(s_value_slots[id].label, LV_TEXT_ALIGN_RIGHT, 0);
     }
     s_motor_pulse_labels[i] = Display_LvglCreateClipLabel(card, s_motor_pulse_text[i], (lv_coord_t)(x + 13), 250, 45, &lv_font_montserrat_12, lv_color_hex(0xDCE8F2));
-    initial_pulse = Display_LvglMotorPulseUs(((id < DISPLAY_HMI_VAR_COUNT) && (s_value_valid[id] != 0U)) ? s_values[id] : 0U);
+    initial_pulse = (s_motor_pulse_valid[i] != 0U) ? s_motor_pulse_us[i] :
+                    Display_LvglMotorPulseUs(((id < DISPLAY_HMI_VAR_COUNT) && (s_value_valid[id] != 0U)) ? s_values[id] : 0U);
     Display_LvglUpdateMotorPulseLabel((uint8_t)i, initial_pulse);
   }
 
-  estop = lv_obj_create(card);
-  lv_obj_set_size(estop, DISPLAY_MOTOR_ESTOP_W, DISPLAY_MOTOR_ESTOP_H);
-  /* 急停按钮在卡片内水平居中，纵向沿用原位置；相对卡片定位，卡片左移后仍正确。 */
-  lv_obj_set_pos(estop, (lv_coord_t)((388U - DISPLAY_MOTOR_ESTOP_W) / 2U), (lv_coord_t)(DISPLAY_MOTOR_ESTOP_Y - DISPLAY_LVGL_BODY_Y));
-  lv_obj_set_style_radius(estop, 4, 0);
-  lv_obj_set_style_bg_color(estop, lv_color_hex(0x4E1B25), 0);
-  lv_obj_set_style_bg_opa(estop, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(estop, 1, 0);
-  lv_obj_set_style_border_color(estop, lv_color_hex(0xE85D75), 0);
-  lv_obj_add_flag(estop, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_clear_flag(estop, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_event_cb(estop, Display_LvglEstopEventCb, LV_EVENT_CLICKED, 0);
-  estop_label = Display_LvglCreateLabel(estop, "\xE6""\x80""\xA5""\xE5""\x81""\x9C", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
-  lv_obj_center(estop_label);
+  for (i = 0U; i < 3U; i++) {
+    lv_coord_t width = (i == 2U) ? (lv_coord_t)(DISPLAY_MOTOR_ESTOP_W - (2U * (uint16_t)action_w) - (2U * (uint16_t)action_gap)) : action_w;
+    lv_coord_t x = (lv_coord_t)(action_base_x + ((lv_coord_t)i * (lv_coord_t)(action_w + action_gap)));
+
+    action = lv_obj_create(card);
+    lv_obj_set_size(action, width, DISPLAY_MOTOR_ESTOP_H);
+    lv_obj_set_pos(action, x, action_y);
+    lv_obj_set_style_radius(action, 4, 0);
+    lv_obj_set_style_bg_color(action, lv_color_hex(action_bg[i]), 0);
+    lv_obj_set_style_bg_opa(action, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(action, 1, 0);
+    lv_obj_set_style_border_color(action, lv_color_hex(action_border[i]), 0);
+    lv_obj_add_flag(action, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(action, LV_OBJ_FLAG_PRESS_LOCK);
+    lv_obj_clear_flag(action, LV_OBJ_FLAG_SCROLLABLE);
+    if (i == 0U) {
+      lv_obj_add_event_cb(action, Display_LvglTakeoffEventCb, LV_EVENT_RELEASED, 0);
+    } else if (i == 1U) {
+      lv_obj_add_event_cb(action, Display_LvglEstopEventCb, LV_EVENT_PRESSED, 0);
+    } else {
+      lv_obj_add_event_cb(action, Display_LvglLandingEventCb, LV_EVENT_RELEASED, 0);
+    }
+    action_label = Display_LvglCreateLabel(action, action_text[i], 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+    lv_obj_add_flag(action_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(action_label, LV_OBJ_FLAG_PRESS_LOCK);
+    if (i == 0U) {
+      lv_obj_add_event_cb(action_label, Display_LvglTakeoffEventCb, LV_EVENT_RELEASED, 0);
+    } else if (i == 1U) {
+      lv_obj_add_event_cb(action_label, Display_LvglEstopEventCb, LV_EVENT_PRESSED, 0);
+    } else {
+      lv_obj_add_event_cb(action_label, Display_LvglLandingEventCb, LV_EVENT_RELEASED, 0);
+    }
+    lv_obj_center(action_label);
+  }
 
   Display_LvglCreateMessageLogPanel(parent, 562, 230);
 }
@@ -2343,6 +2482,18 @@ Display_Result_t Display_LvglSetValue(Display_HmiVariableId_t id, uint32_t value
   s_values[id]      = value;
   s_value_valid[id] = 1U;
   Display_LvglApplyValue(id, value);
+  return DISPLAY_OK;
+}
+
+Display_Result_t Display_LvglSetMotorPulseUs(uint8_t motor_index, uint16_t pulse_us)
+{
+  if ((motor_index >= DISPLAY_LVGL_MOTOR_COUNT) ||
+      (pulse_us < PX4LITE_CONTROL_ESC_MIN_PULSE_US) ||
+      (pulse_us > PX4LITE_CONTROL_ESC_MAX_PULSE_US)) {
+    return DISPLAY_ERROR;
+  }
+
+  Display_LvglUpdateMotorPulseLabel(motor_index, pulse_us);
   return DISPLAY_OK;
 }
 

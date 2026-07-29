@@ -21,6 +21,7 @@
 #define DISPLAY_ARRAY_SIZE(array) ((uint16_t)(sizeof(array) / sizeof((array)[0])))
 
 #define DISPLAY_MOTOR_SLIDER_MAX_VALUE 100U
+#define DISPLAY_INIT_RETRY_MS          500U
 
 typedef struct {
   uint32_t value;           /* 当前缓存的原始显示值 */
@@ -175,8 +176,9 @@ static Display_HmiPage_t s_current_page       = DISPLAY_HMI_PAGE_SELF_CHECK;
 static uint8_t s_display_ready                = 0U;
 static uint8_t s_display_initialized          = 0U;
 static volatile uint8_t s_recover_requested   = 0U;
-static uint8_t s_motor_bat_cutoff             = 0U; /* 电机电池电压不足：停机并锁定 PWM 滑块 */
+static uint32_t s_next_init_attempt_ms        = 0U;
 static uint8_t s_motor_band                   = 4U; /* 电机电池档位(带滞回)，初值=正常 */
+static uint8_t s_motor_power_inhibit          = 0U; /* 已下发给 Control 的动力电池闭锁状态，初值=允许输出 */
 static uint8_t s_main_band                    = 2U; /* 主控电池档位(带滞回)，初值=正常 */
 static uint16_t s_disp_main_dv                = 0U; /* 屏幕主控电压(去抖后)，单位 0.1V */
 static uint16_t s_disp_motor_dv               = 0U; /* 屏幕电机电压(去抖后)，单位 0.1V */
@@ -223,6 +225,12 @@ static uint8_t Display_MotorIndexFromId(Display_HmiVariableId_t id, uint8_t *ind
   return 0U;
 }
 
+/**
+ * @brief 判断当前电机电池电压档位是否允许非零油门输出。
+ */
+static uint8_t Display_MotorPowerAllowsOutput(void);
+static void Display_ClearMotorFields(void);
+
 static const Display_HmiVariableConfig_t *Display_FindMotorSliderByIndex(uint8_t motor_index)
 {
   uint16_t i;
@@ -241,17 +249,32 @@ static const Display_HmiVariableConfig_t *Display_FindMotorSliderByIndex(uint8_t
 static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariableConfig_t *variable, uint16_t throttle_percent)
 {
   uint8_t motor_index;
+  Px4Lite_Result_t result;
 
   if ((variable == 0) || (Display_MotorIndexFromId(variable->id, &motor_index) == 0U)) { return DISPLAY_ERROR; }
-
-  /* 电机电池<9.9V：沿用既有低压停机要求，锁定 PWM 并保持最小脉宽。 */
-  if (s_motor_bat_cutoff != 0U) { return DISPLAY_OK; }
 
   if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_OK; }
 
   if (throttle_percent > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { throttle_percent = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
+  /* 电机电池档位不足时拒绝非零油门，滑块会被弹回旧值；必须推日志说明原因，
+     否则用户只看到滑块"自己掉下来"而无从判断是电池门槛还是控制链路故障。 */
+  if ((throttle_percent != 0U) && (Display_MotorPowerAllowsOutput() == 0U)) {
+    App_MessageLogPushThrottlePowerFail(Px4Lite_PlatformGetMs());
+    return DISPLAY_NOT_READY;
+  }
 
-  if (App_SetMotorThrottlePercent(motor_index, (uint8_t)throttle_percent) != PX4LITE_OK) { return DISPLAY_ERROR; }
+  result = App_SetMotorThrottlePercent(motor_index, (uint8_t)throttle_percent);
+  /* Control 也会拒绝：动力电池闭锁(与上面那道门同源，理论上已拦下)与一键降落进行中的非零
+     油门。两者原因不同，必须分开推日志，否则用户无法区分"电池不行"和"正在降落"。 */
+  if (result == PX4LITE_NOT_READY) {
+    if (App_IsMotorPowerInhibited() != 0U) {
+      App_MessageLogPushThrottlePowerFail(Px4Lite_PlatformGetMs());
+    } else {
+      App_MessageLogPushLandingThrottleReject(Px4Lite_PlatformGetMs());
+    }
+    return DISPLAY_NOT_READY;
+  }
+  if (result != PX4LITE_OK) { return DISPLAY_ERROR; }
 
   (void)Display_SetHmiValueU16(variable->id, throttle_percent);
 
@@ -260,20 +283,12 @@ static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariabl
 
 static Display_Result_t Display_MotorEmergencyStop(void)
 {
-  uint8_t i;
+  Px4Lite_Result_t result;
 
-  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_OK; }
+  result = App_EmergencyStopMotors();
+  Display_ClearMotorFields();
 
-  for (i = 0U; i < 4U; i++) {
-    const Display_HmiVariableConfig_t *variable = Display_FindMotorSliderByIndex(i);
-
-    (void)App_SetMotorThrottlePercent(i, 0U);
-    if (variable != 0) {
-      (void)Display_SetHmiValueU16(variable->id, 0U);
-    }
-  }
-
-  return DISPLAY_OK;
+  return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
 }
 
 Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16_t throttle_percent)
@@ -287,28 +302,45 @@ Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16
   return Display_SetMotorThrottleCommand(variable, throttle_percent);
 }
 
+Display_Result_t Display_RequestMotorAutoTakeoff(void)
+{
+  Px4Lite_Result_t result;
+  uint32_t now_ms = Px4Lite_PlatformGetMs();
+
+  if (Display_MotorPowerAllowsOutput() == 0U) {
+    App_MessageLogPushTakeoffPowerFail(now_ms);
+    return DISPLAY_NOT_READY;
+  }
+  result = App_StartMotorAutoTakeoff();
+  if (result == PX4LITE_NOT_READY) {
+    App_MessageLogPushTakeoffSensorFail(now_ms);
+    return DISPLAY_NOT_READY;
+  }
+  return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
+}
+
 Display_Result_t Display_RequestMotorEmergencyStop(void)
 {
   return Display_MotorEmergencyStop();
+}
+
+Display_Result_t Display_RequestMotorAutoLanding(void)
+{
+  Px4Lite_Result_t result = App_StartMotorAutoLanding();
+
+  /* 一键降落不设电池/姿态准入：撤收动作在传感器异常时更需要可用。失败只可能来自
+     Control 内部状态，仍推日志，避免按钮再次变成静默无响应。 */
+  if (result != PX4LITE_OK) {
+    App_MessageLogPushLandingFail(Px4Lite_PlatformGetMs());
+    return DISPLAY_ERROR;
+  }
+  return DISPLAY_OK;
 }
 
 Display_Result_t Display_RequestAttitudeLevelCalibration(void)
 {
   (void)App_RequestAttitudeLevelCalibration();
   return DISPLAY_OK;
-}
-
-/* 电机电池<9.0V 时把四路油门强制清零(电机停机)；滑块重绘交由常规刷新处理。 */
-static void Display_ForceMotorsOff(void)
-{
-  uint8_t i;
-
-  for (i = 0U; i < 4U; i++) {
-    const Display_HmiVariableConfig_t *variable = Display_FindMotorSliderByIndex(i);
-
-    (void)App_SetMotorThrottlePercent(i, 0U);
-    if (variable != 0) { (void)Display_SetHmiValueU16(variable->id, 0U); }
-  }
 }
 
 static void Display_InitSelfCheckValues(void)
@@ -330,13 +362,26 @@ static void Display_InitSelfCheckValues(void)
  */
 static Display_Result_t Display_EnsureInit(void)
 {
+  Display_Result_t result;
+  uint32_t now_ms;
+
   if (s_recover_requested != 0U) {
     s_recover_requested   = 0U;
     s_display_initialized = 0U;
     s_display_ready       = 0U;
+    s_next_init_attempt_ms = 0U;
   }
 
-  if (s_display_initialized == 0U) { return Display_Init(); }
+  if (s_display_initialized == 0U) {
+    now_ms = Px4Lite_PlatformGetMs();
+    if ((s_next_init_attempt_ms != 0U) && ((int32_t)(now_ms - s_next_init_attempt_ms) < 0)) {
+      return DISPLAY_NOT_READY;
+    }
+
+    result = Display_Init();
+    if (result != DISPLAY_OK) { s_next_init_attempt_ms = now_ms + DISPLAY_INIT_RETRY_MS; }
+    return result;
+  }
 
   return s_display_ready ? DISPLAY_OK : DISPLAY_NOT_READY;
 }
@@ -517,12 +562,13 @@ Display_Result_t Display_Init(void)
 #if DISPLAY_USE_LVGL_BACKEND
   if (Display_LvglInit(Px4Lite_PlatformGetMs()) != DISPLAY_OK) {
     s_display_ready       = 0U;
-    s_display_initialized = 1U;
+    s_display_initialized = 0U;
     return DISPLAY_ERROR;
   }
 
   s_display_ready         = 1U;
   s_display_initialized   = 1U;
+  s_next_init_attempt_ms  = 0U;
   s_current_page          = DISPLAY_HMI_PAGE_SELF_CHECK;
   Display_InitSelfCheckValues();
 #ifdef DEBUG_ENABLE
@@ -768,6 +814,43 @@ static uint16_t Display_MotorSelfCheckValue(void)
   return 2U;
 }
 
+static uint8_t Display_MotorPowerAllowsOutput(void)
+{
+  return (s_motor_band > DISPLAY_MOTOR_BAND_LOWPOWER) ? 1U : 0U;
+}
+
+/**
+ * @brief 把电机电池档位下发为 Control 的动力电池闭锁。
+ *
+ * @details 拒绝新的非零油门只挡得住"还没下发的命令"：档位在电机已经转起来之后才跌破运行
+ * 门限时，Control 锁存的旧目标不会自己消失。断开/没电/供电不足三档都要求四路油门清零，
+ * 因此必须把档位作为一个持续条件下发给 Control，由它清零并闭锁，而不是只在输入口拦截。
+ *
+ * 与急停分开：急停是用户动作，需要一次非零油门显式解锁；本闭锁是供电事实，档位恢复即自动
+ * 解除，解除后四路仍停在 0%，要靠用户重新拖滑条，避免电压在门限附近跳动时电机自己转起来。
+ *
+ * 只在本机模式维护：远端查看时 s_motor_band 反映的是远端机的电池，不能用来闭锁本机电机。
+ */
+static void Display_ApplyMotorPowerInhibit(void)
+{
+  uint8_t inhibit;
+
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return; }
+
+  inhibit = (Display_MotorPowerAllowsOutput() == 0U) ? 1U : 0U;
+
+  /* 每周期无条件下发，不做边沿判断：Control 侧只在 0->1 沿清零目标，重复下发是幂等的。
+     这样即使 Control 被重新初始化把闭锁丢掉，下一个显示周期也会自动补回；只按边沿下发的话
+     Display 会以为"已经发过了"而永不补发。 */
+  (void)App_SetMotorPowerInhibit(inhibit);
+
+  /* 日志仍只在生效沿推：解除沿不推，否则用户会误以为油门被自动恢复了。 */
+  if ((inhibit != 0U) && (s_motor_power_inhibit == 0U)) {
+    App_MessageLogPushMotorPowerCutoff(Px4Lite_PlatformGetMs());
+  }
+  s_motor_power_inhibit = inhibit;
+}
+
 /* 4 个电机自检灯共用同一块电机电池(ADC2)状态，统一刷新。 */
 static void Display_SetMotorSelfCheckLights(uint16_t value)
 {
@@ -794,12 +877,36 @@ static void Display_ClearBatteryFields(void)
 
 static void Display_ClearMotorFields(void)
 {
+  uint8_t i;
+
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_1, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_3, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, 0U);
+#if DISPLAY_USE_LVGL_BACKEND
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    (void)Display_LvglSetMotorPulseUs(i, PX4LITE_CONTROL_ESC_MIN_PULSE_US);
+  }
+#else
+  (void)i;
+#endif
 }
 
+/**
+ * @brief 把 Control 发布的实际输出油门刷新到电机页滑轨。
+ *
+ * @details 滑轨跟随含姿态修正的 `duty_percent`：《基于姿态数据反馈的电机输出辅助校准实验》
+ * 要求实验人员在中速基础油门下倾斜实验箱时，能从四路电机显示上读出修正差异，并在回平后看到
+ * 差异收敛，因此四路显示必须体现修正量而不是用户拖动的原始目标。
+ *
+ * 滑轨同时是输入和输出，显示修正后的值会带来棘轮风险：用户再次触摸滑轨时，若把当前显示值
+ * 当作新目标提交，修正量就会被逐次吃进基础油门，一路棘轮到 0(表现为"油门自己掉下来")。
+ * 该风险由 Display_LvglMotorSliderEventCb() 的触摸锁存消除——只有用户手指实际产生的值才会
+ * 被提交，滑轨自己跟随显示的值永远不会回灌成新目标。两处改动必须成对存在。
+ *
+ * `base_percent` 仍由 Control 发布并经 App_DisplaySnapshot 上行，作为遥测里"用户锁存目标"
+ * 的真值，不参与本机滑轨显示。
+ */
 static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
 {
   if (motor == 0) { return; }
@@ -808,6 +915,25 @@ static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, motor->duty_percent[1]);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_3, motor->duty_percent[2]);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, motor->duty_percent[3]);
+}
+
+/**
+ * @brief 把 Control 最终写入的四路真实 PWM 脉宽刷新到电机页。
+ *
+ * @details 该路径与整数百分比滑条分离，避免小幅姿态修正被百分比取整后隐藏。
+ */
+static void Display_LoadMotorPulseSnapshot(const App_MotorSnapshot_t *motor)
+{
+#if DISPLAY_USE_LVGL_BACKEND
+  uint8_t i;
+
+  if (motor == 0) { return; }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    (void)Display_LvglSetMotorPulseUs(i, motor->pulse_us[i]);
+  }
+#else
+  (void)motor;
+#endif
 }
 
 /*
@@ -1198,14 +1324,8 @@ static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *env
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, motor_pct);
   }
 
-  /* 电机电池<9.9V(断开/没电/供电不足档)：电机不能启动，强制停机并锁定 PWM；回到正常/需充电档自动解锁。 */
-  if (s_motor_band <= DISPLAY_MOTOR_BAND_LOWPOWER) {
-    s_motor_bat_cutoff = 1U;
-    Display_ForceMotorsOff();
-  } else {
-    s_motor_bat_cutoff = 0U;
-  }
-  /* 电机自检灯跟随电机电池档位：<9.9V 红灯，9.9~10.5V 黄灯，>=10.5V 绿灯。 */
+  /* 电机自检灯跟随电机电池档位：<9.9V 红灯，9.9~10.5V 黄灯，>=10.5V 绿灯。
+     本地非零油门和一键起飞共用该档位做电源门禁，避免低压时误启动。 */
   Display_SetMotorSelfCheckLights(Display_MotorSelfCheckValue());
 }
 
@@ -1298,6 +1418,9 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   /* 环境快照提前取，先用带滞回的档位刷新，再算电机/主控电池告警注入告警表与自检错误码表。 */
   environment_result = App_GetDisplayEnvironment(&environment, now_ms);
   if (environment_result == PX4LITE_OK) { Display_UpdateBatteryBands(&environment); }
+  /* 档位刷新后立刻下发闭锁：档位是带滞回的锁存状态，与滑条输入门 Display_MotorPowerAllowsOutput()
+     同源，保证"拒绝新命令"和"清零旧目标"永远同时生效，不会一边拒一边继续输出。 */
+  Display_ApplyMotorPowerInhibit();
   motor_fault = (environment_result == PX4LITE_OK) ? Display_EvalMotorFault(&environment) : 0U;
   main_fault  = (environment_result == PX4LITE_OK) ? Display_EvalMainFault(&environment) : 0U;
 
@@ -1350,7 +1473,8 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   motor_result = App_GetDisplayMotor(&motor, now_ms);
   if (motor_result == PX4LITE_OK) {
     Display_LoadMotorSnapshot(&motor);
-  } else {
+    Display_LoadMotorPulseSnapshot(&motor);
+  } else if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
     Display_ClearMotorFields();
   }
 

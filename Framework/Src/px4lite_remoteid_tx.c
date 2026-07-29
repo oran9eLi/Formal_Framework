@@ -58,6 +58,10 @@ static float s_home_altitude_m;
 
 static uint32_t s_next_heartbeat_ms;
 static uint32_t s_next_basic_id_ms;
+#if PX4LITE_ENABLE_RPI_MAVLINK
+/* 面向树莓派的 BASIC_ID 独立节拍，与 ESP32 在位无关，见 Px4Lite_RemoteIdTxRunRpiIdentity。 */
+static uint32_t s_next_rpi_basic_id_ms;
+#endif
 static uint32_t s_next_location_ms;
 static uint32_t s_next_system_ms;
 static uint32_t s_next_operator_id_ms;
@@ -209,8 +213,12 @@ static Px4Lite_Result_t RemoteId_SendPrepared(void)
 #if PX4LITE_ENABLE_RPI_MAVLINK
   /* D2：身份数据同时镜像到树莓派 USART6(compid 193, RPi 独立序号)，供 RPi 复用其
      现成的 OPEN_DRONE_ID_* 解码。HEARTBEAT 不镜像(RPi 已有遥测链路心跳)。镜像只临时
-     改写 s_remoteid_message 并即时恢复，不影响随后发往 UART4 的 s_remoteid_frame。 */
-  if (s_remoteid_message.msgid != MAVLINK_MSG_ID_HEARTBEAT) {
+     改写 s_remoteid_message 并即时恢复，不影响随后发往 UART4 的 s_remoteid_frame。
+     BASIC_ID 也不在此镜像：本函数整条调用链被 ESP32 在位(PC8)门控，而树莓派要靠
+     BASIC_ID.uas_id 取 vendor_id 建 MQTT 客户端，不能依赖 ESP32 是否插着。改由
+     Px4Lite_RemoteIdTxRunRpiIdentity() 无条件按同样 1Hz、同样字段发往 USART6。 */
+  if ((s_remoteid_message.msgid != MAVLINK_MSG_ID_HEARTBEAT) &&
+      (s_remoteid_message.msgid != MAVLINK_MSG_ID_OPEN_DRONE_ID_BASIC_ID)) {
     (void)Px4Lite_MavlinkTxMirrorToRpi(&s_remoteid_message);
   }
 #endif
@@ -259,10 +267,19 @@ static Px4Lite_Result_t RemoteId_SendHeartbeat(uint32_t now_ms)
 /**
  * @brief 发送 UAS 基础身份。
  */
+/**
+ * @brief 把 UAS 基础身份编码进 s_remoteid_message。
+ * @details ESP32 出口与树莓派出口共用本函数，确保两侧 BASIC_ID 载荷逐字节一致。
+ */
+static void RemoteId_PackBasicId(void)
+{
+  (void)mavlink_msg_open_drone_id_basic_id_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_ID_TYPE_SERIAL_NUMBER, MAV_ODID_UA_TYPE_HELICOPTER_OR_MULTIROTOR, s_uas_id);
+}
+
 static Px4Lite_Result_t RemoteId_SendBasicId(uint32_t now_ms)
 {
   (void)now_ms;
-  (void)mavlink_msg_open_drone_id_basic_id_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_ID_TYPE_SERIAL_NUMBER, MAV_ODID_UA_TYPE_HELICOPTER_OR_MULTIROTOR, s_uas_id);
+  RemoteId_PackBasicId();
   return RemoteId_SendPrepared();
 }
 
@@ -396,6 +413,9 @@ Px4Lite_Result_t Px4Lite_RemoteIdTxInit(uint32_t now_ms)
 
   s_next_heartbeat_ms   = now_ms;
   s_next_basic_id_ms    = now_ms + 50U;
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  s_next_rpi_basic_id_ms = now_ms + 50U;
+#endif
   s_next_location_ms    = now_ms + 100U;
   s_next_system_ms      = now_ms + 150U;
   s_next_operator_id_ms = now_ms + 200U;
@@ -424,6 +444,28 @@ Px4Lite_Result_t Px4Lite_RemoteIdTxRun(uint32_t now_ms)
   return PX4LITE_IDLE;
 }
 
+Px4Lite_Result_t Px4Lite_RemoteIdTxRunRpiIdentity(uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  Px4Lite_Result_t result;
+
+  if (RemoteId_TimeReached(now_ms, s_next_rpi_basic_id_ms) == 0U) { return PX4LITE_IDLE; }
+
+  /* 只发 USART6，不碰 UART4：树莓派靠 BASIC_ID.uas_id 取 vendor_id 建 MQTT 客户端，
+     该依赖必须与 ESP32(PC8)在位解耦。载荷与 ESP32 出口共用 RemoteId_PackBasicId()，
+     compid/序号由 MirrorToRpi 统一改写为 193/RPi 独立序号，与原镜像逐字节一致。 */
+  RemoteId_PackBasicId();
+  result = Px4Lite_MavlinkTxMirrorToRpi(&s_remoteid_message);
+
+  s_next_rpi_basic_id_ms = now_ms + ((result == PX4LITE_OK) ? PX4LITE_REMOTEID_BASIC_ID_PERIOD_MS
+                                                            : PX4LITE_REMOTEID_RETRY_PERIOD_MS);
+  return result;
+#else
+  (void)now_ms;
+  return PX4LITE_IDLE;
+#endif
+}
+
 void Px4Lite_RemoteIdTxGetStats(Px4Lite_RemoteIdTxStats_t *out)
 {
   if (out != 0) { *out = s_remoteid_stats; }
@@ -433,6 +475,7 @@ void Px4Lite_RemoteIdTxGetStats(Px4Lite_RemoteIdTxStats_t *out)
 
 Px4Lite_Result_t Px4Lite_RemoteIdTxInit(uint32_t now_ms) { (void)now_ms; return PX4LITE_OK; }
 Px4Lite_Result_t Px4Lite_RemoteIdTxRun(uint32_t now_ms) { (void)now_ms; return PX4LITE_IDLE; }
+Px4Lite_Result_t Px4Lite_RemoteIdTxRunRpiIdentity(uint32_t now_ms) { (void)now_ms; return PX4LITE_IDLE; }
 void Px4Lite_RemoteIdTxGetStats(Px4Lite_RemoteIdTxStats_t *out) { if (out != 0) { memset(out, 0, sizeof(*out)); } }
 
 #endif

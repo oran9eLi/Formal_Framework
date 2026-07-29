@@ -291,7 +291,11 @@ Display_Result_t Display_HandleTouch(uint16_t x, uint16_t y, Display_HmiVariable
 
 Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16_t throttle_percent);
 
+Display_Result_t Display_RequestMotorAutoTakeoff(void);
+
 Display_Result_t Display_RequestMotorEmergencyStop(void);
+
+Display_Result_t Display_RequestMotorAutoLanding(void);
 
 Display_Result_t Display_RequestAttitudeLevelCalibration(void);
 

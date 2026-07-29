@@ -49,7 +49,7 @@ BSP_LcdFsmcResult_t BSP_LcdFsmc_Init(const BSP_LcdFsmcConfig_t *config)
 
   BSP_LcdFsmc_ApplyTiming(config);
   HAL_Delay(5U);
-  BSP_LcdFsmc_SetBacklight(1U);
+  BSP_LcdFsmc_SetBacklight(0U);
 
   return BSP_LCD_FSMC_OK;
 }

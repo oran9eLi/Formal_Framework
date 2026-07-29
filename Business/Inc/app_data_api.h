@@ -163,9 +163,11 @@ typedef struct {
  */
 typedef struct {
   Px4Lite_TopicHeader_t header;              /**< 快照头，包含 Control 发布时间。 */
-  uint8_t duty_percent[PX4LITE_MOTOR_COUNT]; /**< 每路目标油门百分比，范围 0 到 100。 */
+  uint8_t duty_percent[PX4LITE_MOTOR_COUNT]; /**< 每路实际输出油门百分比(含姿态修正)，范围 0 到 100。 */
+  uint16_t pulse_us[PX4LITE_MOTOR_COUNT];    /**< Control 最终写入各路 PWM 的高电平脉宽，单位：us。 */
   uint8_t run_state;                         /**< 运行状态，1 表示已完成 ESC 预解锁。 */
   uint8_t speed_level;                       /**< 四路目标油门最大值，范围 0 到 100。 */
+  uint8_t base_percent[PX4LITE_MOTOR_COUNT]; /**< 姿态修正前的基础油门(滑块目标)，范围 0 到 100。 */
   uint16_t reserved;                         /**< 保留字段，保持结构体对齐。 */
 } App_MotorSnapshot_t;
 
@@ -254,9 +256,11 @@ typedef struct {
   uint8_t battery2_percent;                              /**< 第二电池电量百分比，范围 0 到 100。 */
   uint8_t low_voltage;                                   /**< 主电池低电压标志，1 表示低电压。 */
   uint8_t low_voltage2;                                  /**< 第二电池低电压标志，1 表示低电压。 */
-  uint8_t motor_duty_percent[APP_DISPLAY_MOTOR_COUNT];   /**< 每路电机目标油门百分比。 */
+  uint8_t motor_duty_percent[APP_DISPLAY_MOTOR_COUNT];   /**< 每路电机实际输出油门百分比(含姿态修正)。 */
+  uint16_t motor_pulse_us[APP_DISPLAY_MOTOR_COUNT];      /**< 每路电机最终 PWM 高电平脉宽，单位：us。 */
   uint8_t motor_run_state;                               /**< 电机运行状态，1 表示允许输出目标油门。 */
   uint8_t motor_speed_level;                             /**< 四路目标油门最大值，范围 0 到 100。 */
+  uint8_t motor_base_percent[APP_DISPLAY_MOTOR_COUNT];   /**< 每路电机姿态修正前的基础油门(滑块目标)。 */
   uint32_t lora_tx_count;                                /**< LoRa 本机发送完成帧计数。 */
   uint32_t lora_rx_count;                                /**< LoRa 接收合法帧计数。 */
   uint32_t lora_lost_count;                              /**< LoRa 接收侧按 MAVLink 序号估算的丢帧数量。 */
@@ -389,6 +393,43 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms);
  * @return 设置结果。
  */
 Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent);
+
+/**
+ * @brief Start a simple four-motor auto takeoff throttle ramp to 60%.
+ *
+ * @return Command result.
+ */
+Px4Lite_Result_t App_StartMotorAutoTakeoff(void);
+
+/**
+ * @brief Start a simple four-motor auto landing throttle ramp down to 0%.
+ *
+ * @return Command result.
+ */
+Px4Lite_Result_t App_StartMotorAutoLanding(void);
+
+Px4Lite_Result_t App_EmergencyStopMotors(void);
+
+/**
+ * @brief Latch or release the motor-battery power inhibit.
+ *
+ * @details Separate from emergency stop: this states the external fact that the motor battery
+ * cannot support output. Callers must maintain it every cycle from the motor battery band.
+ * Latching zeroes all four targets and cancels any auto throttle ramp; while latched every
+ * non-zero throttle and auto takeoff is refused. Releasing restores nothing on its own.
+ *
+ * @param[in] inhibit Non-zero to inhibit output, zero to allow.
+ *
+ * @return Command result.
+ */
+Px4Lite_Result_t App_SetMotorPowerInhibit(uint8_t inhibit);
+
+/**
+ * @brief Report whether the motor-battery power inhibit is currently latched.
+ *
+ * @return 1 when output is inhibited, 0 when allowed.
+ */
+uint8_t App_IsMotorPowerInhibited(void);
 
 /**
  * @brief 设置单路电机目标油门百分比，并返回应用层布尔结果。

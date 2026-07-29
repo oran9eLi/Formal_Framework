@@ -14,6 +14,7 @@
 #include "px4lite_local_msglog.h"
 
 #define APP_MSGLOG_DEBOUNCE_MS 1500U
+#define APP_MSGLOG_ACTION_FAIL_MIN_GAP_MS 3000U
 
 /* 电池档位门限(mV)与滞回，数值与显示层一致(各算各的，同输入同结果)。 */
 #define APP_MOTOR_BAT_CONNECT_MV 5000U
@@ -52,6 +53,12 @@ static AppLog_Debounce_t s_db_gps, s_db_att, s_db_env, s_db_comm, s_db_store, s_
 static App_LogMessageId_t s_boot_self, s_boot_gps, s_boot_att, s_boot_env, s_boot_comm, s_boot_store, s_boot_alarm, s_boot_remoteid, s_boot_5g;
 static uint32_t s_boot_since_ms, s_boot_start_t;
 
+/* 命令拒绝日志限流状态：由按钮/滑块事件驱动，不参与周期去抖。 */
+static uint32_t s_takeoff_sensor_fail_ms, s_takeoff_power_fail_ms, s_throttle_power_fail_ms, s_landing_fail_ms;
+static uint8_t s_takeoff_sensor_fail_valid, s_takeoff_power_fail_valid, s_throttle_power_fail_valid, s_landing_fail_valid;
+static uint32_t s_motor_power_cutoff_ms, s_landing_reject_ms;
+static uint8_t s_motor_power_cutoff_valid, s_landing_reject_valid;
+
 static uint32_t AppLog_Hhmmss(uint32_t now_ms)
 {
   uint32_t total_s = now_ms / 1000U;
@@ -61,10 +68,72 @@ static uint32_t AppLog_Hhmmss(uint32_t now_ms)
   return (hh * 10000U) + (mm * 100U) + ss;
 }
 
+static uint8_t AppLog_IsWarning(App_LogMessageId_t msg)
+{
+  switch (msg) {
+    case APP_LOGMSG_ALARM_ACTIVE:
+    case APP_LOGMSG_TAKEOFF_SENSOR_FAIL:
+    case APP_LOGMSG_TAKEOFF_POWER_FAIL:
+    case APP_LOGMSG_THROTTLE_POWER_FAIL:
+    case APP_LOGMSG_LANDING_FAIL:
+    case APP_LOGMSG_MOTOR_POWER_CUTOFF:
+    case APP_LOGMSG_LANDING_THROTTLE_REJECT:
+      return 1U;
+    default:
+      return 0U;
+  }
+}
+
 static void AppLog_Push(App_LogMessageId_t msg, uint32_t now_ms)
 {
+  uint8_t is_warning = AppLog_IsWarning(msg);
+
   Px4Lite_LocalMsgLogPush((uint16_t)msg, AppLog_Hhmmss(now_ms),
-                          0U, 0U, 0U, (uint8_t)((msg == APP_LOGMSG_ALARM_ACTIVE) ? 1U : 0U));
+                          0U, is_warning, 0U, is_warning);
+}
+
+/**
+ * @brief 按最小间隔限流地追加一条命令拒绝日志。
+ *
+ * @details 滑块一次拖动会连续产生多个 VALUE_CHANGED，每个被拒的事件都推日志会瞬间冲掉
+ * 整屏历史；同一条拒绝原因在 APP_MSGLOG_ACTION_FAIL_MIN_GAP_MS 内只保留第一条。
+ */
+static void AppLog_PushActionFail(App_LogMessageId_t msg, uint32_t *last_ms, uint8_t *valid, uint32_t now_ms)
+{
+  if ((*valid != 0U) && ((uint32_t)(now_ms - *last_ms) < APP_MSGLOG_ACTION_FAIL_MIN_GAP_MS)) { return; }
+  *last_ms = now_ms;
+  *valid   = 1U;
+  AppLog_Push(msg, now_ms);
+}
+
+void App_MessageLogPushTakeoffSensorFail(uint32_t now_ms)
+{
+  AppLog_PushActionFail(APP_LOGMSG_TAKEOFF_SENSOR_FAIL, &s_takeoff_sensor_fail_ms, &s_takeoff_sensor_fail_valid, now_ms);
+}
+
+void App_MessageLogPushTakeoffPowerFail(uint32_t now_ms)
+{
+  AppLog_PushActionFail(APP_LOGMSG_TAKEOFF_POWER_FAIL, &s_takeoff_power_fail_ms, &s_takeoff_power_fail_valid, now_ms);
+}
+
+void App_MessageLogPushThrottlePowerFail(uint32_t now_ms)
+{
+  AppLog_PushActionFail(APP_LOGMSG_THROTTLE_POWER_FAIL, &s_throttle_power_fail_ms, &s_throttle_power_fail_valid, now_ms);
+}
+
+void App_MessageLogPushLandingFail(uint32_t now_ms)
+{
+  AppLog_PushActionFail(APP_LOGMSG_LANDING_FAIL, &s_landing_fail_ms, &s_landing_fail_valid, now_ms);
+}
+
+void App_MessageLogPushMotorPowerCutoff(uint32_t now_ms)
+{
+  AppLog_PushActionFail(APP_LOGMSG_MOTOR_POWER_CUTOFF, &s_motor_power_cutoff_ms, &s_motor_power_cutoff_valid, now_ms);
+}
+
+void App_MessageLogPushLandingThrottleReject(uint32_t now_ms)
+{
+  AppLog_PushActionFail(APP_LOGMSG_LANDING_THROTTLE_REJECT, &s_landing_reject_ms, &s_landing_reject_valid, now_ms);
 }
 
 static uint8_t AppLog_Debounce(AppLog_Debounce_t *d, App_LogMessageId_t now, uint32_t now_ms)
@@ -164,6 +233,13 @@ void App_MessageLogInit(uint32_t now_ms)
   s_boot_self = APP_LOGMSG_COUNT; s_boot_gps = APP_LOGMSG_COUNT; s_boot_att = APP_LOGMSG_COUNT;
   s_boot_env = APP_LOGMSG_COUNT; s_boot_comm = APP_LOGMSG_COUNT; s_boot_store = APP_LOGMSG_COUNT; s_boot_alarm = APP_LOGMSG_COUNT;
   s_boot_remoteid = APP_LOGMSG_COUNT; s_boot_5g = APP_LOGMSG_COUNT;
+  /* 限流置为无效，保证复位后第一次命令拒绝立即可见。 */
+  s_takeoff_sensor_fail_valid = 0U; s_takeoff_power_fail_valid = 0U;
+  s_throttle_power_fail_valid = 0U; s_landing_fail_valid = 0U;
+  s_motor_power_cutoff_valid = 0U; s_landing_reject_valid = 0U;
+  s_takeoff_sensor_fail_ms = now_ms; s_takeoff_power_fail_ms = now_ms;
+  s_throttle_power_fail_ms = now_ms; s_landing_fail_ms = now_ms;
+  s_motor_power_cutoff_ms = now_ms; s_landing_reject_ms = now_ms;
   /* 去抖初值置为 COUNT(无效)，保证首次真实状态触发提交。 */
   s_db_gps.candidate = s_db_gps.committed = APP_LOGMSG_COUNT; s_db_gps.since_ms = now_ms;
   s_db_att.candidate = s_db_att.committed = APP_LOGMSG_COUNT; s_db_att.since_ms = now_ms;

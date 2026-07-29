@@ -656,6 +656,7 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   Px4Lite_State_t battery_state;
   Px4Lite_State_t lora_state;
   Px4Lite_State_t display_state;
+  Px4Lite_State_t fiveg_state;
   uint32_t i;
   uint32_t last_rx_ms;
   uint32_t imu_last_rx_ms;
@@ -663,6 +664,7 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   uint32_t battery_last_rx_ms;
   uint32_t lora_last_valid_ms;
   uint32_t display_last_valid_ms;
+  uint32_t fiveg_last_rx_ms;
   uint32_t status_version;
 
   taskENTER_CRITICAL();
@@ -678,6 +680,8 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   lora_state            = s_status[PX4LITE_MODULE_LORA].state;
   display_last_valid_ms = s_status[PX4LITE_MODULE_DISPLAY].last_valid_ms;
   display_state         = s_status[PX4LITE_MODULE_DISPLAY].state;
+  fiveg_last_rx_ms      = s_status[PX4LITE_MODULE_5G].last_rx_ms;
+  fiveg_state           = s_status[PX4LITE_MODULE_5G].state;
   taskEXIT_CRITICAL();
 
 #if PX4LITE_ENABLE_GNSS
@@ -718,6 +722,18 @@ void Px4Lite_HealthRun(uint32_t now_ms)
 #else
   (void)battery_state;
   (void)battery_last_rx_ms;
+#endif
+
+#if PX4LITE_ENABLE_5G
+  if ((fiveg_state != PX4LITE_STATE_FAILED) &&
+      (((fiveg_last_rx_ms == 0U) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_5G_STARTUP_GRACE_MS)) ||
+       ((fiveg_last_rx_ms != 0U) && (Px4Lite_ElapsedMs(now_ms, fiveg_last_rx_ms) > PX4LITE_5G_HEARTBEAT_TIMEOUT_MS)))) {
+    /* RPICELL 断流只说明树莓派侧网络状态不可知，与 USART6 遥测出口无关：只置 5G 显示状态。 */
+    Px4Lite_SetExternalModuleState(PX4LITE_MODULE_5G, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_COMM_TIMEOUT, now_ms);
+  }
+#else
+  (void)fiveg_state;
+  (void)fiveg_last_rx_ms;
 #endif
 
 #if PX4LITE_ENABLE_LORA
@@ -837,6 +853,18 @@ uint32_t Px4Lite_GetStatusVersion(void)
 void Px4Lite_SetExternalModuleState(Px4Lite_ModuleId_t module_id, Px4Lite_State_t state, uint16_t fault_code, uint32_t now_ms)
 {
   if ((uint32_t)module_id >= (uint32_t)PX4LITE_MODULE_COUNT) { return; }
+
+  taskENTER_CRITICAL();
+  s_status[module_id].last_rx_ms = now_ms;
+  if (state == PX4LITE_STATE_ONLINE) {
+    s_status[module_id].consecutive_errors = 0U;
+    if (s_status[module_id].consecutive_valid < 65535U) { s_status[module_id].consecutive_valid++; }
+  } else {
+    s_status[module_id].consecutive_valid = 0U;
+    if (s_status[module_id].consecutive_errors < 65535U) { s_status[module_id].consecutive_errors++; }
+  }
+  s_status_version++;
+  taskEXIT_CRITICAL();
 
   if (state == PX4LITE_STATE_ONLINE) {
     taskENTER_CRITICAL();
@@ -993,6 +1021,10 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
        未插/未上电(PC8 低)=FAILED 红。RemoteID 为盲发通道，发送必"成功"，无法据此
        判断 ESP32 是否真的在，故灯色只按 PC8；在位时仍照常泵帧广播并自愈，发送结果不改灯色。 */
     uint8_t remoteid_present = Px4Lite_RemoteIdIsPresent();
+
+    /* 树莓派身份帧先于在位判定发送：BASIC_ID 是 RPi 提取 vendor_id 建 MQTT 客户端的唯一来源，
+       ESP32 未插时也必须持续供给，否则拔掉 RemoteID 广播模块会连带上不了云。 */
+    (void)Px4Lite_RemoteIdTxRunRpiIdentity(now_ms);
 
     /* 热拔插边沿检测：插入(低→高)请求重初始化 UART4/DMA，保证 ESP32 重新插上后广播干净恢复；
        拔出(高→低)中止 TX 并清忙，避免继续往已断通道 DMA。首拍(prev=0xFF)不算边沿。

@@ -18,6 +18,7 @@
 #include "px4lite_platform.h"
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
+#include "bsp_adc_current.h" /* [RAW-DIAG] 临时：SD 两路电流列改记原始引脚 mV；查完删本行 */
 #include "storage_config.h"
 #include "storage_csv.h"
 #include "storage_drop_event.h"
@@ -226,6 +227,20 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     Storage_ReportEventState(now_ms, "BATTERY2", (battery2.low_voltage != 0U) ? PX4LITE_STATE_DEGRADED : PX4LITE_STATE_ONLINE, PX4LITE_FAULT_SENSOR_INVALID, 0U, battery2.low_voltage, "low_voltage2");
   } else {
     Storage_EnqueueError(now_ms, "BATTERY2", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, 0U, "battery2_not_ready");
+  }
+
+  /* [RAW-DIAG] 临时诊断：把 current_a / current2_a 两列改记「原始引脚电压 mV」。
+     ×1000 使 CSV 数值直接等于 mV(与串口 adc_mv 一致)，绕过零点/灵敏度/滤波，
+     用于判定电流信号是否真进了 ADC、以及交换线后是否跟随传感器。
+     注意：power_w / power2_w 两列仍是旧标定值，忽略即可。
+     还原：删除本段 + 顶部 bsp_adc_current.h 包含。 */
+  {
+    uint32_t raw_cur_mv1 = 0U;
+    uint32_t raw_cur_mv2 = 0U;
+    BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY1, &raw_cur_mv1, 0);
+    BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY2, &raw_cur_mv2, 0);
+    data.current_ma  = (int32_t)raw_cur_mv1 * 1000;
+    data.current2_ma = (int32_t)raw_cur_mv2 * 1000;
   }
 
   if (Px4Lite_CopyMotor(&motor) == PX4LITE_OK) {

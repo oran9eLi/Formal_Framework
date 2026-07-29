@@ -325,7 +325,9 @@ void HAL_DisplayLcdMspInit(void)
   gpio.Pull  = GPIO_PULLUP;
   gpio.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(BSP_LCD_BL_PORT, &gpio);
-  HAL_GPIO_WritePin(BSP_LCD_BL_PORT, BSP_LCD_BL_PIN, BSP_LCD_BL_ACTIVE_LEVEL);
+  HAL_GPIO_WritePin(BSP_LCD_BL_PORT,
+                    BSP_LCD_BL_PIN,
+                    (BSP_LCD_BL_ACTIVE_LEVEL == GPIO_PIN_SET) ? GPIO_PIN_RESET : GPIO_PIN_SET);
 #endif
 }
 

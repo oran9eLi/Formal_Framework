@@ -26,13 +26,14 @@
  * @param[in] param2 命令参数 2，含义由 command 决定。
  * @param[in] param3 命令参数 3，含义由 command 决定。
  * @param[in] param4 命令参数 4，含义由 command 决定。
+ * @param[in] link 收到该命令的链路，ACK 原路返回该链路。
  * @param[in] now_ms 当前系统毫秒时间。
  *
  * @return 处理结果。
  * @retval PX4LITE_OK 命令属于本机且已处理或已明确拒绝并排队 ACK。
  * @retval PX4LITE_IDLE 命令不属于本机。
  */
-Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, uint32_t now_ms);
+Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, Px4Lite_MavlinkLink_t link, uint32_t now_ms);
 
 /**
  * @brief 处理一条已解码的 MAVLink COMMAND_ACK。

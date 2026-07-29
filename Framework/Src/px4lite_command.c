@@ -13,6 +13,8 @@
 #include "px4lite_config.h"
 #include "px4lite_control.h"
 #include "px4lite_identity.h"
+#include "px4lite_local_msglog.h"
+#include "px4lite_log_message_ids.h"
 #include "px4lite_mavlink_tx.h"
 
 #if defined(__CC_ARM)
@@ -29,11 +31,34 @@
 
 #define PX4LITE_CMD_SET_MOTOR_THROTTLE_PERCENT 31011U
 #define PX4LITE_CMD_SET_MOTOR_CONTROL_MODE     31012U
+#define PX4LITE_CMD_SET_MOTOR_PWM_US           31013U
 #define PX4LITE_CMD_MOTOR_EMERGENCY_STOP       31090U
+#define PX4LITE_CMD_AUTO_TAKEOFF               31091U
+#define PX4LITE_CMD_AUTO_LANDING               31092U
 
 #if PX4LITE_MOTOR_COUNT != 4U
 #error "Motor throttle COMMAND_LONG mapping requires exactly four motor channels"
 #endif
+
+/**
+ * @brief 判断 MAVLink component 是否指向本机。
+ *
+ * @details
+ * 本机是单一逻辑 component，但在两条链路上以不同 compid 对外呈现：LoRa 空口用 191
+ * (PX4LITE_MAVLINK_COMPONENT_ID)，USART6 出口在发送时被改写为 193
+ * (PX4LITE_RPI_MAVLINK_COMPONENT_ID)。树莓派从心跳学到的正是 193，并据此寻址命令。
+ * 因此两个 compid 都必须视为"发给本机"，否则树莓派用它心跳里看到的 193 寻址会被静默拒绝、
+ * 连 COMMAND_ACK 都收不到。0 为广播。
+ */
+static uint8_t Command_IsForThisComponent(uint8_t target_component)
+{
+  if (target_component == 0U) { return 1U; }
+  if (target_component == (uint8_t)PX4LITE_MAVLINK_COMPONENT_ID) { return 1U; }
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  if (target_component == (uint8_t)PX4LITE_RPI_MAVLINK_COMPONENT_ID) { return 1U; }
+#endif
+  return 0U;
+}
 
 /**
  * @brief 判断 MAVLink 目标是否指向本机。
@@ -41,7 +66,7 @@
 static uint8_t Command_IsForThisSystem(uint8_t target_system, uint8_t target_component)
 {
   if ((target_system != 0U) && (target_system != (uint8_t)Px4Lite_IdentityGetMavlinkSystemId())) { return 0U; }
-  if ((target_component != 0U) && (target_component != (uint8_t)PX4LITE_MAVLINK_COMPONENT_ID)) { return 0U; }
+  if (Command_IsForThisComponent(target_component) == 0U) { return 0U; }
   return 1U;
 }
 
@@ -55,6 +80,24 @@ static uint8_t Command_ParamToPercent(float value, uint8_t *out)
   *out = (uint8_t)(value + 0.5f);
   if (*out > 100U) { *out = 100U; }
   return 1U;
+}
+
+static uint8_t Command_ParamToPulseUs(float value, uint16_t *out)
+{
+  if (out == 0) { return 0U; }
+  if (!((value >= (float)PX4LITE_CONTROL_ESC_MIN_PULSE_US) &&
+        (value <= (float)PX4LITE_CONTROL_ESC_MAX_PULSE_US))) { return 0U; }
+  *out = (uint16_t)(value + 0.5f);
+  return 1U;
+}
+
+static void Command_PushTakeoffSensorFail(uint32_t now_ms)
+{
+  uint32_t total_s = now_ms / 1000U;
+  uint32_t hhmmss = (((total_s / 3600U) % 100U) * 10000U) +
+                    (((total_s / 60U) % 60U) * 100U) + (total_s % 60U);
+  Px4Lite_LocalMsgLogPush((uint16_t)PX4LITE_LOGMSG_TAKEOFF_SENSOR_FAIL, hhmmss,
+                          0U, 1U, 0U, 1U);
 }
 
 /**
@@ -120,6 +163,29 @@ static uint8_t Command_HandleSetMotorThrottle(float param1, float param2, float 
   return (uint8_t)MAV_RESULT_ACCEPTED;
 }
 
+static uint8_t Command_HandleSetMotorPulseUs(float param1, float param2, float param3, float param4)
+{
+  float params[PX4LITE_MOTOR_COUNT];
+  uint16_t pulse_us[PX4LITE_MOTOR_COUNT];
+  uint8_t i;
+  Px4Lite_Result_t result;
+
+  params[0] = param1;
+  params[1] = param2;
+  params[2] = param3;
+  params[3] = param4;
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (Command_ParamToPulseUs(params[i], &pulse_us[i]) == 0U) { return (uint8_t)MAV_RESULT_DENIED; }
+  }
+  result = Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_DIRECT);
+  if (result != PX4LITE_OK) { return Command_MapControlResult(result); }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    result = Px4Lite_ControlSetMotorPulseUs(i, pulse_us[i]);
+    if (result != PX4LITE_OK) { return Command_MapControlResult(result); }
+  }
+  return (uint8_t)MAV_RESULT_ACCEPTED;
+}
+
 static uint8_t Command_HandleSetMotorControlMode(float param1, float param2, float param3, float param4)
 {
   Px4Lite_ControlMode_t mode;
@@ -141,7 +207,15 @@ static uint8_t Command_HandleSetMotorControlMode(float param1, float param2, flo
   return Command_MapControlResult(Px4Lite_ControlSetMode(mode));
 }
 
-Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, uint32_t now_ms)
+static uint8_t Command_HandleAutoTakeoff(uint32_t now_ms)
+{
+  Px4Lite_Result_t result = Px4Lite_ControlStartAutoTakeoff();
+
+  if (result == PX4LITE_NOT_READY) { Command_PushTakeoffSensorFail(now_ms); }
+  return Command_MapControlResult(result);
+}
+
+Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, Px4Lite_MavlinkLink_t link, uint32_t now_ms)
 {
   uint8_t ack_result;
 
@@ -154,6 +228,9 @@ Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t sour
     case PX4LITE_CMD_SET_MOTOR_CONTROL_MODE:
       ack_result = Command_HandleSetMotorControlMode(param1, param2, param3, param4);
       break;
+    case PX4LITE_CMD_SET_MOTOR_PWM_US:
+      ack_result = Command_HandleSetMotorPulseUs(param1, param2, param3, param4);
+      break;
     case PX4LITE_CMD_MOTOR_EMERGENCY_STOP:
       (void)param1;
       (void)param2;
@@ -161,12 +238,19 @@ Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t sour
       (void)param4;
       ack_result = Command_MapControlResult(Px4Lite_ControlEmergencyStop(now_ms));
       break;
+    case PX4LITE_CMD_AUTO_TAKEOFF:
+      ack_result = Command_HandleAutoTakeoff(now_ms);
+      break;
+    case PX4LITE_CMD_AUTO_LANDING:
+      ack_result = Command_MapControlResult(Px4Lite_ControlStartAutoLanding());
+      break;
     default:
       ack_result = (uint8_t)MAV_RESULT_UNSUPPORTED;
       break;
   }
 
-  Px4Lite_MavlinkQueueCommandAck(command, ack_result, source_system, source_component);
+  /* target 原样回填命令来源，link 决定出口：对端用哪个 compid 发来的都能收到应答。 */
+  Px4Lite_MavlinkQueueCommandAck(command, ack_result, source_system, source_component, link);
   return PX4LITE_OK;
 }
 

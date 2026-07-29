@@ -18,6 +18,7 @@
 #include "bsp_pwm.h"
 #include "bsp_rtc.h"
 #include "bsp_uart.h"
+#include "bsp_watchdog.h"
 #include "lora_e22.h"
 #include "bsp_time.h"
 #include "sensor_bme280.h"
@@ -132,9 +133,6 @@ static int32_t Px4Lite_BaroUpdateVerticalSpeed(int32_t altitude_mm, uint32_t sam
   return s_baro_vertical_speed_cms;
 }
 
-#if PX4LITE_ENABLE_HARDWARE_WATCHDOG
-extern void BSP_WatchdogRefresh(void);
-#endif
 
 /**
  * @brief 复位平台心跳状态并初始化适配层拥有的服务。
@@ -307,6 +305,14 @@ void Px4Lite_PlatformWatchdogFeed(uint32_t now_ms)
   if (Px4Lite_PlatformHeartbeatsHealthy(now_ms) == 0U) { return; }
 
 #if PX4LITE_ENABLE_HARDWARE_WATCHDOG
+  /* 延迟启动：IWDG 一旦启动就无法用软件关闭，若在 BSP_Init() 中启动，其后的
+     SD/LCD/GNSS 等长耗时初始化和 FreeRTOS 调度器启动期间无人喂狗，会直接形成
+     开机复位循环。这里在所有必需任务心跳首次全部健康时才启动，此刻已确认调度器
+     在跑、各任务都进过循环，不存在无人喂狗的空窗。BSP_Watchdog_Start() 内部
+     幂等，重复调用不会重新配置。 */
+  if (BSP_Watchdog_IsStarted() == 0U) {
+    (void)BSP_Watchdog_Start();
+  }
   BSP_WatchdogRefresh();
 #else
   (void)now_ms;
@@ -392,7 +398,10 @@ Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *measurement)
   now_ms = Px4Lite_PlatformGetMs();
   result = Sensor_MPU6050_Service(now_ms);
   if (result != MPU6050_RESULT_OK) {
-    stable_valid_count = 0U;
+    /* 单帧采样失败只代表"本轮没有新样本"，不重置稳定计数：稳定计数的唯一用途是
+       在重初始化之后等待若干帧再发布(见下方 reinit_count 判定)。若在这里一并清零，
+       任何一次瞬时拒绝都会让计数在 0..MIN-1 之间反复横跳而永远到不了门限，
+       last_rx_ms 随之冻结，Health 在 PX4LITE_IMU_OFFLINE_MS 后误判 IMU 离线。 */
     return (result == MPU6050_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR;
   }
 

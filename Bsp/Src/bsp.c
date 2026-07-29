@@ -13,6 +13,7 @@
 
 #include "bsp_lora.h"
 #include "bsp_remoteid.h"
+#include "bsp_watchdog.h"
 #if BSP_ENABLE_I2C
 #include "bsp_i2c.h"
 #endif
@@ -67,6 +68,12 @@ BSP_Status_t BSP_Init(void)
   s_bsp_init_debug.attempted_mask = 0U;
   s_bsp_init_debug.failed_mask    = 0U;
   s_bsp_init_debug.result         = BSP_STATUS_OK;
+
+  /* 必须在任何其它初始化之前捕获复位原因：RCC_CSR 的复位标志一直保留到写 RMVF，
+     不在此处读取并清除，下次复位读到的就是历次标志的并集，无法判断真实原因。
+     本函数只读寄存器，不启动看门狗——IWDG 的启动推迟到所有必需任务心跳首次
+     健康之后（见 Px4Lite_PlatformWatchdogFeed）。 */
+  BSP_Watchdog_CaptureResetCause();
 
   /* E22 M0/M1 内部上拉，STM32 引脚悬空期间模块会按休眠模式完成上电自检；
      必须最先拉低模式引脚，让 E22 自检结束时直接进入正常模式，避免冷启动

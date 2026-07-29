@@ -26,6 +26,23 @@
 #define BSP_ENABLE_REMOTEID 1U
 #define BSP_ENABLE_RPI_UART 1U
 
+/*
+ * 独立看门狗(IWDG)。IWDG 由 LSI 驱动，STM32F407 的 LSI 标称 32 kHz，数据手册给出
+ * 的实际范围是 17~47 kHz，因此超时选型必须按最快的 47 kHz 校核"最短超时"，否则
+ * 会出现偶发误复位。
+ *
+ * 当前取值：PR=4(64 分频)、RLR=1249，超时 = 64 * (RLR + 1) / f_LSI
+ *   f_LSI = 47 kHz(最快) -> 1.70 s  <- 安全下限
+ *   f_LSI = 32 kHz(标称) -> 2.50 s
+ *   f_LSI = 17 kHz(最慢) -> 4.71 s
+ *
+ * Health 任务每 100 ms 喂一次，最短超时仍有 17 倍余量。任务卡死到复位的总时延约为
+ * 500 ms(心跳超时) + 100 ms(health 周期) + IWDG 超时。
+ */
+#define BSP_WATCHDOG_PRESCALER_CODE 4U    /**< IWDG_PR：4 表示 64 分频。 */
+#define BSP_WATCHDOG_RELOAD         1249U /**< IWDG_RLR：12 位重装值，上限 4095。 */
+#define BSP_WATCHDOG_FREEZE_ON_DEBUG 1U   /**< 调试器挂起内核时冻结 IWDG，便于单步。 */
+
 /* 调试 UART：USART1，PA9/PA10，115200 8N1。仅供 DebugConsole 使用，不再复用给树莓派。 */
 #define BSP_DBG_UART          USART1
 #define BSP_DBG_UART_BAUD     115200U
@@ -102,16 +119,19 @@
 #define BSP_ADC_CH          ADC_CHANNEL_5
 #define BSP_ADC_PORT        GPIOA
 #define BSP_ADC_PIN         GPIO_PIN_5
-#define BSP_ADC_DIVIDER_NUM 10080U
-#define BSP_ADC_DIVIDER_DEN 1000U
+/* 分压系数 = NUM/DEN，用于把引脚电压还原成电池电压。
+   2026-07-24 地面站电源模块标定实测值 10.17793941，按 1e-4 精度取整为 101779/10000。
+   上一版为标称值 10.080。修改后必须同步 Tests/Unit/test_power_adc_calibration.c 的断言。 */
+#define BSP_ADC_DIVIDER_NUM 101779U
+#define BSP_ADC_DIVIDER_DEN 10000U
 
 /* 第二块电池电源采样 ADC2：ADC2 IN4，PA4。与电池 1 同规格，分压系数相同。 */
 #define BSP_ADC2_INS         ADC2
 #define BSP_ADC2_CH          ADC_CHANNEL_4
 #define BSP_ADC2_PORT        GPIOA
 #define BSP_ADC2_PIN         GPIO_PIN_4
-#define BSP_ADC2_DIVIDER_NUM 10080U
-#define BSP_ADC2_DIVIDER_DEN 1000U
+#define BSP_ADC2_DIVIDER_NUM 101779U
+#define BSP_ADC2_DIVIDER_DEN 10000U
 
 /* 两路电流计采样 ADC：ADC3 IN10/IN11，PC0/PC1。与电池电压 ADC1/ADC2 分属独立外设，互不冲突。 */
 #define BSP_ADC_CURRENT_INS           ADC3

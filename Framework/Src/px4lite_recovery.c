@@ -22,13 +22,23 @@ static uint16_t s_attempt_count[PX4LITE_MODULE_COUNT];
 /**
  * @brief 判断一个模块状态是否需要尝试恢复。
  *
+ * @details 只按 OFFLINE/FAILED 判定，不能再看 consecutive_errors：
+ * Px4Lite_SetExternalModuleState() 对任何非 ONLINE 状态都累加该计数，STARTING 属于正常
+ * 启动过程而不是错误，计数在启动期间必然越过阈值。调用者已在 ONLINE/DEGRADED 时清零并
+ * 跳过，因此该计数唯一还能命中的就是 STARTING/UNINITIALIZED/DISABLED——正是本函数下方
+ * 注释声明要交给启动流程处理的状态。
+ *
+ * 曾导致 Control 永久停在 ESC 预解锁：预解锁 2500ms 期间每 20ms 发布一次 STARTING，
+ * 100ms 就凑满阈值，恢复监视器每 2000ms 调用 Px4Lite_ControlRecover() 重置 Control，
+ * 既清零四路油门目标(滑轨自己掉回 0)，又把解锁计时重新拨回起点(ESC 永远解锁不了)。
+ *
  * @param[in] status 模块状态，不能为 NULL。
  *
  * @return 1 表示需要恢复，0 表示不需要。
  */
 static uint8_t Px4Lite_RecoveryNeeded(const Px4Lite_ModuleStatus_t *status)
 {
-  return ((status->state == PX4LITE_STATE_OFFLINE) || (status->state == PX4LITE_STATE_FAILED) || (status->consecutive_errors >= PX4LITE_RECOVERY_ERROR_THRESHOLD)) ? 1U : 0U;
+  return ((status->state == PX4LITE_STATE_OFFLINE) || (status->state == PX4LITE_STATE_FAILED)) ? 1U : 0U;
 }
 #endif
 

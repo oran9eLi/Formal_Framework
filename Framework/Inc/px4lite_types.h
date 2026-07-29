@@ -17,6 +17,18 @@
 #define PX4LITE_COMM_RX_PAYLOAD_MAX 255U /**< 通信接收帧 payload 最大长度，单位：byte。 */
 
 /**
+ * @brief MAVLink 帧所属的物理链路。
+ *
+ * @details
+ * 应答必须原路返回：ACK 的出口由收到命令的链路决定，不得从 sysid/compid 反推。
+ * 对端可以自行选择任意合法 compid，据此猜测出口会在对端换用别的 compid 时静默丢应答。
+ */
+typedef enum {
+  PX4LITE_MAVLINK_LINK_LORA = 0, /**< USART3 经 E22 的 LoRa 空口。 */
+  PX4LITE_MAVLINK_LINK_RPI       /**< USART6 直连树莓派。 */
+} Px4Lite_MavlinkLink_t;
+
+/**
  * @brief Framework 通用返回值。
  */
 typedef enum {
@@ -191,9 +203,18 @@ typedef struct {
  */
 typedef struct {
   Px4Lite_TopicHeader_t header;                  /**< topic 公共头。 */
-  uint8_t duty_percent[PX4LITE_MOTOR_COUNT];     /**< 每路电机目标油门百分比，范围 0 到 100。 */
+  uint8_t duty_percent[PX4LITE_MOTOR_COUNT];     /**< 每路电机实际输出油门百分比(已含姿态修正)，范围 0 到 100。 */
+  uint16_t pulse_us[PX4LITE_MOTOR_COUNT];        /**< Control 最终写入各路 PWM 的高电平脉宽，单位：us。 */
   uint8_t run_state;                             /**< 运行状态，1 表示 ESC 已完成预解锁并允许输出目标油门。 */
   uint8_t speed_level;                           /**< 兼容显示字段，当前等于四路目标油门最大值，范围 0 到 100。 */
+  /*
+   * 姿态修正前的基础油门，即用户滑块或下行命令锁存的目标，范围 0 到 100。
+   *
+   * 与 duty_percent 的差即为姿态修正量。本机电机页滑块跟随 duty_percent(实验要求从四路显示
+   * 上读出倾斜差异)，本字段作为"用户锁存目标"的真值供遥测与地面站使用；滑块不会把显示值回灌
+   * 成新目标，见 Display_LvglMotorSliderEventCb() 的触摸锁存。
+   */
+  uint8_t base_percent[PX4LITE_MOTOR_COUNT];
   uint16_t reserved;                             /**< 保留字段，保持结构体对齐。 */
 } Px4Lite_MotorOutputs_t;
 
@@ -481,6 +502,7 @@ typedef struct {
   uint8_t low_voltage;                                /**< 主电池低电压标志，1 表示低电压。 */
   uint8_t low_voltage2;                               /**< 第二电池低电压标志，1 表示低电压。 */
   uint8_t motor_duty_percent[PX4LITE_MOTOR_COUNT];    /**< 远端四路目标油门百分比。 */
+  uint16_t motor_pulse_us[PX4LITE_MOTOR_COUNT];       /**< 远端 Control 实际输出的四路 PWM 高电平脉宽，单位：us。 */
   uint8_t motor_run_state;                            /**< 远端电机运行状态，1 表示允许输出目标油门。 */
   uint8_t motor_speed_level;                          /**< 远端四路目标油门最大值，范围 0 到 100。 */
   uint8_t remote_log_count;                           /**< 远端消息日志缓存条目数量。 */

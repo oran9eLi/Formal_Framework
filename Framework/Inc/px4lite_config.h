@@ -17,7 +17,7 @@
 #define PX4LITE_ENABLE_BATTERY             1U
 #define PX4LITE_ENABLE_LORA                1U
 /* 5G-A 可通过所属服务发送 AT 指令做连接管理，不承载业务数据或 Remote ID 数据流。 */
-#define PX4LITE_ENABLE_5G                  0U
+#define PX4LITE_ENABLE_5G                  1U
 #define PX4LITE_ENABLE_STORAGE             1U
 /* Remote ID 由 STM32 通过 UART4 向 ESP32-S3 发送 MAVLink/OpenDroneID 消息。 */
 #define PX4LITE_ENABLE_REMOTE_ID           1U
@@ -46,6 +46,7 @@
 #define PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100 18000
 #define PX4LITE_CONTROL_ATTITUDE_MIN_BASE_PERCENT 1U
 #define PX4LITE_CONTROL_ATTITUDE_MAX_CORRECTION_PERCENT 20U
+/* 姿态 PD 增益均放大 100：30 表示 0.30%/degree，4 表示 0.04%/(degree/s)。 */
 #define PX4LITE_CONTROL_ATTITUDE_KP_X100 30
 #define PX4LITE_CONTROL_ATTITUDE_KD_X100 4
 #define PX4LITE_TASK_HEARTBEAT_TIMEOUT_MS  500U
@@ -68,10 +69,14 @@
 #define PX4LITE_PRIORITY_STORAGE (tskIDLE_PRIORITY)
 
 /*
- * 硬件 watchdog 刷新入口实现前保持关闭；若未实现 BSP_WatchdogRefresh() 就打开，
- * 链接错误是预期保护。
+ * 硬件 watchdog。BSP_WatchdogRefresh()/BSP_Watchdog_Start() 已在 bsp_watchdog.c
+ * 实现，故此处开启。超时参数见 BSP_WATCHDOG_PRESCALER_CODE/RELOAD。
+ *
+ * 喂狗只允许经 Px4Lite_PlatformWatchdogFeed()，它以全部必需任务心跳健康为前提；
+ * 任一必需任务卡死或饿死超过 PX4LITE_TASK_HEARTBEAT_TIMEOUT_MS 即停止喂狗，
+ * 由 IWDG 复位整机。复位后 PWM 初值为 0 占空、ESC 走预解锁流程，电机保持停转。
  */
-#define PX4LITE_ENABLE_HARDWARE_WATCHDOG 0U
+#define PX4LITE_ENABLE_HARDWARE_WATCHDOG 1U
 
 #define PX4LITE_GNSS_STARTUP_GRACE_MS    5000U
 #define PX4LITE_GNSS_INSERT_CHECK_MS     1500U
@@ -100,6 +105,10 @@
 #define PX4LITE_BATTERY_MAX_AGE_MS       2500U
 #define PX4LITE_DISPLAY_STARTUP_GRACE_MS 5000U
 #define PX4LITE_DISPLAY_OFFLINE_MS       3000U
+#define PX4LITE_5G_STARTUP_GRACE_MS      5000U
+/* RPICELL 接收超时。按《STM32与树莓派链路周期通信约定》§5 取 5000ms：RPICELL 默认 1Hz，
+   5s 容忍 4 帧调度抖动，又能在树莓派退出/掉电/UART 中断后及时把 5G 显示置为未知。 */
+#define PX4LITE_5G_HEARTBEAT_TIMEOUT_MS  5000U
 
 /*
  * GNSS 专用恢复路径已经挂到 HealthRun，但在 BSP 恢复路径完成硬件故障注入测试前
@@ -228,6 +237,13 @@
 #define PX4LITE_MAVLINK_RPI_RIDSTAT_PERIOD_MS  1000U
 #define PX4LITE_MAVLINK_RPI_ALARM_PERIOD_MS    1000U
 #define PX4LITE_MAVLINK_RPI_LOG_PERIOD_MS      2000U
+
+/*
+ * USART6 上行统一 1Hz 上限。RPi 遥测复用 LoRa 编码器，周期宏与 LoRa 共用，改宏会连累
+ * LoRa 空口，故不改宏，而在 RPi 发送趟对每项周期取此下限：只放慢 USART6，LoRa 侧仍按原周期。
+ * 心跳与多数项本就 1000ms，仅 ATTITUDE/POSITION/MOTOR(500ms)、MODULE_STATE(700ms)被抬到 1000ms。
+ */
+#define PX4LITE_MAVLINK_RPI_TELEM_MIN_PERIOD_MS 1000U
 
 /*
  * ESP32-S3 RemoteID 发送配置。身份字段是生产默认值，后续可由 5G/网口命令写入配置存储后统一加载。
