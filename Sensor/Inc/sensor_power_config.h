@@ -43,8 +43,11 @@
 
 #ifndef POWER_CURRENT_MV_PER_A
 /** @brief 第一电池电流计每 1A 对应的输出电压变化，单位：mV/A。
- *  模块硬件设计值：0.5mΩ 分流 × ~200 增益 = 100mV/A。大电流精调需台架加已知电流补点。 */
-#define POWER_CURRENT_MV_PER_A 100U
+ *  2026-07-24 地面站电源模块标定实测 15.39103031 A/V，取倒数得 1000/15.39103031 = 64.97 mV/A，
+ *  受本宏为整数所限取 65（等效 15.3846 A/V，相对标定值偏低 0.042%，远小于电流计本身误差）。
+ *  上一版 100mV/A 为按 0.5mΩ 分流 × ~200 增益推算的标称值，未经实测验证，本次标定后作废。
+ *  大电流段精度仍需台架加已知电流补点确认。 */
+#define POWER_CURRENT_MV_PER_A 65U
 #endif
 
 #ifndef POWER_CURRENT_OFFSET_MA
@@ -74,12 +77,17 @@
 
 #ifndef POWER2_CURRENT_MV_PER_A
 /** @brief 第二电池电流计每 1A 对应的输出电压变化，单位：mV/A。
- *  模块硬件设计值：0.5mΩ 分流 × ~200 增益 = 100mV/A。大电流精调需台架加已知电流补点。 */
-#define POWER2_CURRENT_MV_PER_A 100U
+ *  与第一电池同规格，沿用同一次标定结果，取值依据见 POWER_CURRENT_MV_PER_A 注释。
+ *  注意：本路对应 PC1 通道，该通道曾因损坏更换开发板，零点 POWER2_CURRENT_ZERO_MV 仍需实测确认。 */
+#define POWER2_CURRENT_MV_PER_A 65U
 #endif
 
 #ifndef POWER2_CURRENT_OFFSET_MA
-/** @brief 第二电池电流二次校准固定偏移，单位：mA，可为负值。 */
+/** @brief 第二电池电流二次校准固定偏移，单位：mA，可为负值。
+ *  刻意与 NW5.1 分歧：NW5.1 取 -3000（按电机空载约 3A 扣基线，使空转显示 0A）。此处保持 0，
+ *  因为该偏移会让电机停转(真 0A)读出约 -3A，且 3A 以下工况全为负值、功率恒 0，
+ *  上报到 SD/MAVLink/远端的就不再是电池电流而是「相对电机空载的增量」。
+ *  PC1 换板后的真实零点应实测后填入 POWER2_CURRENT_ZERO_MV，而不是用本偏移硬凑显示效果。 */
 #define POWER2_CURRENT_OFFSET_MA 0
 #endif
 

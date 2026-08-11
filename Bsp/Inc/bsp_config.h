@@ -119,16 +119,19 @@
 #define BSP_ADC_CH          ADC_CHANNEL_5
 #define BSP_ADC_PORT        GPIOA
 #define BSP_ADC_PIN         GPIO_PIN_5
-#define BSP_ADC_DIVIDER_NUM 10080U
-#define BSP_ADC_DIVIDER_DEN 1000U
+/* 分压系数 = NUM/DEN，用于把引脚电压还原成电池电压。
+   2026-07-24 地面站电源模块标定实测值 10.17793941，按 1e-4 精度取整为 101779/10000。
+   上一版为标称值 10.080。修改后必须同步 Tests/Unit/test_power_adc_calibration.c 的断言。 */
+#define BSP_ADC_DIVIDER_NUM 101779U
+#define BSP_ADC_DIVIDER_DEN 10000U
 
 /* 第二块电池电源采样 ADC2：ADC2 IN4，PA4。与电池 1 同规格，分压系数相同。 */
 #define BSP_ADC2_INS         ADC2
 #define BSP_ADC2_CH          ADC_CHANNEL_4
 #define BSP_ADC2_PORT        GPIOA
 #define BSP_ADC2_PIN         GPIO_PIN_4
-#define BSP_ADC2_DIVIDER_NUM 10080U
-#define BSP_ADC2_DIVIDER_DEN 1000U
+#define BSP_ADC2_DIVIDER_NUM 101779U
+#define BSP_ADC2_DIVIDER_DEN 10000U
 
 /* 两路电流计采样 ADC：ADC3 IN10/IN11，PC0/PC1。与电池电压 ADC1/ADC2 分属独立外设，互不冲突。 */
 #define BSP_ADC_CURRENT_INS           ADC3
