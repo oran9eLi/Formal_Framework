@@ -15,6 +15,12 @@
 #include <stdint.h>
 #include "px4lite_time.h"
 #include "px4lite_types.h"
+#include "px4lite_attitude.h"
+typedef Px4Lite_AttitudeStatus_t App_AttitudeStatus_t; /**< 姿态操作只读快照。 */
+/** @brief 主动校准/相对归零/恢复请求；远端只读时拒绝，本机请求结果异步查询。 */
+Px4Lite_Result_t App_RequestAttitudeAction(Px4Lite_AttitudeAction_t action);
+/** @brief 查询本机姿态操作状态，包含校准进度和相对显示基准。 */
+Px4Lite_Result_t App_CopyAttitudeStatus(App_AttitudeStatus_t *out);
 #include "px4lite_remote_telemetry.h"
 
 /*
@@ -630,9 +636,9 @@ const char *App_GetModuleDisplayName(uint16_t source_id, uint16_t fault_code);
 const char *App_GetFaultReasonText(uint16_t fault_code);
 
 /**
- * @brief 请求按当前姿态重做水平校准（地平仪以当前姿势归零）。
+ * @brief 兼容入口：请求将当前测量设为本机显示的相对零位，不校准传感器。
  *
- * @return 请求结果。
+ * @return OK 仅表示已排队，最终结果通过 App_CopyAttitudeStatus 获取。
  */
 Px4Lite_Result_t App_RequestAttitudeLevelCalibration(void);
 

@@ -51,6 +51,11 @@ build_and_run test_imu     Unit/test_platform_imu_axis_mapping.c || fail=1
 build_and_run test_display Unit/test_display_remote_control.c -O1 -fwhole-program || fail=1
 build_and_run test_command Unit/test_command_motor.c -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member || fail=1
 build_and_run test_alarm Unit/test_mavlink_alarm_table.c -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member -Wno-type-limits || fail=1
+build_and_run test_attitude Unit/test_attitude_measurement.c ../Framework/Src/px4lite_attitude.c || fail=1
+build_and_run test_attitude_ops Unit/test_attitude_operations.c ../Framework/Src/px4lite_attitude.c || fail=1
+build_and_run test_estimator Unit/test_estimator_attitude_requests.c -O1 -fwhole-program || fail=1
+build_and_run test_reference Unit/test_display_attitude_reference.c -O1 -fwhole-program || fail=1
+build_and_run test_storage Unit/test_storage_freshness.c -O1 -fwhole-program || fail=1
 
 echo "======================================"
 if [ "$fail" -eq 0 ]; then echo "全部通过"; else echo "存在失败"; fi

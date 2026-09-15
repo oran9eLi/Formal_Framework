@@ -15,10 +15,30 @@
 #include "px4lite_types.h"
 #include "storage_config.h"
 
+/** @brief CSV 数据域状态；缺测占位零值必须结合此状态判断。 */
+typedef enum {
+  STORAGE_SAMPLE_MISSING = 0, /**< 尚无快照。 */
+  STORAGE_SAMPLE_INVALID = 1, /**< 有快照但有效位或数值不合法。 */
+  STORAGE_SAMPLE_STALE = 2,   /**< 样本已超时。 */
+  STORAGE_SAMPLE_VALID = 3    /**< 有效且在最大龄期内，可能与上一行共用同一样本。 */
+} Storage_SampleState_t;
+
+/** @brief 每个测量域的采样来源，时间为真实样本时刻，非写日志时刻。 */
+typedef struct {
+  uint32_t sample_ms; /**< 原始采样毫秒值，缺快照时为0。 */
+  uint8_t state;      /**< Storage_SampleState_t。 */
+} Storage_CsvSample_t;
+
 /**
  * @brief 常规数据 CSV 行输入字段。
  */
 typedef struct {
+  Storage_CsvSample_t gnss_sample;     /**< 位置原始 GNSS 来源。 */
+  Storage_CsvSample_t attitude_sample; /**< 估计姿态来源。 */
+  Storage_CsvSample_t baro_sample;     /**< 温湿压来源。 */
+  Storage_CsvSample_t battery_sample;  /**< 主电池来源。 */
+  Storage_CsvSample_t battery2_sample; /**< 动力电池来源。 */
+  Storage_CsvSample_t motor_sample;    /**< 实际电机输出来源。 */
   uint32_t time_ms;                /**< 记录时间，单位：ms。 */
   uint32_t local_date_ymd;         /**< 本地日期，编码 YYYYMMDD；未知时为 0。 */
   uint32_t local_time_hhmmss;      /**< 本地时间，编码 HHMMSS；未知时为 0。 */
@@ -42,7 +62,7 @@ typedef struct {
   uint32_t power2_mw;              /**< 第二电池功率，单位：mW。 */
   uint8_t battery2_pct;            /**< 第二电池电量百分比，范围：0 到 100。 */
   uint8_t low_voltage2;            /**< 第二电池低电压标志，0 表示正常，1 表示低电压。 */
-  uint8_t motor_pct[PX4LITE_MOTOR_COUNT];            /**< 四路电机目标油门百分比，范围：0 到 100。 */
+  uint8_t motor_pct[PX4LITE_MOTOR_COUNT];            /**< 四路电机输出油门百分比，范围：0 到 100；非实测转速。 */
   uint8_t motor_run_state;         /**< 电机运行状态，1 表示允许输出目标油门。 */
   uint16_t active_alarm_count;     /**< 当前活动告警数量。 */
   uint16_t highest_fault_code;     /**< 当前最高严重度告警故障码。 */

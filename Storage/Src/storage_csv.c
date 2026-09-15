@@ -25,7 +25,7 @@ static void Storage_FormatSignedCenti(int32_t raw, Storage_Fixed2_t *out)
 
   if (raw < 0) {
     out->sign = '-';
-    magnitude = (uint32_t)(-raw);
+    magnitude = 0U - (uint32_t)raw;
   } else {
     out->sign = '+';
     magnitude = (uint32_t)raw;
@@ -40,7 +40,7 @@ static void Storage_FormatSignedMilli(int32_t raw, Storage_Fixed3_t *out)
 
   if (raw < 0) {
     out->sign = '-';
-    magnitude = (uint32_t)(-raw);
+    magnitude = 0U - (uint32_t)raw;
   } else {
     out->sign = '+';
     magnitude = (uint32_t)raw;
@@ -57,7 +57,9 @@ const char *StorageCsv_DataHeader(void)
          "voltage2_v,current2_a,power2_w,battery2_pct,low_voltage2,"
          "motor1_pct,motor2_pct,motor3_pct,motor4_pct,motor_run_state,"
          "active_alarm_count,highest_fault_code,lora_rx_count,lora_tx_count,lora_parse_error_count,lora_send_error_count,"
-         "storage_queue_count,storage_drop_count\r\n";
+         "storage_queue_count,storage_drop_count,"
+         "schema_version,gnss_state,gnss_sample_ms,attitude_state,attitude_sample_ms,baro_state,baro_sample_ms,"
+         "battery_state,battery_sample_ms,battery2_state,battery2_sample_ms,motor_state,motor_sample_ms\r\n";
 }
 
 const char *StorageCsv_ErrorHeader(void)
@@ -93,8 +95,15 @@ Px4Lite_Result_t StorageCsv_FormatDataLine(const Storage_CsvData_t *data, char *
                      "%lu,%lu,%06lu,%u,%u,%ld,%ld,%c%lu.%02lu,%c%lu.%02lu,%c%lu.%02lu,"
                      "%c%lu.%02lu,%lu.%02lu,%lu.%02lu,%lu.%03lu,%c%lu.%03lu,%lu.%03lu,%u,%u,"
                      "%lu.%03lu,%c%lu.%03lu,%lu.%03lu,%u,%u,"
-                     "%u,%u,%u,%u,%u,%u,%u,%lu,%lu,%lu,%lu,%u,%lu\r\n",
-                     (unsigned long)data->time_ms, (unsigned long)data->local_date_ymd, (unsigned long)data->local_time_hhmmss, (unsigned int)data->time_sync_state, (unsigned int)data->gnss_valid, (long)data->latitude_e7, (long)data->longitude_e7, roll.sign, (unsigned long)roll.whole, (unsigned long)roll.frac, pitch.sign, (unsigned long)pitch.whole, (unsigned long)pitch.frac, yaw.sign, (unsigned long)yaw.whole, (unsigned long)yaw.frac, temperature.sign, (unsigned long)temperature.whole, (unsigned long)temperature.frac, (unsigned long)(data->pressure_hpa100 / 100U), (unsigned long)(data->pressure_hpa100 % 100U), (unsigned long)(data->humidity_pct100 / 100U), (unsigned long)(data->humidity_pct100 % 100U), (unsigned long)(data->voltage_mv / 1000U), (unsigned long)(data->voltage_mv % 1000U), current.sign, (unsigned long)current.whole, (unsigned long)current.frac, (unsigned long)(data->power_mw / 1000U), (unsigned long)(data->power_mw % 1000U), (unsigned int)data->battery_pct, (unsigned int)data->low_voltage, (unsigned long)(data->voltage2_mv / 1000U), (unsigned long)(data->voltage2_mv % 1000U), current2.sign, (unsigned long)current2.whole, (unsigned long)current2.frac, (unsigned long)(data->power2_mw / 1000U), (unsigned long)(data->power2_mw % 1000U), (unsigned int)data->battery2_pct, (unsigned int)data->low_voltage2, (unsigned int)data->motor_pct[0], (unsigned int)data->motor_pct[1], (unsigned int)data->motor_pct[2], (unsigned int)data->motor_pct[3], (unsigned int)data->motor_run_state, (unsigned int)data->active_alarm_count, (unsigned int)data->highest_fault_code, (unsigned long)data->lora_rx_count, (unsigned long)data->lora_tx_count, (unsigned long)data->lora_parse_error_count, (unsigned long)data->lora_send_error_count, (unsigned int)data->storage_queue_count, (unsigned long)data->storage_drop_count);
+                     "%u,%u,%u,%u,%u,%u,%u,%lu,%lu,%lu,%lu,%u,%lu,"
+                     "2,%u,%lu,%u,%lu,%u,%lu,%u,%lu,%u,%lu,%u,%lu\r\n",
+                     (unsigned long)data->time_ms, (unsigned long)data->local_date_ymd, (unsigned long)data->local_time_hhmmss, (unsigned int)data->time_sync_state, (unsigned int)data->gnss_valid, (long)data->latitude_e7, (long)data->longitude_e7, roll.sign, (unsigned long)roll.whole, (unsigned long)roll.frac, pitch.sign, (unsigned long)pitch.whole, (unsigned long)pitch.frac, yaw.sign, (unsigned long)yaw.whole, (unsigned long)yaw.frac, temperature.sign, (unsigned long)temperature.whole, (unsigned long)temperature.frac, (unsigned long)(data->pressure_hpa100 / 100U), (unsigned long)(data->pressure_hpa100 % 100U), (unsigned long)(data->humidity_pct100 / 100U), (unsigned long)(data->humidity_pct100 % 100U), (unsigned long)(data->voltage_mv / 1000U), (unsigned long)(data->voltage_mv % 1000U), current.sign, (unsigned long)current.whole, (unsigned long)current.frac, (unsigned long)(data->power_mw / 1000U), (unsigned long)(data->power_mw % 1000U), (unsigned int)data->battery_pct, (unsigned int)data->low_voltage, (unsigned long)(data->voltage2_mv / 1000U), (unsigned long)(data->voltage2_mv % 1000U), current2.sign, (unsigned long)current2.whole, (unsigned long)current2.frac, (unsigned long)(data->power2_mw / 1000U), (unsigned long)(data->power2_mw % 1000U), (unsigned int)data->battery2_pct, (unsigned int)data->low_voltage2, (unsigned int)data->motor_pct[0], (unsigned int)data->motor_pct[1], (unsigned int)data->motor_pct[2], (unsigned int)data->motor_pct[3], (unsigned int)data->motor_run_state, (unsigned int)data->active_alarm_count, (unsigned int)data->highest_fault_code, (unsigned long)data->lora_rx_count, (unsigned long)data->lora_tx_count, (unsigned long)data->lora_parse_error_count, (unsigned long)data->lora_send_error_count, (unsigned int)data->storage_queue_count, (unsigned long)data->storage_drop_count,
+                     (unsigned int)data->gnss_sample.state, (unsigned long)data->gnss_sample.sample_ms,
+                     (unsigned int)data->attitude_sample.state, (unsigned long)data->attitude_sample.sample_ms,
+                     (unsigned int)data->baro_sample.state, (unsigned long)data->baro_sample.sample_ms,
+                     (unsigned int)data->battery_sample.state, (unsigned long)data->battery_sample.sample_ms,
+                     (unsigned int)data->battery2_sample.state, (unsigned long)data->battery2_sample.sample_ms,
+                     (unsigned int)data->motor_sample.state, (unsigned long)data->motor_sample.sample_ms);
   return ((written > 0) && ((size_t)written < line_size)) ? PX4LITE_OK : PX4LITE_OVERFLOW;
 }
 

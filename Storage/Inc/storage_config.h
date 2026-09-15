@@ -30,7 +30,8 @@
 #define STORAGE_QUEUE_LENGTH       8U
 #define STORAGE_CSV_LINE_MAX       512U
 
-#define STORAGE_DATA_FILE_SUFFIX   'D'
+/* schema 2 使用独立后缀，防止在同日 schema 1 的 _D.CSV 内追加不同列数。 */
+#define STORAGE_DATA_FILE_SUFFIX   '2'
 #define STORAGE_EVENT_FILE_SUFFIX  'E'
 
 #endif

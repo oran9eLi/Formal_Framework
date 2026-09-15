@@ -34,7 +34,7 @@ POWER_SRC   := Unit/test_power_adc_calibration.c ../Sensor/Src/sensor_power.c
 CONTROL_SRC := Unit/test_control_motor_logic.c
 IMU_SRC     := Unit/test_platform_imu_axis_mapping.c
 
-TESTS := power control imu display command alarm
+TESTS := power control imu display command alarm attitude attitude_ops estimator reference storage
 
 .PHONY: all run clean
 all: run
@@ -65,6 +65,21 @@ $(OUTDIR)/test_command.exe: FORCE | $(OUTDIR)
 
 $(OUTDIR)/test_alarm.exe: FORCE | $(OUTDIR)
 	$(CC) $(CFLAGS) -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member -Wno-type-limits Unit/test_mavlink_alarm_table.c -o $@
+
+$(OUTDIR)/test_attitude.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) Unit/test_attitude_measurement.c ../Framework/Src/px4lite_attitude.c -o $@
+
+$(OUTDIR)/test_attitude_ops.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) Unit/test_attitude_operations.c ../Framework/Src/px4lite_attitude.c -o $@
+
+$(OUTDIR)/test_estimator.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) -O1 -fwhole-program Unit/test_estimator_attitude_requests.c -o $@
+
+$(OUTDIR)/test_reference.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) -O1 -fwhole-program Unit/test_display_attitude_reference.c -o $@
+
+$(OUTDIR)/test_storage.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) -O1 -fwhole-program Unit/test_storage_freshness.c -o $@
 
 run: $(addprefix $(OUTDIR)/test_,$(addsuffix .exe,$(TESTS)))
 	@echo "===== 运行单元测试 ====="

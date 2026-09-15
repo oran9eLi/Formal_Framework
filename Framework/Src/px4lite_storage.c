@@ -148,17 +148,31 @@ static void Storage_CheckQueueDropEvent(uint32_t now_ms)
                        "storage_queue_drop");
 }
 
+/** @brief 区分缺测、无效、过期与可用样本，保留真实采样时刻供导出分析。 */
+static uint8_t Storage_ClassifySample(Storage_CsvSample_t *out, Px4Lite_Result_t copied,
+                                     const Px4Lite_TopicHeader_t *header, uint8_t fields_valid,
+                                     uint32_t now_ms, uint32_t max_age_ms)
+{
+  if (copied != PX4LITE_OK) { out->state = STORAGE_SAMPLE_MISSING; return 0U; }
+  out->sample_ms = header->sample_time_ms;
+  if ((header->valid == 0U) || (fields_valid == 0U)) { out->state = STORAGE_SAMPLE_INVALID; return 0U; }
+  if ((uint32_t)(now_ms - header->sample_time_ms) > max_age_ms) { out->state = STORAGE_SAMPLE_STALE; return 0U; }
+  out->state = STORAGE_SAMPLE_VALID;
+  return 1U;
+}
+
 /**
  * @brief 从 Framework topic 构造一条 CSV 数据记录。
  *
  * @details
- * 任一数据源缺失时会额外写入当日 YYMMDD_E.CSV 记录，而不是静默记录全零字段。
+ * 测量域逐项记录状态和样本时刻，非有效域使用占位零值；既有故障事件仍写入 YYMMDD_E.CSV。
  *
  * @param[in] now_ms 当前系统毫秒时间。
  */
 static void Storage_ProduceDataRecord(uint32_t now_ms)
 {
   Px4Lite_VehicleNavigation_t navigation;
+  Px4Lite_SensorGnss_t gnss;
   Px4Lite_SensorBaro_t baro;
   Px4Lite_BatteryStatus_t battery;
   Px4Lite_BatteryStatus_t battery2;
@@ -168,6 +182,7 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
   Px4Lite_CommDebugInfo_t comm;
   Storage_CsvData_t data;
   uint8_t i;
+  Px4Lite_Result_t copied;
 
   memset(&data, 0, sizeof(data));
   data.time_ms = now_ms;
@@ -182,10 +197,18 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     data.time_sync_state   = 0U;
   }
 
-  if (Px4Lite_CopyNavigation(&navigation) == PX4LITE_OK) {
-    data.gnss_valid   = ((navigation.valid_mask & PX4LITE_NAV_VALID_POSITION) != 0U) ? 1U : 0U;
-    data.latitude_e7  = navigation.latitude_e7;
-    data.longitude_e7 = navigation.longitude_e7;
+  /* 位置使用原始 GNSS 样本时刻，避免 Navigation 的 IMU 更新时间给旧定位续期。 */
+  memset(&gnss, 0, sizeof(gnss));
+  copied = Px4Lite_CopyGnss(&gnss);
+  if (Storage_ClassifySample(&data.gnss_sample, copied, &gnss.header, (uint8_t)(gnss.fix_type != 0U), now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U) {
+    data.gnss_valid = 1U;
+    data.latitude_e7 = gnss.latitude_e7;
+    data.longitude_e7 = gnss.longitude_e7;
+  }
+  memset(&navigation, 0, sizeof(navigation));
+  copied = Px4Lite_CopyNavigation(&navigation);
+  if (Storage_ClassifySample(&data.attitude_sample, copied, &navigation.header,
+       (uint8_t)((navigation.valid_mask & PX4LITE_NAV_VALID_ATTITUDE) != 0U), now_ms, PX4LITE_IMU_MAX_AGE_MS) != 0U) {
     data.roll_deg100  = navigation.roll_deg100;
     data.pitch_deg100 = navigation.pitch_deg100;
     data.yaw_deg100   = navigation.yaw_deg100;
@@ -194,7 +217,13 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     Storage_EnqueueError(now_ms, "NAV", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, 0U, "nav_not_ready");
   }
 
-  if (Px4Lite_CopyBaro(&baro) == PX4LITE_OK) {
+  memset(&baro, 0, sizeof(baro));
+  copied = Px4Lite_CopyBaro(&baro);
+  if (Storage_ClassifySample(&data.baro_sample, copied, &baro.header,
+      (uint8_t)((baro.temperature_c >= -100.0f) && (baro.temperature_c <= 150.0f) &&
+                (baro.pressure_pa > 0.0f) && (baro.pressure_pa < 200000.0f) &&
+                (baro.relative_humidity_pct >= 0.0f) && (baro.relative_humidity_pct <= 100.0f)),
+      now_ms, PX4LITE_BARO_MAX_AGE_MS) != 0U) {
     data.temperature_c100 = Storage_RoundFloatToI32(baro.temperature_c * 100.0f);
     /* pressure_pa 单位为 Pa；1 hPa = 100 Pa，因此 Pa 数值等价于 hPa*100。 */
     data.pressure_hpa100 = (uint32_t)Storage_RoundFloatToI32(baro.pressure_pa);
@@ -204,7 +233,9 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     Storage_EnqueueError(now_ms, "BARO", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, 0U, "baro_not_ready");
   }
 
-  if (Px4Lite_CopyBattery(&battery) == PX4LITE_OK) {
+  memset(&battery, 0, sizeof(battery));
+  copied = Px4Lite_CopyBattery(&battery);
+  if (Storage_ClassifySample(&data.battery_sample, copied, &battery.header, 1U, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) != 0U) {
     data.voltage_mv  = battery.voltage_mv;
     data.current_ma  = battery.current_ma;
     data.power_mw    = (battery.current_ma > 0) ? (uint32_t)((((uint64_t)battery.voltage_mv) * (uint32_t)battery.current_ma) / 1000ULL) : 0U;
@@ -216,7 +247,9 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     Storage_EnqueueError(now_ms, "BATTERY", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, 0U, "battery_not_ready");
   }
 
-  if (Px4Lite_CopyBattery2(&battery2) == PX4LITE_OK) {
+  memset(&battery2, 0, sizeof(battery2));
+  copied = Px4Lite_CopyBattery2(&battery2);
+  if (Storage_ClassifySample(&data.battery2_sample, copied, &battery2.header, 1U, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) != 0U) {
     data.voltage2_mv  = battery2.voltage_mv;
     data.current2_ma  = battery2.current_ma;
     data.power2_mw    = (battery2.current_ma > 0) ? (uint32_t)((((uint64_t)battery2.voltage_mv) * (uint32_t)battery2.current_ma) / 1000ULL) : 0U;
@@ -228,7 +261,9 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     Storage_EnqueueError(now_ms, "BATTERY2", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, 0U, "battery2_not_ready");
   }
 
-  if (Px4Lite_CopyMotor(&motor) == PX4LITE_OK) {
+  memset(&motor, 0, sizeof(motor));
+  copied = Px4Lite_CopyMotor(&motor);
+  if (Storage_ClassifySample(&data.motor_sample, copied, &motor.header, 1U, now_ms, 500U) != 0U) {
     for (i = 0U; (i < PX4LITE_MOTOR_COUNT) && (i < 4U); i++) {
       data.motor_pct[i] = motor.duty_percent[i];
     }

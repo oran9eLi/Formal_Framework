@@ -12,6 +12,7 @@
 #define PX4LITE_MODULES_H
 
 #include "px4lite_types.h"
+#include "px4lite_attitude.h"
 
 /**
  * @brief 复位 Framework 模块状态、统计计数和启动时间。
@@ -118,11 +119,15 @@ Px4Lite_Result_t Px4Lite_EstimatorInit(void);
 void Px4Lite_EstimatorRun(uint32_t now_ms);
 
 /**
- * @brief 请求按当前姿态重做水平校准（把当前 roll/pitch 记为零位）。
+ * @brief 兼容旧接口名：请求本机屏幕相对归零，不改变控制使用的测量姿态。
  *
  * @note 仅置位请求标志，下一次 Px4Lite_EstimatorRun 消费，线程安全。
  */
-void Px4Lite_RequestAttitudeLevelCalibration(void);
+Px4Lite_Result_t Px4Lite_RequestAttitudeLevelCalibration(void);
+/** @brief 请求主动校准/相对归零/恢复；OK 仅表示已排队，完成结果由状态快照提供。 */
+Px4Lite_Result_t Px4Lite_RequestAttitudeAction(Px4Lite_AttitudeAction_t action);
+/** @brief 复制估计任务发布的操作状态；无测量时仍可查看失败和进度。 */
+Px4Lite_Result_t Px4Lite_CopyAttitudeStatus(Px4Lite_AttitudeStatus_t *out);
 
 /**
  * @brief 初始化 LoRa/comm 模块和 MAVLink 发送器。

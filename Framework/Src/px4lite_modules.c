@@ -44,7 +44,8 @@ static uint32_t s_last_baro_work_ms;
 static uint32_t s_last_battery_work_ms;
 static uint32_t s_last_battery2_work_ms;
 static Px4Lite_AttitudeState_t s_attitude_state;
-static volatile uint8_t s_attitude_level_cal_request; /* 1=请求按当前姿态重做水平校准 */
+static uint8_t s_attitude_action_request; /**< 临界区保护的单槽请求；估计任务唯一消费者。 */
+static Px4Lite_AttitudeStatus_t s_attitude_status; /**< 临界区发布的操作快照。 */
 
 /**
  * @brief 根据定位类型、卫星数和 HDOP 计算有限范围 GNSS 质量分。
@@ -522,18 +523,51 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 Px4Lite_Result_t Px4Lite_EstimatorInit(void)
 {
   Px4Lite_AttitudeInit(&s_attitude_state);
-  s_attitude_level_cal_request = 0U;
+  s_attitude_action_request = 0U;
+  memset(&s_attitude_status, 0, sizeof(s_attitude_status));
   Px4Lite_SetStatus(PX4LITE_MODULE_ESTIMATOR, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, Px4Lite_PlatformGetMs());
   return PX4LITE_OK;
 }
 
-void Px4Lite_RequestAttitudeLevelCalibration(void)
+/** @brief 旧入口对应相对观察基准，不再冒充陀螺校准。 */
+Px4Lite_Result_t Px4Lite_RequestAttitudeLevelCalibration(void)
 {
-  s_attitude_level_cal_request = 1U;
+  return Px4Lite_RequestAttitudeAction(PX4LITE_ATTITUDE_ACTION_ZERO);
+}
+
+/** @brief 排队一个明确操作；没有新鲜测量、请求未消费或正在校准时立即拒绝。 */
+Px4Lite_Result_t Px4Lite_RequestAttitudeAction(Px4Lite_AttitudeAction_t action)
+{
+  uint32_t now_ms = Px4Lite_PlatformGetMs();
+  if ((action < PX4LITE_ATTITUDE_ACTION_BIAS) || (action > PX4LITE_ATTITUDE_ACTION_RESTORE)) { return PX4LITE_INVALID_PARAM; }
+  taskENTER_CRITICAL();
+  if ((s_attitude_action_request != 0U) || (s_attitude_status.phase == PX4LITE_ATTITUDE_REQUESTED) ||
+      (s_attitude_status.phase == PX4LITE_ATTITUDE_WAIT_STILL) || (s_attitude_status.phase == PX4LITE_ATTITUDE_COLLECTING)) {
+    taskEXIT_CRITICAL(); return PX4LITE_BUSY;
+  }
+  if ((s_attitude_status.measurement_valid == 0U) ||
+      ((uint32_t)(now_ms - s_attitude_status.last_sample_ms) > PX4LITE_IMU_MAX_AGE_MS)) {
+    taskEXIT_CRITICAL(); return PX4LITE_NOT_READY;
+  }
+  s_attitude_action_request = (uint8_t)action;
+  s_attitude_status.action = (uint8_t)action;
+  s_attitude_status.phase = PX4LITE_ATTITUDE_REQUESTED;
+  s_attitude_status.reason = PX4LITE_ATTITUDE_REASON_NONE;
+  s_attitude_status.progress = 0U;
+  taskEXIT_CRITICAL();
+  return PX4LITE_OK;
+}
+
+/** @brief 只复制快照，不从其他任务访问估计器内部状态。 */
+Px4Lite_Result_t Px4Lite_CopyAttitudeStatus(Px4Lite_AttitudeStatus_t *out)
+{
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+  taskENTER_CRITICAL(); *out = s_attitude_status; taskEXIT_CRITICAL();
+  return PX4LITE_OK;
 }
 
 /**
- * @brief 将新鲜 GNSS 测量转换为 Navigation 快照。
+ * @brief 消费姿态操作和 IMU FIFO，结合新鲜 GNSS 发布测量 Navigation 快照。
  */
 void Px4Lite_EstimatorRun(uint32_t now_ms)
 {
@@ -544,6 +578,7 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
   uint8_t publish_navigation = 0U;
   uint8_t attitude_updated   = 0U;
   uint8_t imu_pop_count      = 0U;
+  uint8_t requested_action;
   int32_t roll_deg100        = 0;
   int32_t pitch_deg100       = 0;
   int32_t yaw_deg100         = 0;
@@ -553,17 +588,14 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
 
   memset(&navigation, 0, sizeof(navigation));
 
-  /* 水平校准请求：按下即以当前姿态为基准，把横滚/俯仰/偏航三轴都记为零位，
-     使三个数据从 0 开始(不依赖陀螺零偏标定状态)。估计器未出首帧时忽略本次请求。 */
-  if (s_attitude_level_cal_request != 0U) {
-    s_attitude_level_cal_request = 0U;
-    if (s_attitude_state.valid != 0U) {
-      s_attitude_state.roll_offset_deg    = s_attitude_state.roll_deg;
-      s_attitude_state.pitch_offset_deg   = s_attitude_state.pitch_deg;
-      s_attitude_state.yaw_offset_deg     = s_attitude_state.yaw_deg;
-      s_attitude_state.level_offset_valid = 1U;
-    }
+  taskENTER_CRITICAL();
+  requested_action = s_attitude_action_request;
+  s_attitude_action_request = 0U;
+  taskEXIT_CRITICAL();
+  if (requested_action != 0U) {
+    (void)Px4Lite_AttitudeRequest(&s_attitude_state, (Px4Lite_AttitudeAction_t)requested_action, now_ms);
   }
+  Px4Lite_AttitudeService(&s_attitude_state, now_ms);
 
   if ((Px4Lite_CopyGnss(&gnss) == PX4LITE_OK) && (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U)) {
     navigation.latitude_e7        = gnss.latitude_e7;
@@ -611,6 +643,12 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
       navigation.header.sample_time_ms = imu.header.sample_time_ms;
     }
   }
+
+  Px4Lite_AttitudeService(&s_attitude_state, now_ms);
+  taskENTER_CRITICAL();
+  /* 新请求可能在本周期处理中到达；留到下一周期消费，不能用旧阶段覆盖 REQUESTED。 */
+  if (s_attitude_action_request == 0U) { s_attitude_status = s_attitude_state.operation; }
+  taskEXIT_CRITICAL();
 
   if (attitude_updated != 0U) {
     navigation.roll_deg100       = roll_deg100;

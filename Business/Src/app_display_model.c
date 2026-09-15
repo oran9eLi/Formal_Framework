@@ -79,7 +79,22 @@ Px4Lite_Result_t App_GetDisplayNavigation(App_NavigationSnapshot_t *out, uint32_
   Px4Lite_Result_t fresh;
 
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
-  if (App_GetRemoteDisplayMode() != PX4LITE_REMOTE_MODE_REMOTE) { return App_CopyNavigation(out, now_ms); }
+  if (App_GetRemoteDisplayMode() != PX4LITE_REMOTE_MODE_REMOTE) {
+    App_AttitudeStatus_t status;
+    fresh = App_CopyNavigation(out, now_ms);
+    if ((fresh == PX4LITE_OK) && ((out->valid_mask & PX4LITE_NAV_VALID_ATTITUDE) != 0U) &&
+        (App_CopyAttitudeStatus(&status) == PX4LITE_OK) && (status.reference_active != 0U)) {
+      /* 相对基准仅作用于本机屏幕；Navigation topic、控制、遥测和 CSV 保持测量值。 */
+      out->roll_deg100 -= status.offset_deg100[0];
+      if (out->roll_deg100 >= 18000) { out->roll_deg100 -= 36000; }
+      if (out->roll_deg100 < -18000) { out->roll_deg100 += 36000; }
+      out->pitch_deg100 -= status.offset_deg100[1];
+      out->yaw_deg100 -= status.offset_deg100[2];
+      if (out->yaw_deg100 >= 18000) { out->yaw_deg100 -= 36000; }
+      if (out->yaw_deg100 < -18000) { out->yaw_deg100 += 36000; }
+    }
+    return fresh;
+  }
 
   memset(out, 0, sizeof(*out));
   fresh = AppDisplay_RemoteDomain(&remote, PX4LITE_REMOTE_VALID_NAVIGATION | PX4LITE_REMOTE_VALID_ATTITUDE, now_ms);

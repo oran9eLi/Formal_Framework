@@ -1117,8 +1117,20 @@ const char *App_GetFaultReasonText(uint16_t fault_code)
 
 Px4Lite_Result_t App_RequestAttitudeLevelCalibration(void)
 {
-  Px4Lite_RequestAttitudeLevelCalibration();
-  return PX4LITE_OK;
+  return App_RequestAttitudeAction(PX4LITE_ATTITUDE_ACTION_ZERO);
+}
+
+/** @brief 显式操作对象为本机，远端只读模式不下发本机姿态操作。 */
+Px4Lite_Result_t App_RequestAttitudeAction(Px4Lite_AttitudeAction_t action)
+{
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return PX4LITE_NOT_READY; }
+  return Px4Lite_RequestAttitudeAction(action);
+}
+
+/** @brief 经应用边界查询操作结果，OK 不代表校准成功，须读取 phase。 */
+Px4Lite_Result_t App_CopyAttitudeStatus(App_AttitudeStatus_t *out)
+{
+  return Px4Lite_CopyAttitudeStatus(out);
 }
 
 Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void)
