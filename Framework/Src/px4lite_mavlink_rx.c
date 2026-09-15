@@ -632,16 +632,21 @@ static uint8_t MavRx_DecodeTunnel(Px4Lite_RemoteTelemetry_t *remote, const mavli
 
   mavlink_msg_tunnel_decode(message, &packet);
   if (packet.payload_type != 0x8001U) { return 0U; }
-  if (packet.payload_length < 2U) { return 0U; }
+  /* 先验证整表，任何非法长度/版本/截断均不得污染上一份有效快照。 */
+  if ((packet.payload_length < 2U) || (packet.payload_length > sizeof(packet.payload))) { return 0U; }
+  if (packet.payload[0] != 1U) { return 0U; }
 
   n   = packet.payload[1];
+  if ((uint16_t)(2U + (uint16_t)n * 7U) != (uint16_t)packet.payload_length) { return 0U; }
+
+  memset(remote->alarm_fault_code, 0, sizeof(remote->alarm_fault_code));
+  memset(remote->alarm_severity, 0, sizeof(remote->alarm_severity));
   off = 2U;
   for (i = 0U; i < n; ++i) {
     uint8_t src;
     uint8_t sev;
     uint16_t fault;
 
-    if ((uint16_t)(off + 7U) > (uint16_t)packet.payload_length) { break; }
     src   = packet.payload[off];
     fault = (uint16_t)((uint16_t)packet.payload[off + 1U] | ((uint16_t)packet.payload[off + 2U] << 8U));
     sev   = packet.payload[off + 3U];

@@ -1111,6 +1111,12 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
   if ((id < DISPLAY_HMI_VAR_MOTOR_PWM_1) || (id > DISPLAY_HMI_VAR_MOTOR_PWM_4)) { return; }
   motor_index = (uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1);
 
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+    s_motor_slider_dragging[motor_index] = 0U;
+    s_motor_touch_valid[motor_index] = 0U;
+    return;
+  }
+
   if (code == LV_EVENT_PRESSED) {
     s_motor_slider_dragging[motor_index]   = 1U;
     s_motor_touch_valid[motor_index]       = 0U;
@@ -1153,6 +1159,7 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
 
 static void Display_LvglTakeoffEventCb(lv_event_t *event)
 {
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return; }
   if (lv_event_get_code(event) != LV_EVENT_RELEASED) {
     return;
   }
@@ -1171,6 +1178,7 @@ static void Display_LvglEstopEventCb(lv_event_t *event)
 
 static void Display_LvglLandingEventCb(lv_event_t *event)
 {
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return; }
   if (lv_event_get_code(event) != LV_EVENT_RELEASED) {
     return;
   }
@@ -1180,6 +1188,7 @@ static void Display_LvglLandingEventCb(lv_event_t *event)
 
 static void Display_LvglAttitudeCalEventCb(lv_event_t *event)
 {
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return; }
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
     return;
   }
@@ -1370,8 +1379,8 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
     uint8_t remote_selected = (uint8_t)(App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE);
 
     lr_btn = lv_obj_create(bar);
-    lv_obj_set_size(lr_btn, 70, 32);
-    lv_obj_set_pos(lr_btn, 596, 16);
+    lv_obj_set_size(lr_btn, 100, 32);
+    lv_obj_set_pos(lr_btn, 566, 16);
     lv_obj_set_style_radius(lr_btn, 4, 0);
     lv_obj_set_style_bg_color(lr_btn, remote_selected ? lv_color_hex(0x1DB7C9) : lv_color_hex(0x143747), 0);
     lv_obj_set_style_bg_opa(lr_btn, LV_OPA_COVER, 0);
@@ -1381,7 +1390,7 @@ static void Display_LvglCreateHeader(lv_obj_t *parent, Display_HmiPage_t page)
     lv_obj_add_flag(lr_btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(lr_btn, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(lr_btn, Display_LvglLocalRemoteEventCb, LV_EVENT_CLICKED, 0);
-    lr_label = Display_LvglCreateLabel(lr_btn, remote_selected ? "\xE8""\xBF""\x9C""\xE7""\xAB""\xAF" : "\xE6""\x9C""\xAC""\xE5""\x9C""\xB0", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+    lr_label = Display_LvglCreateLabel(lr_btn, remote_selected ? "\xE8\xBF\x9C\xE7\xAB\xAF\xE5\x8F\xAA\xE8\xAF\xBB" : "\xE6""\x9C""\xAC""\xE5""\x9C""\xB0", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
     lv_obj_center(lr_label);
   }
 
@@ -2049,6 +2058,11 @@ static void Display_LvglCreateAircraftPage(lv_obj_t *parent)
     cal_label = Display_LvglCreateLabel(cal, "\xE6""\xA0""\xA1""\xE5""\x87""\x86", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
     lv_obj_add_flag(cal_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(cal_label, Display_LvglAttitudeCalEventCb, LV_EVENT_CLICKED, 0);
+    if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+      lv_obj_clear_flag(cal, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_clear_flag(cal_label, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_set_style_opa(cal, LV_OPA_50, 0);
+    }
     lv_obj_center(cal_label);
   }
 
@@ -2087,7 +2101,7 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
   static const lv_coord_t track_x[DISPLAY_LVGL_MOTOR_COUNT] = {50, 135, 220, 305};
   static const char *action_text[3] = {
       "\xE4""\xB8""\x80""\xE9""\x94""\xAE""\xE8""\xB5""\xB7""\xE9""\xA3""\x9E",
-      "\xE6""\x80""\xA5""\xE5""\x81""\x9C",
+      "\xE6\x9C\xAC\xE6\x9C\xBA\xE6\x80\xA5\xE5\x81\x9C",
       "\xE4""\xB8""\x80""\xE9""\x94""\xAE""\xE9""\x99""\x8D""\xE8""\x90""\xBD"};
   static const uint32_t action_bg[3] = {0x173E4C, 0x4E1B25, 0x1C3B2A};
   static const uint32_t action_border[3] = {0x35C3D6, 0xE85D75, 0x5AC97A};
@@ -2118,6 +2132,10 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
     lv_obj_set_style_width(s_motor_pwm_bars[i], 18, LV_PART_KNOB);
     lv_obj_set_style_height(s_motor_pwm_bars[i], 18, LV_PART_KNOB);
     lv_obj_add_event_cb(s_motor_pwm_bars[i], Display_LvglMotorSliderEventCb, LV_EVENT_ALL, (void *)(uintptr_t)id);
+    if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+      lv_obj_clear_flag(s_motor_pwm_bars[i], LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_state(s_motor_pwm_bars[i], LV_STATE_DISABLED);
+    }
     /* 数值区避开滑块旋钮：左列 PWM，右列脉宽，列间保留触摸与视觉间距。 */
     (void)Display_LvglCreateClipLabel(card, "PWM", (lv_coord_t)(x - 25), 234, 30, &lv_font_montserrat_12, lv_color_hex(0x7D91A6));
     (void)Display_LvglCreateClipLabel(card, "us", (lv_coord_t)(x + 13), 234, 45, &lv_font_montserrat_12, lv_color_hex(0x7D91A6));
@@ -2165,6 +2183,12 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
       lv_obj_add_event_cb(action_label, Display_LvglLandingEventCb, LV_EVENT_RELEASED, 0);
     }
     lv_obj_center(action_label);
+    /* 远端升降速只读；急停保留为明确的本机操作。子标签也必须禁用。 */
+    if ((i != 1U) && (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE)) {
+      lv_obj_clear_flag(action, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_clear_flag(action_label, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_set_style_opa(action, LV_OPA_50, 0);
+    }
   }
 
   Display_LvglCreateMessageLogPanel(parent, 562, 230);

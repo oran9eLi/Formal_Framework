@@ -16,6 +16,8 @@
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
 #include "px4lite_topics.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #if PX4LITE_ENABLE_CONTROL
 
@@ -617,6 +619,74 @@ uint8_t Px4Lite_ControlIsPowerInhibited(void)
   return s_power_inhibited;
 }
 
+/**
+ * @brief 提交完整四路目标；进入临界区前完成换算，区内只校验门禁和复制状态。
+ * @details 百分比保持当前模式，脉宽命令同时选择 DIRECT。用户缓降中的全零命令
+ *          只确认已有撤收意图，不改变曲线或模式；被拒命令不解除急停。
+ */
+static Px4Lite_Result_t Px4Lite_ControlCommitMotorTargets(const uint8_t percent[PX4LITE_MOTOR_COUNT],
+                                                         const uint16_t pulse[PX4LITE_MOTOR_COUNT],
+                                                         uint8_t is_pulse, uint8_t nonzero)
+{
+  uint8_t i;
+  uint32_t now_ms = Px4Lite_PlatformGetMs();
+
+  taskENTER_CRITICAL();
+  if ((s_power_inhibited != 0U) && (nonzero != 0U)) {
+    taskEXIT_CRITICAL();
+    return PX4LITE_NOT_READY;
+  }
+  if ((s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) && (s_auto_landing_user != 0U)) {
+    taskEXIT_CRITICAL();
+    return (nonzero != 0U) ? PX4LITE_NOT_READY : PX4LITE_OK;
+  }
+  if (nonzero != 0U) { Px4Lite_ControlReleaseEmergencyStop(now_ms); }
+  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { Px4Lite_ControlClearAutoThrottle(); }
+  if (is_pulse != 0U) { s_control_mode = PX4LITE_CONTROL_MODE_DIRECT; }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    s_target_throttle_percent[i] = percent[i];
+    s_target_pulse_us[i] = pulse[i];
+    s_target_is_pulse[i] = is_pulse;
+    s_target_update_ms[i] = now_ms;
+    s_target_valid[i] = 1U;
+  }
+  taskEXIT_CRITICAL();
+  return PX4LITE_OK;
+}
+
+/** @brief 完整校验四路百分比，保留模式后整体提交；单位 %，范围 0~100。 */
+Px4Lite_Result_t Px4Lite_ControlSetMotorThrottles(const uint8_t percent[PX4LITE_MOTOR_COUNT])
+{
+  uint8_t i;
+  uint8_t nonzero = 0U;
+  uint16_t pulse[PX4LITE_MOTOR_COUNT];
+
+  if (percent == 0) { return PX4LITE_INVALID_PARAM; }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (percent[i] > 100U) { return PX4LITE_INVALID_PARAM; }
+    pulse[i] = Px4Lite_ControlThrottleToPulseUs(percent[i]);
+    if (percent[i] != 0U) { nonzero = 1U; }
+  }
+  return Px4Lite_ControlCommitMotorTargets(percent, pulse, 0U, nonzero);
+}
+
+/** @brief 完整校验四路脉宽，与 DIRECT 模式整体提交；单位 us。 */
+Px4Lite_Result_t Px4Lite_ControlSetMotorPulses(const uint16_t pulse[PX4LITE_MOTOR_COUNT])
+{
+  uint8_t i;
+  uint8_t nonzero = 0U;
+  uint8_t percent[PX4LITE_MOTOR_COUNT];
+
+  if (pulse == 0) { return PX4LITE_INVALID_PARAM; }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if ((pulse[i] < PX4LITE_CONTROL_ESC_MIN_PULSE_US) ||
+        (pulse[i] > PX4LITE_CONTROL_ESC_MAX_PULSE_US)) { return PX4LITE_INVALID_PARAM; }
+    percent[i] = Px4Lite_ControlPulseToThrottlePercent(pulse[i]);
+    if (pulse[i] != PX4LITE_CONTROL_ESC_MIN_PULSE_US) { nonzero = 1U; }
+  }
+  return Px4Lite_ControlCommitMotorTargets(percent, pulse, 1U, nonzero);
+}
+
 Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
 {
   if (motor_index >= PX4LITE_MOTOR_COUNT) { return PX4LITE_INVALID_PARAM; }
@@ -792,7 +862,8 @@ Px4Lite_Result_t Px4Lite_ControlRecover(void)
   return PX4LITE_OK;
 }
 
-void Px4Lite_ControlRun(uint32_t now_ms)
+/** @brief 无阻塞地完成一次目标消费和输出；由外层保持任务之间的状态一致性。 */
+static void Px4Lite_ControlRunCycle(uint32_t now_ms)
 {
   uint16_t pulse_us[PX4LITE_MOTOR_COUNT];
   uint8_t duty_percent[PX4LITE_MOTOR_COUNT];
@@ -876,7 +947,31 @@ void Px4Lite_ControlRun(uint32_t now_ms)
   Px4Lite_SetExternalModuleState(PX4LITE_MODULE_CONTROL, ((result == PX4LITE_OK) && (s_estop_latched == 0U)) ? PX4LITE_STATE_ONLINE : PX4LITE_STATE_DEGRADED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SYSTEM_SELF_CHECK, now_ms);
 }
 
+/**
+ * @brief 控制周期与任务中的命令提交串行，避免计算中途被另一任务切换目标/模式。
+ * @details 保持中断可用；本周期只允许快照、计算和同步 PWM 寄存器写入，禁止阻塞
+ *          I/O 或等待调度器。健康状态和 topic 发布均为短临界区操作。M4 测量周期耗时。
+ */
+void Px4Lite_ControlRun(uint32_t now_ms)
+{
+  vTaskSuspendAll();
+  Px4Lite_ControlRunCycle(now_ms);
+  (void)xTaskResumeAll();
+}
+
 #else
+
+Px4Lite_Result_t Px4Lite_ControlSetMotorThrottles(const uint8_t percent[PX4LITE_MOTOR_COUNT])
+{
+  (void)percent;
+  return PX4LITE_NOT_READY;
+}
+
+Px4Lite_Result_t Px4Lite_ControlSetMotorPulses(const uint16_t pulse[PX4LITE_MOTOR_COUNT])
+{
+  (void)pulse;
+  return PX4LITE_NOT_READY;
+}
 
 Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
 {

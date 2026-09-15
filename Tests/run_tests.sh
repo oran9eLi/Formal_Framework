@@ -46,6 +46,11 @@ fail=0
 build_and_run test_power   Unit/test_power_adc_calibration.c ../Sensor/Src/sensor_power.c || fail=1
 build_and_run test_control Unit/test_control_motor_logic.c || fail=1
 build_and_run test_imu     Unit/test_platform_imu_axis_mapping.c || fail=1
+# 包含实际大模块的测试以 whole-program 删除无关硬件路径；未关闭断言。
+# MAVLink 生成头的 packed-member 和 RX 既有 uint8 长度上限比较警告仅在这组屏蔽。
+build_and_run test_display Unit/test_display_remote_control.c -O1 -fwhole-program || fail=1
+build_and_run test_command Unit/test_command_motor.c -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member || fail=1
+build_and_run test_alarm Unit/test_mavlink_alarm_table.c -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member -Wno-type-limits || fail=1
 
 echo "======================================"
 if [ "$fail" -eq 0 ]; then echo "全部通过"; else echo "存在失败"; fi

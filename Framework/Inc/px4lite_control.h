@@ -12,6 +12,11 @@
 
 #include "px4lite_types.h"
 
+/** @brief 四路百分比整体提交，保持当前模式；拒绝无副作用。仅任务上下文调用。 */
+Px4Lite_Result_t Px4Lite_ControlSetMotorThrottles(const uint8_t percent[PX4LITE_MOTOR_COUNT]);
+/** @brief 四路脉宽与 DIRECT 模式整体提交；拒绝无副作用。单位 us，仅任务上下文调用。 */
+Px4Lite_Result_t Px4Lite_ControlSetMotorPulses(const uint16_t pulse[PX4LITE_MOTOR_COUNT]);
+
 /**
  * @brief 电机控制输出模式。
  */

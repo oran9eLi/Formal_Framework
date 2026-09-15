@@ -253,7 +253,7 @@ static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariabl
 
   if ((variable == 0) || (Display_MotorIndexFromId(variable->id, &motor_index) == 0U)) { return DISPLAY_ERROR; }
 
-  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_OK; }
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
 
   if (throttle_percent > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { throttle_percent = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
   /* 电机电池档位不足时拒绝非零油门，滑块会被弹回旧值；必须推日志说明原因，
@@ -286,7 +286,8 @@ static Display_Result_t Display_MotorEmergencyStop(void)
   Px4Lite_Result_t result;
 
   result = App_EmergencyStopMotors();
-  Display_ClearMotorFields();
+  /* 本机急停不改变远端遥测，避免让学生误以为远端也已停机。 */
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_LOCAL) { Display_ClearMotorFields(); }
 
   return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
 }
@@ -302,11 +303,13 @@ Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16
   return Display_SetMotorThrottleCommand(variable, throttle_percent);
 }
 
+/** @brief 仅允许本地视图发起本机升速；远端视图为只读。 */
 Display_Result_t Display_RequestMotorAutoTakeoff(void)
 {
   Px4Lite_Result_t result;
   uint32_t now_ms = Px4Lite_PlatformGetMs();
 
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
   if (Display_MotorPowerAllowsOutput() == 0U) {
     App_MessageLogPushTakeoffPowerFail(now_ms);
     return DISPLAY_NOT_READY;
@@ -319,14 +322,19 @@ Display_Result_t Display_RequestMotorAutoTakeoff(void)
   return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
 }
 
+/** @brief 无论查看哪个节点，明确急停本机；远端数据保持由遥测更新。 */
 Display_Result_t Display_RequestMotorEmergencyStop(void)
 {
   return Display_MotorEmergencyStop();
 }
 
+/** @brief 仅允许本地视图发起本机缓降停机。 */
 Display_Result_t Display_RequestMotorAutoLanding(void)
 {
-  Px4Lite_Result_t result = App_StartMotorAutoLanding();
+  Px4Lite_Result_t result;
+
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
+  result = App_StartMotorAutoLanding();
 
   /* 一键降落不设电池/姿态准入：撤收动作在传感器异常时更需要可用。失败只可能来自
      Control 内部状态，仍推日志，避免按钮再次变成静默无响应。 */
@@ -337,10 +345,15 @@ Display_Result_t Display_RequestMotorAutoLanding(void)
   return DISPLAY_OK;
 }
 
+/** @brief 本地归零请求透传有效结果，远端视图拒绝操作本机。 */
 Display_Result_t Display_RequestAttitudeLevelCalibration(void)
 {
-  (void)App_RequestAttitudeLevelCalibration();
-  return DISPLAY_OK;
+  Px4Lite_Result_t result;
+
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
+  result = App_RequestAttitudeLevelCalibration();
+  if (result == PX4LITE_NOT_READY) { return DISPLAY_NOT_READY; }
+  return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
 }
 
 static void Display_InitSelfCheckValues(void)

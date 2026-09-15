@@ -155,12 +155,8 @@ static uint8_t Command_HandleSetMotorThrottle(float param1, float param2, float 
     if (Command_ParamToPercent(params[i], &throttle[i]) == 0U) { return (uint8_t)MAV_RESULT_DENIED; }
   }
 
-  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
-    result = Px4Lite_ControlSetMotorThrottlePercent(i, throttle[i]);
-    if (result != PX4LITE_OK) { return Command_MapControlResult(result); }
-  }
-
-  return (uint8_t)MAV_RESULT_ACCEPTED;
+  result = Px4Lite_ControlSetMotorThrottles(throttle);
+  return Command_MapControlResult(result);
 }
 
 static uint8_t Command_HandleSetMotorPulseUs(float param1, float param2, float param3, float param4)
@@ -177,13 +173,8 @@ static uint8_t Command_HandleSetMotorPulseUs(float param1, float param2, float p
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     if (Command_ParamToPulseUs(params[i], &pulse_us[i]) == 0U) { return (uint8_t)MAV_RESULT_DENIED; }
   }
-  result = Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_DIRECT);
-  if (result != PX4LITE_OK) { return Command_MapControlResult(result); }
-  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
-    result = Px4Lite_ControlSetMotorPulseUs(i, pulse_us[i]);
-    if (result != PX4LITE_OK) { return Command_MapControlResult(result); }
-  }
-  return (uint8_t)MAV_RESULT_ACCEPTED;
+  result = Px4Lite_ControlSetMotorPulses(pulse_us);
+  return Command_MapControlResult(result);
 }
 
 static uint8_t Command_HandleSetMotorControlMode(float param1, float param2, float param3, float param4)

@@ -34,7 +34,7 @@ POWER_SRC   := Unit/test_power_adc_calibration.c ../Sensor/Src/sensor_power.c
 CONTROL_SRC := Unit/test_control_motor_logic.c
 IMU_SRC     := Unit/test_platform_imu_axis_mapping.c
 
-TESTS := power control imu
+TESTS := power control imu display command alarm
 
 .PHONY: all run clean
 all: run
@@ -43,15 +43,30 @@ $(OUTDIR):
 	@mkdir -p $(OUTDIR)
 
 $(OUTDIR)/test_power.exe: $(POWER_SRC) | $(OUTDIR)
-	$(CC) $(CFLAGS) $^ -o $@
+	$(CC) $(CFLAGS) $(POWER_SRC) -o $@
 
 $(OUTDIR)/test_control.exe: $(CONTROL_SRC) | $(OUTDIR)
-	$(CC) $(CFLAGS) $^ -o $@
+	$(CC) $(CFLAGS) $(CONTROL_SRC) -o $@
 
 $(OUTDIR)/test_imu.exe: $(IMU_SRC) | $(OUTDIR)
-	$(CC) $(CFLAGS) $^ -o $@
+	$(CC) $(CFLAGS) $(IMU_SRC) -o $@
 
-run: $(OUTDIR)/test_power.exe $(OUTDIR)/test_control.exe $(OUTDIR)/test_imu.exe
+# 测试直接包含实现文件，源码或头文件变化后每次重新构建，避免运行旧二进制。
+.PHONY: FORCE
+FORCE:
+
+$(OUTDIR)/test_power.exe $(OUTDIR)/test_control.exe $(OUTDIR)/test_imu.exe: FORCE
+
+$(OUTDIR)/test_display.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) -O1 -fwhole-program Unit/test_display_remote_control.c -o $@
+
+$(OUTDIR)/test_command.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member Unit/test_command_motor.c -o $@
+
+$(OUTDIR)/test_alarm.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member -Wno-type-limits Unit/test_mavlink_alarm_table.c -o $@
+
+run: $(addprefix $(OUTDIR)/test_,$(addsuffix .exe,$(TESTS)))
 	@echo "===== 运行单元测试 ====="
 	@fail=0; \
 	for t in $(TESTS); do \
