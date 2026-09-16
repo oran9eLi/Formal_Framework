@@ -146,6 +146,11 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_ROLL, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1300U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 118U, 124U, 22U, "ac_roll", "\xB0", "CNS_State.sensor"},
     {DISPLAY_HMI_VAR_PITCH, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1301U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 150U, 124U, 22U, "ac_pitch", "\xB0", "CNS_State.sensor"},
     {DISPLAY_HMI_VAR_YAW, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1305U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 182U, 124U, 22U, "ac_yaw", "\xB0", "CNS_State.navigation"},
+    {DISPLAY_HMI_VAR_ATTITUDE_ACTION, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1310U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "attitude_action", "-", "App_Attitude"},
+    {DISPLAY_HMI_VAR_ATTITUDE_PHASE, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1311U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "attitude_phase", "-", "App_Attitude"},
+    {DISPLAY_HMI_VAR_ATTITUDE_REASON, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1312U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "attitude_reason", "-", "App_Attitude"},
+    {DISPLAY_HMI_VAR_ATTITUDE_PROGRESS, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1313U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "attitude_progress", "%", "App_Attitude"},
+    {DISPLAY_HMI_VAR_ATTITUDE_REFERENCE, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1314U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "attitude_reference", "-", "App_Attitude"},
     {DISPLAY_HMI_VAR_LORA_TX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1401U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 214U, 124U, 22U, "ac_lora_tx", "-", "CNS_State.lora"},
     {DISPLAY_HMI_VAR_LORA_RX_COUNT, DISPLAY_HMI_PAGE_AIRCRAFT, 0x1403U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 246U, 124U, 22U, "ac_lora_rx", "-", "CNS_State.lora"},
 
@@ -162,6 +167,12 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_MOTOR_PWM_2, DISPLAY_HMI_PAGE_MOTOR, 0x1601U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK2_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_2", "%", "HMI/Motor"},
     {DISPLAY_HMI_VAR_MOTOR_PWM_3, DISPLAY_HMI_PAGE_MOTOR, 0x1602U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK3_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_3", "%", "HMI/Motor"},
     {DISPLAY_HMI_VAR_MOTOR_PWM_4, DISPLAY_HMI_PAGE_MOTOR, 0x1603U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RW, 0U, DISPLAY_MOTOR_TRACK4_X, DISPLAY_MOTOR_TRACK_TOP_Y, DISPLAY_MOTOR_TRACK_W, DISPLAY_MOTOR_TRACK_H, "motor_slider_4", "%", "HMI/Motor"},
+    {DISPLAY_HMI_VAR_MOTOR_TARGET_1, DISPLAY_HMI_PAGE_MOTOR, 0x1610U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_target_1", "%", "App_Control"},
+    {DISPLAY_HMI_VAR_MOTOR_TARGET_2, DISPLAY_HMI_PAGE_MOTOR, 0x1611U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_target_2", "%", "App_Control"},
+    {DISPLAY_HMI_VAR_MOTOR_TARGET_3, DISPLAY_HMI_PAGE_MOTOR, 0x1612U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_target_3", "%", "App_Control"},
+    {DISPLAY_HMI_VAR_MOTOR_TARGET_4, DISPLAY_HMI_PAGE_MOTOR, 0x1613U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_target_4", "%", "App_Control"},
+    {DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, DISPLAY_HMI_PAGE_MOTOR, 0x1614U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_control_mode", "-", "App_Control"},
+    {DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, DISPLAY_HMI_PAGE_MOTOR, 0x1615U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_operation_state", "-", "App_Control"},
     {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_MOTOR, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 616U, 76U, 176U, 330U, "msg_log_motor", "-", "App_Registry"},
 
     /* 告警页 -- 运行期告警项 */    {DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, DISPLAY_HMI_PAGE_ALARM, 0x1700U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 52U, 72U, 696U, 38U, "alarm_active_mask", "-", "App_Alarm"},
@@ -229,6 +240,7 @@ static uint8_t Display_MotorIndexFromId(Display_HmiVariableId_t id, uint8_t *ind
  * @brief 判断当前电机电池电压档位是否允许非零油门输出。
  */
 static uint8_t Display_MotorPowerAllowsOutput(void);
+static void Display_ClearMotorOutputFields(void);
 static void Display_ClearMotorFields(void);
 
 static const Display_HmiVariableConfig_t *Display_FindMotorSliderByIndex(uint8_t motor_index)
@@ -276,7 +288,11 @@ static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariabl
   }
   if (result != PX4LITE_OK) { return DISPLAY_ERROR; }
 
-  (void)Display_SetHmiValueU16(variable->id, throttle_percent);
+  /* 学生操作后立即更新“设定”列；“实际输出”只接受 Control 下一份快照，
+     避免姿态辅助下短暂把目标伪装成已经生效的输出。 */
+  (void)Display_SetHmiValueU16(
+      (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_MOTOR_TARGET_1 + motor_index),
+      throttle_percent);
 
   return DISPLAY_OK;
 }
@@ -287,7 +303,10 @@ static Display_Result_t Display_MotorEmergencyStop(void)
 
   result = App_EmergencyStopMotors();
   /* 本机急停不改变远端遥测，避免让学生误以为远端也已停机。 */
-  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_LOCAL) { Display_ClearMotorFields(); }
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_LOCAL) {
+    Display_ClearMotorOutputFields();
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, PX4LITE_MOTOR_OP_STOPPED);
+  }
 
   return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
 }
@@ -345,15 +364,32 @@ Display_Result_t Display_RequestMotorAutoLanding(void)
   return DISPLAY_OK;
 }
 
-/** @brief 本地归零请求透传有效结果，远端视图拒绝操作本机。 */
-Display_Result_t Display_RequestAttitudeLevelCalibration(void)
+/** @brief 本机显式选择直控/姿态辅助；远端视图保持只读。 */
+Display_Result_t Display_RequestMotorControlMode(Px4Lite_ControlMode_t mode)
 {
   Px4Lite_Result_t result;
 
   if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
-  result = App_RequestAttitudeLevelCalibration();
+  result = App_SetMotorControlMode(mode);
   if (result == PX4LITE_NOT_READY) { return DISPLAY_NOT_READY; }
   return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
+}
+
+/** @brief 本地姿态操作透传有效结果，远端视图拒绝操作本机。 */
+Display_Result_t Display_RequestAttitudeAction(Px4Lite_AttitudeAction_t action)
+{
+  Px4Lite_Result_t result;
+
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
+  result = App_RequestAttitudeAction(action);
+  if ((result == PX4LITE_NOT_READY) || (result == PX4LITE_BUSY)) { return DISPLAY_NOT_READY; }
+  return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
+}
+
+/** @brief 兼容旧入口：语义是设置本机显示零位，不是传感器校准。 */
+Display_Result_t Display_RequestAttitudeLevelCalibration(void)
+{
+  return Display_RequestAttitudeAction(PX4LITE_ATTITUDE_ACTION_ZERO);
 }
 
 static void Display_InitSelfCheckValues(void)
@@ -484,6 +520,12 @@ static void Display_LoadMockValues(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_3, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_1, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_2, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_3, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_4, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, 255U);
 
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, 0U);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW1_CODE, 0U);
@@ -888,7 +930,7 @@ static void Display_ClearBatteryFields(void)
   Display_SetMotorSelfCheckLights(3U);
 }
 
-static void Display_ClearMotorFields(void)
+static void Display_ClearMotorOutputFields(void)
 {
   uint8_t i;
 
@@ -896,6 +938,10 @@ static void Display_ClearMotorFields(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_3, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_1, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_2, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_3, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_4, 0U);
 #if DISPLAY_USE_LVGL_BACKEND
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     (void)Display_LvglSetMotorPulseUs(i, PX4LITE_CONTROL_ESC_MIN_PULSE_US);
@@ -905,20 +951,19 @@ static void Display_ClearMotorFields(void)
 #endif
 }
 
+/** @brief 数据源无有效电机快照时清除数值，并显式标记模式和过程未知。 */
+static void Display_ClearMotorFields(void)
+{
+  Display_ClearMotorOutputFields();
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, 255U);
+}
+
 /**
- * @brief 把 Control 发布的实际输出油门刷新到电机页滑轨。
+ * @brief 分别发布学生设定目标、含姿态修正的输出、PWM、模式和过程状态。
  *
- * @details 滑轨跟随含姿态修正的 `duty_percent`：《基于姿态数据反馈的电机输出辅助校准实验》
- * 要求实验人员在中速基础油门下倾斜实验箱时，能从四路电机显示上读出修正差异，并在回平后看到
- * 差异收敛，因此四路显示必须体现修正量而不是用户拖动的原始目标。
- *
- * 滑轨同时是输入和输出，显示修正后的值会带来棘轮风险：用户再次触摸滑轨时，若把当前显示值
- * 当作新目标提交，修正量就会被逐次吃进基础油门，一路棘轮到 0(表现为"油门自己掉下来")。
- * 该风险由 Display_LvglMotorSliderEventCb() 的触摸锁存消除——只有用户手指实际产生的值才会
- * 被提交，滑轨自己跟随显示的值永远不会回灌成新目标。两处改动必须成对存在。
- *
- * `base_percent` 仍由 Control 发布并经 App_DisplaySnapshot 上行，作为遥测里"用户锁存目标"
- * 的真值，不参与本机滑轨显示。
+ * @details 滑轨跟随 base_percent；输出百分比与真实 PWM 另列显示，使姿态辅助差值可见，
+ * 同时避免输出修正被再次提交为目标。
  */
 static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
 {
@@ -928,6 +973,35 @@ static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_2, motor->duty_percent[1]);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_3, motor->duty_percent[2]);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_PWM_4, motor->duty_percent[3]);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_1, motor->base_percent[0]);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_2, motor->base_percent[1]);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_3, motor->base_percent[2]);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_4, motor->base_percent[3]);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE,
+                               (motor->control_mode_valid != 0U) ? motor->control_mode : 2U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE,
+                               (motor->operation_state_valid != 0U) ? motor->operation_state : 255U);
+}
+
+/** @brief 发布姿态操作阶段到显示缓存；远端页面用 255 表示本机操作不可用。 */
+static void Display_LoadAttitudeOperationStatus(Px4Lite_RemoteMode_t display_mode)
+{
+  App_AttitudeStatus_t status;
+
+  if ((display_mode == PX4LITE_REMOTE_MODE_REMOTE) ||
+      (App_CopyAttitudeStatus(&status) != PX4LITE_OK)) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_ACTION, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_PHASE, 255U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_REASON, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_PROGRESS, 0U);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_REFERENCE, 0U);
+    return;
+  }
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_ACTION, status.action);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_PHASE, status.phase);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_REASON, status.reason);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_PROGRESS, status.progress);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ATTITUDE_REFERENCE, status.reference_active);
 }
 
 /**
@@ -1410,6 +1484,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   } else {
     Display_ClearNavigationSnapshot();
   }
+  Display_LoadAttitudeOperationStatus(display_mode);
 
   date_time_result = App_GetDisplayDateTime(&date_time, now_ms);
   if ((date_time_result == PX4LITE_OK) && (date_time.local_date_ymd != 0U)) {

@@ -322,6 +322,10 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
   out->header      = source.header;
   out->run_state   = source.run_state;
   out->speed_level = source.speed_level;
+  out->control_mode = source.control_mode;
+  out->operation_state = source.operation_state;
+  out->control_mode_valid = 1U;
+  out->operation_state_valid = 1U;
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     out->duty_percent[i] = source.duty_percent[i];
     out->pulse_us[i]     = source.pulse_us[i];
@@ -343,6 +347,12 @@ Px4Lite_Result_t App_StartMotorAutoTakeoff(void)
 Px4Lite_Result_t App_StartMotorAutoLanding(void)
 {
   return Px4Lite_ControlStartAutoLanding();
+}
+
+Px4Lite_Result_t App_SetMotorControlMode(Px4Lite_ControlMode_t mode)
+{
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return PX4LITE_NOT_READY; }
+  return Px4Lite_ControlSetMode(mode);
 }
 
 Px4Lite_Result_t App_EmergencyStopMotors(void)

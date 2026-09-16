@@ -194,6 +194,16 @@ typedef struct {
 #define PX4LITE_MOTOR_COUNT 4U /**< 电机输出通道数量。 */
 #endif
 
+/** @brief 电机实验过程状态，供显示解释已接受目标当前处于哪个阶段。 */
+typedef enum {
+  PX4LITE_MOTOR_OP_STOPPED = 0,       /**< 目标为零，输出停止。 */
+  PX4LITE_MOTOR_OP_ESC_PREPARING = 1, /**< ESC 正在输出最小脉宽完成预解锁。 */
+  PX4LITE_MOTOR_OP_MANUAL_RUNNING = 2,/**< 手动目标正在输出。 */
+  PX4LITE_MOTOR_OP_SYNC_RAMP_UP = 3,  /**< 四路同步升速曲线执行中。 */
+  PX4LITE_MOTOR_OP_RAMP_DOWN = 4,     /**< 缓降停机曲线执行中。 */
+  PX4LITE_MOTOR_OP_INHIBITED = 5      /**< 动力电池条件不满足，输出闭锁。 */
+} Px4Lite_MotorOperationState_t;
+
 /**
  * @brief 电机输出命令快照。
  *
@@ -215,7 +225,8 @@ typedef struct {
    * 成新目标，见 Display_LvglMotorSliderEventCb() 的触摸锁存。
    */
   uint8_t base_percent[PX4LITE_MOTOR_COUNT];
-  uint16_t reserved;                             /**< 保留字段，保持结构体对齐。 */
+  uint8_t control_mode;                          /**< `Px4Lite_ControlMode_t` 数值：0 直控，1 姿态辅助。 */
+  uint8_t operation_state;                       /**< 当前实验过程，见 `Px4Lite_MotorOperationState_t`。 */
 } Px4Lite_MotorOutputs_t;
 
 #define PX4LITE_NAV_VALID_ATTITUDE (1UL << 0) /**< 姿态角和角速度有效。 */

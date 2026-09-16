@@ -246,10 +246,12 @@ Px4Lite_Result_t App_GetDisplayMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
   out->header      = remote.header;
   out->run_state   = remote.motor_run_state;
   out->speed_level = remote.motor_speed_level;
+  out->control_mode_valid = 0U;
+  out->operation_state_valid = 0U;
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; ++i) {
     out->duty_percent[i] = remote.motor_duty_percent[i];
-    /* 远端遥测帧只携带最终输出，不区分基础油门；远端页面的滑块本就不允许写油门
-       (Display_SetMotorThrottleCommand 在 REMOTE 模式直接返回)，退化为同值不影响显示。 */
+    /* 远端遥测帧只携带最终输出，不区分基础油门。滑轨用同值提供输出位置参考，
+       LVGL 的“设”标签在远端模式明确显示 --，不得把推导值冒充学生目标。 */
     out->base_percent[i] = remote.motor_duty_percent[i];
     if ((remote.motor_pulse_us[i] >= PX4LITE_CONTROL_ESC_MIN_PULSE_US) &&
         (remote.motor_pulse_us[i] <= PX4LITE_CONTROL_ESC_MAX_PULSE_US)) {

@@ -16,6 +16,7 @@
 #include "px4lite_time.h"
 #include "px4lite_types.h"
 #include "px4lite_attitude.h"
+#include "px4lite_control.h"
 typedef Px4Lite_AttitudeStatus_t App_AttitudeStatus_t; /**< 姿态操作只读快照。 */
 /** @brief 主动校准/相对归零/恢复请求；远端只读时拒绝，本机请求结果异步查询。 */
 Px4Lite_Result_t App_RequestAttitudeAction(Px4Lite_AttitudeAction_t action);
@@ -174,7 +175,10 @@ typedef struct {
   uint8_t run_state;                         /**< 运行状态，1 表示已完成 ESC 预解锁。 */
   uint8_t speed_level;                       /**< 四路目标油门最大值，范围 0 到 100。 */
   uint8_t base_percent[PX4LITE_MOTOR_COUNT]; /**< 姿态修正前的基础油门(滑块目标)，范围 0 到 100。 */
-  uint16_t reserved;                         /**< 保留字段，保持结构体对齐。 */
+  uint8_t control_mode;                      /**< `Px4Lite_ControlMode_t` 数值；本机快照有效。 */
+  uint8_t operation_state;                   /**< 当前实验过程，见 `Px4Lite_MotorOperationState_t`。 */
+  uint8_t control_mode_valid;                /**< 1 表示模式由目标设备明确上报。 */
+  uint8_t operation_state_valid;              /**< 1 表示过程状态由目标设备明确上报。 */
 } App_MotorSnapshot_t;
 
 /**
@@ -413,6 +417,9 @@ Px4Lite_Result_t App_StartMotorAutoTakeoff(void);
  * @return Command result.
  */
 Px4Lite_Result_t App_StartMotorAutoLanding(void);
+
+/** @brief 本机选择直控或姿态辅助模式；远端显示模式下拒绝。 */
+Px4Lite_Result_t App_SetMotorControlMode(Px4Lite_ControlMode_t mode);
 
 Px4Lite_Result_t App_EmergencyStopMotors(void);
 

@@ -2,6 +2,8 @@
 #define DISPLAY_H
 
 #include <stdint.h>
+#include "px4lite_attitude.h"
+#include "px4lite_control.h"
 
 typedef enum {
   DISPLAY_OK = 0,    /* 显示模块正常 */
@@ -109,6 +111,17 @@ typedef enum {
   DISPLAY_HMI_VAR_FLIGHT_TIME_S,         /* 飞行时间(上电后运行)，单位 s */
   DISPLAY_HMI_VAR_MESSAGE_LOG,           /* 消息日志缓冲版本号，变化即重绘日志区 */
   DISPLAY_HMI_VAR_VIEW_NODE_ID,          /* 当前查看对象编号：本地=本机sysid(UID派生)，远端=选中节点，显示 DCDW-xxx */
+  DISPLAY_HMI_VAR_MOTOR_TARGET_1,        /* 电机1学生设定目标，单位% */
+  DISPLAY_HMI_VAR_MOTOR_TARGET_2,        /* 电机2学生设定目标，单位% */
+  DISPLAY_HMI_VAR_MOTOR_TARGET_3,        /* 电机3学生设定目标，单位% */
+  DISPLAY_HMI_VAR_MOTOR_TARGET_4,        /* 电机4学生设定目标，单位% */
+  DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE,    /* 0=直控，1=姿态辅助，2=远端未上报 */
+  DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, /* Px4Lite_MotorOperationState_t；255=远端未上报 */
+  DISPLAY_HMI_VAR_ATTITUDE_ACTION,       /* Px4Lite_AttitudeAction_t */
+  DISPLAY_HMI_VAR_ATTITUDE_PHASE,        /* Px4Lite_AttitudePhase_t */
+  DISPLAY_HMI_VAR_ATTITUDE_REASON,       /* Px4Lite_AttitudeReason_t */
+  DISPLAY_HMI_VAR_ATTITUDE_PROGRESS,     /* 校准进度，0到100 */
+  DISPLAY_HMI_VAR_ATTITUDE_REFERENCE,    /* 本机显示相对基准是否启用 */
   DISPLAY_HMI_VAR_COUNT                  /* HMI 变量数量 */
 } Display_HmiVariableId_t;
 
@@ -296,6 +309,12 @@ Display_Result_t Display_RequestMotorAutoTakeoff(void);
 Display_Result_t Display_RequestMotorEmergencyStop(void);
 
 Display_Result_t Display_RequestMotorAutoLanding(void);
+
+/** @brief 本机选择直控/姿态辅助；远端显示时拒绝。 */
+Display_Result_t Display_RequestMotorControlMode(Px4Lite_ControlMode_t mode);
+
+/** @brief 请求传感器零偏校准、设置显示零位或恢复基准。 */
+Display_Result_t Display_RequestAttitudeAction(Px4Lite_AttitudeAction_t action);
 
 Display_Result_t Display_RequestAttitudeLevelCalibration(void);
 

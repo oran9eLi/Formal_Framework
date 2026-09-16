@@ -571,6 +571,20 @@ static void Px4Lite_ControlPublish(uint32_t now_ms,
   }
   outputs.run_state                = run_state;
   outputs.speed_level              = max_throttle;
+  outputs.control_mode             = (uint8_t)s_control_mode;
+  if (s_power_inhibited != 0U) {
+    outputs.operation_state = (uint8_t)PX4LITE_MOTOR_OP_INHIBITED;
+  } else if (s_esc_armed == 0U) {
+    outputs.operation_state = (uint8_t)PX4LITE_MOTOR_OP_ESC_PREPARING;
+  } else if (s_auto_profile == PX4LITE_CONTROL_AUTO_TAKEOFF) {
+    outputs.operation_state = (uint8_t)PX4LITE_MOTOR_OP_SYNC_RAMP_UP;
+  } else if (s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) {
+    outputs.operation_state = (uint8_t)PX4LITE_MOTOR_OP_RAMP_DOWN;
+  } else if ((run_state != 0U) && (max_throttle != 0U)) {
+    outputs.operation_state = (uint8_t)PX4LITE_MOTOR_OP_MANUAL_RUNNING;
+  } else {
+    outputs.operation_state = (uint8_t)PX4LITE_MOTOR_OP_STOPPED;
+  }
   outputs.header.sequence          = ++s_sequence;
   outputs.header.sample_time_ms    = now_ms;
   outputs.header.publish_time_ms   = now_ms;
@@ -740,8 +754,6 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorPulseUs(uint8_t motor_index, uint16_t pu
 
 Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoff(void)
 {
-  Px4Lite_Result_t result;
-
   if (s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) {
     return PX4LITE_BUSY;
   }
@@ -753,9 +765,9 @@ Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoff(void)
     return PX4LITE_NOT_READY;
   }
 
-  result = Px4Lite_ControlStartAutoThrottle(PX4LITE_CONTROL_AUTO_TAKEOFF);
-  if (result == PX4LITE_OK) { s_control_mode = PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST; }
-  return result;
+  /* 教学操作只改变四路同步目标，不替学生切换控制模式。需要姿态辅助时，
+     学生必须先在电机页明确选择，便于观察直控与闭环修正的差异。 */
+  return Px4Lite_ControlStartAutoThrottle(PX4LITE_CONTROL_AUTO_TAKEOFF);
 }
 
 /**
@@ -764,7 +776,7 @@ Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoff(void)
  * @details 降落是撤收动作，不设姿态或环境准入：姿态掉线恰恰是最需要把油门收回 0 的时刻，
  * 用传感器状态阻止降落会让飞机在异常时卡在当前油门。自动起飞期间姿态丢失由
  * `Px4Lite_ControlMonitorAutoTakeoff()` 自动转入本斜坡；手动油门下用户也可随时按降落。
- * 姿态辅助在降落全程仍然生效（姿态新鲜时才实际叠加修正），保证收油门过程尽量保持水平。
+ * 当前控制模式在缓降过程中保持不变；姿态辅助只有在学生已经明确选择时才生效。
  */
 Px4Lite_Result_t Px4Lite_ControlStartAutoLanding(void)
 {
@@ -772,7 +784,6 @@ Px4Lite_Result_t Px4Lite_ControlStartAutoLanding(void)
 
   result = Px4Lite_ControlStartAutoThrottle(PX4LITE_CONTROL_AUTO_LANDING);
   if (result == PX4LITE_OK) {
-    s_control_mode = PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST;
     /* 用户明确要求撤收：斜坡跑完之前不再接受非零手动油门。 */
     s_auto_landing_user = 1U;
   }
@@ -898,10 +909,10 @@ static void Px4Lite_ControlRunCycle(uint32_t now_ms)
     result = Px4Lite_ControlWriteAll(pulse_us);
     if (Px4Lite_ElapsedMs(now_ms, s_arm_start_ms) >= PX4LITE_CONTROL_ESC_ARM_TIME_MS) { s_esc_armed = 1U; }
     if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { s_auto_start_ms = now_ms; }
-    /* 预解锁期间硬件必须停在 1000us，但滑轨要显示已接受的目标，否则会被误判为掉档。
-       此时姿态修正尚未参与，基础油门与输出百分比同为已锁存的目标。 */
-    Px4Lite_ControlCopyTargetPercent(duty_percent);
-    Px4Lite_ControlPublish(now_ms, duty_percent, duty_percent, pulse_us, 0U);
+    /* 预解锁期间硬件停在 1000us，因此实际输出为 0；学生设定单独保存在
+       base_percent，页面可同时解释“目标已接受”和“ESC 尚未输出”。 */
+    Px4Lite_ControlCopyTargetPercent(base_percent);
+    Px4Lite_ControlPublish(now_ms, duty_percent, base_percent, pulse_us, 0U);
     Px4Lite_SetExternalModuleState(PX4LITE_MODULE_CONTROL, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_DEGRADED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SYSTEM_SELF_CHECK, now_ms);
     return;
   }

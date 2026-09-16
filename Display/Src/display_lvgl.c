@@ -53,7 +53,7 @@
 #define DISPLAY_LVGL_TAB_COUNT       6U
 #define DISPLAY_LVGL_MOTOR_COUNT     4U
 #define DISPLAY_LVGL_REMOTE_ROWS     16U   /* 通信连接页远端节点列表最大行数 */
-#define DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS 1000U /* 通信连接页节点列表周期重建间隔 */
+#define DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS 1000U /* 通信连接页节点状态刷新间隔 */
 #define DISPLAY_LVGL_LOG_ROWS        9U
 /* 告警行容量：数据侧最多 PX4LITE_MODULE_COUNT + 5G占位/电机/主控，取 16 与 APP_DISPLAY_ALARM_MAX 对齐。
    超过可视高度时容器可竖向滚动(见 Display_LvglCreateAlarmTable/SummaryAlarmList)。 */
@@ -143,7 +143,7 @@ static char s_motor_pulse_text[DISPLAY_LVGL_MOTOR_COUNT][16];
 static uint16_t s_motor_pulse_us[DISPLAY_LVGL_MOTOR_COUNT];
 static uint8_t s_motor_pulse_valid[DISPLAY_LVGL_MOTOR_COUNT];
 static uint8_t s_motor_slider_dragging[DISPLAY_LVGL_MOTOR_COUNT];
-/* 本次按压期间手指实际拖出来的滑轨值。滑轨显示的是含姿态修正的输出，只有这个值可以被提交
+/* 本次按压期间手指实际拖出来的滑轨值。滑轨显示学生设定目标，只有这个值可以被提交
    为新的基础油门，见 Display_LvglMotorSliderEventCb()。 */
 static uint8_t s_motor_touch_value[DISPLAY_LVGL_MOTOR_COUNT];
 static uint8_t s_motor_touch_valid[DISPLAY_LVGL_MOTOR_COUNT];
@@ -172,6 +172,18 @@ static uint32_t s_next_remote_list_rebuild_ms;
 static uint32_t s_remote_list_sig; /* 通信连接页节点列表内容签名(node_id+state)，仅内容变化才整页重建，避免每秒屏闪 */
 static App_RemoteNodeView_t s_remote_node_views[DISPLAY_LVGL_REMOTE_ROWS];
 static char s_remote_node_texts[DISPLAY_LVGL_REMOTE_ROWS][64];
+static lv_obj_t *s_remote_node_labels[DISPLAY_LVGL_REMOTE_ROWS];
+
+/** @brief 格式化通信节点实时接收计数和丢包率。 */
+static void Display_LvglFormatRemoteNodeText(char *text, size_t text_size, const App_RemoteNodeView_t *view)
+{
+  if ((text == 0) || (text_size == 0U) || (view == 0)) { return; }
+  (void)snprintf(text, text_size, "DCDW-%03u  RX %lu  Loss %u.%u%%",
+                 (unsigned int)view->node_id,
+                 (unsigned long)view->rx_frame_count,
+                 (unsigned int)(view->rx_loss_rate_x10 / 10U),
+                 (unsigned int)(view->rx_loss_rate_x10 % 10U));
+}
 
 /**
  * @brief 计算远端节点列表内容签名，只纳入 node_id 与在线状态。
@@ -226,7 +238,7 @@ static const char *Display_LvglPageTitle(Display_HmiPage_t page)
     case DISPLAY_HMI_PAGE_DATA:
       return "\xE5""\xAE""\x9A""\xE4""\xBD""\x8D""\xE6""\x95""\xB0""\xE6""\x8D""\xAE";
     case DISPLAY_HMI_PAGE_MOTOR:
-      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE6""\x8E""\xA7""\xE5""\x88""\xB6";
+      return "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE5""\xAE""\x9E""\xE9""\xAA""\x8C";
     case DISPLAY_HMI_PAGE_ALARM:
       return "\xE5""\x91""\x8A""\xE8""\xAD""\xA6""\xE5""\x88""\x97""\xE8""\xA1""\xA8";
     case DISPLAY_HMI_PAGE_HIDDEN:
@@ -331,6 +343,9 @@ static void Display_LvglClearActiveObjects(void)
     s_alarm_rows[i].code_label   = 0;
     s_alarm_rows[i].module_label = 0;
     s_alarm_rows[i].reason_label = 0;
+  }
+  for (i = 0U; i < DISPLAY_LVGL_REMOTE_ROWS; i++) {
+    s_remote_node_labels[i] = 0;
   }
   s_log_alarm_label = 0;
   s_attitude_obj = 0;
@@ -447,6 +462,43 @@ static void Display_LvglFormatCoordinate(char *text, int32_t raw)
   (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s%lu.%07lu", sign, (unsigned long)(abs_value / 10000000U), (unsigned long)(abs_value % 10000000U));
 }
 
+/** @brief 把姿态异步操作状态转换为课堂可理解的短文本。 */
+static void Display_LvglFormatAttitudePhase(char *text, uint32_t phase)
+{
+  uint32_t action = s_values[DISPLAY_HMI_VAR_ATTITUDE_ACTION];
+  uint32_t reason = s_values[DISPLAY_HMI_VAR_ATTITUDE_REASON];
+  uint32_t progress = s_values[DISPLAY_HMI_VAR_ATTITUDE_PROGRESS];
+
+  if (phase == 255U) {
+    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xBF\x9C\xE7\xAB\xAF\xE5\x8F\xAA\xE8\xAF\xBB"); /* 远端只读 */
+  } else if (phase == PX4LITE_ATTITUDE_REQUESTED) {
+    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xAF\xB7\xE6\xB1\x82\xE5\xB7\xB2\xE6\x8E\xA5\xE5\x8F\x97"); /* 请求已接受 */
+  } else if (phase == PX4LITE_ATTITUDE_WAIT_STILL) {
+    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xAF\xB7\xE6\x94\xBE\xE7\xA8\xB3\xE8\xAE\xBE\xE5\xA4\x87"); /* 请放稳设备 */
+  } else if (phase == PX4LITE_ATTITUDE_COLLECTING) {
+    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE9\x87\x87\xE9\x9B\x86\xE4\xB8\xAD %lu%%", (unsigned long)progress); /* 采集中 */
+  } else if (phase == PX4LITE_ATTITUDE_SUCCEEDED) {
+    if (action == PX4LITE_ATTITUDE_ACTION_BIAS) {
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE9\x9B\xB6\xE5\x81\x8F\xE6\xA0\xA1\xE5\x87\x86\xE6\x88\x90\xE5\x8A\x9F"); /* 零偏校准成功 */
+    } else if (action == PX4LITE_ATTITUDE_ACTION_ZERO) {
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\xB7\xB2\xE8\xAE\xBE\xE7\x9B\xB8\xE5\xAF\xB9\xE9\x9B\xB6\xE4\xBD\x8D"); /* 已设相对零位 */
+    } else {
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\xB7\xB2\xE6\x81\xA2\xE5\xA4\x8D\xE5\x8E\x9F\xE5\x9F\xBA\xE5\x87\x86"); /* 已恢复原基准 */
+    }
+  } else if (phase == PX4LITE_ATTITUDE_FAILED) {
+    if (reason == PX4LITE_ATTITUDE_REASON_NO_DATA) {
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\xA4\xB1\xE8\xB4\xA5\xEF\xBC\x9A\xE6\x97\xA0\xE5\xA7\xBF\xE6\x80\x81\xE6\x95\xB0\xE6\x8D\xAE"); /* 失败：无姿态数据 */
+    } else {
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\xA4\xB1\xE8\xB4\xA5\xEF\xBC\x9A\xE8\xAE\xBE\xE5\xA4\x87\xE6\x9C\xAA\xE6\x94\xBE\xE7\xA8\xB3"); /* 失败：设备未放稳 */
+    }
+  } else {
+    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s",
+                   (s_values[DISPLAY_HMI_VAR_ATTITUDE_REFERENCE] != 0U) ?
+                   "\xE7\x9B\xB8\xE5\xAF\xB9\xE9\x9B\xB6\xE4\xBD\x8D\xE5\xB7\xB2\xE5\x90\xAF\xE7\x94\xA8" : /* 相对零位已启用 */
+                   "\xE5\xBE\x85\xE6\x93\x8D\xE4\xBD\x9C"); /* 待操作 */
+  }
+}
+
 /**
  * @brief Format one HMI value into its static text slot.
  */
@@ -499,11 +551,43 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
       break;
     case DISPLAY_HMI_VAR_BATTERY_PERCENT:
     case DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT:
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu%%", (unsigned long)value);
+      break;
+    case DISPLAY_HMI_VAR_MOTOR_TARGET_1:
+    case DISPLAY_HMI_VAR_MOTOR_TARGET_2:
+    case DISPLAY_HMI_VAR_MOTOR_TARGET_3:
+    case DISPLAY_HMI_VAR_MOTOR_TARGET_4:
+      if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+        (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xAE\xBE--"); /* 远端协议不含基础目标 */
+      } else {
+        (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xAE\xBE%lu%%", (unsigned long)value); /* 设 */
+      }
+      break;
     case DISPLAY_HMI_VAR_MOTOR_PWM_1:
     case DISPLAY_HMI_VAR_MOTOR_PWM_2:
     case DISPLAY_HMI_VAR_MOTOR_PWM_3:
     case DISPLAY_HMI_VAR_MOTOR_PWM_4:
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu%%", (unsigned long)value);
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\x87\xBA%lu%%", (unsigned long)value); /* 出 */
+      break;
+    case DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE:
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s",
+                     (value == PX4LITE_CONTROL_MODE_DIRECT) ? "\xE7\x9B\xB4\xE6\x8E\xA7" :
+                     ((value == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) ? "\xE5\xA7\xBF\xE6\x80\x81\xE8\xBE\x85\xE5\x8A\xA9" :
+                      "\xE8\xBF\x9C\xE7\xAB\xAF\xE6\x9C\xAA\xE4\xB8\x8A\xE6\x8A\xA5")); /* 直控/姿态辅助/远端未上报 */
+      break;
+    case DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE:
+      switch (value) {
+        case PX4LITE_MOTOR_OP_STOPPED: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\x81\x9C\xE6\xAD\xA2"); break;
+        case PX4LITE_MOTOR_OP_ESC_PREPARING: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "ESC\xE5\x87\x86\xE5\xA4\x87\xE4\xB8\xAD"); break;
+        case PX4LITE_MOTOR_OP_MANUAL_RUNNING: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE6\x89\x8B\xE5\x8A\xA8\xE8\xBF\x90\xE8\xA1\x8C"); break;
+        case PX4LITE_MOTOR_OP_SYNC_RAMP_UP: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\x90\x8C\xE6\xAD\xA5\xE5\x8D\x87\xE9\x80\x9F"); break;
+        case PX4LITE_MOTOR_OP_RAMP_DOWN: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE7\xBC\x93\xE9\x99\x8D\xE5\x81\x9C\xE6\x9C\xBA"); break;
+        case PX4LITE_MOTOR_OP_INHIBITED: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE7\x94\xB5\xE6\xBA\x90\xE9\x97\xAD\xE9\x94\x81"); break;
+        default: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xBF\x9C\xE7\xAB\xAF\xE7\x8A\xB6\xE6\x80\x81"); break;
+      }
+      break;
+    case DISPLAY_HMI_VAR_ATTITUDE_PHASE:
+      Display_LvglFormatAttitudePhase(text, value);
       break;
     case DISPLAY_HMI_VAR_GNSS_FIX:
       /* 定位状态显示解算 fix 等级(无定位/2D/3D/差分…)，与自检模块态文字区分开。 */
@@ -682,8 +766,8 @@ static uint16_t Display_LvglMotorPulseUs(uint32_t percent)
 /**
  * @brief 更新 Control 最终写入的 PWM 脉宽文本。
  *
- * @details 脉宽仅用于精确数值显示，不反推滑轨。滑轨沿用旧工程口径，只跟随 Control
- * 发布的 `duty_percent`，避免 ESC 预解锁期间的 1000us 把已接受的手动目标拉回 0%。
+ * @details 脉宽仅用于精确数值显示，不反推滑轨。滑轨跟随 Control 发布的
+ * `base_percent`，避免把安全脉宽或姿态修正回灌为学生目标。
  */
 static void Display_LvglUpdateMotorPulseLabel(uint8_t motor_index, uint32_t pulse_us)
 {
@@ -1086,22 +1170,22 @@ void Display_LvglSetAlarmRows(const uint32_t *packed, uint16_t count)
 /**
  * @brief 电机页滑轨触摸事件处理。
  *
- * @details 只提交用户手指实际产生的值。滑轨跟随 Control 发布的 duty_percent(含姿态修正)，
- * 因此它显示的值未必等于用户拖出来的目标；若把滑轨当前值无条件提交，修正量就会在每次触摸时
- * 被吃进基础油门，逐次棘轮到 0，即历史上"油门自己掉下来"的成因。
+ * @details 只提交用户手指实际产生的值。滑轨跟随 Control 发布的 base_percent，
+ * 实际输出与 PWM 由独立标签展示，不把姿态修正回灌为学生设定目标。
  *
  * LVGL 只在旋钮位置真正改变时才发 LV_EVENT_VALUE_CHANGED，因此"手指按下后没有移动旋钮"
  * 的点按不会产生 touch_valid，本回调也就不提交任何目标——显示值不会回灌成新目标。松手时
  * 重发的是最后一次手指产生的值(s_motor_touch_value)，而不是滑轨当前显示值，既堵住棘轮，
  * 又保留了电阻触摸快速松手漏掉最后一次 VALUE_CHANGED 的补偿。
  *
- * 与 Display_LoadMotorSnapshot() 的 duty_percent 口径成对存在，改一处必须同时改另一处。
+ * 与 Display_LoadMotorSnapshot() 的 base_percent 口径成对存在，改一处必须同时改另一处。
  */
 static void Display_LvglMotorSliderEventCb(lv_event_t *event)
 {
   lv_event_code_t code;
   lv_obj_t *slider;
   Display_HmiVariableId_t id;
+  Display_HmiVariableId_t target_id;
   uint8_t motor_index;
   int32_t value;
 
@@ -1110,6 +1194,7 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
   id     = (Display_HmiVariableId_t)(uintptr_t)lv_event_get_user_data(event);
   if ((id < DISPLAY_HMI_VAR_MOTOR_PWM_1) || (id > DISPLAY_HMI_VAR_MOTOR_PWM_4)) { return; }
   motor_index = (uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1);
+  target_id = (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_MOTOR_TARGET_1 + motor_index);
 
   if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) {
     s_motor_slider_dragging[motor_index] = 0U;
@@ -1143,17 +1228,17 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
   }
 
   if (Display_RequestMotorThrottle(id, (uint16_t)value) != DISPLAY_OK) {
-    if ((id < DISPLAY_HMI_VAR_COUNT) && (s_value_valid[id] != 0U)) {
+    if ((target_id < DISPLAY_HMI_VAR_COUNT) && (s_value_valid[target_id] != 0U)) {
       s_control_update_active = 1U;
-      lv_slider_set_value(slider, Display_LvglClampPercent(s_values[id]), LV_ANIM_OFF);
+      lv_slider_set_value(slider, Display_LvglClampPercent(s_values[target_id]), LV_ANIM_OFF);
       s_control_update_active = 0U;
     }
     return;
   }
 
-  if (id < DISPLAY_HMI_VAR_COUNT) {
-    s_values[id]      = (uint32_t)value;
-    s_value_valid[id] = 1U;
+  if (target_id < DISPLAY_HMI_VAR_COUNT) {
+    s_values[target_id]      = (uint32_t)value;
+    s_value_valid[target_id] = 1U;
   }
 }
 
@@ -1186,14 +1271,28 @@ static void Display_LvglLandingEventCb(lv_event_t *event)
   (void)Display_RequestMotorAutoLanding();
 }
 
-static void Display_LvglAttitudeCalEventCb(lv_event_t *event)
+static void Display_LvglAttitudeActionEventCb(lv_event_t *event)
 {
+  Px4Lite_AttitudeAction_t action;
+
   if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return; }
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
     return;
   }
+  action = (Px4Lite_AttitudeAction_t)(uintptr_t)lv_event_get_user_data(event);
+  (void)Display_RequestAttitudeAction(action);
+}
 
-  (void)Display_RequestAttitudeLevelCalibration();
+/** @brief 学生点击模式按钮，在直控与姿态辅助之间显式切换。 */
+static void Display_LvglMotorModeEventCb(lv_event_t *event)
+{
+  Px4Lite_ControlMode_t next_mode;
+
+  if ((App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) ||
+      (lv_event_get_code(event) != LV_EVENT_CLICKED)) { return; }
+  next_mode = (s_values[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE] == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) ?
+              PX4LITE_CONTROL_MODE_DIRECT : PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST;
+  (void)Display_RequestMotorControlMode(next_mode);
 }
 
 /**
@@ -1210,17 +1309,27 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id, uint32_t value)
 
   Display_LvglUpdateStatusLed(id, value);
 
-  if ((id >= DISPLAY_HMI_VAR_MOTOR_PWM_1) && (id <= DISPLAY_HMI_VAR_MOTOR_PWM_4)) {
-    motor_index = (uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1);
-    /* 用户拖动时不覆盖触摸位置；松手后滑轨跟随 Control 发布的 duty_percent。
-       Control 在 ESC 预解锁期间发布已接受的目标百分比，因此手动目标不会被 1000us
-       安全脉宽错误拉回 0%。 */
+  if ((id >= DISPLAY_HMI_VAR_MOTOR_TARGET_1) && (id <= DISPLAY_HMI_VAR_MOTOR_TARGET_4)) {
+    motor_index = (uint8_t)((uint16_t)id - (uint16_t)DISPLAY_HMI_VAR_MOTOR_TARGET_1);
+    /* 滑轨只跟随学生设定目标；输出修正通过独立数值显示。 */
     if ((motor_index < DISPLAY_LVGL_MOTOR_COUNT) && (s_motor_pwm_bars[motor_index] != 0) &&
         (s_motor_slider_dragging[motor_index] == 0U) &&
         (lv_slider_is_dragged(s_motor_pwm_bars[motor_index]) == false)) {
       s_control_update_active = 1U;
       lv_slider_set_value(s_motor_pwm_bars[motor_index], Display_LvglClampPercent(value), LV_ANIM_OFF);
       s_control_update_active = 0U;
+    }
+  }
+
+  if ((id == DISPLAY_HMI_VAR_ATTITUDE_ACTION) ||
+      (id == DISPLAY_HMI_VAR_ATTITUDE_REASON) ||
+      (id == DISPLAY_HMI_VAR_ATTITUDE_PROGRESS) ||
+      (id == DISPLAY_HMI_VAR_ATTITUDE_REFERENCE)) {
+    Display_LvglFormatValue(DISPLAY_HMI_VAR_ATTITUDE_PHASE,
+                            s_values[DISPLAY_HMI_VAR_ATTITUDE_PHASE]);
+    if (s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].label != 0) {
+      lv_label_set_text_static(s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].label,
+                               s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].text);
     }
   }
 
@@ -2015,14 +2124,21 @@ static void Display_LvglCreateAircraftPage(lv_obj_t *parent)
 {
   lv_obj_t *card;
   lv_obj_t *horizon;
+  uint8_t i;
+  static const Px4Lite_AttitudeAction_t actions[3] = {
+      PX4LITE_ATTITUDE_ACTION_BIAS, PX4LITE_ATTITUDE_ACTION_ZERO, PX4LITE_ATTITUDE_ACTION_RESTORE};
+  static const char *texts[3] = {
+      "\xE6\xA0\xA1\xE5\x87\x86\xE9\x9B\xB6\xE5\x81\x8F", /* 校准零偏 */
+      "\xE8\xAE\xBE\xE4\xB8\xBA\xE9\x9B\xB6\xE4\xBD\x8D", /* 设为零位 */
+      "\xE6\x81\xA2\xE5\xA4\x8D\xE5\x9F\xBA\xE5\x87\x86"  /* 恢复基准 */
+  };
 
   Display_LvglCreateSystemColumn(parent);
   card = Display_LvglCreateCard(parent, 264, DISPLAY_LVGL_BODY_Y, 268, DISPLAY_LVGL_BODY_H, "\xE9""\xA3""\x9E""\xE6""\x9C""\xBA""\xE5""\xA7""\xBF""\xE6""\x80""\x81");
 
-  /* 删除发送/接收/心跳三行；上半部为姿态地平仪区域：卡片内 (8,36) 起，252x212。
-     地平仪由 Display_LvglHorizonDrawCb 在 DRAW_POST 事件里直绘（约 200 直径圆盘）。 */
+  /* 地平仪缩短，为操作状态、三组角度和三个明确动作保留空间。 */
   horizon = lv_obj_create(card);
-  lv_obj_set_size(horizon, 252, 212);
+  lv_obj_set_size(horizon, 252, 166);
   lv_obj_set_pos(horizon, 8, 36);
   lv_obj_set_style_radius(horizon, 4, 0);
   lv_obj_set_style_bg_color(horizon, lv_color_hex(0x0C1622), 0);
@@ -2034,36 +2150,34 @@ static void Display_LvglCreateAircraftPage(lv_obj_t *parent)
   s_attitude_obj = horizon;
   lv_obj_add_event_cb(horizon, Display_LvglHorizonDrawCb, LV_EVENT_DRAW_POST, NULL);
 
-  /* 三态姿态数据下移到卡片底部三行，行距压缩到 24px 给地平仪让出高度；
-     数据整体左移，右侧腾出"校准"按钮位置。 */
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_ROLL, "\xE6""\xA8""\xAA""\xE6""\xBB""\x9A", 16, 256, 96);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PITCH, "\xE4""\xBF""\xAF""\xE4""\xBB""\xB0", 16, 280, 96);
-  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_YAW, "\xE5""\x81""\x8F""\xE8""\x88""\xAA", 16, 304, 96);
+  Display_LvglCreateValueLabel(card, DISPLAY_HMI_VAR_ATTITUDE_PHASE, 12, 207, 244, &display_lvgl_font_zh_16);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_ROLL, "\xE6\xA8\xAA\xE6\xBB\x9A", 16, 230, 104);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_PITCH, "\xE4\xBF\xAF\xE4\xBB\xB0", 16, 252, 104);
+  Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_YAW, "\xE7\x9B\xB8\xE5\xAF\xB9\xE5\x81\x8F\xE8\x88\xAA", 16, 274, 104);
 
-  /* 校准按钮：点下把当前姿态记为水平零位，地平仪以当前姿势归零。 */
-  {
-    lv_obj_t *cal = lv_obj_create(card);
-    lv_obj_t *cal_label;
-
-    lv_obj_set_size(cal, 74, 64);
-    lv_obj_set_pos(cal, 186, 258);
-    lv_obj_set_style_radius(cal, 4, 0);
-    lv_obj_set_style_bg_color(cal, lv_color_hex(0x1B3A4E), 0);
-    lv_obj_set_style_bg_opa(cal, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(cal, 1, 0);
-    lv_obj_set_style_border_color(cal, lv_color_hex(0x1DB7C9), 0);
-    lv_obj_add_flag(cal, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(cal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(cal, Display_LvglAttitudeCalEventCb, LV_EVENT_CLICKED, 0);
-    cal_label = Display_LvglCreateLabel(cal, "\xE6""\xA0""\xA1""\xE5""\x87""\x86", 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
-    lv_obj_add_flag(cal_label, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(cal_label, Display_LvglAttitudeCalEventCb, LV_EVENT_CLICKED, 0);
+  for (i = 0U; i < 3U; i++) {
+    lv_obj_t *button = lv_obj_create(card);
+    lv_obj_t *label;
+    lv_obj_set_size(button, 78, 30);
+    lv_obj_set_pos(button, (lv_coord_t)(8 + (i * 84U)), 298);
+    lv_obj_set_style_radius(button, 4, 0);
+    lv_obj_set_style_bg_color(button, lv_color_hex(0x1B3A4E), 0);
+    lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(button, 1, 0);
+    lv_obj_set_style_border_color(button, lv_color_hex(0x1DB7C9), 0);
+    lv_obj_set_style_pad_all(button, 0, 0);
+    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(button, Display_LvglAttitudeActionEventCb, LV_EVENT_CLICKED, (void *)(uintptr_t)actions[i]);
+    label = Display_LvglCreateLabel(button, texts[i], 0, 0, &display_lvgl_font_zh_16, lv_color_hex(0xFFFFFF));
+    lv_obj_add_flag(label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(label, Display_LvglAttitudeActionEventCb, LV_EVENT_CLICKED, (void *)(uintptr_t)actions[i]);
+    lv_obj_center(label);
     if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) {
-      lv_obj_clear_flag(cal, LV_OBJ_FLAG_CLICKABLE);
-      lv_obj_clear_flag(cal_label, LV_OBJ_FLAG_CLICKABLE);
-      lv_obj_set_style_opa(cal, LV_OPA_50, 0);
+      lv_obj_clear_flag(button, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_set_style_opa(button, LV_OPA_50, 0);
     }
-    lv_obj_center(cal_label);
   }
 
   Display_LvglCreateMessageLogPanel(parent, 540, 252);
@@ -2096,13 +2210,15 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
   lv_obj_t *card;
   lv_obj_t *action;
   lv_obj_t *action_label;
+  lv_obj_t *mode_button;
+  lv_obj_t *mode_label;
   uint16_t i;
   static const char *motor_names[DISPLAY_LVGL_MOTOR_COUNT] = {"\xE4""\xB8""\x80""\xE5""\x8F""\xB7", "\xE4""\xBA""\x8C""\xE5""\x8F""\xB7", "\xE4""\xB8""\x89""\xE5""\x8F""\xB7", "\xE5""\x9B""\x9B""\xE5""\x8F""\xB7"};
   static const lv_coord_t track_x[DISPLAY_LVGL_MOTOR_COUNT] = {50, 135, 220, 305};
   static const char *action_text[3] = {
-      "\xE4""\xB8""\x80""\xE9""\x94""\xAE""\xE8""\xB5""\xB7""\xE9""\xA3""\x9E",
+      "\xE5""\x90""\x8C""\xE6""\xAD""\xA5""\xE5""\x8D""\x87""\xE9""\x80""\x9F",
       "\xE6\x9C\xAC\xE6\x9C\xBA\xE6\x80\xA5\xE5\x81\x9C",
-      "\xE4""\xB8""\x80""\xE9""\x94""\xAE""\xE9""\x99""\x8D""\xE8""\x90""\xBD"};
+      "\xE7""\xBC""\x93""\xE9""\x99""\x8D""\xE5""\x81""\x9C""\xE6""\x9C""\xBA"};
   static const uint32_t action_bg[3] = {0x173E4C, 0x4E1B25, 0x1C3B2A};
   static const uint32_t action_border[3] = {0x35C3D6, 0xE85D75, 0x5AC97A};
   const lv_coord_t action_gap = 4;
@@ -2110,20 +2226,49 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
   const lv_coord_t action_y = (lv_coord_t)(DISPLAY_MOTOR_ESTOP_Y - DISPLAY_LVGL_BODY_Y);
   const lv_coord_t action_w = (lv_coord_t)((DISPLAY_MOTOR_ESTOP_W - (2U * 4U)) / 3U);
 
-  /* 系统栏收窄 204->150，油门卡片左移，消息日志加宽到 230（原 176 太窄，文字被时间列挡住）。 */
+  /* 系统栏收窄 204->150，实验卡片左移，消息日志加宽到 230。 */
   Display_LvglCreateSystemColumnAt(parent, 8, 150);
-  card = Display_LvglCreateCard(parent, 166, DISPLAY_LVGL_BODY_Y, 388, DISPLAY_LVGL_BODY_H, "\xE6""\xB2""\xB9""\xE9""\x97""\xA8""\xE6""\x8E""\xA7""\xE5""\x88""\xB6");
+  card = Display_LvglCreateCard(parent, 166, DISPLAY_LVGL_BODY_Y, 388, DISPLAY_LVGL_BODY_H, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE5""\xAE""\x9E""\xE9""\xAA""\x8C");
+
+  mode_button = lv_obj_create(card);
+  lv_obj_set_size(mode_button, 132, 28);
+  lv_obj_set_pos(mode_button, 18, 32);
+  lv_obj_set_style_radius(mode_button, 4, 0);
+  lv_obj_set_style_bg_color(mode_button, lv_color_hex(0x173E4C), 0);
+  lv_obj_set_style_bg_opa(mode_button, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(mode_button, 1, 0);
+  lv_obj_set_style_border_color(mode_button, lv_color_hex(0x35C3D6), 0);
+  lv_obj_set_style_pad_all(mode_button, 0, 0);
+  lv_obj_add_flag(mode_button, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(mode_button, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(mode_button, Display_LvglMotorModeEventCb, LV_EVENT_CLICKED, 0);
+  Display_LvglCreateValueLabel(mode_button, DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, 0, 5, 132, &display_lvgl_font_zh_16);
+  mode_label = s_value_slots[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE].label;
+  if (mode_label != 0) {
+    lv_obj_set_style_text_align(mode_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_add_flag(mode_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(mode_label, Display_LvglMotorModeEventCb, LV_EVENT_CLICKED, 0);
+  }
+  (void)Display_LvglCreateLabel(card, "\xE8""\xBF""\x90""\xE8""\xA1""\x8C""\xE9""\x98""\xB6""\xE6""\xAE""\xB5", 166, 38,
+                                &display_lvgl_font_zh_16, lv_color_hex(0x7D91A6));
+  Display_LvglCreateValueLabel(card, DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, 246, 37, 126, &display_lvgl_font_zh_16);
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) {
+    lv_obj_clear_flag(mode_button, LV_OBJ_FLAG_CLICKABLE);
+    if (mode_label != 0) { lv_obj_clear_flag(mode_label, LV_OBJ_FLAG_CLICKABLE); }
+    lv_obj_set_style_opa(mode_button, LV_OPA_50, 0);
+  }
+
   for (i = 0U; i < DISPLAY_LVGL_MOTOR_COUNT; i++) {
     lv_coord_t x = track_x[i];
     lv_coord_t label_x = (lv_coord_t)(x - 10);
     Display_HmiVariableId_t id = (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_MOTOR_PWM_1 + i);
+    Display_HmiVariableId_t target_id = (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_MOTOR_TARGET_1 + i);
     uint32_t initial_pulse;
 
-    (void)Display_LvglCreateLabel(card, motor_names[i], label_x, 34, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
+    (void)Display_LvglCreateLabel(card, motor_names[i], label_x, 66, &display_lvgl_font_zh_16, lv_color_hex(0xDCE8F2));
     s_motor_pwm_bars[i] = lv_slider_create(card);
-    /* 顶端下移、缩短滑轨(底端不动)，使滑点滑到 100% 时不再压住上方"X号"名称。 */
-    lv_obj_set_size(s_motor_pwm_bars[i], 28, 138);
-    lv_obj_set_pos(s_motor_pwm_bars[i], (lv_coord_t)(x + 1), 80);
+    lv_obj_set_size(s_motor_pwm_bars[i], 28, 108);
+    lv_obj_set_pos(s_motor_pwm_bars[i], (lv_coord_t)(x + 1), 90);
     lv_slider_set_range(s_motor_pwm_bars[i], 0, 100);
     lv_slider_set_value(s_motor_pwm_bars[i], 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_motor_pwm_bars[i], lv_color_hex(0x263748), LV_PART_MAIN);
@@ -2136,15 +2281,11 @@ static void Display_LvglCreateMotorPage(lv_obj_t *parent)
       lv_obj_clear_flag(s_motor_pwm_bars[i], LV_OBJ_FLAG_CLICKABLE);
       lv_obj_add_state(s_motor_pwm_bars[i], LV_STATE_DISABLED);
     }
-    /* 数值区避开滑块旋钮：左列 PWM，右列脉宽，列间保留触摸与视觉间距。 */
-    (void)Display_LvglCreateClipLabel(card, "PWM", (lv_coord_t)(x - 25), 234, 30, &lv_font_montserrat_12, lv_color_hex(0x7D91A6));
-    (void)Display_LvglCreateClipLabel(card, "us", (lv_coord_t)(x + 13), 234, 45, &lv_font_montserrat_12, lv_color_hex(0x7D91A6));
-    Display_LvglCreateValueLabel(card, id, (lv_coord_t)(x - 25), 250, 30, &lv_font_montserrat_12);
-    if (s_value_slots[id].label != 0) {
-      lv_obj_set_style_text_font(s_value_slots[id].label, &lv_font_montserrat_12, 0);
-      lv_obj_set_style_text_align(s_value_slots[id].label, LV_TEXT_ALIGN_RIGHT, 0);
-    }
-    s_motor_pulse_labels[i] = Display_LvglCreateClipLabel(card, s_motor_pulse_text[i], (lv_coord_t)(x + 13), 250, 45, &lv_font_montserrat_12, lv_color_hex(0xDCE8F2));
+    /* 三行并列展示：学生设定、控制器实际输出、最终 PWM 脉宽。 */
+    Display_LvglCreateValueLabel(card, target_id, (lv_coord_t)(x - 25), 202, 58, &display_lvgl_font_zh_16);
+    Display_LvglCreateValueLabel(card, id, (lv_coord_t)(x - 25), 222, 58, &display_lvgl_font_zh_16);
+    s_motor_pulse_labels[i] = Display_LvglCreateClipLabel(card, s_motor_pulse_text[i], (lv_coord_t)(x - 25), 244, 62,
+                                                          &lv_font_montserrat_12, lv_color_hex(0xDCE8F2));
     initial_pulse = (s_motor_pulse_valid[i] != 0U) ? s_motor_pulse_us[i] :
                     Display_LvglMotorPulseUs(((id < DISPLAY_HMI_VAR_COUNT) && (s_value_valid[id] != 0U)) ? s_values[id] : 0U);
     Display_LvglUpdateMotorPulseLabel((uint8_t)i, initial_pulse);
@@ -2263,11 +2404,7 @@ static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
         dot_color = lv_palette_main(LV_PALETTE_AMBER);
       }
 
-      (void)snprintf(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), "DCDW-%03u  RX %lu  Loss %u.%u%%",
-                     (unsigned int)s_remote_node_views[i].node_id,
-                     (unsigned long)s_remote_node_views[i].rx_frame_count,
-                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 / 10U),
-                     (unsigned int)(s_remote_node_views[i].rx_loss_rate_x10 % 10U));
+      Display_LvglFormatRemoteNodeText(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), &s_remote_node_views[i]);
       btn = lv_obj_create(list);
       lv_obj_set_size(btn, 300, 30);
       lv_obj_set_pos(btn, 0, (lv_coord_t)(i * 36U));
@@ -2290,7 +2427,7 @@ static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
       lv_obj_set_style_pad_all(dot, 0, 0);
       lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
       label = Display_LvglCreateLabel(btn, s_remote_node_texts[i], 30, 6, &lv_font_montserrat_14, lv_color_hex(0xFFFFFF));
-      (void)label;
+      s_remote_node_labels[i] = label;
     }
   } else {
     (void)Display_LvglCreateLabel(list, "No remote heartbeat", 16, 30, &lv_font_montserrat_14, lv_color_hex(0x7D91A6));
@@ -2300,7 +2437,7 @@ static void Display_LvglCreateHiddenPage(lv_obj_t *parent)
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_RX_COUNT, "\xE6""\x8E""\xA5""\xE6""\x94""\xB6""\xE8""\xAE""\xA1""\xE6""\x95""\xB0", 32, 188, 180);
   Display_LvglCreateValueRow(card, DISPLAY_HMI_VAR_LORA_LOSS_RATE, "\xE4""\xB8""\xA2""\xE5""\x8C""\x85""\xE7""\x8E""\x87", 32, 228, 180);
 
-  /* 记录本次构建的节点列表签名；周期检查只在签名变化时才重建，静止时不重绘。 */
+  /* 记录本次构建的节点列表签名；节点集合不变时只更新行内 RX/Loss 文字。 */
   s_remote_list_sig = Display_LvglRemoteNodeSig(s_remote_node_views, count);
 }
 
@@ -2455,7 +2592,8 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
     Display_LvglRequestLocalView(s_current_lvgl_page, 1U);
   }
 
-  /* 通信连接页：仅当节点上下线/状态变化(签名变化)时才整页重建，静止时不重绘，消除屏闪。 */
+  /* 通信连接页：节点上下线/状态变化才整页重建；集合不变时原位刷新 RX/Loss，
+     学生可连续观察链路质量，且不会因每秒重建页面产生屏闪。 */
   if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) &&
       (s_page_change_requested == 0U) &&
       (s_next_remote_list_rebuild_ms != 0U) &&
@@ -2472,6 +2610,15 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
       s_requested_page         = DISPLAY_HMI_PAGE_HIDDEN;
       s_page_change_requested  = 1U;
       s_page_rebuild_requested = 1U;
+    } else {
+      uint8_t i;
+      for (i = 0U; (i < probe_count) && (i < DISPLAY_LVGL_REMOTE_ROWS); i++) {
+        s_remote_node_views[i] = probe[i];
+        Display_LvglFormatRemoteNodeText(s_remote_node_texts[i], sizeof(s_remote_node_texts[i]), &probe[i]);
+        if (s_remote_node_labels[i] != 0) {
+          lv_label_set_text_static(s_remote_node_labels[i], s_remote_node_texts[i]);
+        }
+      }
     }
     s_next_remote_list_rebuild_ms = now_ms + DISPLAY_LVGL_REMOTE_LIST_REFRESH_MS;
   }

@@ -194,6 +194,8 @@ static int TestThrottleMappingAndPublish(void)
   failures += ExpectU32("published duty0", g_last_motor.duty_percent[0], 50U);
   failures += ExpectU32("published pulse0", g_last_motor.pulse_us[0], expected_mid);
   failures += ExpectU32("published run", g_last_motor.run_state, 1U);
+  failures += ExpectU32("published direct mode", g_last_motor.control_mode, PX4LITE_CONTROL_MODE_DIRECT);
+  failures += ExpectU32("published manual state", g_last_motor.operation_state, PX4LITE_MOTOR_OP_MANUAL_RUNNING);
   failures += ExpectU32("control state", g_control_state, PX4LITE_STATE_ONLINE);
   failures += ExpectU32("control fault", g_control_fault, 0U);
   failures += ExpectU32("publish count nonzero", (g_publish_count > 0U) ? 1U : 0U, 1U);
@@ -209,9 +211,11 @@ static int TestThrottleTargetPublishesDuringArm(void)
   failures += ExpectU32("set motor0 while arming", Px4Lite_ControlSetMotorThrottlePercent(0U, 40U), PX4LITE_OK);
   Px4Lite_ControlRun(g_now_ms);
   failures += ExpectU32("arming pulse stays min", g_pulse_us[0], PX4LITE_CONTROL_ESC_MIN_PULSE_US);
-  failures += ExpectU32("arming publishes target", g_last_motor.duty_percent[0], 40U);
+  failures += ExpectU32("arming publishes zero actual output", g_last_motor.duty_percent[0], 0U);
+  failures += ExpectU32("arming preserves accepted target", g_last_motor.base_percent[0], 40U);
   failures += ExpectU32("arming publishes actual min pulse", g_last_motor.pulse_us[0], PX4LITE_CONTROL_ESC_MIN_PULSE_US);
   failures += ExpectU32("arming run state", g_last_motor.run_state, 0U);
+  failures += ExpectU32("arming operation state", g_last_motor.operation_state, PX4LITE_MOTOR_OP_ESC_PREPARING);
   return failures;
 }
 
@@ -252,7 +256,7 @@ static int TestAttitudeAssistMixesFreshRoll(void)
   return failures;
 }
 
-static int TestAttitudeAssistDefaultsOnForSingleActiveOutput(void)
+static int TestDirectControlIsDefaultForSingleActiveOutput(void)
 {
   int failures = 0;
 
@@ -261,8 +265,9 @@ static int TestAttitudeAssistDefaultsOnForSingleActiveOutput(void)
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 40U);
   SeedAttitude(g_now_ms, 1000, 0, 0, 0);
   Px4Lite_ControlRun(g_now_ms);
-  failures += ExpectU32("single active corrected duty0", g_last_motor.duty_percent[0], 37U);
-  failures += ExpectU32("single active corrected pulse0", g_pulse_us[0], 1370U);
+  failures += ExpectU32("default mode", s_control_mode, PX4LITE_CONTROL_MODE_DIRECT);
+  failures += ExpectU32("single active direct duty0", g_last_motor.duty_percent[0], 40U);
+  failures += ExpectU32("single active direct pulse0", g_pulse_us[0], 1400U);
   failures += ExpectU32("inactive duty1", g_last_motor.duty_percent[1], 0U);
   failures += ExpectU32("inactive pulse1", g_pulse_us[1], PX4LITE_CONTROL_ESC_MIN_PULSE_US);
   return failures;
@@ -274,6 +279,7 @@ static int TestAttitudeAssistAdjustsPulseForSmallWindDisturbance(void)
 
   ResetHarness();
   ArmControl();
+  (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 40U);
@@ -311,6 +317,7 @@ static int TestAttitudeAssistKeepsBaseThrottleStable(void)
 
   ResetHarness();
   ArmControl();
+  (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 30U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 30U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 30U);
@@ -348,6 +355,7 @@ static int TestAttitudeAssistPreservesUnequalBaseThrottle(void)
 
   ResetHarness();
   ArmControl();
+  (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 20U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 30U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 40U);
@@ -468,6 +476,7 @@ static int TestAttitudeAssistBridgesTransientNavigationGap(void)
 
   ResetHarness();
   ArmControl();
+  (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     (void)Px4Lite_ControlSetMotorThrottlePercent(i, 40U);
   }
@@ -576,6 +585,7 @@ static int TestAutoTakeoffDropsToLandingOnAttitudeLoss(void)
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("auto takeoff start", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
   Px4Lite_ControlRun(g_now_ms);
+  failures += ExpectU32("auto takeoff operation state", g_last_motor.operation_state, PX4LITE_MOTOR_OP_SYNC_RAMP_UP);
 
   RunControlWithLevelAttitude(PX4LITE_CONTROL_AUTO_TAKEOFF_RAMP_MS / 2U);
   failures += ExpectU32("auto takeoff half duty", g_last_motor.duty_percent[0], PX4LITE_CONTROL_AUTO_TAKEOFF_TARGET_PERCENT / 2U);
@@ -607,7 +617,7 @@ static int TestAutoTakeoffCompletesAndHoldsTarget(void)
   failures += ExpectU32("set direct before takeoff", Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_DIRECT), PX4LITE_OK);
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("completed takeoff start", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
-  failures += ExpectU32("takeoff restores attitude mode", s_control_mode, PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
+  failures += ExpectU32("takeoff preserves explicit direct mode", s_control_mode, PX4LITE_CONTROL_MODE_DIRECT);
   Px4Lite_ControlRun(g_now_ms);
 
   RunControlWithLevelAttitude(PX4LITE_CONTROL_AUTO_TAKEOFF_RAMP_MS);
@@ -666,7 +676,7 @@ static int TestAutoTakeoffRequiresAttitudeAndEnvironmentOnline(void)
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_DIRECT);
   failures += ExpectU32("landing attitude online", Px4Lite_ControlStartAutoLanding(), PX4LITE_OK);
-  failures += ExpectU32("landing restores attitude mode", s_control_mode, PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
+  failures += ExpectU32("landing preserves explicit direct mode", s_control_mode, PX4LITE_CONTROL_MODE_DIRECT);
 
   ResetHarness();
   ArmControl();
@@ -805,6 +815,7 @@ static int TestLandingRefusesNonZeroManualThrottle(void)
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("landing started", Px4Lite_ControlStartAutoLanding(), PX4LITE_OK);
   RunControlWithLevelAttitude(PX4LITE_CONTROL_AUTO_LANDING_RAMP_MS / 2U);
+  failures += ExpectU32("landing operation state", g_last_motor.operation_state, PX4LITE_MOTOR_OP_RAMP_DOWN);
 
   /* 非零手动油门必须被拒，且降落斜坡不能被撤掉。 */
   failures += ExpectU32("landing refuses manual throttle", Px4Lite_ControlSetMotorThrottlePercent(0U, 40U), PX4LITE_NOT_READY);
@@ -855,7 +866,7 @@ int main(void)
   failures += TestThrottleTargetPublishesDuringArm();
   failures += TestThrottleClampAndInvalidIndex();
   failures += TestAttitudeAssistMixesFreshRoll();
-  failures += TestAttitudeAssistDefaultsOnForSingleActiveOutput();
+  failures += TestDirectControlIsDefaultForSingleActiveOutput();
   failures += TestAttitudeAssistAdjustsPulseForSmallWindDisturbance();
   failures += TestAttitudeAssistPreservesUnequalBaseThrottle();
   failures += TestAttitudeAssistKeepsBaseThrottleStable();
