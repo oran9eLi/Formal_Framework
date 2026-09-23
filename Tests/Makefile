@@ -34,7 +34,7 @@ POWER_SRC   := Unit/test_power_adc_calibration.c ../Sensor/Src/sensor_power.c
 CONTROL_SRC := Unit/test_control_motor_logic.c
 IMU_SRC     := Unit/test_platform_imu_axis_mapping.c
 
-TESTS := power control imu display command alarm attitude attitude_ops estimator reference storage
+TESTS := power control imu display command alarm attitude attitude_ops estimator reference storage rpi_h1_echo
 
 .PHONY: all run clean
 all: run
@@ -80,6 +80,9 @@ $(OUTDIR)/test_reference.exe: FORCE | $(OUTDIR)
 
 $(OUTDIR)/test_storage.exe: FORCE | $(OUTDIR)
 	$(CC) $(CFLAGS) -O1 -fwhole-program Unit/test_storage_freshness.c -o $@
+
+$(OUTDIR)/test_rpi_h1_echo.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member Unit/test_rpi_h1_echo.c -o $@
 
 run: $(addprefix $(OUTDIR)/test_,$(addsuffix .exe,$(TESTS)))
 	@echo "===== 运行单元测试 ====="

@@ -146,7 +146,7 @@ BaseType_t Px4Lite_AppInit(void)
   if (xTaskCreate(Px4Lite_HealthTask, "health", PX4LITE_STACK_HEALTH, 0, PX4LITE_PRIORITY_HEALTH, &task_handle) != pdPASS) { return pdFAIL; }
   (void)DebugTaskMonitor_Register(task_handle, "health", PX4LITE_STACK_HEALTH);
 
-#if PX4LITE_ENABLE_LORA || PX4LITE_ENABLE_REMOTE_ID
+#if PX4LITE_ENABLE_LORA || PX4LITE_ENABLE_REMOTE_ID || PX4LITE_ENABLE_RPI_MAVLINK
   task_handle = 0;
   if (xTaskCreate(Px4Lite_CommTask, "comm", PX4LITE_STACK_COMM, 0, PX4LITE_PRIORITY_COMM, &task_handle) != pdPASS) { return pdFAIL; }
   (void)DebugTaskMonitor_Register(task_handle, "comm", PX4LITE_STACK_COMM);
@@ -207,7 +207,7 @@ static void Px4Lite_ControlTask(void *argument)
  */
 static void Px4Lite_CommTask(void *argument)
 {
-#if PX4LITE_ENABLE_LORA || PX4LITE_ENABLE_REMOTE_ID
+#if PX4LITE_ENABLE_LORA || PX4LITE_ENABLE_REMOTE_ID || PX4LITE_ENABLE_RPI_MAVLINK
   TickType_t last_wake;
   Px4Lite_WorkItem_t work;
   uint32_t now_ms;
@@ -216,6 +216,9 @@ static void Px4Lite_CommTask(void *argument)
   now_ms = Px4Lite_PlatformGetMs();
 #if PX4LITE_ENABLE_LORA
   (void)Px4Lite_RegistryStart(PX4LITE_MODULE_LORA, now_ms);
+#elif PX4LITE_ENABLE_RPI_MAVLINK
+  /* 无 LoRa 构建中没有 LoRa 描述符代为初始化通信发送器，RPi 在此独立启动。 */
+  (void)Px4Lite_CommModulesInit();
 #endif
 #if PX4LITE_ENABLE_REMOTE_ID
   (void)Px4Lite_RegistryStart(PX4LITE_MODULE_REMOTE_ID, now_ms);

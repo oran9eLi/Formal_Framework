@@ -23,6 +23,8 @@ static volatile uint16_t s_rpi_rx_tail;
 static volatile uint16_t s_rpi_rx_count;
 static volatile uint32_t s_rpi_rx_drop_count;
 static volatile uint32_t s_rpi_rx_error_count;
+static volatile uint8_t s_rpi_initialized;
+static volatile uint8_t s_rpi_reconfiguring;
 static uint8_t s_rpi_rx_byte;
 #endif
 
@@ -94,7 +96,7 @@ void BSP_UART_GetDebugInfo(BSP_UART_DebugInfo_t *out)
 }
 
 #if (BSP_ENABLE_RPI_UART == 1U)
-static void BSP_RpiUART_ResetRxState(void)
+static void BSP_RpiUART_ResetRxState(uint8_t reset_counters)
 {
   uint32_t primask;
 
@@ -102,10 +104,38 @@ static void BSP_RpiUART_ResetRxState(void)
   s_rpi_rx_head        = 0U;
   s_rpi_rx_tail        = 0U;
   s_rpi_rx_count       = 0U;
-  s_rpi_rx_drop_count  = 0U;
-  s_rpi_rx_error_count = 0U;
+  if (reset_counters != 0U) {
+    s_rpi_rx_drop_count  = 0U;
+    s_rpi_rx_error_count = 0U;
+  }
   s_rpi_rx_byte        = 0U;
   BSP_Critical_Exit(primask);
+}
+
+/** @brief 填写 USART6 固定 8N1 参数，波特率由调用方传入。 */
+static void BSP_RpiUART_FillConfig(uint32_t baud_bps)
+{
+  huart6.Instance          = BSP_RPI_UART;
+  huart6.Init.BaudRate     = baud_bps;
+  huart6.Init.WordLength   = BSP_RPI_UART_WORD;
+  huart6.Init.StopBits     = BSP_RPI_UART_STOP;
+  huart6.Init.Parity       = BSP_RPI_UART_PARITY;
+  huart6.Init.Mode         = BSP_RPI_UART_MODE;
+  huart6.Init.HwFlowCtl    = BSP_RPI_UART_HWCTL;
+  huart6.Init.OverSampling = BSP_RPI_UART_OVERSAMP;
+}
+
+/** @brief 初始化指定速率并挂接第一个接收字节。 */
+static HAL_StatusTypeDef BSP_RpiUART_Start(uint32_t baud_bps)
+{
+  HAL_StatusTypeDef status;
+
+  BSP_RpiUART_FillConfig(baud_bps);
+  status = HAL_UART_Init(&huart6);
+  if (status != HAL_OK) { return status; }
+  status = HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U);
+  if (status != HAL_OK) { (void)HAL_UART_DeInit(&huart6); }
+  return status;
 }
 
 static void BSP_RpiUART_PushRxByteFromIsr(uint8_t byte)
@@ -129,20 +159,12 @@ BSP_Status_t BSP_RpiUART_Init(void)
 {
   HAL_StatusTypeDef hal_status;
 
-  huart6.Instance          = BSP_RPI_UART;
-  huart6.Init.BaudRate     = BSP_RPI_UART_BAUD;
-  huart6.Init.WordLength   = BSP_RPI_UART_WORD;
-  huart6.Init.StopBits     = BSP_RPI_UART_STOP;
-  huart6.Init.Parity       = BSP_RPI_UART_PARITY;
-  huart6.Init.Mode         = BSP_RPI_UART_MODE;
-  huart6.Init.HwFlowCtl    = BSP_RPI_UART_HWCTL;
-  huart6.Init.OverSampling = BSP_RPI_UART_OVERSAMP;
-
-  BSP_RpiUART_ResetRxState();
-  hal_status = HAL_UART_Init(&huart6);
-  if (hal_status != HAL_OK) { return BSP_UART_MapHalStatus(hal_status); }
-
-  hal_status = HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U);
+  s_rpi_reconfiguring = 1U;
+  s_rpi_initialized = 0U;
+  BSP_RpiUART_ResetRxState(1U);
+  hal_status = BSP_RpiUART_Start(BSP_RPI_UART_BAUD);
+  if (hal_status == HAL_OK) { s_rpi_initialized = 1U; }
+  s_rpi_reconfiguring = 0U;
   return BSP_UART_MapHalStatus(hal_status);
 }
 
@@ -157,14 +179,75 @@ BSP_Status_t BSP_RpiUART_Init(void)
  */
 BSP_Status_t BSP_RpiUART_Send(const uint8_t *data, uint16_t length, uint32_t timeout_ms)
 {
+  if ((data == 0) || (length == 0U)) { return BSP_STATUS_ERROR; }
+  if ((s_rpi_initialized == 0U) || (s_rpi_reconfiguring != 0U)) { return BSP_STATUS_BUSY; }
   return BSP_UART_MapHalStatus(HAL_UART_Transmit(&huart6, (uint8_t *)data, length, timeout_ms));
 }
 
+/**
+ * @brief 读取 USART6 当前实际波特率。
+ * @param[out] baud_bps 输出波特率，单位 bit/s。
+ * @return BSP 通用返回码。
+ */
+BSP_Status_t BSP_RpiUART_GetBaudRate(uint32_t *baud_bps)
+{
+  if (baud_bps == 0) { return BSP_STATUS_ERROR; }
+  if ((s_rpi_initialized == 0U) || (s_rpi_reconfiguring != 0U)) { return BSP_STATUS_BUSY; }
+  *baud_bps = huart6.Init.BaudRate;
+  return BSP_STATUS_OK;
+}
+
+/**
+ * @brief 同步重配 USART6 波特率，失败时尝试恢复旧速率。
+ * @param[in] baud_bps 目标波特率，单位 bit/s。
+ * @return BSP 通用返回码；目标配置失败时即使回滚成功也返回原失败结果。
+ */
+BSP_Status_t BSP_RpiUART_SetBaudRate(uint32_t baud_bps)
+{
+  uint32_t previous_baud_bps;
+  HAL_StatusTypeDef target_status;
+  HAL_StatusTypeDef rollback_status;
+
+  if (baud_bps == 0U) { return BSP_STATUS_ERROR; }
+  if ((s_rpi_initialized == 0U) || (s_rpi_reconfiguring != 0U)) { return BSP_STATUS_BUSY; }
+  if (huart6.Init.BaudRate == baud_bps) { return BSP_STATUS_OK; }
+
+  previous_baud_bps = huart6.Init.BaudRate;
+  s_rpi_reconfiguring = 1U;
+  s_rpi_initialized = 0U;
+  (void)HAL_UART_AbortReceive(&huart6);
+  (void)HAL_UART_DeInit(&huart6);
+  BSP_RpiUART_ResetRxState(0U);
+
+  target_status = BSP_RpiUART_Start(baud_bps);
+  if (target_status == HAL_OK) {
+    s_rpi_initialized = 1U;
+    s_rpi_reconfiguring = 0U;
+    return BSP_STATUS_OK;
+  }
+
+  /* 目标速率启动失败时尽力回滚，函数仍返回目标配置失败，供上层结构化上报。 */
+  (void)HAL_UART_AbortReceive(&huart6);
+  (void)HAL_UART_DeInit(&huart6);
+  BSP_RpiUART_ResetRxState(0U);
+  rollback_status = BSP_RpiUART_Start(previous_baud_bps);
+  if (rollback_status == HAL_OK) { s_rpi_initialized = 1U; }
+  s_rpi_reconfiguring = 0U;
+  return BSP_UART_MapHalStatus(target_status);
+}
+
+/**
+ * @brief 从 USART6 RX 环形缓冲复制原始字节。
+ * @param[out] data 输出缓冲区。
+ * @param[in] max_length 最大读取长度。
+ * @return 实际读取字节数。
+ */
 uint16_t BSP_RpiUART_Read(uint8_t *data, uint16_t max_length)
 {
   uint16_t copied = 0U;
 
-  if ((data == 0) || (max_length == 0U)) { return 0U; }
+  if ((data == 0) || (max_length == 0U) || (s_rpi_initialized == 0U) ||
+      (s_rpi_reconfiguring != 0U)) { return 0U; }
 
   while (copied < max_length) {
     uint32_t primask;
@@ -185,10 +268,12 @@ uint16_t BSP_RpiUART_Read(uint8_t *data, uint16_t max_length)
   return copied;
 }
 
+/** @brief 转发 USART6 IRQ 到 HAL，并累计硬件错误。 */
 void BSP_RpiUART_IrqHandler(void)
 {
   uint32_t sr;
 
+  if ((s_rpi_initialized == 0U) || (s_rpi_reconfiguring != 0U)) { return; }
   sr = huart6.Instance->SR;
   if ((sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE)) != 0U) { s_rpi_rx_error_count++; }
 
@@ -197,17 +282,19 @@ void BSP_RpiUART_IrqHandler(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if ((huart != 0) && (huart->Instance == BSP_RPI_UART)) {
+  if ((huart != 0) && (huart->Instance == BSP_RPI_UART) &&
+      (s_rpi_initialized != 0U) && (s_rpi_reconfiguring == 0U)) {
     BSP_RpiUART_PushRxByteFromIsr(s_rpi_rx_byte);
-    (void)HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U);
+    if (HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U) != HAL_OK) { s_rpi_rx_error_count++; }
   }
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-  if ((huart != 0) && (huart->Instance == BSP_RPI_UART)) {
+  if ((huart != 0) && (huart->Instance == BSP_RPI_UART) &&
+      (s_rpi_initialized != 0U) && (s_rpi_reconfiguring == 0U)) {
     s_rpi_rx_error_count++;
-    (void)HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U);
+    if (HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U) != HAL_OK) { s_rpi_rx_error_count++; }
   }
 }
 #endif

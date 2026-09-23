@@ -692,6 +692,50 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
 #endif
 }
 
+/**
+ * @brief 通过 Platform Adapter 查询 USART6 实际波特率。
+ * @param[out] baud_bps 输出波特率，单位 bit/s。
+ * @return Framework 通用返回码。
+ */
+Px4Lite_Result_t Px4Lite_RpiMavlinkGetBaudRate(uint32_t *baud_bps)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  BSP_Status_t status;
+
+  if (baud_bps == 0) { return PX4LITE_INVALID_PARAM; }
+  status = BSP_RpiUART_GetBaudRate(baud_bps);
+  if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
+  if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
+  return PX4LITE_IO_ERROR;
+#else
+  (void)baud_bps;
+  return PX4LITE_NOT_READY;
+#endif
+}
+
+/**
+ * @brief 通过 Platform Adapter 切换 USART6 波特率并丢弃旧半帧。
+ * @param[in] baud_bps 目标波特率，单位 bit/s。
+ * @return Framework 通用返回码。
+ */
+Px4Lite_Result_t Px4Lite_RpiMavlinkSetBaudRate(uint32_t baud_bps)
+{
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  BSP_Status_t status;
+
+  if (baud_bps == 0U) { return PX4LITE_INVALID_PARAM; }
+  status = BSP_RpiUART_SetBaudRate(baud_bps);
+  /* 切换及失败回滚都会截断当前字节流，不能保留旧速率下的 MAVLink 半帧。 */
+  Px4Lite_RpiMavlinkResetRxState();
+  if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
+  if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
+  return PX4LITE_IO_ERROR;
+#else
+  (void)baud_bps;
+  return PX4LITE_NOT_READY;
+#endif
+}
+
 Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms)
 {
 #if PX4LITE_ENABLE_RPI_MAVLINK

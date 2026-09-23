@@ -921,30 +921,39 @@ void Px4Lite_SetExternalModuleState(Px4Lite_ModuleId_t module_id, Px4Lite_State_
 
 Px4Lite_Result_t Px4Lite_CommModulesInit(void)
 {
-#if PX4LITE_ENABLE_LORA
-  uint32_t now_ms         = Px4Lite_PlatformGetMs();
-  Px4Lite_Result_t result = Px4Lite_LoRaInit();
-  Px4Lite_Result_t tx_init_result;
+  uint32_t now_ms = Px4Lite_PlatformGetMs();
+  Px4Lite_Result_t result = PX4LITE_OK;
 
+#if PX4LITE_ENABLE_LORA
+  result = Px4Lite_LoRaInit();
   Px4Lite_RemoteTelemetryInit(now_ms);
   s_lora_link_reset_pending = 0U;
   if (result == PX4LITE_BUSY) { Px4Lite_LoRaRequestReinit(); }
-  /*
-   * MAVLink TX 只是 Framework 调度状态，E22 启动时未插也必须初始化；
-   * 否则后续热插拔恢复 ONLINE 后，遥测发送器仍可能从未完成过初始化。
-   */
-  tx_init_result = Px4Lite_MavlinkTxInit(now_ms);
-  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
-    if (tx_init_result != PX4LITE_OK) { result = tx_init_result; }
-  }
+#endif
 
+#if PX4LITE_ENABLE_LORA || PX4LITE_ENABLE_RPI_MAVLINK
+  {
+    Px4Lite_Result_t tx_init_result;
+
+  /*
+   * MAVLink TX 同时持有 LoRa 与 RPi 出口调度状态。即使 LoRa 未启用或 E22 未插，
+   * RPi USART6 仍必须独立初始化，不能隐式依赖 LoRa 模块描述符。
+   */
+    tx_init_result = Px4Lite_MavlinkTxInit(now_ms);
+    if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
+      if (tx_init_result != PX4LITE_OK) { result = tx_init_result; }
+    }
+  }
+#endif
+
+#if PX4LITE_ENABLE_LORA
   Px4Lite_SetStatus(PX4LITE_MODULE_LORA,
                     ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED,
                     ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE,
                     now_ms);
   return (result == PX4LITE_BUSY) ? PX4LITE_OK : result;
 #else
-  return PX4LITE_OK;
+  return result;
 #endif
 }
 
@@ -990,6 +999,11 @@ static Px4Lite_Result_t Px4Lite_RemoteIdRunReinitIfRequested(uint32_t now_ms)
 
 void Px4Lite_CommWorkRun(uint32_t now_ms)
 {
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  (void)Px4Lite_RpiMavlinkService(now_ms);
+  (void)Px4Lite_MavlinkRxRunRpi(now_ms);
+#endif
+
 #if PX4LITE_ENABLE_LORA
   Px4Lite_CommDebugInfo_t info;
   Px4Lite_State_t state;
@@ -1000,9 +1014,6 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   uint8_t lora_present;
   uint8_t lora_unavailable;
 
-  (void)Px4Lite_RpiMavlinkService(now_ms);
-  (void)Px4Lite_MavlinkRxRunRpi(now_ms);
-
   result = Px4Lite_LoRaService(now_ms);
   rx_result = Px4Lite_MavlinkRxRun(now_ms);
   if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY)) { result = rx_result; }
@@ -1012,11 +1023,6 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
     tx_result = Px4Lite_MavlinkTxRun(now_ms);
     if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
   }
-
-  /* RPi 全量出口独立于 LoRa 服务状态：LoRa 忙(半双工常态)或 E22 未插时，
-     LoRa 镜像帧会停，但 RPi 专属遥测(LORASTAT/RIDSTAT/告警表/日志表)必须照发，
-     否则树莓派会出现"身份帧有、遥测帧无"的诡异局部失联。故放在 LoRa 门控之外。 */
-  (void)Px4Lite_MavlinkTxRunRpi(now_ms);
 
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
@@ -1054,6 +1060,11 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
     }
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   }
+#endif
+
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  /* RPi 出口独立于 LoRa；H1 响应由同一 CommTask 发送，不切换 USART6。 */
+  (void)Px4Lite_MavlinkTxRunRpi(now_ms);
 #endif
 
 #if PX4LITE_ENABLE_REMOTE_ID
@@ -1104,7 +1115,7 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   }
 #endif
 
-#if !PX4LITE_ENABLE_LORA && !PX4LITE_ENABLE_REMOTE_ID
+#if !PX4LITE_ENABLE_LORA && !PX4LITE_ENABLE_REMOTE_ID && !PX4LITE_ENABLE_RPI_MAVLINK
   (void)now_ms;
 #endif
 }

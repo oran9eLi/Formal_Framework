@@ -332,6 +332,21 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms);
 Px4Lite_Result_t Px4Lite_RpiMavlinkCopyRxFrame(Px4Lite_CommRxFrame_t *out);
 
 /**
+ * @brief 获取树莓派 MAVLink 物理串口当前实际波特率。
+ * @param[out] baud_bps 输出波特率，单位 bit/s。
+ * @return Framework 通用返回码。
+ */
+Px4Lite_Result_t Px4Lite_RpiMavlinkGetBaudRate(uint32_t *baud_bps);
+
+/**
+ * @brief 同步切换树莓派 MAVLink 物理串口波特率。
+ * @param[in] baud_bps 目标波特率，单位 bit/s。
+ * @return Framework 通用返回码。
+ * @note 调用后会清空平台 MAVLink 半帧解析状态；白名单与协议时序由 Framework 管理。
+ */
+Px4Lite_Result_t Px4Lite_RpiMavlinkSetBaudRate(uint32_t baud_bps);
+
+/**
  * @brief 获取 LoRa 模块当前公开状态。
  *
  * @param[in] now_ms 当前系统毫秒时间，用于超时判断。

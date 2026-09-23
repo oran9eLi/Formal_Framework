@@ -64,7 +64,7 @@ void BSP_UART_GetDebugInfo(BSP_UART_DebugInfo_t *out);
  * @brief 按 `bsp_config.h` 配置初始化树莓派 MAVLink UART（USART6，PC6/PC7）。
  *
  * @details
- * 与调试 UART（USART1）相互独立，只用于飞控向树莓派单向阻塞发送 MAVLink 帧。
+ * 与调试 UART（USART1）相互独立，用于树莓派双向 MAVLink 字节流。
  *
  * @return BSP 通用返回码。
  */
@@ -80,6 +80,21 @@ BSP_Status_t BSP_RpiUART_Init(void);
  * @return BSP 通用返回码。
  */
 BSP_Status_t BSP_RpiUART_Send(const uint8_t *data, uint16_t length, uint32_t timeout_ms);
+
+/**
+ * @brief 读取 USART6 当前实际配置的波特率。
+ * @param[out] baud_bps 输出波特率，单位 bit/s，不能为 NULL。
+ * @return BSP 通用返回码；串口未就绪或正在重配置时返回 BUSY。
+ */
+BSP_Status_t BSP_RpiUART_GetBaudRate(uint32_t *baud_bps);
+
+/**
+ * @brief 同步重配置 USART6 波特率并重新挂接单字节中断接收。
+ * @param[in] baud_bps 目标波特率，单位 bit/s；白名单由 Framework 业务层负责。
+ * @return BSP 通用返回码。
+ * @note 仅允许 CommTask 在旧速率响应完整发送后调用；失败时会尝试恢复旧速率。
+ */
+BSP_Status_t BSP_RpiUART_SetBaudRate(uint32_t baud_bps);
 
 /**
  * @brief 从树莓派 UART RX 环形缓冲读取原始字节。

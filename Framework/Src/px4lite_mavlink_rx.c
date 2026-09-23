@@ -19,6 +19,7 @@
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
 #include "px4lite_remote_telemetry.h"
+#include "px4lite_rpi_h1_echo.h"
 
 #if defined(__CC_ARM)
 #define MAVLINK_ALIGNED_FIELDS   0
@@ -673,6 +674,34 @@ static uint8_t MavRx_DecodeTunnel(Px4Lite_RemoteTelemetry_t *remote, const mavli
   return 1U;
 }
 
+#if PX4LITE_ENABLE_RPI_MAVLINK
+/** @brief 仅在 RPi 物理链路识别 H1 TUNNEL，不进入业务遥测快照。 */
+static uint8_t MavRx_DecodeRpiH1EchoTunnel(const mavlink_message_t *message)
+{
+  mavlink_tunnel_t packet;
+  Px4Lite_Result_t result;
+  uint8_t wire_payload_length;
+
+  if (message == 0) { return 0U; }
+  mavlink_msg_tunnel_decode(message, &packet);
+  if (packet.payload_type != PX4LITE_RPI_H1_TUNNEL_TYPE) { return 0U; }
+  if (packet.payload_length > (uint8_t)sizeof(packet.payload)) { return 1U; }
+  /* TUNNEL 的固定字段在线上占 5 字节；不能把 MAVLink 解码补零当作实际文本。 */
+  wire_payload_length = (message->len >= 5U) ? (uint8_t)(message->len - 5U) : 0U;
+
+  result = Px4Lite_RpiH1EchoHandleTunnel(message->sysid,
+                                         message->compid,
+                                         packet.target_system,
+                                         packet.target_component,
+                                         Px4Lite_IdentityGetMavlinkSystemId(),
+                                         packet.payload_type,
+                                         packet.payload,
+                                         packet.payload_length,
+                                         wire_payload_length);
+  return (result == PX4LITE_IDLE) ? 0U : 1U;
+}
+#endif
+
 static uint8_t MavRx_DecodeStatusText(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
 {
   mavlink_statustext_t packet;
@@ -817,6 +846,9 @@ Px4Lite_Result_t Px4Lite_MavlinkRxRunRpi(uint32_t now_ms)
       break;
     case MAVLINK_MSG_ID_NAMED_VALUE_INT:
       decoded = MavRx_DecodeRpiNamedValueInt(&s_rx_message_scratch, now_ms);
+      break;
+    case MAVLINK_MSG_ID_TUNNEL:
+      decoded = MavRx_DecodeRpiH1EchoTunnel(&s_rx_message_scratch);
       break;
     default:
       decoded = 0U;
