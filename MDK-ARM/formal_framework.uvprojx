@@ -444,6 +444,11 @@
               <FilePath>..\Framework\Src\px4lite_mavlink_rx.c</FilePath>
             </File>
             <File>
+              <FileName>px4lite_rpi_baud_switch.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_rpi_baud_switch.c</FilePath>
+            </File>
+            <File>
               <FileName>px4lite_rpi_h1_echo.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_rpi_h1_echo.c</FilePath>

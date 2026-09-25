@@ -18,6 +18,7 @@
 #include "px4lite_local_msglog.h"
 #include "px4lite_platform.h"
 #include "px4lite_remoteid_tx.h"
+#include "px4lite_rpi_baud_switch.h"
 #include "px4lite_rpi_h1_echo.h"
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
@@ -340,7 +341,38 @@ static Px4Lite_Result_t MavTx_SendRpiExclusive(void)
   return Px4Lite_RpiMavlinkSend(s_frame, length);
 }
 
-/** @brief 最高优先级发送 H1 受控回显响应，不执行参数切换。 */
+/** @brief 在旧速率上发送切换接受帧；仅发送完整后才重新配置 UART6。 */
+static Px4Lite_Result_t MavTx_SendRpiBaudSwitchResponse(void)
+{
+  Px4Lite_RpiBaudSwitchResponseView_t response;
+  mavlink_tunnel_t packet;
+  Px4Lite_Result_t result;
+
+  result = Px4Lite_RpiBaudSwitchPeekResponse(&response);
+  if (result != PX4LITE_OK) { return result; }
+  if ((response.payload == 0) || (response.payload_length != PX4LITE_RPI_BAUD_PAYLOAD_LENGTH) ||
+      (response.payload_length > (uint8_t)sizeof(packet.payload))) {
+    return PX4LITE_INVALID_PARAM;
+  }
+
+  memset(&packet, 0, sizeof(packet));
+  packet.target_system = response.target_system;
+  packet.target_component = response.target_component;
+  packet.payload_type = response.payload_type;
+  packet.payload_length = response.payload_length;
+  memcpy(packet.payload, response.payload, response.payload_length);
+  (void)mavlink_msg_tunnel_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(),
+                                        PX4LITE_RPI_MAVLINK_COMPONENT_ID,
+                                        MavTx_Channel(), &s_message, &packet);
+  result = MavTx_SendRpiExclusive();
+  if (result == PX4LITE_OK) {
+    /* BSP_RpiUART_Send 使用 HAL_UART_Transmit，成功返回表示最后一位已从 UART 移出。 */
+    (void)Px4Lite_RpiBaudSwitchResponseSent();
+  }
+  return result;
+}
+
+/** @brief 最高优先级发送 H1 受控回显响应。 */
 static Px4Lite_Result_t MavTx_SendRpiH1EchoResponse(void)
 {
   Px4Lite_RpiH1EchoResponseView_t response;
@@ -1905,6 +1937,9 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
 #if PX4LITE_ENABLE_RPI_MAVLINK
   if (Px4Lite_RpiMavlinkInit() != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
   if (Px4Lite_RpiH1EchoInit() != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
+#if PX4LITE_RPI_BAUD_SWITCH_ENABLE
+  if (Px4Lite_RpiBaudSwitchInit() != PX4LITE_OK) { return PX4LITE_IO_ERROR; }
+#endif
   s_rpi_tx_seq           = 0U;
   s_rpi_catalog_index    = 0U;
   s_rpi_lorastat_count   = 0U;
@@ -2007,7 +2042,12 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRunRpi(uint32_t now_ms)
      回退 LoRa 序号并改 compid=193，故既不依赖 LoRa 空口/服务状态，也不消耗 LoRa 通道序号。 */
   s_send_target = MAV_TX_TARGET_RPI;
 
-  /* H1 响应抢在周期遥测和普通 ACK 前发送；本轮不改 UART 参数。 */
+  /* 切速率接受帧最高优先级；整帧在 B0 发完后才应用 B1。 */
+  result = MavTx_SendRpiBaudSwitchResponse();
+  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) ||
+      (result == PX4LITE_IO_ERROR) || (result == PX4LITE_INVALID_PARAM)) { return result; }
+
+  /* H1 回显仍优先于周期遥测和普通 ACK。 */
   result = MavTx_SendRpiH1EchoResponse();
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) ||
       (result == PX4LITE_IO_ERROR) || (result == PX4LITE_INVALID_PARAM)) { return result; }

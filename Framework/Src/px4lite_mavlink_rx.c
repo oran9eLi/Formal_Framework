@@ -19,6 +19,7 @@
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
 #include "px4lite_remote_telemetry.h"
+#include "px4lite_rpi_baud_switch.h"
 #include "px4lite_rpi_h1_echo.h"
 
 #if defined(__CC_ARM)
@@ -680,6 +681,7 @@ static uint8_t MavRx_DecodeRpiH1EchoTunnel(const mavlink_message_t *message)
 {
   mavlink_tunnel_t packet;
   Px4Lite_Result_t result;
+  Px4Lite_RpiH1EchoResponseView_t pending_echo;
   uint8_t wire_payload_length;
 
   if (message == 0) { return 0U; }
@@ -688,6 +690,26 @@ static uint8_t MavRx_DecodeRpiH1EchoTunnel(const mavlink_message_t *message)
   if (packet.payload_length > (uint8_t)sizeof(packet.payload)) { return 1U; }
   /* TUNNEL 的固定字段在线上占 5 字节；不能把 MAVLink 解码补零当作实际文本。 */
   wire_payload_length = (message->len >= 5U) ? (uint8_t)(message->len - 5U) : 0U;
+
+#if PX4LITE_RPI_BAUD_SWITCH_ENABLE
+  if ((packet.payload_length >= 2U) &&
+      (packet.payload[1] == PX4LITE_RPI_BAUD_REQUEST_TYPE)) {
+    /* 两种实验事务共用单个 CommTask 发送口；不让切速率响应越过已排队的 H1 回显。 */
+    if (Px4Lite_RpiH1EchoPeekResponse(&pending_echo) == PX4LITE_OK) { return 1U; }
+    result = Px4Lite_RpiBaudSwitchHandleTunnel(message->sysid,
+                                               message->compid,
+                                               packet.target_system,
+                                               packet.target_component,
+                                               Px4Lite_IdentityGetMavlinkSystemId(),
+                                               packet.payload_type,
+                                               packet.payload,
+                                               packet.payload_length,
+                                               wire_payload_length);
+    return (result == PX4LITE_IDLE) ? 0U : 1U;
+  }
+  /* 切速率事务挂起期间，拒绝新 H1 请求，避免旧速率响应滞留到 B1。 */
+  if (Px4Lite_RpiBaudSwitchIsPending() != 0U) { return 1U; }
+#endif
 
   result = Px4Lite_RpiH1EchoHandleTunnel(message->sysid,
                                          message->compid,

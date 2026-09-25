@@ -169,6 +169,8 @@
 #define PX4LITE_RPI_EXPERIMENT_BAUD_LOW_BPS    57600U
 #define PX4LITE_RPI_EXPERIMENT_BAUD_HIGH_BPS   115200U
 #define PX4LITE_RPI_EXPERIMENT_ECHO_MAX_BYTES  64U
+/* 里程碑五受控 UART6 改参：仅允许本机从 B0=115200 切至 B1=57600，复位恢复 B0。 */
+#define PX4LITE_RPI_BAUD_SWITCH_ENABLE         1U
 /*
  * 树莓派 MAVLink 已迁到独立的 USART6(PC6/PC7)，USART1 恢复为纯调试口，
  * 不再需要为 RPi 静音调试打印。保留本宏仅为回退到 USART1 共线方案时使用。
