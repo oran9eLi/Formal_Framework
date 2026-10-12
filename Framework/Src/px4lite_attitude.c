@@ -12,6 +12,8 @@
 #include <math.h>
 #include <string.h>
 #include "px4lite_config.h"
+#include "px4lite_log_message_ids.h"
+#include "px4lite_local_msglog.h"
 
 #define PX4LITE_ATTITUDE_RAD_TO_DEG              57.2957795f
 #define PX4LITE_ATTITUDE_DEFAULT_DT_S            0.02f
@@ -30,6 +32,26 @@
 #define PX4LITE_ATTITUDE_STATIC_ACCEL_NORM_TOL_G 0.05f
 #define PX4LITE_ATTITUDE_STATIC_ACCEL_DELTA_G    0.03f
 #define PX4LITE_ATTITUDE_STATIC_GYRO_DELTA_DPS   2.0f
+
+/** @brief 姿态操作所有者直接产生事件，禁止显示层推断完成。 */
+static void Px4Lite_AttitudeLog(uint16_t message, uint32_t now_ms)
+{
+  Px4Lite_LocalMsgLogEvent(message, now_ms, 0U, PX4LITE_MODULE_IMU,
+    (Px4Lite_LogMessageSeverity(message) != 0U) ? 1U : 0U);
+}
+/** @brief 请求入口与执行入口共用拒绝原因目录；只允许任务上下文、临界区外调用。 */
+void Px4Lite_AttitudeLogRejected(Px4Lite_AttitudeAction_t action, Px4Lite_Result_t result, uint32_t now_ms)
+{
+  uint16_t message;
+  if (action == PX4LITE_ATTITUDE_ACTION_BIAS) {
+    message = (result == PX4LITE_BUSY) ? PX4LITE_LOGMSG_BIAS_BUSY : PX4LITE_LOGMSG_BIAS_NO_DATA;
+  } else if (action == PX4LITE_ATTITUDE_ACTION_ZERO) {
+    message = (result == PX4LITE_BUSY) ? PX4LITE_LOGMSG_ZERO_BUSY : PX4LITE_LOGMSG_ZERO_NO_DATA;
+  } else if (action == PX4LITE_ATTITUDE_ACTION_RESTORE) {
+    message = (result == PX4LITE_BUSY) ? PX4LITE_LOGMSG_RESTORE_BUSY : PX4LITE_LOGMSG_RESTORE_NO_DATA;
+  } else { return; }
+  Px4Lite_AttitudeLog(message, now_ms);
+}
 
 /**
  * @brief 计算浮点绝对值，避免依赖库实现差异。
@@ -175,15 +197,20 @@ static uint8_t Px4Lite_AttitudeIsStatic(const Px4Lite_AttitudeState_t *state, fl
  * @param[in] gyro_x_dps X 轴角速度，单位 degree/s。
  * @param[in] gyro_y_dps Y 轴角速度，单位 degree/s。
  * @param[in] gyro_z_dps Z 轴角速度，单位 degree/s。
+ * @param[in] sample_ms 当前样本采集 Uptime，单位 ms；请求前缓存样本不参与校准。
  *
  * @note 仅在显式校准期间采样，完成前继续使用旧零偏，测量姿态始终正常积分。
  */
-static void Px4Lite_AttitudeUpdateGyroBias(Px4Lite_AttitudeState_t *state, uint8_t is_static, float gyro_x_dps, float gyro_y_dps, float gyro_z_dps)
+static void Px4Lite_AttitudeUpdateGyroBias(Px4Lite_AttitudeState_t *state, uint8_t is_static, float gyro_x_dps, float gyro_y_dps, float gyro_z_dps, uint32_t sample_ms)
 {
   if ((state->operation.phase != PX4LITE_ATTITUDE_WAIT_STILL) &&
       (state->operation.phase != PX4LITE_ATTITUDE_COLLECTING)) { return; }
 
+  /* FIFO 中可能还留有请求前采样；这些帧只推进测量，不参与本次主动校准。 */
+  if ((int32_t)(sample_ms - state->operation.started_ms) < 0) { return; }
+
   if (is_static == 0U) {
+    if (state->operation.phase == PX4LITE_ATTITUDE_COLLECTING) { Px4Lite_AttitudeLog(PX4LITE_LOGMSG_BIAS_RESTARTED, sample_ms); }
     state->gyro_bias_sum_dps[0] = 0.0f;
     state->gyro_bias_sum_dps[1] = 0.0f;
     state->gyro_bias_sum_dps[2] = 0.0f;
@@ -193,6 +220,7 @@ static void Px4Lite_AttitudeUpdateGyroBias(Px4Lite_AttitudeState_t *state, uint8
     return;
   }
 
+  if (state->calibration_started == 0U) { Px4Lite_AttitudeLog(PX4LITE_LOGMSG_BIAS_STARTED, sample_ms); state->calibration_started = 1U; }
   state->gyro_bias_sum_dps[0] += gyro_x_dps;
   state->gyro_bias_sum_dps[1] += gyro_y_dps;
   state->gyro_bias_sum_dps[2] += gyro_z_dps;
@@ -208,6 +236,7 @@ static void Px4Lite_AttitudeUpdateGyroBias(Px4Lite_AttitudeState_t *state, uint8
     state->gyro_bias_valid = 1U;
     state->operation.bias_valid = 1U;
     state->operation.phase = PX4LITE_ATTITUDE_SUCCEEDED;
+    Px4Lite_AttitudeLog(PX4LITE_LOGMSG_BIAS_COMPLETED, sample_ms);
   }
 }
 
@@ -234,6 +263,7 @@ static float Px4Lite_AttitudeDtSeconds(Px4Lite_AttitudeState_t *state, const Px4
   return dt_s;
 }
 
+/** @brief 初始化估计器内部状态；只由资源所属估计任务使用。 */
 void Px4Lite_AttitudeInit(Px4Lite_AttitudeState_t *state)
 {
   if (state != 0) { memset(state, 0, sizeof(*state)); }
@@ -251,9 +281,11 @@ void Px4Lite_AttitudeService(Px4Lite_AttitudeState_t *state, uint32_t now_ms)
   if (state->operation.measurement_valid == 0U) {
     state->operation.phase = PX4LITE_ATTITUDE_FAILED;
     state->operation.reason = PX4LITE_ATTITUDE_REASON_NO_DATA;
+    Px4Lite_AttitudeLog(PX4LITE_LOGMSG_BIAS_ABORT_NO_DATA, now_ms);
   } else if ((uint32_t)(now_ms - state->operation.started_ms) >= PX4LITE_ATTITUDE_CAL_TIMEOUT_MS) {
     state->operation.phase = PX4LITE_ATTITUDE_FAILED;
     state->operation.reason = PX4LITE_ATTITUDE_REASON_NOT_STILL;
+    Px4Lite_AttitudeLog(PX4LITE_LOGMSG_BIAS_FAILED_STILL, now_ms);
   }
 }
 
@@ -263,7 +295,7 @@ Px4Lite_Result_t Px4Lite_AttitudeRequest(Px4Lite_AttitudeState_t *state, Px4Lite
   if ((state == 0) || (action < PX4LITE_ATTITUDE_ACTION_BIAS) || (action > PX4LITE_ATTITUDE_ACTION_RESTORE)) { return PX4LITE_INVALID_PARAM; }
   Px4Lite_AttitudeService(state, now_ms);
   if ((state->operation.phase == PX4LITE_ATTITUDE_WAIT_STILL) ||
-      (state->operation.phase == PX4LITE_ATTITUDE_COLLECTING)) { return PX4LITE_BUSY; }
+      (state->operation.phase == PX4LITE_ATTITUDE_COLLECTING)) { Px4Lite_AttitudeLogRejected(action, PX4LITE_BUSY, now_ms); return PX4LITE_BUSY; }
   state->operation.action = (uint8_t)action;
   state->operation.started_ms = now_ms;
   state->operation.reason = PX4LITE_ATTITUDE_REASON_NONE;
@@ -271,24 +303,31 @@ Px4Lite_Result_t Px4Lite_AttitudeRequest(Px4Lite_AttitudeState_t *state, Px4Lite
   if (state->operation.measurement_valid == 0U) {
     state->operation.phase = PX4LITE_ATTITUDE_FAILED;
     state->operation.reason = PX4LITE_ATTITUDE_REASON_NO_DATA;
+    Px4Lite_AttitudeLogRejected(action, PX4LITE_NOT_READY, now_ms);
     return PX4LITE_NOT_READY;
   }
   if (action == PX4LITE_ATTITUDE_ACTION_BIAS) {
+    Px4Lite_AttitudeLog(PX4LITE_LOGMSG_BIAS_ACCEPTED, now_ms);
+    state->calibration_started = 0U;
     memset(state->gyro_bias_sum_dps, 0, sizeof(state->gyro_bias_sum_dps));
     state->gyro_bias_sample_count = 0U;
     state->motion_ref_valid = 0U;
     state->operation.phase = PX4LITE_ATTITUDE_WAIT_STILL;
   } else {
+    Px4Lite_AttitudeLog((action == PX4LITE_ATTITUDE_ACTION_ZERO) ? PX4LITE_LOGMSG_ZERO_ACCEPTED : PX4LITE_LOGMSG_RESTORE_ACCEPTED, now_ms);
+    Px4Lite_AttitudeLog((action == PX4LITE_ATTITUDE_ACTION_ZERO) ? PX4LITE_LOGMSG_ZERO_STARTED : PX4LITE_LOGMSG_RESTORE_STARTED, now_ms);
     state->operation.reference_active = (uint8_t)(action == PX4LITE_ATTITUDE_ACTION_ZERO);
     state->operation.offset_deg100[0] = (action == PX4LITE_ATTITUDE_ACTION_ZERO) ? Px4Lite_AttitudeRoundDeg100(state->roll_deg) : 0;
     state->operation.offset_deg100[1] = (action == PX4LITE_ATTITUDE_ACTION_ZERO) ? Px4Lite_AttitudeRoundDeg100(state->pitch_deg) : 0;
     state->operation.offset_deg100[2] = (action == PX4LITE_ATTITUDE_ACTION_ZERO) ? Px4Lite_AttitudeRoundDeg100(state->yaw_deg) : 0;
     state->operation.phase = PX4LITE_ATTITUDE_SUCCEEDED;
     state->operation.progress = 100U;
+    Px4Lite_AttitudeLog((action == PX4LITE_ATTITUDE_ACTION_ZERO) ? PX4LITE_LOGMSG_ZERO_COMPLETED : PX4LITE_LOGMSG_RESTORE_COMPLETED, now_ms);
   }
   return PX4LITE_OK;
 }
 
+/** @brief 消费新鲜 IMU 测量，推进校准并输出绝对测量角；相对归零只影响显示基准。 */
 Px4Lite_Result_t Px4Lite_AttitudeUpdate(Px4Lite_AttitudeState_t *state, const Px4Lite_SensorImu_t *imu, int32_t *roll_deg100, int32_t *pitch_deg100, int32_t *yaw_deg100)
 {
   float accel_x_g;
@@ -333,7 +372,7 @@ Px4Lite_Result_t Px4Lite_AttitudeUpdate(Px4Lite_AttitudeState_t *state, const Px
   state->gyro_prev_dps[1] = gyro_y_dps;
   state->gyro_prev_dps[2] = gyro_z_dps;
   state->motion_ref_valid = 1U;
-  Px4Lite_AttitudeUpdateGyroBias(state, is_static, gyro_x_dps, gyro_y_dps, gyro_z_dps);
+  Px4Lite_AttitudeUpdateGyroBias(state, is_static, gyro_x_dps, gyro_y_dps, gyro_z_dps, imu->header.sample_time_ms);
   if (state->gyro_bias_valid != 0U) {
     gyro_x_dps -= state->gyro_bias_dps[0];
     gyro_y_dps -= state->gyro_bias_dps[1];
@@ -344,7 +383,7 @@ Px4Lite_Result_t Px4Lite_AttitudeUpdate(Px4Lite_AttitudeState_t *state, const Px
 
   if (state->valid == 0U) {
     if (accel_trust > 0.0f) {
-      state->roll_deg  = roll_acc;
+      state->roll_deg  = Px4Lite_AttitudeWrapDeg(roll_acc);
       state->pitch_deg = pitch_acc;
     } else {
       state->roll_deg  = 0.0f;
@@ -354,10 +393,11 @@ Px4Lite_Result_t Px4Lite_AttitudeUpdate(Px4Lite_AttitudeState_t *state, const Px
     state->valid     = 1U;
   } else {
     dt_s             = Px4Lite_AttitudeDtSeconds(state, imu);
-    roll_gyro        = state->roll_deg + (gyro_x_dps * dt_s);
+    roll_gyro        = Px4Lite_AttitudeWrapDeg(state->roll_deg + (gyro_x_dps * dt_s));
     pitch_gyro       = state->pitch_deg + (gyro_y_dps * dt_s);
     alpha            = Px4Lite_AttitudeDynamicAlpha(dt_s, accel_trust);
-    state->roll_deg  = (alpha * roll_gyro) + ((1.0f - alpha) * roll_acc);
+    /* 横滚在 ±180 度处换表示；沿最短角差修正，避免把倒置姿态拉向零度。 */
+    state->roll_deg  = Px4Lite_AttitudeWrapDeg(roll_gyro + ((1.0f - alpha) * Px4Lite_AttitudeWrapDeg(roll_acc - roll_gyro)));
     state->pitch_deg = (alpha * pitch_gyro) + ((1.0f - alpha) * pitch_acc);
     state->yaw_deg   = Px4Lite_AttitudeWrapDeg(state->yaw_deg + (gyro_z_dps * dt_s));
   }

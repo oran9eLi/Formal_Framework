@@ -183,6 +183,7 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
   Storage_CsvData_t data;
   uint8_t i;
   Px4Lite_Result_t copied;
+  Px4Lite_TopicHeader_t sample_header; /**< 分类时使用所属测量域的真实时刻，不修改来源快照。 */
 
   memset(&data, 0, sizeof(data));
   data.time_ms = now_ms;
@@ -200,14 +201,19 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
   /* 位置使用原始 GNSS 样本时刻，避免 Navigation 的 IMU 更新时间给旧定位续期。 */
   memset(&gnss, 0, sizeof(gnss));
   copied = Px4Lite_CopyGnss(&gnss);
-  if (Storage_ClassifySample(&data.gnss_sample, copied, &gnss.header, (uint8_t)(gnss.fix_type != 0U), now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U) {
+  sample_header = gnss.header;
+  sample_header.sample_time_ms = gnss.position_update_ms;
+  if (Storage_ClassifySample(&data.gnss_sample, copied, &sample_header,
+      (uint8_t)((gnss.fix_type != 0U) && ((gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION) != 0U)), now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U) {
     data.gnss_valid = 1U;
     data.latitude_e7 = gnss.latitude_e7;
     data.longitude_e7 = gnss.longitude_e7;
   }
   memset(&navigation, 0, sizeof(navigation));
   copied = Px4Lite_CopyNavigation(&navigation);
-  if (Storage_ClassifySample(&data.attitude_sample, copied, &navigation.header,
+  sample_header = navigation.header;
+  sample_header.sample_time_ms = navigation.attitude_update_ms;
+  if (Storage_ClassifySample(&data.attitude_sample, copied, &sample_header,
        (uint8_t)((navigation.valid_mask & PX4LITE_NAV_VALID_ATTITUDE) != 0U), now_ms, PX4LITE_IMU_MAX_AGE_MS) != 0U) {
     data.roll_deg100  = navigation.roll_deg100;
     data.pitch_deg100 = navigation.pitch_deg100;
@@ -281,7 +287,14 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
   data.lora_parse_error_count = comm.parse_error_count;
   data.lora_send_error_count  = comm.send_error_count;
   data.storage_queue_count    = StorageQueue_Count();
-  data.storage_drop_count     = StorageQueue_DropCount();
+  {
+    Storage_SdStatus_t sd_status;
+    uint32_t queue_drops = StorageQueue_DropCount();
+    Storage_SD_CopyStatus(&sd_status);
+    /* CSV 暴露队列丢失和已出队写失败总数；饱和避免相加回绕。 */
+    data.storage_drop_count = (UINT32_MAX - queue_drops < sd_status.write_drop_count)
+        ? UINT32_MAX : queue_drops + sd_status.write_drop_count;
+  }
 
   memset(&s_work_record, 0, sizeof(s_work_record));
   s_work_record.type            = STORAGE_RECORD_DATA;
@@ -351,8 +364,10 @@ void Px4Lite_StorageWorkRun(uint32_t now_ms)
 
   if (s_remount_request != 0U) {
     s_remount_request = 0U;
-    /* 强制清理状态，使下一次 Service() 立即重新挂载，而不是等待退避超时。 */
-    Storage_SD_Init();
+    /* 由资源所有者释放句柄；保留累计统计、首因及已有 2 秒退避。 */
+    Storage_SD_Recover(now_ms);
+    /* 文件关闭和卸载可能阻塞；本拍后续操作不能继续使用清理前的旧时刻。 */
+    now_ms = Px4Lite_PlatformGetMs();
   }
 
   if (Px4Lite_CopyTime(&time) == PX4LITE_OK) {

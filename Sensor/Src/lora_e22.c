@@ -285,8 +285,11 @@ static uint8_t Lora_E22_LocalUnavailable(uint32_t now_ms)
   return (aux_low_ms > LORA_E22_PRESENT_TIMEOUT_MS) ? 1U : 0U;
 }
 
+/** @brief 清除本编译单元接收通道的真实状态及输出副本，丢弃旧会话半帧。 */
 static void Lora_E22_ResetParser(void)
 {
+  memset(mavlink_get_channel_status(MAVLINK_COMM_0), 0, sizeof(mavlink_status_t));
+  memset(mavlink_get_channel_buffer(MAVLINK_COMM_0), 0, sizeof(mavlink_message_t));
   memset(&s_parse_status, 0, sizeof(s_parse_status));
   memset(&s_parse_msg, 0, sizeof(s_parse_msg));
   s_parse_last_byte_ms = 0U;
@@ -492,15 +495,34 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
     s_rx_byte_count += received;
 
     for (i = 0U; i < received; i++) {
-      uint8_t parse_error_before = s_parse_status.parse_error;
-      uint16_t drop_before       = s_parse_status.packet_rx_drop_count;
+      uint8_t framing;
 
-      if ((s_parse_last_byte_ms != 0U) && ((uint32_t)(now_ms - s_parse_last_byte_ms) > LORA_E22_PARSE_IDLE_RESET_MS)) {
+      if ((mavlink_get_channel_status(MAVLINK_COMM_0)->parse_state != MAVLINK_PARSE_STATE_IDLE) &&
+          ((uint32_t)(now_ms - s_parse_last_byte_ms) > LORA_E22_PARSE_IDLE_RESET_MS)) {
         Lora_E22_ResetParser();
       }
       s_parse_last_byte_ms = now_ms;
 
-      if (mavlink_parse_char(MAVLINK_COMM_0, temp[i], &s_parse_msg, &s_parse_status) != 0) {
+      framing = mavlink_frame_char(MAVLINK_COMM_0, temp[i], &s_parse_msg, &s_parse_status);
+      /* 库输出的 drop 字段是本字节解析错误数，非累计丢帧数；CRC 由 framing 独立报告。 */
+      s_parse_error_count += s_parse_status.packet_rx_drop_count;
+      if ((framing == MAVLINK_FRAMING_BAD_CRC) || (framing == MAVLINK_FRAMING_BAD_SIGNATURE)) {
+        mavlink_status_t *parser = mavlink_get_channel_status(MAVLINK_COMM_0);
+        mavlink_message_t *message = mavlink_get_channel_buffer(MAVLINK_COMM_0);
+
+        s_parse_error_count++;
+        if (framing == MAVLINK_FRAMING_BAD_CRC) { s_crc_error_count++; }
+        parser->msg_received = MAVLINK_FRAMING_INCOMPLETE;
+        parser->parse_state = MAVLINK_PARSE_STATE_IDLE;
+        /* 与库 parse_char 一致：失败帧的末字节可能已是下一帧 STX。 */
+        if (temp[i] == MAVLINK_STX) {
+          parser->parse_state = MAVLINK_PARSE_STATE_GOT_STX;
+          message->len = 0U;
+          mavlink_start_checksum(message);
+        }
+      }
+
+      if (framing == MAVLINK_FRAMING_OK) {
         /* --- complete MAVLink frame received --- */
         uint32_t primask;
         Lora_RxFrame_t *slot;
@@ -515,7 +537,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
 
         slot               = &s_rx_queue[s_rx_q_head];
         slot->rx_time_ms   = now_ms;
-        slot->frame_len    = s_parse_msg.len + MAVLINK_NUM_HEADER_BYTES + MAVLINK_NUM_CHECKSUM_BYTES;
+        slot->frame_len    = mavlink_msg_get_send_buffer_length(&s_parse_msg);
         slot->system_id    = s_parse_msg.sysid;
         slot->component_id = s_parse_msg.compid;
         slot->sequence     = s_parse_msg.seq;
@@ -532,12 +554,6 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
         BSP_Critical_Exit(primask);
       }
 
-      if (s_parse_status.parse_error != parse_error_before) {
-        uint8_t delta = (uint8_t)(s_parse_status.parse_error - parse_error_before);
-        s_parse_error_count += delta;
-        s_crc_error_count += delta;
-      }
-      if (s_parse_status.packet_rx_drop_count != drop_before) { s_rx_drop_count += (uint16_t)(s_parse_status.packet_rx_drop_count - drop_before); }
     }
   }
 

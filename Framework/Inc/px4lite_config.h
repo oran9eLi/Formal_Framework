@@ -36,6 +36,10 @@
 #define PX4LITE_MOTOR_COUNT                4U
 #define PX4LITE_CONTROL_ESC_MIN_PULSE_US   1000U
 #define PX4LITE_CONTROL_ESC_MAX_PULSE_US   2000U
+/** 本机动力电池保护，单位 mV；恢复滞回独立于显示档位。 */
+#define PX4LITE_CONTROL_POWER_CUTOFF_MV  9900U
+#define PX4LITE_CONTROL_POWER_RECOVER_MV 10100U
+#define PX4LITE_CONTROL_POWER_MAX_MV     13500U
 #define PX4LITE_CONTROL_ESC_ARM_TIME_MS    2500U
 #define PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS 200U
 #define PX4LITE_CONTROL_ATTITUDE_ASSIST_DEFAULT 0U
@@ -49,7 +53,8 @@
 /* 姿态 PD 增益均放大 100：30 表示 0.30%/degree，4 表示 0.04%/(degree/s)。 */
 #define PX4LITE_CONTROL_ATTITUDE_KP_X100 30
 #define PX4LITE_CONTROL_ATTITUDE_KD_X100 4
-#define PX4LITE_TASK_HEARTBEAT_TIMEOUT_MS  500U
+#define PX4LITE_TASK_HEARTBEAT_MIN_MS 500U /**< 各任务心跳最小期限，单位 ms。 */
+#define PX4LITE_WATCHDOG_STARTUP_WINDOW_MS 10000U /**< 调度器交接后首轮心跳期限，单位 ms。 */
 #define PX4LITE_IMU_WORK_PERIOD_MS         10U
 #define PX4LITE_BARO_WORK_PERIOD_MS        1000U
 #define PX4LITE_BATTERY_WORK_PERIOD_MS     1000U
@@ -69,12 +74,9 @@
 #define PX4LITE_PRIORITY_STORAGE (tskIDLE_PRIORITY)
 
 /*
- * 硬件 watchdog。BSP_WatchdogRefresh()/BSP_Watchdog_Start() 已在 bsp_watchdog.c
- * 实现，故此处开启。超时参数见 BSP_WATCHDOG_PRESCALER_CODE/RELOAD。
- *
- * 喂狗只允许经 Px4Lite_PlatformWatchdogFeed()，它以全部必需任务心跳健康为前提；
- * 任一必需任务卡死或饿死超过 PX4LITE_TASK_HEARTBEAT_TIMEOUT_MS 即停止喂狗，
- * 由 IWDG 复位整机。复位后 PWM 初值为 0 占空、ESC 走预解锁流程，电机保持停转。
+ * 硬件 watchdog：main 最早期启用启动窗口，调度前只允许有限进展点刷新。
+ * 交接后必须在首轮期限内收齐实际任务心跳并成功切换运行窗口；运行刷新
+ * 仅由 HealthTask 完成工作后通过 Platform 门控。Debug/Storage 不纳入集合。
  */
 #define PX4LITE_ENABLE_HARDWARE_WATCHDOG 1U
 

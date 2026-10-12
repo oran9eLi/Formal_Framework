@@ -1,11 +1,12 @@
 /**
  * @file freertos_hooks.c
- * @brief Handle FreeRTOS stack overflow and allocation failure events.
+ * @brief Core 层处理 FreeRTOS 栈溢出/分配失败；先撤收输出，再保存最小现场。
  */
 
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
+#include "core_fatal.h"
 
 #include <stdint.h>
 
@@ -27,27 +28,29 @@ static void FreeRtosHooks_CopyTaskName(char *task_name)
 
   g_stack_overflow_task_name_ptr = (uintptr_t)task_name;
   for (i = 0U; i < (uint32_t)(configMAX_TASK_NAME_LEN - 1); ++i) {
-    if ((task_name == 0) || (task_name[i] == '\0')) { break; }
+    if ((Core_FatalRamRangeValid((uintptr_t)task_name + i, 1U) == 0U) || (task_name[i] == '\0')) { break; }
     g_stack_overflow_task_name[i] = task_name[i];
   }
   g_stack_overflow_task_name[i] = '\0';
 }
 
 /**
- * @brief Capture the failed task and enter the fatal error path on stack overflow.
+ * @brief 栈溢出先撤收输出，再尽可能保存任务信息。
  */
 void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
 {
+  Core_FatalQuiesce();
   g_stack_overflow_task = task;
   FreeRtosHooks_CopyTaskName(task_name);
   Error_Handler();
 }
 
 /**
- * @brief Count allocation failures and enter the fatal error path.
+ * @brief 分配失败先撤收输出，再记录计数并停机。
  */
 void vApplicationMallocFailedHook(void)
 {
+  Core_FatalQuiesce();
   g_malloc_failed_count++;
   Error_Handler();
 }

@@ -10,6 +10,7 @@
 #include "px4lite_mavlink_rx.h"
 
 #include <limits.h>
+#include <math.h>
 #include <string.h>
 
 #include "px4lite_config.h"
@@ -162,14 +163,14 @@ static void MavRx_AppendRemoteLog(Px4Lite_RemoteTelemetry_t *remote, const Px4Li
     }
   }
 
-  if (remote->remote_log_count < PX4LITE_LOCAL_LOG_CAP) {
+  if (remote->remote_log_count < PX4LITE_REMOTE_LOG_CAP) {
     remote->remote_log_entries[remote->remote_log_count] = *entry;
     remote->remote_log_count++;
   } else {
-    for (i = 1U; i < PX4LITE_LOCAL_LOG_CAP; i++) {
+    for (i = 1U; i < PX4LITE_REMOTE_LOG_CAP; i++) {
       remote->remote_log_entries[(uint8_t)(i - 1U)] = remote->remote_log_entries[i];
     }
-    remote->remote_log_entries[(uint8_t)(PX4LITE_LOCAL_LOG_CAP - 1U)] = *entry;
+    remote->remote_log_entries[(uint8_t)(PX4LITE_REMOTE_LOG_CAP - 1U)] = *entry;
   }
 
   remote->remote_log_latest_seq = entry->sequence;
@@ -205,21 +206,27 @@ static void MavRx_UpdateSource(Px4Lite_RemoteTelemetry_t *remote, const Px4Lite_
   MavRx_UpdateSequenceStats(remote, frame, previous_rx_ms);
 }
 
-static void MavRx_UpdateStaleMask(Px4Lite_RemoteTelemetry_t *remote, uint32_t now_ms)
+/** @brief 只为本帧实际承载的导航字段记录接收时间。 */
+static void MavRx_MarkNavigation(Px4Lite_RemoteTelemetry_t *remote, uint32_t fields)
 {
-  uint32_t stale = 0U;
+  remote->navigation_valid_mask |= fields;
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
+  remote->navigation_update_ms = remote->last_rx_ms;
+  if ((fields & PX4LITE_NAV_VALID_POSITION) != 0U) { remote->position_update_ms = remote->last_rx_ms; }
+  if ((fields & PX4LITE_NAV_VALID_VELOCITY) != 0U) { remote->velocity_update_ms = remote->last_rx_ms; }
+  if ((fields & PX4LITE_NAV_VALID_TIME) != 0U) { remote->time_update_ms = remote->last_rx_ms; }
+  if ((fields & PX4LITE_NAV_VALID_ALTITUDE) != 0U) { remote->altitude_update_ms = remote->last_rx_ms; }
+}
 
-  if (remote == 0) { return; }
-  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->heartbeat_update_ms) > PX4LITE_REMOTE_HEARTBEAT_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_HEARTBEAT; }
-  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_NAVIGATION) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->navigation_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_NAVIGATION; }
-  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->attitude_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_ATTITUDE; }
-  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_ENVIRONMENT) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->environment_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_ENVIRONMENT; }
-  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_BATTERY) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->battery_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_BATTERY; }
-  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->modules_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_MODULES; }
-  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->alarm_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_ALARM; }
-  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_MOTOR) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->motor_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_MOTOR; }
-  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_LOG) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->log_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_LOG; }
-  remote->stale_mask = stale;
+/** @brief 校验 yymmdd 与 UTC 当日秒；00:00:00 是有效时间。 */
+static uint8_t MavRx_UtcValid(uint32_t date, uint32_t seconds)
+{
+  static const uint8_t days[12] = {31U,28U,31U,30U,31U,30U,31U,31U,30U,31U,30U,31U};
+  uint32_t yy = date / 10000U, mm = (date / 100U) % 100U, dd = date % 100U;
+  uint32_t limit;
+  if ((yy > 99U) || (mm == 0U) || (mm > 12U) || (seconds >= 86400U)) { return 0U; }
+  limit = days[mm - 1U]; if ((mm == 2U) && ((yy % 4U) == 0U)) { limit++; }
+  return (uint8_t)((dd != 0U) && (dd <= limit));
 }
 
 static void MavRx_MarkHeartbeatSeen(Px4Lite_RemoteTelemetry_t *remote)
@@ -245,20 +252,34 @@ static uint8_t MavRx_DecodeHeartbeat(Px4Lite_RemoteTelemetry_t *remote, const ma
   return 1U;
 }
 
+/** @brief GPS_RAW_INT 的定位与速度各自检查协议有效值，COG 不冒充姿态 yaw。 */
 static uint8_t MavRx_DecodeGpsRaw(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
 {
   mavlink_gps_raw_int_t packet;
-
+  float course;
   mavlink_msg_gps_raw_int_decode(message, &packet);
-  remote->latitude_e7     = packet.lat;
-  remote->longitude_e7    = packet.lon;
-  remote->altitude_mm     = packet.alt;
-  remote->gnss_fix_type   = packet.fix_type;
-  remote->hdop_x100       = (packet.eph != UINT16_MAX) ? packet.eph : 0U;
+  remote->navigation_valid_mask &= ~(PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY);
+  remote->gnss_fix_type = 0U;
+  remote->satellites_used = 0U;
+  if ((packet.fix_type < 2U) || (packet.lat < -900000000L) || (packet.lat > 900000000L) ||
+      (packet.lon < -1800000000L) || (packet.lon > 1800000000L)) { return 1U; }
+  remote->latitude_e7 = packet.lat;
+  remote->longitude_e7 = packet.lon;
+  remote->gnss_fix_type = packet.fix_type;
+  remote->hdop_x100 = (packet.eph != UINT16_MAX) ? packet.eph : 0U;
   remote->satellites_used = (packet.satellites_visible != UINT8_MAX) ? packet.satellites_visible : 0U;
-  if ((packet.cog != UINT16_MAX) && (packet.cog <= 36000U)) { remote->yaw_deg100 = (int32_t)packet.cog; }
-  remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
-  remote->navigation_update_ms = remote->last_rx_ms;
+  MavRx_MarkNavigation(remote, PX4LITE_NAV_VALID_POSITION);
+  if (packet.fix_type >= 3U) {
+    remote->altitude_mm = packet.alt;
+    MavRx_MarkNavigation(remote, PX4LITE_NAV_VALID_ALTITUDE);
+  }
+  if ((packet.vel != UINT16_MAX) && (packet.cog != UINT16_MAX) && (packet.cog <= 36000U)) {
+    course = (float)packet.cog * (3.14159265358979323846f / 18000.0f);
+    remote->velocity_north_cms = (int32_t)((float)packet.vel * cosf(course));
+    remote->velocity_east_cms = (int32_t)((float)packet.vel * sinf(course));
+    remote->velocity_down_cms = 0;
+    MavRx_MarkNavigation(remote, PX4LITE_NAV_VALID_VELOCITY);
+  }
   return 1U;
 }
 
@@ -278,81 +299,105 @@ static uint8_t MavRx_DecodeAttitude(Px4Lite_RemoteTelemetry_t *remote, const mav
   return 1U;
 }
 
+/** @brief GLOBAL_POSITION_INT 只更新位置、速度和高度，不改姿态域。 */
 static uint8_t MavRx_DecodePosition(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
 {
   mavlink_global_position_int_t packet;
 
   mavlink_msg_global_position_int_decode(message, &packet);
+  if ((packet.lat < -900000000L) || (packet.lat > 900000000L) || (packet.lon < -1800000000L) || (packet.lon > 1800000000L)) { return 0U; }
   remote->latitude_e7        = packet.lat;
   remote->longitude_e7       = packet.lon;
   remote->altitude_mm        = packet.alt;
   remote->velocity_north_cms = packet.vx;
   remote->velocity_east_cms  = packet.vy;
   remote->velocity_down_cms  = packet.vz;
-  if (packet.hdg != UINT16_MAX) { remote->yaw_deg100 = (int32_t)packet.hdg; }
-  remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
-  remote->navigation_update_ms = remote->last_rx_ms;
+  MavRx_MarkNavigation(remote, PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY | PX4LITE_NAV_VALID_ALTITUDE);
   return 1U;
 }
 
+/** @brief 只推进本帧所属电池的有效位和接收时间。 */
+static void MavRx_MarkBattery(Px4Lite_RemoteTelemetry_t *remote, uint8_t secondary)
+{
+  remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
+  remote->battery_update_ms = remote->last_rx_ms;
+  if (secondary != 0U) {
+    remote->battery2_update_ms = remote->last_rx_ms;
+  } else {
+    remote->battery1_update_ms = remote->last_rx_ms;
+  }
+}
+
+/** @brief SYS_STATUS 只携带主电池，不激活第二电池。 */
 static uint8_t MavRx_DecodeSysStatus(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
 {
   mavlink_sys_status_t packet;
 
   mavlink_msg_sys_status_decode(message, &packet);
+  remote->battery_valid_mask &= ~PX4LITE_REMOTE_BATTERY_VALID_PRIMARY;
+  remote->voltage_mv = 0U; remote->current_ma = 0U; remote->battery_percent = 0U;
   if (packet.voltage_battery != UINT16_MAX) {
     remote->voltage_mv = packet.voltage_battery;
-    remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
-    remote->battery_update_ms = remote->last_rx_ms;
+    remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE1;
+    MavRx_MarkBattery(remote, 0U);
   }
   /* current_battery 单位 cA(10mA)，-1 表示未测量；换算回 mA。 */
   if (packet.current_battery >= 0) {
     remote->current_ma = (uint32_t)packet.current_battery * 10U;
-    remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
-    remote->battery_update_ms = remote->last_rx_ms;
+    remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_CURRENT1;
+    MavRx_MarkBattery(remote, 0U);
   }
-  if (packet.battery_remaining >= 0) {
+  if ((packet.battery_remaining >= 0) && (packet.battery_remaining <= 100)) {
     remote->battery_percent = (uint8_t)packet.battery_remaining;
-    remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
-    remote->battery_update_ms = remote->last_rx_ms;
+    remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_PERCENT1;
+    MavRx_MarkBattery(remote, 0U);
   }
   remote->low_voltage = (packet.battery_remaining >= 0 && packet.battery_remaining <= 15) ? 1U : 0U;
   return 1U;
 }
 
+/** @brief 按电池 ID 更新各已知标量，未知字段撤位清零，不借另一路时间续期。 */
 static uint8_t MavRx_DecodeBattery(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
 {
   mavlink_battery_status_t packet;
 
   mavlink_msg_battery_status_decode(message, &packet);
+  if (packet.id > 1U) { return 0U; }
+  if (packet.id == 1U) { remote->battery_valid_mask &= ~PX4LITE_REMOTE_BATTERY_VALID_SECONDARY; remote->voltage2_mv = 0U; remote->current2_ma = 0U; remote->battery2_percent = 0U; }
+  else { remote->battery_valid_mask &= ~PX4LITE_REMOTE_BATTERY_VALID_PRIMARY; remote->voltage_mv = 0U; remote->current_ma = 0U; remote->battery_percent = 0U; }
   /* MAVLink 用 id 区分多块电池：id=1 电池2，其余(id=0)电池1。
      current_battery 单位 cA(10mA)，-1 表示未测量；换算回 mA。 */
   if (packet.id == 1U) {
-    if (packet.voltages[0] != UINT16_MAX) { remote->voltage2_mv = packet.voltages[0]; }
-    if (packet.current_battery >= 0) { remote->current2_ma = (uint32_t)packet.current_battery * 10U; }
-    if (packet.battery_remaining >= 0) { remote->battery2_percent = (uint8_t)packet.battery_remaining; }
+    if (packet.voltages[0] != UINT16_MAX) { remote->voltage2_mv = packet.voltages[0]; remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE2; }
+    if (packet.current_battery >= 0) { remote->current2_ma = (uint32_t)packet.current_battery * 10U; remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_CURRENT2; }
+    if ((packet.battery_remaining >= 0) && (packet.battery_remaining <= 100)) { remote->battery2_percent = (uint8_t)packet.battery_remaining; remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_PERCENT2; }
     remote->low_voltage2 = (packet.charge_state == (uint8_t)MAV_BATTERY_CHARGE_STATE_LOW) ? 1U : 0U;
   } else {
-    if (packet.voltages[0] != UINT16_MAX) { remote->voltage_mv = packet.voltages[0]; }
-    if (packet.current_battery >= 0) { remote->current_ma = (uint32_t)packet.current_battery * 10U; }
-    if (packet.battery_remaining >= 0) { remote->battery_percent = (uint8_t)packet.battery_remaining; }
+    if (packet.voltages[0] != UINT16_MAX) { remote->voltage_mv = packet.voltages[0]; remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE1; }
+    if (packet.current_battery >= 0) { remote->current_ma = (uint32_t)packet.current_battery * 10U; remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_CURRENT1; }
+    if ((packet.battery_remaining >= 0) && (packet.battery_remaining <= 100)) { remote->battery_percent = (uint8_t)packet.battery_remaining; remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_PERCENT1; }
     remote->low_voltage = (packet.charge_state == (uint8_t)MAV_BATTERY_CHARGE_STATE_LOW) ? 1U : 0U;
   }
-  remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
-  remote->battery_update_ms = remote->last_rx_ms;
+  if ((remote->battery_valid_mask & ((packet.id == 1U) ? PX4LITE_REMOTE_BATTERY_VALID_SECONDARY : PX4LITE_REMOTE_BATTERY_VALID_PRIMARY)) != 0U) { MavRx_MarkBattery(remote, packet.id); }
   return 1U;
 }
 
+/** @brief 温压帧只更新温压来源的有效位和时间，湿度来源独立。 */
 static uint8_t MavRx_DecodePressure(Px4Lite_RemoteTelemetry_t *remote, const mavlink_message_t *message)
 {
   mavlink_scaled_pressure_t packet;
 
   mavlink_msg_scaled_pressure_decode(message, &packet);
+  remote->environment_valid_mask &= ~PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE;
+  remote->pressure_pa = 0.0f; remote->temperature_c = 0.0f;
+  if (!(packet.press_abs > 0.0f && packet.press_abs < 2000.0f)) { return 1U; }
   remote->pressure_pa   = packet.press_abs * 100.0f;          /* hPa → Pa */
   remote->temperature_c = ((float)packet.temperature) / 100.0f; /* cdegC → degC */
   /* 湿度不在 SCALED_PRESSURE 里，由独立的 HUMIDITY 帧维护，这里不得清零覆盖。 */
   remote->valid_mask |= PX4LITE_REMOTE_VALID_ENVIRONMENT;
   remote->environment_update_ms = remote->last_rx_ms;
+  remote->pressure_temperature_update_ms = remote->last_rx_ms;
+  remote->environment_valid_mask |= PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE;
   return 1U;
 }
 
@@ -498,8 +543,7 @@ static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, cons
     bds_used = (uint8_t)((value >> 24U) & 0xFFU);
     remote->satellites_used = (uint8_t)(gps_used + bds_used);
     if (remote->satellites_used == 0U) { remote->satellites_used = (uint8_t)((value & 0xFFU) + ((value >> 8U) & 0xFFU)); }
-    remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
-    remote->navigation_update_ms = remote->last_rx_ms;
+    /* 卫星诊断不包含坐标、速度或 UTC，不续期测量。 */
     return 1U;
   }
 
@@ -521,34 +565,40 @@ static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote, cons
   /* LoRa 按 fj-lora 兼容格式继续接收第二电池摘要 BAT2STAT。 */
 
   if (MavRx_NameEquals(packet.name, "BAT2STAT") != 0U) {
+    remote->battery_valid_mask &= ~PX4LITE_REMOTE_BATTERY_VALID_SECONDARY;
+    remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE2;
     remote->voltage2_mv = (uint32_t)(value & 0xFFFFU);
     remote->battery2_percent = (uint8_t)((value >> 16U) & 0xFFU);
+    if (remote->battery2_percent <= 100U) { remote->battery_valid_mask |= PX4LITE_REMOTE_BATTERY_VALID_PERCENT2; } else { remote->battery2_percent = 0U; }
     remote->low_voltage2 = (uint8_t)((value >> 24U) & 0x01U);
-    remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY;
-    remote->battery_update_ms = remote->last_rx_ms;
+    remote->current2_ma = 0U; /* 此兼容帧不携带电流，不保留陈旧值。 */
+    MavRx_MarkBattery(remote, 1U);
     return 1U;
   }
 
   if (MavRx_NameEquals(packet.name, "GNSSUTC") != 0U) {
+    if (MavRx_UtcValid(value, packet.time_boot_ms) == 0U) { remote->navigation_valid_mask &= ~PX4LITE_NAV_VALID_TIME; return 1U; }
     remote->gnss_utc_date = value;
     remote->gnss_utc_sec = packet.time_boot_ms;
-    remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
-    remote->navigation_update_ms = remote->last_rx_ms;
+    MavRx_MarkNavigation(remote, PX4LITE_NAV_VALID_TIME);
     return 1U;
   }
 
   if (MavRx_NameEquals(packet.name, "BAROALT") != 0U) {
     remote->altitude_mm = (int32_t)value;
-    remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION;
-    remote->navigation_update_ms = remote->last_rx_ms;
+    MavRx_MarkNavigation(remote, PX4LITE_NAV_VALID_ALTITUDE);
     return 1U;
   }
 
   if ((MavRx_NameEquals(packet.name, "HUMIDITY") != 0U) || (MavRx_NameEquals(packet.name, "ENVHUM") != 0U)) {
-    if (value > 1000U) { value = 1000U; }
+    remote->environment_valid_mask &= ~PX4LITE_REMOTE_ENV_VALID_HUMIDITY;
+    remote->relative_humidity_pct = 0.0f;
+    if (value > 1000U) { return 1U; }
     remote->relative_humidity_pct = ((float)value) / 10.0f;
     remote->valid_mask |= PX4LITE_REMOTE_VALID_ENVIRONMENT;
     remote->environment_update_ms = remote->last_rx_ms;
+    remote->humidity_update_ms = remote->last_rx_ms;
+    remote->environment_valid_mask |= PX4LITE_REMOTE_ENV_VALID_HUMIDITY;
     return 1U;
   }
 
@@ -836,7 +886,7 @@ Px4Lite_Result_t Px4Lite_MavlinkRxRun(uint32_t now_ms)
   decoded = MavRx_DecodeMessage(&s_rx_remote_scratch, &s_rx_message_scratch, now_ms);
   if (decoded != 0U) {
     s_last_peer_rx_ms = s_rx_frame_scratch.rx_time_ms;
-    MavRx_UpdateStaleMask(&s_rx_remote_scratch, now_ms);
+    Px4Lite_RemoteTelemetryRefreshFreshness(&s_rx_remote_scratch, now_ms);
     s_rx_remote_scratch.decoded_frame_count = s_rx_remote_scratch.decoded_frame_count + 1U;
     s_rx_remote_scratch.header.sample_time_ms  = s_rx_frame_scratch.rx_time_ms;
     s_rx_remote_scratch.header.publish_time_ms = now_ms;

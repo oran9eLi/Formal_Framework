@@ -9,6 +9,7 @@
  */
 
 #include "px4lite_platform.h"
+#include "px4lite_heartbeat_policy.h"
 #include "px4lite_config.h"
 #include "px4lite_imu_axis_map.h"
 #include "bsp_gnss.h"
@@ -44,8 +45,17 @@
 #include <math.h>
 #include <string.h>
 
+static volatile uint8_t s_gnss_reinit_pending; /**< Health 只置位，由 sensor 消费。 */
+static uint32_t s_gnss_last_rx_sequence; /**< 适配器已消费的驱动链路序号，重初始化后复位。 */
+
 static uint32_t s_heartbeat_ms[PX4LITE_HEARTBEAT_COUNT];
 static uint32_t s_heartbeat_seen_mask;
+static uint32_t s_heartbeat_timeout_ms[PX4LITE_HEARTBEAT_COUNT]; /**< 创建者提交的期限，单位 ms。 */
+static uint32_t s_heartbeat_required_mask;
+static Px4Lite_WatchdogPhase_t s_watchdog_phase;
+static uint32_t s_watchdog_start_ms;
+static uint32_t s_watchdog_last_check_ms; /**< 上次策略检查时刻，单位 ms；监视毫秒时基进展。 */
+static uint8_t s_heartbeat_config_sealed; /**< 调度器开始后不允许修改必需集合。 */
 static uint32_t s_baro_last_sample_ms;
 static int32_t s_baro_last_altitude_mm;
 static int32_t s_baro_vertical_speed_cms;
@@ -53,10 +63,12 @@ static uint8_t s_baro_altitude_valid;
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
 #define PX4LITE_RPI_RX_SERVICE_BYTE_BUDGET 128U
+#define PX4LITE_RPI_RX_IDLE_RESET_MS 200U /**< 半帧最大字节间隔，单位 ms。 */
 
 static mavlink_status_t s_rpi_parse_status;
 static mavlink_message_t s_rpi_parse_msg;
 static uint32_t s_rpi_pending_rx_ms;
+static uint32_t s_rpi_last_byte_ms; /**< 最近消费字节时刻；解析状态单独表示半帧存在。 */
 static uint8_t s_rpi_pending_frame;
 #endif
 
@@ -143,6 +155,12 @@ Px4Lite_Result_t Px4Lite_PlatformInit(void)
 {
   memset(s_heartbeat_ms, 0, sizeof(s_heartbeat_ms));
   s_heartbeat_seen_mask = 0U;
+  s_heartbeat_required_mask = 0U;
+  s_heartbeat_config_sealed = 0U;
+  s_watchdog_phase = PX4LITE_WATCHDOG_OFF;
+  s_watchdog_start_ms = 0U;
+  s_watchdog_last_check_ms = 0U;
+  memset(s_heartbeat_timeout_ms, 0, sizeof(s_heartbeat_timeout_ms));
   return PX4LITE_OK;
 }
 
@@ -241,6 +259,23 @@ Px4Lite_Result_t Px4Lite_PlatformGetHardwareUid(uint32_t *uid_words, uint8_t wor
 }
 
 /**
+ * @brief 调度前配置实际创建任务的固定心跳槽位；禁止重复、越界及运行时改配置。
+ * @param[in] id 固定心跳编号。
+ * @param[in] period_ms 正常工作周期，单位 ms。
+ * @param[in] min_timeout_ms 初始化/重试等路径要求的最小期限，单位 ms。
+ * @return 参数非法或已封存时拒绝，成功后该槽位成为必需项。
+ */
+Px4Lite_Result_t Px4Lite_PlatformHeartbeatConfigure(Px4Lite_HeartbeatId_t id, uint32_t period_ms, uint32_t min_timeout_ms)
+{
+  uint32_t timeout = Px4Lite_HeartbeatTimeoutMs(period_ms, min_timeout_ms);
+  if (((uint32_t)id >= PX4LITE_HEARTBEAT_COUNT) || (timeout == 0U)) { return PX4LITE_INVALID_PARAM; }
+  if ((s_heartbeat_config_sealed != 0U) || ((s_heartbeat_required_mask & (1UL << id)) != 0U)) { return PX4LITE_NOT_READY; }
+  s_heartbeat_timeout_ms[id] = timeout;
+  s_heartbeat_required_mask |= 1UL << id;
+  return PX4LITE_OK;
+}
+
+/**
  * @brief 记录一个必需任务最近一次成功执行时间。
  *
  * @param[in] id 心跳编号。
@@ -251,6 +286,7 @@ void Px4Lite_PlatformHeartbeat(Px4Lite_HeartbeatId_t id, uint32_t now_ms)
   if ((uint32_t)id >= (uint32_t)PX4LITE_HEARTBEAT_COUNT) { return; }
 
   taskENTER_CRITICAL();
+  s_heartbeat_config_sealed = 1U;
   s_heartbeat_ms[id] = now_ms;
   s_heartbeat_seen_mask |= (1UL << (uint32_t)id);
   taskEXIT_CRITICAL();
@@ -267,70 +303,78 @@ uint8_t Px4Lite_PlatformHeartbeatsHealthy(uint32_t now_ms)
 {
   uint32_t heartbeat[PX4LITE_HEARTBEAT_COUNT];
   uint32_t seen_mask;
-  uint32_t required_mask;
-  uint32_t i;
-
   taskENTER_CRITICAL();
   memcpy(heartbeat, s_heartbeat_ms, sizeof(heartbeat));
   seen_mask = s_heartbeat_seen_mask;
   taskEXIT_CRITICAL();
-
-  required_mask = (1UL << (uint32_t)PX4LITE_HEARTBEAT_SENSOR) | (1UL << (uint32_t)PX4LITE_HEARTBEAT_ESTIMATOR) | (1UL << (uint32_t)PX4LITE_HEARTBEAT_HEALTH) | (1UL << (uint32_t)PX4LITE_HEARTBEAT_SYSTEM) | (1UL << (uint32_t)PX4LITE_HEARTBEAT_BUSINESS);
-#if PX4LITE_ENABLE_DISPLAY
-  required_mask |= (1UL << (uint32_t)PX4LITE_HEARTBEAT_DISPLAY);
-#endif
-#if PX4LITE_ENABLE_LORA || PX4LITE_ENABLE_REMOTE_ID
-  required_mask |= (1UL << (uint32_t)PX4LITE_HEARTBEAT_COMM);
-#endif
-#if PX4LITE_ENABLE_CONTROL
-  required_mask |= (1UL << (uint32_t)PX4LITE_HEARTBEAT_CONTROL);
-#endif
-  if ((seen_mask & required_mask) != required_mask) { return 0U; }
-
-  for (i = 0U; i < (uint32_t)PX4LITE_HEARTBEAT_COUNT; ++i) {
-    if ((required_mask & (1UL << i)) == 0U) { continue; }
-    if ((uint32_t)(now_ms - heartbeat[i]) > PX4LITE_TASK_HEARTBEAT_TIMEOUT_MS) { return 0U; }
-  }
-
-  return 1U;
+  /* 期限与必需位图已在调度前固定，运行期无需重复复制。 */
+  return Px4Lite_HeartbeatsCheck(heartbeat, s_heartbeat_timeout_ms, PX4LITE_HEARTBEAT_COUNT,
+                               seen_mask, s_heartbeat_required_mask, now_ms);
 }
 
 /**
- * @brief 在所有必需任务心跳健康时刷新硬件看门狗。
- *
- * @param[in] now_ms 当前系统毫秒时间。
+ * @brief 调度器启动前封存任务集合并开始首轮期限，不能重复交接。
+ * @param[in] now_ms 当前真实毫秒时间。
+ * @return 空集合/重复交接/硬件未启动时失败；失败不再续期。
  */
+Px4Lite_Result_t Px4Lite_PlatformWatchdogBeginStartup(uint32_t now_ms)
+{
+  if ((s_heartbeat_config_sealed != 0U) || (s_heartbeat_required_mask == 0U)) {
+    s_watchdog_phase = PX4LITE_WATCHDOG_FAILED;
+    BSP_Watchdog_SealBootProgress();
+    return PX4LITE_NOT_READY;
+  }
+#if PX4LITE_ENABLE_HARDWARE_WATCHDOG
+  if (BSP_Watchdog_IsStarted() == 0U) {
+    s_watchdog_phase = PX4LITE_WATCHDOG_FAILED;
+    BSP_Watchdog_SealBootProgress();
+    return PX4LITE_NOT_READY;
+  }
+  BSP_Watchdog_BootProgress();
+#endif
+  BSP_Watchdog_SealBootProgress();
+  s_heartbeat_config_sealed = 1U;
+  s_watchdog_start_ms = now_ms;
+  s_watchdog_last_check_ms = now_ms;
+  s_watchdog_phase = PX4LITE_WATCHDOG_WAITING;
+  return PX4LITE_OK;
+}
+
+/** @brief HealthTask 完成工作并更新心跳后执行；时基停走不续期，首轮超时/硬件切换失败锁存。 */
 void Px4Lite_PlatformWatchdogFeed(uint32_t now_ms)
 {
-  if (Px4Lite_PlatformHeartbeatsHealthy(now_ms) == 0U) { return; }
-
+  Px4Lite_WatchdogAction_t action = Px4Lite_WatchdogEvaluate(&s_watchdog_phase, &s_watchdog_last_check_ms, s_watchdog_start_ms,
+                                                          now_ms, Px4Lite_PlatformHeartbeatsHealthy(now_ms));
+  if (action == PX4LITE_WATCHDOG_ENTER_RUNTIME) {
 #if PX4LITE_ENABLE_HARDWARE_WATCHDOG
-  /* 延迟启动：IWDG 一旦启动就无法用软件关闭，若在 BSP_Init() 中启动，其后的
-     SD/LCD/GNSS 等长耗时初始化和 FreeRTOS 调度器启动期间无人喂狗，会直接形成
-     开机复位循环。这里在所有必需任务心跳首次全部健康时才启动，此刻已确认调度器
-     在跑、各任务都进过循环，不存在无人喂狗的空窗。BSP_Watchdog_Start() 内部
-     幂等，重复调用不会重新配置。 */
-  if (BSP_Watchdog_IsStarted() == 0U) {
-    (void)BSP_Watchdog_Start();
-  }
-  BSP_WatchdogRefresh();
-#else
-  (void)now_ms;
+    if (BSP_Watchdog_EnterRuntime() != BSP_STATUS_OK) {
+      s_watchdog_phase = PX4LITE_WATCHDOG_FAILED;
+      return;
+    }
 #endif
+    s_watchdog_phase = PX4LITE_WATCHDOG_RUNTIME;
+  } else if (action == PX4LITE_WATCHDOG_FEED) {
+#if PX4LITE_ENABLE_HARDWARE_WATCHDOG
+    BSP_WatchdogRefresh();
+#endif
+  }
 }
 
 /**
  * @brief 初始化 GNSS BSP 和强类型 GNSS 解析器。
  */
+
 Px4Lite_Result_t Px4Lite_GnssInit(void)
 {
+  s_gnss_last_rx_sequence = 0U;
+  s_gnss_reinit_pending = 0U;
   /* GNSS UART/DMA 由 BSP_Init() 集中初始化；此处只初始化解析器状态。 */
   return (Sensor_GNSS_Init() == GNSS_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
 }
 
 void Px4Lite_GnssRequestReinit(void)
 {
-  Sensor_GNSS_RequestReinit();
+  s_gnss_reinit_pending = 1U;
 }
 
 /**
@@ -338,20 +382,49 @@ void Px4Lite_GnssRequestReinit(void)
  */
 Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
 {
-  static uint32_t last_rx_sequence;
+  uint32_t now_ms;
+  uint8_t reinit;
+  uint32_t best_age = UINT32_MAX;
+  uint32_t age;
+  uint32_t times[4];
+  uint32_t i;
+  static const uint32_t bits[4] = {GNSS_VALID_POSITION, GNSS_VALID_VELOCITY, GNSS_VALID_TIME, GNSS_VALID_ALTITUDE};
   Gnss_Snapshot_t snapshot;
   Gnss_Result_t result;
 
   if (measurement == 0) { return PX4LITE_INVALID_PARAM; }
 
-  (void)Sensor_GNSS_Service(Px4Lite_PlatformGetMs());
+  taskENTER_CRITICAL();
+  reinit = s_gnss_reinit_pending;
+  s_gnss_reinit_pending = 0U;
+  taskEXIT_CRITICAL();
+  if (reinit != 0U) {
+    s_gnss_last_rx_sequence = 0U;
+    Sensor_GNSS_RequestReinit();
+  }
+  now_ms = Px4Lite_PlatformGetMs();
+  if (Sensor_GNSS_Service(now_ms) == GNSS_RESULT_IO_ERROR) { return PX4LITE_IO_ERROR; }
   result = Sensor_GNSS_CopySnapshot(&snapshot);
   if (result == GNSS_RESULT_INVALID_PARAM) { return PX4LITE_IO_ERROR; }
 
-  if ((snapshot.rx_sequence == 0U) || (snapshot.rx_sequence == last_rx_sequence)) { return PX4LITE_IDLE; }
+  if ((snapshot.rx_sequence == 0U) || (snapshot.rx_sequence == s_gnss_last_rx_sequence)) { return PX4LITE_IDLE; }
 
   memset(measurement, 0, sizeof(*measurement));
-  measurement->header.sample_time_ms = snapshot.last_rx_ms;
+  measurement->last_rx_ms = snapshot.last_rx_ms;
+  measurement->position_update_ms = snapshot.position_update_ms;
+  measurement->velocity_update_ms = snapshot.velocity_update_ms;
+  measurement->time_update_ms = snapshot.time_update_ms;
+  measurement->altitude_update_ms = snapshot.altitude_update_ms;
+  if ((snapshot.valid_mask & GNSS_VALID_POSITION) != 0U) { measurement->valid_mask |= PX4LITE_GNSS_VALID_POSITION; }
+  if ((snapshot.valid_mask & GNSS_VALID_VELOCITY) != 0U) { measurement->valid_mask |= PX4LITE_GNSS_VALID_VELOCITY; }
+  if ((snapshot.valid_mask & GNSS_VALID_TIME) != 0U) { measurement->valid_mask |= PX4LITE_GNSS_VALID_TIME; }
+  if ((snapshot.valid_mask & GNSS_VALID_ALTITUDE) != 0U) { measurement->valid_mask |= PX4LITE_GNSS_VALID_ALTITUDE; }
+  times[0] = snapshot.position_update_ms; times[1] = snapshot.velocity_update_ms;
+  times[2] = snapshot.time_update_ms; times[3] = snapshot.altitude_update_ms;
+  for (i = 0U; i < 4U; ++i) {
+    age = Px4Lite_ElapsedMs(now_ms, times[i]);
+    if (((snapshot.valid_mask & bits[i]) != 0U) && (age < best_age)) { best_age = age; measurement->header.sample_time_ms = times[i]; }
+  }
   measurement->latitude_e7           = snapshot.latitude_deg_e7;
   measurement->longitude_e7          = snapshot.longitude_deg_e7;
   measurement->altitude_mm           = snapshot.altitude_mm;
@@ -360,7 +433,7 @@ Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
   measurement->utc_date              = snapshot.utc_date;
   measurement->heading_deg100        = (uint16_t)snapshot.heading_deg100;
   measurement->hdop_x100             = snapshot.hdop_cm;
-  measurement->fix_type              = (snapshot.fix_valid != 0U) ? snapshot.fix_quality : 0U;
+  measurement->fix_type              = ((snapshot.fix_valid != 0U) && (Px4Lite_ElapsedMs(now_ms, snapshot.position_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS)) ? snapshot.fix_quality : 0U;
   measurement->fix_dimension         = snapshot.fix_dimension;
   measurement->satellites_used       = snapshot.satellites;
   measurement->gps_visible           = snapshot.gps_visible_sats;
@@ -368,7 +441,7 @@ Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
   measurement->gps_used              = snapshot.gps_used_sats;
   measurement->bds_used              = snapshot.bds_used_sats;
 
-  last_rx_sequence = snapshot.rx_sequence;
+  s_gnss_last_rx_sequence = snapshot.rx_sequence;
   return PX4LITE_OK;
 }
 
@@ -452,7 +525,8 @@ void Px4Lite_BaroRequestReinit(void)
   Sensor_BME280_RequestReinit();
 }
 
-Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement)
+/** @brief 每轮推进 BME280，只在触发许可时开启新测量；发布时保留驱动采样时间。 */
+Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement, uint8_t start_measurement)
 {
   static uint32_t last_rx_sequence;
   Bme280_Snapshot_t snapshot;
@@ -462,7 +536,7 @@ Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement)
   if (measurement == 0) { return PX4LITE_INVALID_PARAM; }
 
   now_ms = Px4Lite_PlatformGetMs();
-  result = Sensor_BME280_Service(now_ms);
+  result = Sensor_BME280_Service(now_ms, start_measurement);
   if (result != BME280_RESULT_OK) { return (result == BME280_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
 
   result = Sensor_BME280_CopySnapshot(&snapshot);
@@ -519,6 +593,7 @@ Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement)
   measurement->header.sample_time_ms = snapshot.sample_time_ms;
   measurement->voltage_mv            = (uint32_t)((snapshot.voltage_v * 1000.0f) + 0.5f);
   measurement->current_ma            = snapshot.current_ma;
+  measurement->current_valid         = snapshot.current_valid;
   measurement->percent               = snapshot.percent;
   measurement->low_voltage           = snapshot.low_voltage;
 
@@ -548,6 +623,7 @@ Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement)
   measurement->header.sample_time_ms = snapshot.sample_time_ms;
   measurement->voltage_mv            = (uint32_t)((snapshot.voltage_v * 1000.0f) + 0.5f);
   measurement->current_ma            = snapshot.current_ma;
+  measurement->current_valid         = snapshot.current_valid;
   measurement->percent               = snapshot.percent;
   measurement->low_voltage           = snapshot.low_voltage;
 
@@ -654,12 +730,16 @@ Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len)
 }
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
+/** @brief 初始化或切换串口后清理真实 MAVLink 接收状态，不能只清输出副本。 */
 static void Px4Lite_RpiMavlinkResetRxState(void)
 {
+  memset(mavlink_get_channel_status(MAVLINK_COMM_0), 0, sizeof(mavlink_status_t));
+  memset(mavlink_get_channel_buffer(MAVLINK_COMM_0), 0, sizeof(mavlink_message_t));
   memset(&s_rpi_parse_status, 0, sizeof(s_rpi_parse_status));
   memset(&s_rpi_parse_msg, 0, sizeof(s_rpi_parse_msg));
   s_rpi_pending_rx_ms = 0U;
   s_rpi_pending_frame = 0U;
+  s_rpi_last_byte_ms = 0U;
 }
 #endif
 
@@ -747,6 +827,11 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms)
   for (i = 0U; i < PX4LITE_RPI_RX_SERVICE_BYTE_BUDGET; ++i) {
     if (BSP_RpiUART_Read(&byte, 1U) == 0U) { return (i == 0U) ? PX4LITE_IDLE : PX4LITE_OK; }
 
+    if ((mavlink_get_channel_status(MAVLINK_COMM_0)->parse_state != MAVLINK_PARSE_STATE_IDLE) &&
+        ((uint32_t)(now_ms - s_rpi_last_byte_ms) > PX4LITE_RPI_RX_IDLE_RESET_MS)) {
+      Px4Lite_RpiMavlinkResetRxState();
+    }
+    s_rpi_last_byte_ms = now_ms;
     if (mavlink_parse_char(MAVLINK_COMM_0, byte, &s_rpi_parse_msg, &s_rpi_parse_status) != 0) {
       s_rpi_pending_rx_ms = now_ms;
       s_rpi_pending_frame = 1U;
@@ -770,7 +855,7 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkCopyRxFrame(Px4Lite_CommRxFrame_t *out)
   memset(out, 0, sizeof(*out));
   out->rx_time_ms   = s_rpi_pending_rx_ms;
   out->msg_id       = s_rpi_parse_msg.msgid;
-  out->frame_len    = (uint16_t)(s_rpi_parse_msg.len + MAVLINK_NUM_HEADER_BYTES + MAVLINK_NUM_CHECKSUM_BYTES);
+  out->frame_len    = mavlink_msg_get_send_buffer_length(&s_rpi_parse_msg);
   out->system_id    = s_rpi_parse_msg.sysid;
   out->component_id = s_rpi_parse_msg.compid;
   out->sequence     = s_rpi_parse_msg.seq;

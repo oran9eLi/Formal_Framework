@@ -246,15 +246,19 @@ uint32_t BSP_GNSS_GetDropCount(void)
 }
 
 /**
- * @brief 在 UART IDLE 中断报告新 DMA 字节后推进接收环形缓冲。
+ * @brief 任务轮询或 UART IDLE 中断推进同一个 DMA 写位置。
+ * @note 从读取 NDTR 到提交 head/tail/drop 全程互斥，防止任务旧位置覆盖 ISR 新位置。
  */
 void BSP_GNSS_RxIdleCallback(uint16_t dummy)
 {
   uint16_t pos;
   uint16_t advanced;
   uint16_t free_before;
+  uint32_t primask;
 
   (void)dummy;
+  primask = __get_PRIMASK();
+  __disable_irq();
 
 #if DEBUG_GNSS_BSP_MONITOR_ENABLE
   s_dbg_rx_idle_callback_count++;
@@ -282,6 +286,7 @@ void BSP_GNSS_RxIdleCallback(uint16_t dummy)
   }
 
   s_rx_head = pos;
+  if (primask == 0U) { __enable_irq(); }
 }
 
 /**

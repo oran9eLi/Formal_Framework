@@ -13,8 +13,6 @@
 #include "px4lite_config.h"
 #include "px4lite_control.h"
 #include "px4lite_identity.h"
-#include "px4lite_local_msglog.h"
-#include "px4lite_log_message_ids.h"
 #include "px4lite_mavlink_tx.h"
 
 #if defined(__CC_ARM)
@@ -89,15 +87,6 @@ static uint8_t Command_ParamToPulseUs(float value, uint16_t *out)
         (value <= (float)PX4LITE_CONTROL_ESC_MAX_PULSE_US))) { return 0U; }
   *out = (uint16_t)(value + 0.5f);
   return 1U;
-}
-
-static void Command_PushTakeoffSensorFail(uint32_t now_ms)
-{
-  uint32_t total_s = now_ms / 1000U;
-  uint32_t hhmmss = (((total_s / 3600U) % 100U) * 10000U) +
-                    (((total_s / 60U) % 60U) * 100U) + (total_s % 60U);
-  Px4Lite_LocalMsgLogPush((uint16_t)PX4LITE_LOGMSG_TAKEOFF_SENSOR_FAIL, hhmmss,
-                          0U, 1U, 0U, 1U);
 }
 
 /**
@@ -198,11 +187,12 @@ static uint8_t Command_HandleSetMotorControlMode(float param1, float param2, flo
   return Command_MapControlResult(Px4Lite_ControlSetMode(mode));
 }
 
+/** @brief 透传同步升速结果；真实接受/拒绝与过程事件由 Control 统一记录。 */
 static uint8_t Command_HandleAutoTakeoff(uint32_t now_ms)
 {
   Px4Lite_Result_t result = Px4Lite_ControlStartAutoTakeoff();
 
-  if (result == PX4LITE_NOT_READY) { Command_PushTakeoffSensorFail(now_ms); }
+  (void)now_ms;
   return Command_MapControlResult(result);
 }
 

@@ -71,7 +71,7 @@ typedef struct {
   uint32_t lora_parse_error_count; /**< LoRa/MAVLink 接收解析错误累计次数。 */
   uint32_t lora_send_error_count;  /**< LoRa 底层发送错误累计次数。 */
   uint16_t storage_queue_count;    /**< Storage 记录队列当前占用数量。 */
-  uint32_t storage_drop_count;     /**< Storage 记录队列累计丢弃次数。 */
+  uint32_t storage_drop_count;     /**< 队列丢弃与提交后写入失败累计数，超过 UINT32_MAX 时饱和。 */
 } Storage_CsvData_t;
 
 /**

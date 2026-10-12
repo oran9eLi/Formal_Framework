@@ -13,6 +13,7 @@
 #include "px4lite_topics.h"
 
 static uint32_t g_now_ms;
+#include "motor_battery_fixture.h"
 static uint16_t g_pulse_us[PX4LITE_MOTOR_COUNT];
 static uint8_t g_button_pressed[PX4LITE_BUTTON_COUNT];
 static Px4Lite_MotorOutputs_t g_last_motor;
@@ -37,9 +38,7 @@ static void ResetHarness(void)
   g_imu_state     = PX4LITE_STATE_ONLINE;
   g_baro_state    = PX4LITE_STATE_ONLINE;
   g_now_ms        = 1000U;
-  /* 动力电池闭锁是外部供电条件，Px4Lite_ControlReset() 故意不清它(见该函数说明)，
-     因此必须由测试夹具显式复位，否则用例之间会互相污染。 */
-  (void)Px4Lite_ControlSetPowerInhibit(0U);
+  ResetBatteryFixture();
 }
 
 static int ExpectU32(const char *name, uint32_t actual, uint32_t expected)
@@ -757,7 +756,7 @@ static int TestPowerInhibitClearsAndRefusesThrottle(void)
   failures += ExpectU32("duty before inhibit", g_last_motor.duty_percent[0], 30U);
 
   /* 闭锁沿：已经在跑的四路必须立刻掉到 0，硬件回到最小脉宽。 */
-  failures += ExpectU32("set inhibit", Px4Lite_ControlSetPowerInhibit(1U), PX4LITE_OK);
+  failures += ExpectU32("set inhibit", SetFixturePowerInhibit(1U), PX4LITE_OK);
   failures += ExpectU32("inhibit reported", Px4Lite_ControlIsPowerInhibited(), 1U);
   Px4Lite_ControlRun(g_now_ms);
   failures += ExpectU32("inhibit zeroes duty0", g_last_motor.duty_percent[0], 0U);
@@ -776,7 +775,7 @@ static int TestPowerInhibitClearsAndRefusesThrottle(void)
   /* 被拒的油门命令不能顺带解锁急停：拒绝发生在解锁之前。 */
   ResetHarness();
   ArmControl();
-  (void)Px4Lite_ControlSetPowerInhibit(1U);
+  (void)SetFixturePowerInhibit(1U);
   (void)Px4Lite_ControlEmergencyStop(g_now_ms);
   failures += ExpectU32("refused throttle keeps estop", Px4Lite_ControlSetMotorThrottlePercent(0U, 30U), PX4LITE_NOT_READY);
   failures += ExpectU32("estop still latched", s_estop_latched, 1U);
@@ -785,14 +784,16 @@ static int TestPowerInhibitClearsAndRefusesThrottle(void)
   ResetHarness();
   ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 30U);
-  (void)Px4Lite_ControlSetPowerInhibit(1U);
-  (void)Px4Lite_ControlSetPowerInhibit(0U);
+  (void)SetFixturePowerInhibit(1U);
+  (void)SetFixturePowerInhibit(0U);
   failures += ExpectU32("inhibit released", Px4Lite_ControlIsPowerInhibited(), 0U);
   Px4Lite_ControlRun(g_now_ms);
   failures += ExpectU32("release restores nothing", g_last_motor.duty_percent[0], 0U);
   failures += ExpectU32("throttle accepted after release", Px4Lite_ControlSetMotorThrottlePercent(0U, 30U), PX4LITE_OK);
   Px4Lite_ControlRun(g_now_ms);
-  failures += ExpectU32("duty after release", g_last_motor.duty_percent[0], 30U);
+  failures += ExpectU32("recovery restarts prearm", g_last_motor.duty_percent[0], 0U);
+  RunControlWithLevelAttitude(PX4LITE_CONTROL_ESC_ARM_TIME_MS + PX4LITE_CONTROL_PERIOD_MS);
+  failures += ExpectU32("new target after rearm", g_last_motor.duty_percent[0], 30U);
   return failures;
 }
 
@@ -858,9 +859,46 @@ static int TestLandingRefusesNonZeroManualThrottle(void)
   return failures;
 }
 
+/** @brief 无本机数据及阈值/年龄边界必须控制真实目标入口。 */
+static int TestPowerGateStartupAndLimits(void)
+{
+  int failures = 0;
+  const uint32_t mv[] = {9899U, 9900U, 10099U, 10100U, 9900U, 13500U, 13501U};
+  const uint32_t blocked[] = {1U, 1U, 1U, 0U, 0U, 0U, 1U};
+  uint32_t i;
+  ResetHarness();
+  g_battery_ready = 0U;
+  (void)Px4Lite_ControlModuleInit();
+  failures += ExpectU32("startup missing battery refused", Px4Lite_ControlSetMotorThrottlePercent(0U, 25U), PX4LITE_NOT_READY);
+  g_battery_ready = 1U;
+  g_battery_valid = 0U;
+  failures += ExpectU32("invalid battery refused", Px4Lite_ControlSetMotorPulseUs(0U, 1500U), PX4LITE_NOT_READY);
+  g_battery_valid = 1U;
+  for (i = 0U; i < sizeof(mv) / sizeof(mv[0]); ++i) {
+    g_battery_mv = mv[i];
+    Px4Lite_ControlRun(g_now_ms);
+    failures += ExpectU32("power hysteresis boundary", Px4Lite_ControlIsPowerInhibited(), blocked[i]);
+  }
+  g_battery_mv = 12000U;
+  g_battery_live = 0U;
+  g_now_ms = 1500U;
+  g_battery_sample_ms = (uint32_t)(1500U - 2500U);
+  failures += ExpectU32("age 2500 across wrap", Px4Lite_ControlSetMotorThrottlePercent(0U, 25U), PX4LITE_OK);
+  g_now_ms++;
+  failures += ExpectU32("age 2501 refused before cycle", Px4Lite_ControlSetMotorThrottlePercent(0U, 25U), PX4LITE_NOT_READY);
+  failures += ExpectU32("stale clears old targets", s_target_valid[0], 0U);
+  g_battery_live = 1U;
+  Px4Lite_ControlRun(g_now_ms);
+  failures += ExpectU32("fresh data cannot restore target", g_last_motor.base_percent[0], 0U);
+  failures += ExpectU32("recovery holds minimum", g_pulse_us[0], 1000U);
+  return failures;
+}
+
 int main(void)
 {
   int failures = 0;
+
+  failures += TestPowerGateStartupAndLimits();
 
   failures += TestThrottleMappingAndPublish();
   failures += TestThrottleTargetPublishesDuringArm();

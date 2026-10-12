@@ -67,6 +67,9 @@ void Business_RegistryPoll(uint32_t now_ms);
  */
 void Business_StatusHeartbeat(Business_ComponentId_t component_id);
 
+/** @brief 调度前配置业务任务心跳周期/最低期限，单位 ms；1 成功，0 失败。 */
+uint8_t Business_StatusConfigureHeartbeat(Business_ComponentId_t component_id, uint32_t period_ms, uint32_t min_timeout_ms);
+
 /**
  * @brief 将一条 Business 日志记录转换为事件总线消息。
  *

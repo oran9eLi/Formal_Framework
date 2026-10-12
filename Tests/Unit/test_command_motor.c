@@ -16,7 +16,9 @@ static uint32_t g_critical_enter_count;
 #define taskENTER_CRITICAL() do { g_critical_depth++; g_critical_enter_count++; } while (0)
 #define taskEXIT_CRITICAL()  do { g_critical_depth--; } while (0)
 static unsigned g_scheduler_depth;
-#define vTaskSuspendAll() do { g_scheduler_depth++; } while (0)
+static unsigned g_scheduler_enter_count;
+static uint32_t g_suspend_advance_ms;
+#define vTaskSuspendAll() do { g_now_ms += g_suspend_advance_ms; g_suspend_advance_ms = 0U; g_scheduler_depth++; g_scheduler_enter_count++; } while (0)
 #define xTaskResumeAll() (--g_scheduler_depth)
 
 #include "px4lite_config.h"
@@ -26,6 +28,7 @@ static unsigned g_scheduler_depth;
 #include "common/mavlink.h"
 
 static uint32_t g_now_ms;
+#include "motor_battery_fixture.h"
 static uint16_t g_pulse_us[PX4LITE_MOTOR_COUNT];
 static Px4Lite_MotorOutputs_t g_last_motor;
 static uint8_t g_last_ack_result;
@@ -92,10 +95,13 @@ static void ResetHarness(void)
   g_last_ack_result = 0xFFU;
   g_critical_depth = 0U;
   g_critical_enter_count = 0U;
+  g_scheduler_enter_count = 0U;
+  g_scheduler_depth = 0U;
+  g_suspend_advance_ms = 0U;
   g_navigation_ready = 0U;
   g_require_cycle_lock = 0U;
   g_unprotected_write = 0U;
-  (void)Px4Lite_ControlSetPowerInhibit(0U);
+  ResetBatteryFixture();
   (void)Px4Lite_ControlModuleInit();
 }
 
@@ -157,7 +163,7 @@ static int TestRejectedBatchLeavesAllTargets(void)
   static const float bad[] = {-1.0f, 101.0f, NAN, INFINITY};
   int failures = 0;
   ResetHarness();
-  (void)Px4Lite_ControlSetPowerInhibit(1U);
+  (void)SetFixturePowerInhibit(1U);
   g_now_ms += 10U;
   SendMotorCommand(31011U, 0.0f, 0.0f, 20.0f, 0.0f);
   failures += ExpectU32("inhibited batch refused", g_last_ack_result, MAV_RESULT_TEMPORARILY_REJECTED);
@@ -165,7 +171,7 @@ static int TestRejectedBatchLeavesAllTargets(void)
     failures += ExpectU32("no partial valid target", s_target_valid[i], 0U);
     failures += ExpectU32("no partial timestamp", s_target_update_ms[i], 0U);
   }
-  (void)Px4Lite_ControlSetPowerInhibit(0U);
+  (void)SetFixturePowerInhibit(0U);
   SendMotorCommand(31011U, 10.0f, 20.0f, 30.0f, 40.0f);
   for (i = 0U; i < sizeof(bad)/sizeof(bad[0]); ++i) {
     SendMotorCommand(31011U, 50.0f, bad[i], 60.0f, 70.0f);
@@ -189,7 +195,7 @@ static int TestAcceptedPulseCommandCommitsOnce(void)
   SendMotorCommand(31013U, 1200.0f, 1300.0f, 1400.0f, 1500.0f);
   failures += ExpectU32("pulse accepted", g_last_ack_result, MAV_RESULT_ACCEPTED);
   failures += ExpectU32("pulse direct mode", s_control_mode, PX4LITE_CONTROL_MODE_DIRECT);
-  failures += ExpectU32("single commit", g_critical_enter_count, 1U);
+  failures += ExpectU32("single task-serialized commit", g_scheduler_enter_count, 1U);
   failures += ExpectU32("critical balanced", g_critical_depth, 0U);
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     failures += ExpectU32("pulse target", s_target_pulse_us[i], expected[i]);
@@ -213,12 +219,50 @@ static int TestThrottleCommandValidationAndCommit(void)
 
   SendMotorCommand(31011U, 10.0f, 20.0f, 30.0f, 40.0f);
   failures += ExpectU32("throttle accepted", g_last_ack_result, MAV_RESULT_ACCEPTED);
-  failures += ExpectU32("throttle single commit", g_critical_enter_count, 1U);
+  failures += ExpectU32("throttle task-serialized commit", g_scheduler_enter_count, 1U);
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     failures += ExpectU32("throttle target", s_target_throttle_percent[i], (uint32_t)((i + 1U) * 10U));
     failures += ExpectU32("throttle type", s_target_is_pulse[i], 0U);
     failures += ExpectU32("throttle timestamp", s_target_update_ms[i], g_now_ms);
   }
+  return failures;
+}
+
+/** @brief 模拟取锁前抢占：旧样本越过年龄边界须拒绝，新样本不得误判为回绕过期。 */
+static int TestPowerGateTimeCapturedInsideLock(void)
+{
+  int failures = 0;
+  ResetHarness();
+  g_battery_live = 0U;
+  g_battery_sample_ms = g_now_ms - PX4LITE_BATTERY_MAX_AGE_MS;
+  g_suspend_advance_ms = 1U;
+  SendMotorCommand(31011U, 20.0f, 20.0f, 20.0f, 20.0f);
+  failures += ExpectU32("batch stale after preemption rejected", g_last_ack_result, MAV_RESULT_TEMPORARILY_REJECTED);
+  g_battery_live = 1U;
+  Px4Lite_ControlRun(g_now_ms);
+  failures += ExpectU32("recovery cannot revive refused target", s_target_valid[0], 0U);
+
+  ResetHarness();
+  SendMotorCommand(31011U, 20.0f, 20.0f, 20.0f, 20.0f);
+  g_battery_live = 0U;
+  g_battery_sample_ms = g_now_ms - PX4LITE_BATTERY_MAX_AGE_MS;
+  g_suspend_advance_ms = 1U;
+  Px4Lite_ControlRun(g_now_ms);
+  failures += ExpectU32("cycle stale after preemption inhibited", Px4Lite_ControlIsPowerInhibited(), 1U);
+  failures += ExpectU32("cycle stale clears old target", s_target_valid[0], 0U);
+
+  ResetHarness();
+  g_suspend_advance_ms = 1U; /* live 夹具在新时刻返回 sensor 刚发布的样本。 */
+  SendMotorCommand(31011U, 20.0f, 20.0f, 20.0f, 20.0f);
+  failures += ExpectU32("batch accepts new sample after preemption", g_last_ack_result, MAV_RESULT_ACCEPTED);
+  failures += ExpectU32("batch uses current timestamp", s_target_update_ms[0], g_now_ms);
+
+  ResetHarness();
+  SendMotorCommand(31011U, 20.0f, 20.0f, 20.0f, 20.0f);
+  g_suspend_advance_ms = 1U;
+  Px4Lite_ControlRun(g_now_ms);
+  failures += ExpectU32("cycle accepts new sample after preemption", Px4Lite_ControlIsPowerInhibited(), 0U);
+  failures += ExpectU32("cycle preserves fresh target", s_target_throttle_percent[0], 20U);
   return failures;
 }
 
@@ -229,6 +273,7 @@ int main(void)
   failures += TestAcceptedPulseCommandCommitsOnce();
   failures += TestThrottleCommandValidationAndCommit();
   failures += TestRejectedBatchLeavesAllTargets();
+  failures += TestPowerGateTimeCapturedInsideLock();
   /* 控制周期在可调度边界内消费目标，结束后必须恢复调度。 */
   Px4Lite_ControlRun(g_now_ms);
   failures += ExpectU32("scheduler balanced", g_scheduler_depth, 0U);

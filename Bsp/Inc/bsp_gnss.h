@@ -40,7 +40,8 @@ uint16_t BSP_GNSS_GetRxCount(void);
  */
 uint32_t BSP_GNSS_GetDropCount(void);
 /**
- * @brief 在 UART IDLE 中断报告新 DMA 字节后推进接收环形缓冲。
+ * @brief 任务轮询或 UART IDLE 中断报告 DMA 字节后推进环形缓冲。
+ * @note 内部保存 PRIMASK，从读取 DMA 位置到更新索引全程互斥，并按原中断状态恢复。
  */
 void BSP_GNSS_RxIdleCallback(uint16_t dummy);
 /**

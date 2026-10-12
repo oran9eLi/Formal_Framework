@@ -13,7 +13,7 @@
 - 工程入口：Keil MDK-ARM v5
 - 任务模型：固定周期任务 + 框架注册表 + 强类型 topic / snapshot
 - 主要边界：硬件采集、设备驱动、框架调度、业务读取、显示刷新、LoRa 发送、日志显示、SD 存储分层隔离
-- 完成度口径：以 `Development_Guide/07_移植进度与功能清单.md` 为准
+- 本轮 V1.0 计划与进度：以 [里程碑计划](Release/V1.0_里程碑计划.md)和[执行台账](Release/V1.0_执行台账.md)为准
 
 ## 目录结构
 
@@ -89,7 +89,7 @@ Core -> Business -> Framework -> Platform Adapter -> Driver -> BSP -> HAL
 | `health` | 100 ms | 超时检测、OFFLINE 判定、健康快照、看门狗喂狗门控 |
 | `comm` | 10 ms | LoRa RX 和 MAVLink TX 调度 |
 | `biz_system` | 1000 ms | 启动日志、注册表轮询、系统业务状态 |
-| `biz_acq` | 200 ms | 导航快照复制和 EventBus 分发 |
+| `biz_acq` | 200 ms | 导航快照复制、EventBus 分发、本机状态事件观察 |
 | `biz_display` | 10 ms | 触摸优先、预算化 LCD 刷新 |
 | `debug` | 100 ms | 周期诊断和任务监控，不纳入看门狗集合 |
 | `storage` | 50 ms | SD CSV 日志记录，注册表登记，低优先级阻塞 I/O |
@@ -113,7 +113,7 @@ App_GetCommStats(&comm);
 
 ## 当前能力概览
 
-当前真实完成度以 `Development_Guide/07_移植进度与功能清单.md` 为唯一来源。不要仅凭文件、任务或函数声明存在就判断模块已经完成。
+下表保留既有工程能力概览，不作为本轮 V1.0 验收结论。本轮交付状态统一维护在[执行台账](Release/V1.0_执行台账.md)，旧模块清单仅供历史参考。不要仅凭文件、任务或函数声明存在就判断功能已经完成。
 
 | 模块 | 当前状态口径 |
 |---|---|
@@ -145,7 +145,9 @@ App_GetCommStats(&comm);
 |---|---|
 | `Development_Guide/01_强制开发规范.md` | 代码评审和合入门禁 |
 | `Development_Guide/06_应用层数据接口.md` | Business 层读取数据的正式接口 |
-| `Development_Guide/07_移植进度与功能清单.md` | 当前完成度、占位项、后续阶段和验收标准 |
+| [V1.0 里程碑计划](Release/V1.0_里程碑计划.md) | 本轮交付阶段、依赖与验收条件 |
+| [V1.0 执行台账](Release/V1.0_执行台账.md) | 本轮任务、范围决策、问题及证据 |
+| `Development_Guide/07_移植进度与功能清单.md` | 历史模块完成度与移植记录 |
 | `Development_Guide/10_Debug模块化使用指南.md` | Debug 开关和诊断模块使用方式 |
 | `Development_Guide/12_团队模块化开发手册.md` | 新成员和协作开发流程 |
 | `Development_Guide/16_模块接入标准与评审清单.md` | 新模块接入模板和 16 项检查清单 |
@@ -157,7 +159,7 @@ App_GetCommStats(&comm);
 3. 在 `Framework/Src/px4lite_platform_f407.c` 中做 Driver 类型到 Framework 类型的转换。
 4. 在 `Framework` 中建立强类型 topic、状态、超时和恢复入口。
 5. 在 `Business` 中只通过 `app_data_api.h` 或 EventBus 消费快照。
-6. 在 `Development_Guide/07_移植进度与功能清单.md` 和 `Change_History/` 中记录完成度、验证结果和未完成项。
+6. 在 `Release/V1.0_执行台账.md` 中记录本轮完成度、验证证据和未完成项；架构及行为变更同步写入 `Development_Guide/Change_History/` 或相关规范。
 
 ## 版本库约定
 

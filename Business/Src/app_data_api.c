@@ -284,24 +284,29 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
     out->pressure_pa           = baro.pressure_pa;
     out->temperature_c         = baro.temperature_c;
     out->relative_humidity_pct = baro.relative_humidity_pct;
+    out->valid_mask |= APP_ENV_VALID_ENVIRONMENT;
     copied                     = 1U;
   }
 
   if ((Px4Lite_CopyBattery(&battery) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
     if (copied == 0U) { out->header = battery.header; }
     out->voltage_mv      = battery.voltage_mv;
-    out->current_ma      = battery.current_ma;
+    out->current_ma      = (battery.current_valid != 0U) ? battery.current_ma : 0;
     out->battery_percent = battery.percent;
     out->low_voltage     = battery.low_voltage;
+    out->valid_mask |= APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_PERCENT1;
+    if (battery.current_valid != 0U) { out->valid_mask |= APP_ENV_VALID_CURRENT1; }
     copied               = 1U;
   }
 
   if ((Px4Lite_CopyBattery2(&battery2) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery2.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
     if (copied == 0U) { out->header = battery2.header; }
     out->voltage2_mv      = battery2.voltage_mv;
-    out->current2_ma      = battery2.current_ma;
+    out->current2_ma      = (battery2.current_valid != 0U) ? battery2.current_ma : 0;
     out->battery2_percent = battery2.percent;
     out->low_voltage2     = battery2.low_voltage;
+    out->valid_mask |= APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_PERCENT2;
+    if (battery2.current_valid != 0U) { out->valid_mask |= APP_ENV_VALID_CURRENT2; }
     copied                = 1U;
   }
 
@@ -360,9 +365,10 @@ Px4Lite_Result_t App_EmergencyStopMotors(void)
   return Px4Lite_ControlEmergencyStop(Px4Lite_PlatformGetMs());
 }
 
-Px4Lite_Result_t App_SetMotorPowerInhibit(uint8_t inhibit)
+/** @brief 通过 Control 只读查询本机低压事实。 */
+uint8_t App_IsMotorPowerLowVoltage(void)
 {
-  return Px4Lite_ControlSetPowerInhibit(inhibit);
+  return Px4Lite_ControlIsPowerLowVoltage();
 }
 
 uint8_t App_IsMotorPowerInhibited(void)
@@ -689,6 +695,7 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
   if (out == 0) { return 0U; }
 
   if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
+  Px4Lite_RemoteTelemetryRefreshFreshness(&s_display_remote_scratch, now_ms);
   if (Px4Lite_IsFresh(&s_display_remote_scratch.header, now_ms, APP_REMOTE_MAX_AGE_MS) == 0U) { return 0U; }
 
   memset(out, 0, sizeof(*out));
@@ -714,20 +721,19 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
     }
   }
 
-  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_NAVIGATION) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_NAVIGATION) == 0U)) {
-    out->navigation_valid   = 1U;
-    out->gnss_utc_sec       = s_display_remote_scratch.gnss_utc_sec;
-    out->gnss_utc_date      = s_display_remote_scratch.gnss_utc_date;
-    out->latitude_e7        = s_display_remote_scratch.latitude_e7;
-    out->longitude_e7       = s_display_remote_scratch.longitude_e7;
-    out->altitude_mm        = s_display_remote_scratch.altitude_mm;
-    out->velocity_north_cms = s_display_remote_scratch.velocity_north_cms;
-    out->velocity_east_cms  = s_display_remote_scratch.velocity_east_cms;
-    out->yaw_deg100         = s_display_remote_scratch.yaw_deg100;
-    out->hdop_x100          = s_display_remote_scratch.hdop_x100;
-    out->satellites_used    = s_display_remote_scratch.satellites_used;
-    out->gnss_fix_type      = s_display_remote_scratch.gnss_fix_type;
-    (void)App_FillDisplayTimeFromGnss(out, s_display_remote_scratch.gnss_utc_date, s_display_remote_scratch.gnss_utc_sec);
+  if (((s_display_remote_scratch.navigation_valid_mask & ~s_display_remote_scratch.navigation_stale_mask) & PX4LITE_NAV_VALID_POSITION) != 0U) {
+    out->navigation_valid = 1U;
+    out->latitude_e7 = s_display_remote_scratch.latitude_e7; out->longitude_e7 = s_display_remote_scratch.longitude_e7;
+    out->hdop_x100 = s_display_remote_scratch.hdop_x100; out->satellites_used = s_display_remote_scratch.satellites_used;
+    out->gnss_fix_type = s_display_remote_scratch.gnss_fix_type;
+  }
+  if (((s_display_remote_scratch.navigation_valid_mask & ~s_display_remote_scratch.navigation_stale_mask) & PX4LITE_NAV_VALID_ALTITUDE) != 0U) { out->altitude_mm = s_display_remote_scratch.altitude_mm; }
+  if (((s_display_remote_scratch.navigation_valid_mask & ~s_display_remote_scratch.navigation_stale_mask) & PX4LITE_NAV_VALID_VELOCITY) != 0U) {
+    out->velocity_north_cms = s_display_remote_scratch.velocity_north_cms; out->velocity_east_cms = s_display_remote_scratch.velocity_east_cms;
+  }
+  if (((s_display_remote_scratch.navigation_valid_mask & ~s_display_remote_scratch.navigation_stale_mask) & PX4LITE_NAV_VALID_TIME) != 0U) {
+    out->gnss_utc_sec = s_display_remote_scratch.gnss_utc_sec; out->gnss_utc_date = s_display_remote_scratch.gnss_utc_date;
+    (void)App_FillDisplayTimeFromGnss(out, out->gnss_utc_date, out->gnss_utc_sec);
   }
 
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ATTITUDE) == 0U)) {
@@ -737,25 +743,32 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
     out->yaw_deg100       = s_display_remote_scratch.yaw_deg100;
   }
 
-  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ENVIRONMENT) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ENVIRONMENT) == 0U)) {
-    out->environment_valid     = 1U;
-    out->pressure_pa           = s_display_remote_scratch.pressure_pa;
-    out->temperature_c         = s_display_remote_scratch.temperature_c;
-    out->relative_humidity_pct = s_display_remote_scratch.relative_humidity_pct;
+  if (((s_display_remote_scratch.environment_valid_mask & ~s_display_remote_scratch.environment_stale_mask) & PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE) != 0U) {
+    out->environment_valid = 1U; out->pressure_pa = s_display_remote_scratch.pressure_pa; out->temperature_c = s_display_remote_scratch.temperature_c;
   }
-
-  if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_BATTERY) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_BATTERY) == 0U)) {
-    out->environment_valid = 1U;
-    out->voltage_mv        = s_display_remote_scratch.voltage_mv;
-    out->voltage2_mv       = s_display_remote_scratch.voltage2_mv;
-    out->current_ma        = (int32_t)s_display_remote_scratch.current_ma;
-    out->current2_ma       = (int32_t)s_display_remote_scratch.current2_ma;
-    out->battery_percent   = s_display_remote_scratch.battery_percent;
-    out->battery2_percent  = s_display_remote_scratch.battery2_percent;
-    out->low_voltage       = s_display_remote_scratch.low_voltage;
-    out->low_voltage2      = s_display_remote_scratch.low_voltage2;
+  if (((s_display_remote_scratch.environment_valid_mask & ~s_display_remote_scratch.environment_stale_mask) & PX4LITE_REMOTE_ENV_VALID_HUMIDITY) != 0U) {
+    out->environment_valid = 1U; out->relative_humidity_pct = s_display_remote_scratch.relative_humidity_pct;
   }
-
+  if (((s_display_remote_scratch.battery_valid_mask & ~s_display_remote_scratch.battery_stale_mask) & PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE1) != 0U) {
+    out->environment_valid = 1U; out->voltage_mv = s_display_remote_scratch.voltage_mv;
+    out->low_voltage = s_display_remote_scratch.low_voltage;
+  }
+  if (((s_display_remote_scratch.battery_valid_mask & ~s_display_remote_scratch.battery_stale_mask) & PX4LITE_REMOTE_BATTERY_VALID_CURRENT1) != 0U) {
+    out->environment_valid = 1U; out->current_ma = s_display_remote_scratch.current_ma;
+  }
+  if (((s_display_remote_scratch.battery_valid_mask & ~s_display_remote_scratch.battery_stale_mask) & PX4LITE_REMOTE_BATTERY_VALID_PERCENT1) != 0U) {
+    out->environment_valid = 1U; out->battery_percent = s_display_remote_scratch.battery_percent;
+  }
+  if (((s_display_remote_scratch.battery_valid_mask & ~s_display_remote_scratch.battery_stale_mask) & PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE2) != 0U) {
+    out->environment_valid = 1U; out->voltage2_mv = s_display_remote_scratch.voltage2_mv;
+    out->low_voltage2 = s_display_remote_scratch.low_voltage2;
+  }
+  if (((s_display_remote_scratch.battery_valid_mask & ~s_display_remote_scratch.battery_stale_mask) & PX4LITE_REMOTE_BATTERY_VALID_CURRENT2) != 0U) {
+    out->environment_valid = 1U; out->current2_ma = s_display_remote_scratch.current2_ma;
+  }
+  if (((s_display_remote_scratch.battery_valid_mask & ~s_display_remote_scratch.battery_stale_mask) & PX4LITE_REMOTE_BATTERY_VALID_PERCENT2) != 0U) {
+    out->environment_valid = 1U; out->battery2_percent = s_display_remote_scratch.battery2_percent;
+  }
   if (((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) && ((s_display_remote_scratch.stale_mask & PX4LITE_REMOTE_VALID_ALARM) == 0U)) {
     uint16_t source;
     uint16_t row = 0U;
@@ -842,6 +855,7 @@ uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity
   if (last_seq != 0) { *last_seq = 0U; }
   if ((entries == 0) || (capacity == 0U)) { return 0U; }
   if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
+  Px4Lite_RemoteTelemetryRefreshFreshness(&s_display_remote_scratch, now_ms);
   if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) { return 0U; }
 
   count = s_display_remote_scratch.remote_log_count;
@@ -858,24 +872,27 @@ uint32_t App_GetRemoteMessageLogVersion(uint32_t now_ms)
 {
   (void)now_ms;
   if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
+  Px4Lite_RemoteTelemetryRefreshFreshness(&s_display_remote_scratch, now_ms);
   if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) { return 0U; }
   return ((uint32_t)s_display_remote_scratch.remote_log_latest_seq << 1U) ^ s_display_remote_scratch.log_update_ms;
 }
 
+/** @brief 旧全局远端模式的兼容入口；启用请求明确拒绝，不改变发送调度。 */
 uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms)
 {
-  if (Px4Lite_RemoteTelemetrySetMode((enabled != 0U) ? PX4LITE_REMOTE_MODE_REMOTE : PX4LITE_REMOTE_MODE_LOCAL, now_ms) != PX4LITE_OK) { return 0U; }
-  Px4Lite_MavlinkSetTxEnabled((enabled != 0U) ? 0U : 1U);
-  return 1U;
+  (void)now_ms;
+  return (enabled == 0U) ? 1U : 0U;
 }
 
+/** @brief 只选择通信诊断对象；不改变主页面或收发状态。 */
 uint8_t App_SelectRemoteNode(uint8_t node_id, uint32_t now_ms)
 {
+  (void)now_ms;
   if (node_id == Px4Lite_IdentityGetNodeId()) { return 0U; }
-  if (Px4Lite_SelectRemoteNode(node_id) != PX4LITE_OK) { return 0U; }
-  return App_SetRemoteViewEnabled(1U, now_ms);
+  return (Px4Lite_SelectRemoteNode(node_id) == PX4LITE_OK) ? 1U : 0U;
 }
 
+/** @brief 旧查看租约已退出；无全局租约可过期，远端数据由显式快照判龄。 */
 uint8_t App_RemoteViewExpired(uint32_t now_ms)
 {
   (void)now_ms;
@@ -1033,6 +1050,7 @@ const char *App_GetModuleDisplayName(uint16_t source_id, uint16_t fault_code)
 
     case PX4LITE_FAULT_DISPLAY_OFFLINE:
     case PX4LITE_FAULT_DISPLAY_REFRESH:
+    case PX4LITE_FAULT_DISPLAY_TOUCH:
       return "DISPLAY";
 
     case PX4LITE_FAULT_STORAGE_NOT_READY:
@@ -1092,6 +1110,8 @@ const char *App_GetFaultReasonText(uint16_t fault_code)
       return "DISPLAY OFFLINE";
     case PX4LITE_FAULT_DISPLAY_REFRESH:
       return "DISPLAY REFRESH";
+    case PX4LITE_FAULT_DISPLAY_TOUCH:
+      return "TOUCH OFFLINE";
     case PX4LITE_FAULT_STORAGE_NOT_READY:
       return "STORAGE NOT READY";
     case PX4LITE_FAULT_STORAGE_WRITE:
@@ -1109,15 +1129,15 @@ const char *App_GetFaultReasonText(uint16_t fault_code)
     case PX4LITE_FAULT_ESTIMATOR_DIVERGE:
       return "EST DIVERGE";
     case PX4LITE_FAULT_MOTOR_DISCONNECT:
-      return "MOTOR DISCONNECT";
+      return "MOTOR POWER ABSENT";
     case PX4LITE_FAULT_MOTOR_POWER_LOW:
       return "MOTOR POWER LOW";
     case PX4LITE_FAULT_MOTOR_DEAD:
-      return "MOTOR BAT EMPTY";
+      return "MOTOR BATTERY CRITICAL";
     case PX4LITE_FAULT_MOTOR_CHARGE:
-      return "MOTOR CHARGE";
+      return "MOTOR BATTERY LOW";
     case PX4LITE_FAULT_POWER_CHARGE:
-      return "POWER CHARGE";
+      return "MAIN BATTERY LOW";
     default:
       break;
   }
@@ -1145,5 +1165,5 @@ Px4Lite_Result_t App_CopyAttitudeStatus(App_AttitudeStatus_t *out)
 
 Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void)
 {
-  return Px4Lite_RemoteTelemetryGetMode();
+  return PX4LITE_REMOTE_MODE_LOCAL;
 }

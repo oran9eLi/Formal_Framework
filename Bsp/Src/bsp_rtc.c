@@ -134,13 +134,20 @@ static BSP_Status_t BSP_RTC_ConfigClock(void)
 
   current_source = __HAL_RCC_GET_RTC_SOURCE();
   if (current_source == RCC_RTCCLKSOURCE_LSE) {
+    __HAL_RCC_LSE_CONFIG(RCC_LSE_ON);
+    if (BSP_RTC_WaitClockFlag(RCC_FLAG_LSERDY, SET) != BSP_STATUS_OK) { return BSP_STATUS_TIMEOUT; }
     s_rtc_clock_source = RCC_RTCCLKSOURCE_LSE;
   } else if (current_source == RCC_RTCCLKSOURCE_LSI) {
+    __HAL_RCC_LSI_ENABLE();
+    if (BSP_RTC_WaitClockFlag(RCC_FLAG_LSIRDY, SET) != BSP_STATUS_OK) { return BSP_STATUS_TIMEOUT; }
     s_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
-  } else {
+  } else if (current_source == 0U) {
     if (BSP_RTC_SelectLseClock() != BSP_STATUS_OK) {
       if (BSP_RTC_SelectLsiClock() != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
     }
+  } else {
+    /* 未支持的既有时钟源不能直接改写 RTCSEL；保留备份域并报告失败。 */
+    return BSP_STATUS_ERROR;
   }
 
   __HAL_RCC_RTC_ENABLE();

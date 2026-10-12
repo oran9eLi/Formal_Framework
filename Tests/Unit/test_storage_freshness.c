@@ -17,6 +17,7 @@ static Px4Lite_VehicleNavigation_t test_navigation;
 static Px4Lite_BatteryStatus_t test_battery;
 static Px4Lite_MotorOutputs_t test_motor;
 static char saved_line[STORAGE_CSV_LINE_MAX];
+static uint32_t queue_drops, write_drops;
 /** @brief 读取真实 CSV 字段，测试预期列号独立于生产格式化实现。 */
 static long Field(unsigned column)
 {
@@ -38,7 +39,9 @@ Px4Lite_Result_t Px4Lite_CopyMotor(Px4Lite_MotorOutputs_t *out) { *out = test_mo
 Px4Lite_Result_t Px4Lite_CopyAlarmSnapshot(Px4Lite_AlarmSnapshot_t *out) { (void)out; return PX4LITE_NOT_READY; }
 void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out) { memset(out, 0, sizeof(*out)); }
 uint16_t StorageQueue_Count(void) { return 0U; }
-uint32_t StorageQueue_DropCount(void) { return 0U; }
+uint32_t StorageQueue_DropCount(void) { return queue_drops; }
+/** @brief 本用例无 SD 故障，提供新增运行统计依赖。 */
+void Storage_SD_CopyStatus(Storage_SdStatus_t *out) { memset(out, 0, sizeof(*out)); out->write_drop_count = write_drops; }
 Storage_EventAction_t StorageEventTracker_Update(const char *source, uint32_t fault, const char *message, uint8_t active, uint32_t *count)
 { (void)source; (void)fault; (void)message; (void)active; (void)count; return STORAGE_EVENT_ACTION_NONE; }
 Px4Lite_Result_t StorageQueue_Push(const Storage_Record_t *record)
@@ -72,7 +75,10 @@ int main(void)
   other_sources_ready = 1U;
   test_gnss.header.valid = 1U; test_gnss.header.sample_time_ms = 1000U; test_gnss.fix_type = 1U;
   test_gnss.latitude_e7 = 12345;
+  test_gnss.valid_mask = PX4LITE_GNSS_VALID_POSITION;
+  test_gnss.position_update_ms = 1000U;
   test_navigation.header.valid = 1U; test_navigation.header.sample_time_ms = 10000U;
+  test_navigation.attitude_update_ms = 10000U;
   test_navigation.valid_mask = PX4LITE_NAV_VALID_ATTITUDE | PX4LITE_NAV_VALID_POSITION;
   test_navigation.latitude_e7 = 12345; test_navigation.roll_deg100 = 3000;
   test_battery.header.valid = 1U; test_battery.header.sample_time_ms = 1000U; test_battery.voltage_mv = 12000U;
@@ -83,9 +89,18 @@ int main(void)
   assert(Field(43) == 2 && Field(45) == 2 && Field(47) == 2);
   assert(Field(13) == 0 && Field(18) == 0 && Field(23) == 0);
   test_gnss.header.sample_time_ms = test_battery.header.sample_time_ms = test_motor.header.sample_time_ms = 10000U;
+  test_gnss.position_update_ms = 10000U;
   Storage_ProduceDataRecord(10000U);
   assert(Field(37) == 3 && Field(43) == 3 && Field(45) == 3 && Field(47) == 3);
   assert(Field(5) == 12345 && Field(13) == 12 && Field(18) == 12 && Field(23) == 50);
+  test_gnss.position_update_ms = 100U;
+  test_gnss.header.sample_time_ms = 1400U; /* 新UTC不能续期旧位置。 */
+  Storage_ProduceDataRecord(1700U);
+  assert(Field(37) == 2 && Field(38) == 100 && Field(4) == 0 && Field(5) == 0);
+  test_navigation.header.sample_time_ms = 10000U;
+  test_navigation.attitude_update_ms = 9900U; /* GNSS比IMU新，CSV仍须保留真实IMU时刻。 */
+  Storage_ProduceDataRecord(10000U);
+  assert(Field(39) == 3 && Field(40) == 9900);
   test_navigation.valid_mask = PX4LITE_NAV_VALID_POSITION; test_gnss.fix_type = 0U;
   test_battery.header.valid = test_motor.header.valid = 0U;
   Storage_ProduceDataRecord(10000U);
@@ -110,6 +125,16 @@ int main(void)
     assert(strcmp(path, "0:/UNSYNC_2.CSV") == 0);
     assert(StorageFile_FormatPath(STORAGE_RECORD_EVENT, 20260915U, path, sizeof(path)) == PX4LITE_OK);
     assert(strcmp(path, "0:/260915_E.CSV") == 0);
+  }
+  queue_drops = 2U; write_drops = 3U;
+  Storage_ProduceDataRecord(10000U); assert(Field(35) == 5);
+  queue_drops = UINT32_MAX; write_drops = 3U;
+  Storage_ProduceDataRecord(10000U);
+  {
+    unsigned column = 35U;
+    const char *cursor = saved_line;
+    while (column-- != 0U) { cursor = strchr(cursor, ','); assert(cursor != 0); cursor++; }
+    assert(strtoul(cursor, 0, 10) == UINT32_MAX);
   }
   puts("storage freshness tests passed");
   return 0;

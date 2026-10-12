@@ -33,11 +33,21 @@ typedef enum {
   GNSS_RESULT_IO_ERROR      /**< UART/DMA 或 BSP 访问失败。 */
 } Gnss_Result_t;
 
+#define GNSS_VALID_POSITION (1UL << 0) /**< GGA 经纬度和定位质量字段有效。 */
+#define GNSS_VALID_VELOCITY (1UL << 1) /**< RMC 地速和航迹角字段有效。 */
+#define GNSS_VALID_TIME (1UL << 2) /**< RMC 完整 UTC 日期与时间有效。 */
+#define GNSS_VALID_ALTITUDE (1UL << 3) /**< GGA 海拔高度字段有效。 */
+
 /**
- * @brief GNSS 最新解析快照。
+ * @brief GNSS 最新解析快照；记录测量事实，年龄策略由 Framework 消费者判断。
  */
 typedef struct {
   Gnss_DataState_t data_state; /**< 数据事实状态；组件离线/失败归 Framework 判定。 */
+  uint32_t valid_mask;          /**< 最新各测量字段有效位，使用 GNSS_VALID_*。 */
+  uint32_t position_update_ms;  /**< 最近有效 GGA 位置时间，单位：ms。 */
+  uint32_t velocity_update_ms;  /**< 最近有效 RMC 地速/航迹角时间，单位：ms。 */
+  uint32_t time_update_ms;      /**< 最近有效 RMC 日期/时间接收时刻，单位：ms。 */
+  uint32_t altitude_update_ms;  /**< 最近有效 GGA 海拔时间，单位：ms。 */
 
   uint8_t fix_valid;     /**< 定位有效标志，1 表示定位有效。 */
   uint8_t fix_quality;   /**< GGA 定位质量字段。 */

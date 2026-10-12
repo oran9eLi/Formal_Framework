@@ -66,8 +66,8 @@ BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uin
 /**
  * @brief 读取上一次 ReadVoltageMv 缓存的诊断值（不访问 ADC，仅供调试打印）。
  * @param[in] channel 电流计通道。
- * @param[out] adc_mv 上次采样的原始引脚电压（mV）；浮空判定命中时为 0。可为 NULL。
- * @param[out] floating 上次是否被判为浮空（1=浮空强制清零，0=读到真实电压）。可为 NULL。
+ * @param[out] adc_mv 上次成功采样的原始引脚电压（mV），未经浮空清零。可为 NULL。
+ * @param[out] floating 上次浮空判定结果；1=浮空，0=未判浮空或探测已禁用。可为 NULL。
  * @note 临时诊断接口，定位电流计接线后可移除。
  */
 void BSP_ADC_Current_GetDiag(BSP_ADC_CurrentChannel_t channel, uint32_t *adc_mv, uint8_t *floating);

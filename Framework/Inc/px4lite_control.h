@@ -10,6 +10,8 @@
 #ifndef PX4LITE_CONTROL_H
 #define PX4LITE_CONTROL_H
 
+/** 本文件命令接口仅供任务上下文调用；内部使用调度互斥，不允许从 ISR 调用。 */
+
 #include "px4lite_types.h"
 
 /** @brief 四路百分比整体提交，保持当前模式；拒绝无副作用。仅任务上下文调用。 */
@@ -114,19 +116,7 @@ Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll_deg100, int32_t p
  */
 Px4Lite_Result_t Px4Lite_ControlEmergencyStop(uint32_t now_ms);
 
-/**
- * @brief 设置或解除动力电池闭锁。
- *
- * @details 与急停分开：急停是用户动作、需要一次非零油门显式解锁；本标志表达"动力电池当前
- * 不满足运行条件"这一外部供电事实，由上层按电机电池档位持续维护，档位恢复即自动解除。
- * 置位沿立即清零四路目标并撤销自动油门；置位期间拒绝一切非零油门与一键起飞，一键降落
- * 不受限制。解除时不自动恢复任何油门，必须由用户重新拖动滑条。
- *
- * @param[in] inhibit 非 0 表示闭锁，0 表示允许输出。
- *
- * @return 总是 PX4LITE_OK。
- */
-Px4Lite_Result_t Px4Lite_ControlSetPowerInhibit(uint8_t inhibit);
+
 
 /**
  * @brief 查询动力电池闭锁是否生效。
@@ -134,6 +124,9 @@ Px4Lite_Result_t Px4Lite_ControlSetPowerInhibit(uint8_t inhibit);
  * @return 1 表示闭锁中，0 表示允许输出。
  */
 uint8_t Px4Lite_ControlIsPowerInhibited(void);
+
+/** @brief 只读查询本机有效新鲜采样的低压事实，缺帧/过期不冒称低压。 */
+uint8_t Px4Lite_ControlIsPowerLowVoltage(void);
 
 /**
  * @brief 初始化控制模块状态并复位电机输出。
@@ -152,7 +145,7 @@ Px4Lite_Result_t Px4Lite_ControlRecover(void);
 /**
  * @brief 执行一次控制周期，刷新电机 PWM 输出和 Motor topic。
  *
- * @param[in] now_ms 当前系统时间，单位：ms。
+ * @param[in] now_ms 调用者调度时刻，单位 ms；内部进入调度互斥后重新取当前时间。
  */
 void Px4Lite_ControlRun(uint32_t now_ms);
 

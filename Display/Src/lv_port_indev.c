@@ -15,11 +15,12 @@
 
 static lv_indev_drv_t s_indev_drv;
 static lv_indev_t *s_indev;
+static uint8_t s_registration_attempted;
 static uint16_t s_last_x;
 static uint16_t s_last_y;
 
 /**
- * @brief Read one GT911 point for LVGL.
+ * @brief 读取触摸点；初始化或运行故障均立即向 LVGL 返回释放。
  */
 static void LvPortIndev_Read(lv_indev_drv_t *drv, lv_indev_data_t *data)
 {
@@ -44,15 +45,15 @@ static void LvPortIndev_Read(lv_indev_drv_t *drv, lv_indev_data_t *data)
 }
 
 /**
- * @brief Initialize LVGL pointer input registration.
+ * @brief 启动时仅尝试注册一次输入设备；触摸失败不影响注册，运行期不重复分配。
  */
 uint8_t LvPortIndev_Init(void)
 {
-  if (Display_Gt911_Init() != DISPLAY_GT911_OK) {
-    return 0U;
-  }
+  /* 注册与硬件在位无关，运行期恢复不再分配 LVGL 输入设备。 */
+  (void)Display_Gt911_Init();
 
-  if (s_indev == 0) {
+  if (s_registration_attempted == 0U) {
+    s_registration_attempted = 1U;
     lv_indev_drv_init(&s_indev_drv);
     s_indev_drv.type    = LV_INDEV_TYPE_POINTER;
     s_indev_drv.read_cb = LvPortIndev_Read;
@@ -61,3 +62,7 @@ uint8_t LvPortIndev_Init(void)
 
   return (s_indev != 0) ? 1U : 0U;
 }
+
+/** @brief 查询启动时输入设备注册结果，不分配资源。 */
+uint8_t LvPortIndev_IsRegistered(void)
+{ return (s_indev != 0) ? 1U : 0U; }

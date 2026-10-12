@@ -1,13 +1,13 @@
 /**
  * @file display_gt911.c
- * @brief Implement the GT911 capacitive touch driver.
+ * @brief Display 层 GT911 驱动；显示任务独占 BSP 触摸端口，阶段式恢复不阻塞等待。
  */
 
 #include "display_gt911.h"
 
 #include "bsp_config.h"
 #include "bsp_touch_port.h"
-#include "stm32f4xx_hal.h"
+
 
 #include <string.h>
 
@@ -28,20 +28,25 @@ static uint8_t s_gt911_init_error;
 static uint8_t s_gt911_orig_version;
 static uint8_t s_gt911_cfg_bytes[4];
 
-/**
- * @brief Read a GT911 16-bit register with short bus recovery retries.
- */
-static uint8_t Display_Gt911_ReadRegRetry(uint8_t addr, uint16_t reg, uint8_t *buf, uint8_t len)
+/** @brief 显示任务内推进的初始化阶段；各延迟由毫秒截止时间表示。 */
+typedef enum {
+  GT911_STOPPED, GT911_START, GT911_RESET_WAIT, GT911_BOOT_WAIT,
+  GT911_SETTLE_WAIT, GT911_PROBE, GT911_CFG_ORIG, GT911_CFG_BYTES,
+  GT911_CFG_VERSION, GT911_BACKOFF, GT911_READY
+} Display_Gt911Phase_t;
+static Display_Gt911Phase_t s_gt911_phase;
+static uint32_t s_gt911_deadline_ms, s_gt911_now_ms, s_gt911_recovery_count;
+static uint8_t s_gt911_probe_addr, s_gt911_error;
+
+/** @brief 保存故障并释放按键状态，至少退避 2 秒后重试。 */
+static void Display_Gt911_Fail(void)
 {
-  uint8_t retry;
-
-  for (retry = 0U; retry < 3U; retry++) {
-    if (BSP_TouchPort_ReadReg16(addr, reg, buf, len) == BSP_TOUCH_PORT_OK) { return 0U; }
-    BSP_TouchPort_Recover();
-    HAL_Delay(2U);
-  }
-
-  return 1U;
+  s_gt911_error = BSP_TouchPort_GetLastError();
+  if (s_gt911_error == 0U) { s_gt911_error = 1U; }
+  s_gt911_addr = 0U;
+  s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+  s_gt911_phase = GT911_BACKOFF;
+  s_gt911_deadline_ms = s_gt911_now_ms + 2000U;
 }
 
 /**
@@ -50,72 +55,6 @@ static uint8_t Display_Gt911_ReadRegRetry(uint8_t addr, uint16_t reg, uint8_t *b
 static uint8_t Display_Gt911_PidIsSupported(const uint8_t *pid)
 {
   return (uint8_t)((memcmp(pid, "911", 4U) == 0) || (memcmp(pid, "9147", 4U) == 0) || (memcmp(pid, "9271", 4U) == 0) || (memcmp(pid, "1158", 4U) == 0));
-}
-
-/**
- * @brief Run the GT911 reset and INT address selection sequence.
- */
-static void Display_Gt911_ResetForAddress(uint8_t addr)
-{
-  BSP_TouchPort_WriteReset(0U);
-
-  if (addr == DISPLAY_GT911_ADDR_14) {
-    BSP_TouchPort_SetIntOutput(0U);
-    BSP_TouchPort_SetIntOutput(1U);
-    HAL_Delay(1U);
-    BSP_TouchPort_WriteReset(1U);
-    HAL_Delay(10U);
-  } else {
-    BSP_TouchPort_SetIntOutput(0U);
-    HAL_Delay(1U);
-    BSP_TouchPort_WriteReset(1U);
-    HAL_Delay(10U);
-  }
-
-  BSP_TouchPort_SetIntInput();
-  HAL_Delay(100U);
-}
-
-/**
- * @brief Read GT911 configuration diagnostics after product detection.
- */
-static uint8_t Display_Gt911_ReadConfigDebug(uint8_t addr)
-{
-  s_gt911_cfg_verified = 0U;
-  s_gt911_cfg_version  = 0U;
-  s_gt911_orig_version = 0U;
-  s_gt911_init_error   = 0U;
-
-  if (BSP_TouchPort_ReadReg16(addr, DISPLAY_GT911_REG_CTRL, &s_gt911_orig_version, 1U) != BSP_TOUCH_PORT_OK) {
-    s_gt911_init_error = 0xA1U;
-    return 1U;
-  }
-
-  if (BSP_TouchPort_ReadReg16(addr, DISPLAY_GT911_REG_CFG, s_gt911_cfg_bytes, 4U) == BSP_TOUCH_PORT_OK) { s_gt911_cfg_verified = 1U; }
-
-  if (BSP_TouchPort_ReadReg16(addr, DISPLAY_GT911_REG_CTRL, &s_gt911_cfg_version, 1U) != BSP_TOUCH_PORT_OK) { s_gt911_cfg_version = 0xFFU; }
-
-  return 0U;
-}
-
-/**
- * @brief Probe one GT911 I2C address.
- */
-static uint8_t Display_Gt911_TryAddress(uint8_t addr)
-{
-  uint8_t pid[4];
-
-  Display_Gt911_ResetForAddress(addr);
-  BSP_TouchPort_Recover();
-  if (BSP_TouchPort_ReadReg16(addr, DISPLAY_GT911_REG_PID, pid, sizeof(pid)) != BSP_TOUCH_PORT_OK) { return 1U; }
-
-  if (Display_Gt911_PidIsSupported(pid) != 0U) {
-    s_gt911_addr = addr;
-    (void)Display_Gt911_ReadConfigDebug(addr);
-    return 0U;
-  }
-
-  return 1U;
 }
 
 /**
@@ -138,32 +77,100 @@ static void Display_Gt911_MapToDisplay(uint16_t raw_x, uint16_t raw_y, uint16_t 
   Display_Gt911_Clamp(x, y);
 }
 
-/**
- * @brief Initialize the GT911 touch controller.
- */
+/** @brief 启动触摸阶段机，不阻塞等待硬件；重复调用不重置运行状态。 */
 Display_Gt911Result_t Display_Gt911_Init(void)
 {
-  (void)BSP_TouchPort_Init();
-  s_gt911_addr        = 0U;
-  s_gt911_last_info   = 0U;
-  s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+  if (s_gt911_phase == GT911_STOPPED) { s_gt911_phase = GT911_START; }
+  return (s_gt911_phase == GT911_READY) ? DISPLAY_GT911_OK : DISPLAY_GT911_NOT_READY;
+}
 
-  if (Display_Gt911_TryAddress(DISPLAY_GT911_ADDR_14) == 0U) {
-    s_gt911_last_result = DISPLAY_GT911_OK;
-    return DISPLAY_GT911_OK;
+/** @brief 每显示周期推进最多一个阶段；不调用 HAL_Delay，不分配内存。 */
+void Display_Gt911_Service(uint32_t now_ms)
+{
+  uint8_t pid[4];
+  s_gt911_now_ms = now_ms;
+  switch (s_gt911_phase) {
+    case GT911_BACKOFF:
+      if ((int32_t)(now_ms - s_gt911_deadline_ms) < 0) { return; }
+      s_gt911_phase = GT911_START;
+      break;
+    case GT911_START:
+      s_gt911_recovery_count++;
+      if (BSP_TouchPort_Init() != BSP_TOUCH_PORT_OK) { Display_Gt911_Fail(); break; }
+      s_gt911_cfg_verified = 0U;
+      s_gt911_probe_addr = DISPLAY_GT911_ADDR_14;
+      BSP_TouchPort_WriteReset(0U);
+      BSP_TouchPort_SetIntOutput(1U);
+      s_gt911_deadline_ms = now_ms + 1U;
+      s_gt911_phase = GT911_RESET_WAIT;
+      break;
+    case GT911_RESET_WAIT:
+      if ((int32_t)(now_ms - s_gt911_deadline_ms) < 0) { return; }
+      BSP_TouchPort_WriteReset(1U);
+      s_gt911_deadline_ms = now_ms + 10U;
+      s_gt911_phase = GT911_BOOT_WAIT;
+      break;
+    case GT911_BOOT_WAIT:
+      if ((int32_t)(now_ms - s_gt911_deadline_ms) < 0) { return; }
+      BSP_TouchPort_SetIntInput();
+      s_gt911_deadline_ms = now_ms + 100U;
+      s_gt911_phase = GT911_SETTLE_WAIT;
+      break;
+    case GT911_SETTLE_WAIT:
+      if ((int32_t)(now_ms - s_gt911_deadline_ms) < 0) { return; }
+      BSP_TouchPort_Recover();
+      s_gt911_phase = GT911_PROBE;
+      break;
+    case GT911_PROBE:
+      if ((BSP_TouchPort_ReadReg16(s_gt911_probe_addr, DISPLAY_GT911_REG_PID, pid, 4U) == BSP_TOUCH_PORT_OK) &&
+          (Display_Gt911_PidIsSupported(pid) != 0U)) {
+        s_gt911_phase = GT911_CFG_ORIG;
+      } else if (s_gt911_probe_addr == DISPLAY_GT911_ADDR_14) {
+        s_gt911_probe_addr = DISPLAY_GT911_ADDR_5D;
+        BSP_TouchPort_WriteReset(0U);
+        BSP_TouchPort_SetIntOutput(0U);
+        s_gt911_deadline_ms = now_ms + 1U;
+        s_gt911_phase = GT911_RESET_WAIT;
+      } else { Display_Gt911_Fail(); }
+      break;
+    case GT911_CFG_ORIG:
+      if (BSP_TouchPort_ReadReg16(s_gt911_probe_addr, DISPLAY_GT911_REG_CTRL, &s_gt911_orig_version, 1U) != BSP_TOUCH_PORT_OK) {
+        s_gt911_init_error = 0xA1U; Display_Gt911_Fail(); break;
+      }
+      s_gt911_phase = GT911_CFG_BYTES;
+      break;
+    case GT911_CFG_BYTES:
+      if (BSP_TouchPort_ReadReg16(s_gt911_probe_addr, DISPLAY_GT911_REG_CFG, s_gt911_cfg_bytes, 4U) != BSP_TOUCH_PORT_OK) {
+        s_gt911_init_error = 0xA2U; Display_Gt911_Fail(); break;
+      }
+      s_gt911_cfg_verified = 1U;
+      s_gt911_phase = GT911_CFG_VERSION;
+      break;
+    case GT911_CFG_VERSION:
+      if (BSP_TouchPort_ReadReg16(s_gt911_probe_addr, DISPLAY_GT911_REG_CTRL, &s_gt911_cfg_version, 1U) != BSP_TOUCH_PORT_OK) {
+        s_gt911_init_error = 0xA3U; Display_Gt911_Fail(); break;
+      }
+      s_gt911_addr = s_gt911_probe_addr;
+      s_gt911_error = 0U; s_gt911_init_error = 0U;
+      s_gt911_last_result = DISPLAY_GT911_OK;
+      s_gt911_phase = GT911_READY;
+      break;
+    default: break;
   }
+}
 
-  if (Display_Gt911_TryAddress(DISPLAY_GT911_ADDR_5D) == 0U) {
-    s_gt911_last_result = DISPLAY_GT911_OK;
-    return DISPLAY_GT911_OK;
-  }
-
-  s_gt911_last_result = DISPLAY_GT911_NOT_READY;
-  return DISPLAY_GT911_NOT_READY;
+/** @brief 复制纯软件触摸状态，供显示门面读取，不执行 GPIO/I2C。 */
+void Display_Gt911_GetStatus(Display_Gt911Status_t *out)
+{
+  if (out == 0) { return; }
+  out->ready = (uint8_t)(s_gt911_phase == GT911_READY);
+  out->recovering = (uint8_t)((s_gt911_phase != GT911_READY) && (s_gt911_phase != GT911_STOPPED));
+  out->recovery_count = s_gt911_recovery_count;
+  out->last_error = s_gt911_error;
 }
 
 /**
- * @brief Scan one touch point and return landscape display coordinates.
+ * @brief 单次读取触摸点；任一 I/O 失败进入恢复退避，调用者须报告按键释放。
  */
 Display_Gt911Result_t Display_Gt911_Scan(uint16_t *x, uint16_t *y)
 {
@@ -178,8 +185,8 @@ Display_Gt911Result_t Display_Gt911_Scan(uint16_t *x, uint16_t *y)
     return DISPLAY_GT911_NOT_READY;
   }
 
-  if (Display_Gt911_ReadRegRetry(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &info, 1U) != 0U) {
-    s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+  if (BSP_TouchPort_ReadReg16(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &info, 1U) != BSP_TOUCH_PORT_OK) {
+    Display_Gt911_Fail();
     return DISPLAY_GT911_NOT_READY;
   }
 
@@ -189,19 +196,23 @@ Display_Gt911Result_t Display_Gt911_Scan(uint16_t *x, uint16_t *y)
     return DISPLAY_GT911_NO_DATA;
   }
   if ((info & 0x0FU) == 0U) {
-    (void)BSP_TouchPort_WriteReg16(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &clear, 1U);
+    if (BSP_TouchPort_WriteReg16(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &clear, 1U) != BSP_TOUCH_PORT_OK) {
+      Display_Gt911_Fail(); return DISPLAY_GT911_NOT_READY;
+    }
     s_gt911_last_result = DISPLAY_GT911_NO_POINT;
     return DISPLAY_GT911_NO_POINT;
   }
-  if (Display_Gt911_ReadRegRetry(s_gt911_addr, DISPLAY_GT911_REG_TP1, data, 6U) != 0U) {
-    s_gt911_last_result = DISPLAY_GT911_NOT_READY;
+  if (BSP_TouchPort_ReadReg16(s_gt911_addr, DISPLAY_GT911_REG_TP1, data, 6U) != BSP_TOUCH_PORT_OK) {
+    Display_Gt911_Fail();
     return DISPLAY_GT911_NOT_READY;
   }
 
   raw_x = (uint16_t)(((uint16_t)data[1] << 8) | data[0]);
   raw_y = (uint16_t)(((uint16_t)data[3] << 8) | data[2]);
   Display_Gt911_MapToDisplay(raw_x, raw_y, x, y);
-  (void)BSP_TouchPort_WriteReg16(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &clear, 1U);
+  if (BSP_TouchPort_WriteReg16(s_gt911_addr, DISPLAY_GT911_REG_TP_INFO, &clear, 1U) != BSP_TOUCH_PORT_OK) {
+      Display_Gt911_Fail(); return DISPLAY_GT911_NOT_READY;
+    }
 
   s_gt911_last_result = DISPLAY_GT911_OK;
   return DISPLAY_GT911_OK;

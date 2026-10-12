@@ -10,6 +10,7 @@
 #include "px4lite_remoteid_tx.h"
 
 #include <limits.h>
+#include <math.h>
 #include <string.h>
 
 #include "px4lite_config.h"
@@ -17,6 +18,7 @@
 #include "px4lite_mavlink_tx.h"
 #include "px4lite_platform.h"
 #include "px4lite_topics.h"
+#include "px4lite_time.h"
 
 #if defined(__CC_ARM)
 #define MAVLINK_ALIGNED_FIELDS   0
@@ -129,56 +131,84 @@ static void RemoteId_FillHardwareUid(void)
   }
 }
 
-/**
- * @brief 将厘米每秒速度限幅为 OpenDroneID 水平速度字段。
- */
+/** @brief 按协议输出二维地速模长；未知为 25500，已知最大 25425 cm/s。 */
 static uint16_t RemoteId_HorizontalSpeedCms(const Px4Lite_VehicleNavigation_t *nav)
 {
-  int32_t north;
-  int32_t east;
-  uint32_t speed_cms;
-
-  if ((nav == 0) || ((nav->valid_mask & PX4LITE_NAV_VALID_VELOCITY) == 0U)) { return 0U; }
-
-  north = (nav->velocity_north_cms >= 0) ? nav->velocity_north_cms : -nav->velocity_north_cms;
-  east  = (nav->velocity_east_cms >= 0) ? nav->velocity_east_cms : -nav->velocity_east_cms;
-  speed_cms = (uint32_t)north + (uint32_t)east;
-  if (speed_cms > UINT16_MAX) { return UINT16_MAX; }
-  return (uint16_t)speed_cms;
+  float north, east, speed;
+  if ((nav == 0) || ((nav->valid_mask & PX4LITE_NAV_VALID_VELOCITY) == 0U)) { return 25500U; }
+  north = (float)nav->velocity_north_cms;
+  east = (float)nav->velocity_east_cms;
+  speed = sqrtf(north * north + east * east);
+  return (speed >= 25425.0f) ? 25425U : (uint16_t)(speed + 0.5f);
 }
 
 /**
- * @brief 将垂直速度限幅到 int16，单位 cm/s。
+ * @brief 当前 Navigation 尚无有效垂速来源，始终发送协议未知值 6300 cm/s。
+ * @details ALTITUDE 有效仅授权高度，不能将尚未赋值的垂速零占位解释为静止。
  */
 static int16_t RemoteId_SpeedVerticalCms(const Px4Lite_VehicleNavigation_t *nav)
-{
-  int32_t value;
+{ (void)nav; return 6300; }
 
-  if ((nav == 0) || ((nav->valid_mask & PX4LITE_NAV_VALID_ALTITUDE) == 0U)) { return 0; }
-  value = -nav->vertical_speed_cms;
-  if (value > INT16_MAX) { return INT16_MAX; }
-  if (value < INT16_MIN) { return INT16_MIN; }
-  return (int16_t)value;
-}
-
-/**
- * @brief 将 yaw_deg100 归一化到 OpenDroneID 航向字段，单位 degree * 100。
- */
+/** @brief 北东速度计算地面航迹；静止或速度无效时使用协议未知值 36100。 */
 static uint16_t RemoteId_DirectionDeg100(const Px4Lite_VehicleNavigation_t *nav)
 {
-  int32_t heading;
-
-  if ((nav == 0) || ((nav->valid_mask & PX4LITE_NAV_VALID_ATTITUDE) == 0U)) { return UINT16_MAX; }
-
-  heading = nav->yaw_deg100 % 36000;
-  if (heading < 0) { heading += 36000; }
-  return (uint16_t)heading;
+  float angle;
+  uint32_t direction;
+  if ((nav == 0) || ((nav->valid_mask & PX4LITE_NAV_VALID_VELOCITY) == 0U) ||
+      ((nav->velocity_north_cms == 0) && (nav->velocity_east_cms == 0))) { return 36100U; }
+  angle = atan2f((float)nav->velocity_east_cms, (float)nav->velocity_north_cms) * 5729.5779513f;
+  if (angle < 0.0f) { angle += 36000.0f; }
+  direction = (uint32_t)(angle + 0.5f);
+  return (uint16_t)(direction % 36000U);
 }
 
+/** @brief Gregorian 闰年判定，用于 2019 UTC 时间基准转换。 */
+static uint8_t RemoteId_IsLeap(uint32_t year)
+{ return (uint8_t)(((year % 4U) == 0U) && (((year % 100U) != 0U) || ((year % 400U) == 0U))); }
+
+/** @brief 合法 UTC 日期时间转换为自 2019-01-01 起秒数；拒绝越界和无效日期。 */
+static uint8_t RemoteId_Epoch2019(uint32_t date, uint32_t hhmmss, uint32_t *out)
+{
+  static const uint8_t month_days[12] = {31U,28U,31U,30U,31U,30U,31U,31U,30U,31U,30U,31U};
+  uint32_t year = date / 10000U, month = (date / 100U) % 100U, day = date % 100U;
+  uint32_t hour = hhmmss / 10000U, minute = (hhmmss / 100U) % 100U, second = hhmmss % 100U;
+  uint32_t days = 0U, y, m, max_day, seconds_day;
+  if ((out == 0) || (year < 2019U) || (year > 2155U) || (month < 1U) || (month > 12U) ||
+      (hour > 23U) || (minute > 59U) || (second > 59U)) { return 0U; }
+  max_day = month_days[month - 1U] + ((month == 2U) ? RemoteId_IsLeap(year) : 0U);
+  if ((day == 0U) || (day > max_day)) { return 0U; }
+  for (y = 2019U; y < year; y++) { days += 365U + RemoteId_IsLeap(y); }
+  for (m = 1U; m < month; m++) { days += month_days[m - 1U] + ((m == 2U) ? RemoteId_IsLeap(year) : 0U); }
+  days += day - 1U;
+  seconds_day = hour * 3600U + minute * 60U + second;
+  if (days > (UINT32_MAX - seconds_day) / 86400U) { return 0U; }
+  *out = days * 86400U + seconds_day;
+  return 1U;
+}
+
+/** @brief LOCATION 时间为当前 UTC 小时内秒数；没有独立有效 TIME 域时发送 65535。 */
+static float RemoteId_LocationTimestamp(const Px4Lite_VehicleNavigation_t *nav)
+{
+  if (((nav->valid_mask & PX4LITE_NAV_VALID_TIME) == 0U) || (nav->gnss_utc_sec >= 86400U)) { return 65535.0f; }
+  return (float)(nav->gnss_utc_sec % 3600U);
+}
+
+/** @brief 系统时间取统一 UTC 快照，禁止使用系统开机秒数；缺失或停更不发送 SYSTEM。 */
+static uint8_t RemoteId_SystemTimestamp(uint32_t now_ms, uint32_t *out)
+{
+  Px4Lite_TimeSnapshot_t time;
+  if ((Px4Lite_CopyTime(&time) != PX4LITE_OK) ||
+      (Px4Lite_IsFresh(&time.header, now_ms, 2000U) == 0U) ||
+      (time.source == PX4LITE_TIME_SOURCE_NONE) || (time.sync_state == PX4LITE_TIME_SYNC_INVALID)) { return 0U; }
+  return RemoteId_Epoch2019(time.utc_date_ymd, time.utc_time_hhmmss, out);
+}
+
+/** @brief 只锁定同时具有有效位置与高度的起飞参考点。 */
 static void RemoteId_UpdateHomeIfNeeded(const Px4Lite_VehicleNavigation_t *nav)
 {
   if ((nav == 0) || (s_home_valid != 0U)) { return; }
-  if ((nav->valid_mask & PX4LITE_NAV_VALID_POSITION) == 0U) { return; }
+  if ((nav->valid_mask & (PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_ALTITUDE)) !=
+      (PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_ALTITUDE)) { return; }
 
   s_home_latitude_e7 = nav->latitude_e7;
   s_home_longitude_e7 = nav->longitude_e7;
@@ -301,10 +331,11 @@ static Px4Lite_Result_t RemoteId_SendLocation(uint32_t now_ms)
   RemoteId_UpdateHomeIfNeeded(&s_remoteid_nav);
   /* altitude_m 是绝对融合高度：同时填 altitude_barometric 与 altitude_geodetic(绝对 WGS84)；
      height 字段(height_reference=OVER_TAKEOFF)另填相对起飞点的高度差，勿与 geodetic 混淆。 */
-  altitude_m = ((float)s_remoteid_nav.fused_altitude_mm) / 1000.0f;
-  timestamp_s = (float)(s_remoteid_nav.gnss_utc_sec % 86400UL);
+  altitude_m = ((s_remoteid_nav.valid_mask & PX4LITE_NAV_VALID_ALTITUDE) != 0U)
+      ? ((float)s_remoteid_nav.fused_altitude_mm) / 1000.0f : -1000.0f;
+  timestamp_s = RemoteId_LocationTimestamp(&s_remoteid_nav);
 
-  (void)mavlink_msg_open_drone_id_location_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_STATUS_AIRBORNE, RemoteId_DirectionDeg100(&s_remoteid_nav), RemoteId_HorizontalSpeedCms(&s_remoteid_nav), RemoteId_SpeedVerticalCms(&s_remoteid_nav), s_remoteid_nav.latitude_e7, s_remoteid_nav.longitude_e7, altitude_m, altitude_m, MAV_ODID_HEIGHT_REF_OVER_TAKEOFF, (s_home_valid != 0U) ? (altitude_m - s_home_altitude_m) : 0.0f, RemoteId_HorizontalAccuracy(&s_remoteid_nav), MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_SPEED_ACC_UNKNOWN, timestamp_s, MAV_ODID_TIME_ACC_UNKNOWN);
+  (void)mavlink_msg_open_drone_id_location_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_STATUS_AIRBORNE, RemoteId_DirectionDeg100(&s_remoteid_nav), RemoteId_HorizontalSpeedCms(&s_remoteid_nav), RemoteId_SpeedVerticalCms(&s_remoteid_nav), s_remoteid_nav.latitude_e7, s_remoteid_nav.longitude_e7, altitude_m, altitude_m, MAV_ODID_HEIGHT_REF_OVER_TAKEOFF, ((s_home_valid != 0U) && ((s_remoteid_nav.valid_mask & PX4LITE_NAV_VALID_ALTITUDE) != 0U)) ? (altitude_m - s_home_altitude_m) : -1000.0f, RemoteId_HorizontalAccuracy(&s_remoteid_nav), MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_VER_ACC_UNKNOWN, MAV_ODID_SPEED_ACC_UNKNOWN, timestamp_s, MAV_ODID_TIME_ACC_UNKNOWN);
 
   result = RemoteId_SendPrepared();
   if (result == PX4LITE_OK) { s_remoteid_stats.last_location_seq = s_remoteid_nav.header.sequence; }
@@ -316,15 +347,18 @@ static Px4Lite_Result_t RemoteId_SendLocation(uint32_t now_ms)
  */
 static Px4Lite_Result_t RemoteId_SendSystem(uint32_t now_ms)
 {
-  float altitude_m = 0.0f;
+  float altitude_m = -1000.0f;
+  uint32_t timestamp;
   int32_t latitude = 0;
   int32_t longitude = 0;
 
+  if (RemoteId_SystemTimestamp(now_ms, &timestamp) == 0U) { return PX4LITE_NOT_READY; }
   if (Px4Lite_CopyNavigation(&s_remoteid_nav) == PX4LITE_OK) {
     if ((Px4Lite_IsFresh(&s_remoteid_nav.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U) && ((s_remoteid_nav.valid_mask & PX4LITE_NAV_VALID_POSITION) != 0U)) {
       latitude = s_remoteid_nav.latitude_e7;
       longitude = s_remoteid_nav.longitude_e7;
-      altitude_m = ((float)s_remoteid_nav.fused_altitude_mm) / 1000.0f;
+      altitude_m = ((s_remoteid_nav.valid_mask & PX4LITE_NAV_VALID_ALTITUDE) != 0U)
+          ? ((float)s_remoteid_nav.fused_altitude_mm) / 1000.0f : -1000.0f;
       RemoteId_UpdateHomeIfNeeded(&s_remoteid_nav);
     }
   }
@@ -334,7 +368,7 @@ static Px4Lite_Result_t RemoteId_SendSystem(uint32_t now_ms)
     altitude_m = s_home_altitude_m;
   }
 
-  (void)mavlink_msg_open_drone_id_system_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_OPERATOR_LOCATION_TYPE_TAKEOFF, MAV_ODID_CLASSIFICATION_TYPE_UNDECLARED, latitude, longitude, 1U, 0U, -1000.0f, -1000.0f, MAV_ODID_CATEGORY_EU_UNDECLARED, MAV_ODID_CLASS_EU_UNDECLARED, altitude_m, now_ms / 1000UL);
+  (void)mavlink_msg_open_drone_id_system_pack(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID, &s_remoteid_message, PX4LITE_REMOTEID_TARGET_SYSTEM, PX4LITE_REMOTEID_TARGET_COMPONENT, s_id_or_mac, MAV_ODID_OPERATOR_LOCATION_TYPE_TAKEOFF, MAV_ODID_CLASSIFICATION_TYPE_UNDECLARED, latitude, longitude, 1U, 0U, -1000.0f, -1000.0f, MAV_ODID_CATEGORY_EU_UNDECLARED, MAV_ODID_CLASS_EU_UNDECLARED, altitude_m, timestamp);
   return RemoteId_SendPrepared();
 }
 
@@ -369,11 +403,31 @@ static const RemoteId_Item_t s_remoteid_catalog[] = {
 
 #define REMOTEID_CATALOG_COUNT ((uint8_t)(sizeof(s_remoteid_catalog) / sizeof(s_remoteid_catalog[0])))
 
+/**
+ * @brief 在 CommTask 内初始化或热恢复发送调度器，保留本次上电累计错误数。
+ * @details 其他统计与发送时序重新开始；逐字段清理避免错误计数出现瞬时零值。
+ * @param[in] now_ms 当前系统真实毫秒时间。
+ * @return 调度器初始化结果，不表示 ESP32 已收到数据。
+ */
 Px4Lite_Result_t Px4Lite_RemoteIdTxInit(uint32_t now_ms)
 {
   memset(&s_remoteid_message, 0, sizeof(s_remoteid_message));
   memset(s_remoteid_frame, 0, sizeof(s_remoteid_frame));
-  memset(&s_remoteid_stats, 0, sizeof(s_remoteid_stats));
+  /* error_count 只在冷启动静态初始化时归零；热恢复不写该字段，防止采样间漏掉新错误。 */
+  s_remoteid_stats.heartbeat_count = 0U;
+  s_remoteid_stats.basic_id_count = 0U;
+  s_remoteid_stats.location_count = 0U;
+  s_remoteid_stats.system_count = 0U;
+  s_remoteid_stats.operator_id_count = 0U;
+  s_remoteid_stats.self_id_count = 0U;
+  s_remoteid_stats.no_data_count = 0U;
+  s_remoteid_stats.stale_count = 0U;
+  s_remoteid_stats.busy_count = 0U;
+  s_remoteid_stats.last_message_id = 0U;
+  s_remoteid_stats.last_location_seq = 0U;
+  s_remoteid_stats.last_success_ms = 0U;
+  s_remoteid_stats.last_busy_ms = 0U;
+  s_remoteid_stats.last_error_ms = 0U;
   memset(&s_remoteid_nav, 0, sizeof(s_remoteid_nav));
   s_home_valid = 0U;
   s_home_latitude_e7 = 0;

@@ -71,6 +71,10 @@ Px4Lite_Result_t Px4Lite_PlatformGetHardwareUid(uint32_t *uid_words, uint8_t wor
  */
 void Px4Lite_PlatformHeartbeat(Px4Lite_HeartbeatId_t id, uint32_t now_ms);
 
+/** @brief 仅供任务创建者调度前配置固定槽位；周期/最低期限均为毫秒，重复或非法配置拒绝。 */
+Px4Lite_Result_t Px4Lite_PlatformHeartbeatConfigure(Px4Lite_HeartbeatId_t id, uint32_t period_ms, uint32_t min_timeout_ms);
+
+
 /**
  * @brief 检查所有必需任务心跳是否存在且未超时。
  *
@@ -81,13 +85,16 @@ void Px4Lite_PlatformHeartbeat(Px4Lite_HeartbeatId_t id, uint32_t now_ms);
 uint8_t Px4Lite_PlatformHeartbeatsHealthy(uint32_t now_ms);
 
 /**
- * @brief 在所有必需任务心跳健康时刷新硬件看门狗。
+ * @brief 毫秒时基前进且所有必需任务心跳健康时交接或刷新硬件看门狗。
  *
  * @param[in] now_ms 当前系统毫秒时间。
  *
  * @note 调用方不应绕过本函数直接喂狗。
  */
 void Px4Lite_PlatformWatchdogFeed(uint32_t now_ms);
+
+/** @brief 调度前封存实际任务集合并启动首轮期限；空集合/重复交接返回 NOT_READY。 */
+Px4Lite_Result_t Px4Lite_PlatformWatchdogBeginStartup(uint32_t now_ms);
 
 /**
  * @brief 初始化平台适配层拥有的服务并复位心跳状态。
@@ -161,10 +168,11 @@ Px4Lite_Result_t Px4Lite_BaroInit(void);
  * @brief 将最新 BME280 快照转换为 Framework 气压计测量。
  *
  * @param[out] measurement 输出缓冲区，不能为 NULL。
+ * @param[in] start_measurement 非零允许启动新测量；等待中的测量每个 sensor 周期均推进。
  *
  * @return 转换结果。
  */
-Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement);
+Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement, uint8_t start_measurement);
 
 /**
  * @brief 初始化电源检测 ADC 驱动。

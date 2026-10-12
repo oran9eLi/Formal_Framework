@@ -17,6 +17,10 @@
 #include "px4lite_faults.h"
 #include "px4lite_platform.h"
 #include "px4lite_topics.h"
+#include "business_template_config.h"
+#if BUSINESS_ENABLE_DISPLAY
+#include "display.h"
+#endif
 
 /**
  * @brief 向 Business 代码返回平台单调毫秒时间。
@@ -32,6 +36,19 @@ uint32_t Business_PlatformGetMs(void)
 void Business_RegistryPoll(uint32_t now_ms)
 {
   (void)now_ms;
+}
+
+/** @brief 业务创建者提交自己的周期；固定枚举映射保持在适配边界。 */
+uint8_t Business_StatusConfigureHeartbeat(Business_ComponentId_t component_id, uint32_t period_ms, uint32_t min_timeout_ms)
+{
+  Px4Lite_HeartbeatId_t id;
+  switch (component_id) {
+    case BUSINESS_COMPONENT_SYSTEM: id = PX4LITE_HEARTBEAT_SYSTEM; break;
+    case BUSINESS_COMPONENT_ACQUISITION: id = PX4LITE_HEARTBEAT_BUSINESS; break;
+    case BUSINESS_COMPONENT_DISPLAY: id = PX4LITE_HEARTBEAT_DISPLAY; break;
+    default: return 0U;
+  }
+  return (Px4Lite_PlatformHeartbeatConfigure(id, period_ms, min_timeout_ms) == PX4LITE_OK) ? 1U : 0U;
 }
 
 /**
@@ -135,6 +152,16 @@ Business_ServiceResult_t Business_AcquisitionRunOnce(uint32_t now_ms)
 void Business_DisplayReportResult(Business_ServiceResult_t result, uint32_t now_ms)
 {
   if ((result == BUSINESS_SERVICE_OK) || (result == BUSINESS_SERVICE_IDLE)) {
+#if BUSINESS_ENABLE_DISPLAY
+    Display_RuntimeStatus_t display_status;
+
+    /* 显示任务读取自身状态副本；触摸不可用时保留 LCD 心跳及独立恢复流程。 */
+    Display_GetRuntimeStatus(&display_status);
+    if ((display_status.display_ready != 0U) && (display_status.touch_ready == 0U)) {
+      Px4Lite_SetExternalModuleState(PX4LITE_MODULE_DISPLAY, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_DISPLAY_TOUCH, now_ms);
+      return;
+    }
+#endif
     Px4Lite_SetExternalModuleState(PX4LITE_MODULE_DISPLAY, PX4LITE_STATE_ONLINE, 0U, now_ms);
   } else if (result == BUSINESS_SERVICE_NOT_READY) {
     Px4Lite_SetExternalModuleState(PX4LITE_MODULE_DISPLAY, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_DISPLAY_OFFLINE, now_ms);

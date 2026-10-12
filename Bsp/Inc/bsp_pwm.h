@@ -40,6 +40,12 @@ BSP_Status_t BSP_PWM_Init(void);
 BSP_Status_t BSP_PWM_DeInit(void);
 
 /**
+ * @brief 不可恢复异常时撤收四路 PWM 并固定 GPIO 低电平。
+ * @note 仅 Core fatal 使用；不依赖句柄、tick、调度器或中断，允许初始化前及重复调用。
+ */
+void BSP_PWM_EmergencyStop(void);
+
+/**
  * @brief 设置单个 PWM 通道高电平脉宽。
  *
  * @param[in] channel PWM 通道编号。

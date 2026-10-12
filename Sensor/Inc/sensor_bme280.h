@@ -29,7 +29,7 @@ typedef enum {
  */
 typedef struct {
   uint32_t rx_sequence;        /**< 样本序号，每次有效采样递增。 */
-  uint32_t sample_time_ms;     /**< 采样完成时间，单位：ms。 */
+  uint32_t sample_time_ms;     /**< 成功触发转换的时间，单位：ms；保守标记数据年龄，并非硬件精确完成时间。 */
   float temperature_c;         /**< 温度，单位：摄氏度。 */
   float pressure_pa;           /**< 气压，单位：Pa。 */
   float relative_humidity_pct; /**< 相对湿度，单位：%。 */
@@ -56,15 +56,17 @@ typedef struct {
 Bme280_Result_t Sensor_BME280_Init(void);
 
 /**
- * @brief 执行一次 BME280 周期服务，触发强制测量并缓存结果。
+ * @brief 推进 BME280 测量与恢复，空闲时根据许可触发强制测量。
  *
  * @param[in] now_ms 当前 sensor 周期时间，单位：ms。
+ * @param[in] start_measurement 非 0 允许启动一次新测量；忙时忽略，不排队。
  *
  * @return 服务结果。
  *
- * @note 本函数由 sensor 任务调用，不在 ISR 中调用。
+ * @note 本函数每个 sensor 周期调用以推进等待状态；新测量许可使用独立采样周期。
+ *       只能由 sensor 任务调用，不在 ISR 中调用。OK 只在产生新快照的那一拍返回。
  */
-Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms);
+Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms, uint8_t start_measurement);
 
 /**
  * @brief 复制最近一次由 `Sensor_BME280_Service()` 生成的样本。

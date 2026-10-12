@@ -8,6 +8,10 @@
  */
 
 #include "main.h"
+#include "core_fatal.h"
+#include "bsp_pwm.h"
+#include "bsp_watchdog.h"
+#include "px4lite_config.h"
 #include "bsp.h"
 #include "business_task_registry.h"
 #include "debug_console.h"
@@ -25,29 +29,41 @@ static void SystemClock_Config(void);
  */
 int main(void)
 {
-  HAL_Init();
+  BSP_Watchdog_CaptureResetCause();
+#if PX4LITE_ENABLE_HARDWARE_WATCHDOG
+  if (BSP_Watchdog_StartBoot() != BSP_STATUS_OK) { Error_Handler(); }
+#endif
+  if (HAL_Init() != HAL_OK) { Error_Handler(); }
+  BSP_Watchdog_BootProgress();
   SystemClock_Config();
+  BSP_Watchdog_BootProgress();
 
   DebugConsole_Init();
+  BSP_Watchdog_BootProgress();
   if (BSP_Init() != BSP_STATUS_OK) {
     DBG_BOOT_PRINT("boot failed: BSP_Init");
     Error_Handler();
   }
+  BSP_Watchdog_BootProgress();
 
   if (Px4Lite_PlatformInit() != PX4LITE_OK) {
     DBG_BOOT_PRINT("boot failed: Px4Lite_PlatformInit");
     Error_Handler();
   }
+  BSP_Watchdog_BootProgress();
   if (Px4Lite_AppInit() != pdPASS) {
     DBG_BOOT_PRINT("boot failed: Px4Lite_AppInit");
     Error_Handler();
   }
+  BSP_Watchdog_BootProgress();
   if (Business_AppInit() != pdPASS) {
     DBG_BOOT_PRINT("boot failed: Business_AppInit");
     Error_Handler();
   }
+  BSP_Watchdog_BootProgress();
 
   DBG_BOOT_PRINT("Formal framework started: sensors + business + display");
+  if (Px4Lite_PlatformWatchdogBeginStartup(Px4Lite_PlatformGetMs()) != PX4LITE_OK) { Error_Handler(); }
   vTaskStartScheduler();
   Error_Handler();
 }
@@ -88,12 +104,25 @@ static void SystemClock_Config(void)
 /**
  * @brief 进入不可恢复错误的停机路径。
  *
- * @note 当前策略为关闭中断后停在死循环；后续可在此扩展故障持久化。
+ * @note 先撤收电机信号，再清理 DMA 和停机；不依赖调度器或 HAL 时基。
  */
 void Error_Handler(void)
 {
-  BSP_EmergencyStopDma();
+  Core_FatalHalt();
+}
+
+/** @brief 致命异常最先执行的输出撤收；后续现场记录失败也不会保留 PWM。 */
+void Core_FatalQuiesce(void)
+{
   __disable_irq();
+  BSP_PWM_EmergencyStop();
+}
+
+/** @brief 不可恢复停机，不恢复中断、不喂狗。 */
+void Core_FatalHalt(void)
+{
+  Core_FatalQuiesce();
+  BSP_EmergencyStopDma();
   for (;;) {}
 }
 

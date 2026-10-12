@@ -16,8 +16,7 @@
 
 static ADC_HandleTypeDef s_hadc_current;
 
-/* 临时诊断缓存：ReadVoltageMv 每次采样后记录每路原始引脚电压与浮空标志，供调试打印。
-   下标 0=BATTERY1(PC0)，1=BATTERY2(PC1)。定位电流计接线后可连同 GetDiag 一起移除。 */
+/** @brief 最近成功采样的诊断缓存；下标 0/1 对应 PC0/PC1，不触发额外采样。 */
 static uint32_t s_diag_adc_mv[2];
 static uint8_t  s_diag_floating[2];
 
@@ -43,10 +42,17 @@ static uint32_t BSP_ADC_Current_HalChannel(BSP_ADC_CurrentChannel_t channel)
 /* 浮空检测开关。诊断证明:电流计 CURR 输出对"预置拉高"的下沉能力弱，低电流(~0.2V)
    时会被浮空检测误判成高阻并清零(把真实小电流误杀)。传感器已实测接好，故关闭检测、
    直接读真实电压。若以后要重新识别"未接传感器"，需改进检测策略后再置 1。 */
+#ifndef BSP_ADC_CURRENT_FLOAT_CHECK_ENABLE
 #define BSP_ADC_CURRENT_FLOAT_CHECK_ENABLE 0U
+#endif
 
-/* 采样前把电流计模拟脚预置到指定电平：high=0 拉低、high=1 拉高，数 µs 后切回模拟态。
-   拉低=软件放电减小浮空漂高；配合拉高用于浮空检测(见 PinFloating)。 */
+#if BSP_ADC_CURRENT_FLOAT_CHECK_ENABLE
+/**
+ * @brief 仅供显式启用的浮空诊断预置引脚电平，返回前恢复模拟输入。
+ * @param[in] channel 已校验的电流通道。
+ * @param[in] high 0 为低电平，非 0 为高电平。
+ * @note 正常采样不得调用；推挽探测会扰动外部模拟输出，生产配置默认禁用。
+ */
 static void BSP_ADC_Current_PrechargePin(BSP_ADC_CurrentChannel_t channel, uint8_t high)
 {
   GPIO_InitTypeDef gpio;
@@ -69,6 +75,7 @@ static void BSP_ADC_Current_PrechargePin(BSP_ADC_CurrentChannel_t channel, uint8
   gpio.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(port, &gpio);
 }
+#endif
 
 BSP_Status_t BSP_ADC_Current_Init(void)
 {
@@ -100,6 +107,12 @@ BSP_Status_t BSP_ADC_Current_Recover(void)
   return BSP_ADC_Current_Init();
 }
 
+/**
+ * @brief 在模拟输入状态读取指定通道，不驱动外部电流传感器的输出引脚。
+ * @param[in] channel 第一或第二电流通道。
+ * @param[out] raw 成功时输出 12 位原始码，失败时保持原值。
+ * @return 参数或转换失败返回 ERROR，否则返回 OK。
+ */
 BSP_Status_t BSP_ADC_Current_ReadRaw(BSP_ADC_CurrentChannel_t channel, uint32_t *raw)
 {
   ADC_ChannelConfTypeDef adc_channel;
@@ -117,9 +130,6 @@ BSP_Status_t BSP_ADC_Current_ReadRaw(BSP_ADC_CurrentChannel_t channel, uint32_t 
   adc_channel.SamplingTime = BSP_ADC_CURRENT_SAMPLE_TIME;
   adc_channel.Offset       = 0U;
   if (HAL_ADC_ConfigChannel(&s_hadc_current, &adc_channel) != HAL_OK) { return BSP_STATUS_ERROR; }
-
-  /* 转换前拉低放电，消除未接电流计时的浮空漂高。 */
-  BSP_ADC_Current_PrechargePin(channel, 0U);
 
   result = HAL_ADC_Start(&s_hadc_current);
   if (result != HAL_OK) { return BSP_ADC_Current_MapHalStatus(result); }
@@ -150,7 +160,8 @@ BSP_Status_t BSP_ADC_Current_ReadAverage(BSP_ADC_CurrentChannel_t channel, uint3
   return BSP_STATUS_OK;
 }
 
-/* 单次转换：先把该通道脚预置到 high 电平再采样，用于浮空检测。 */
+#if BSP_ADC_CURRENT_FLOAT_CHECK_ENABLE
+/** @brief 仅在浮空诊断中预置电平后采样，所有转换均在模拟输入状态进行。 */
 static BSP_Status_t BSP_ADC_Current_ReadOnePrecharged(BSP_ADC_CurrentChannel_t channel, uint8_t high, uint32_t *raw)
 {
   ADC_ChannelConfTypeDef adc_channel;
@@ -175,30 +186,39 @@ static BSP_Status_t BSP_ADC_Current_ReadOnePrecharged(BSP_ADC_CurrentChannel_t c
   return (result == HAL_OK) ? BSP_STATUS_OK : BSP_STATUS_ERROR;
 }
 
-/* 浮空(未接电流计)检测：预置低采一次、预置高采一次，两读相差过大即判浮空。
-   真实低阻源两次都被拉回真值 → 差≈噪声；浮空脚跟随预置 → 差巨大。 */
-static uint8_t BSP_ADC_Current_PinFloating(BSP_ADC_CurrentChannel_t channel)
+/** @brief 比较高低预置后的原始码；转换失败与浮空结果分别返回。 */
+static BSP_Status_t BSP_ADC_Current_PinFloating(BSP_ADC_CurrentChannel_t channel, uint8_t *floating)
 {
   uint32_t raw_lo = 0U;
   uint32_t raw_hi = 0U;
 
-  if (BSP_ADC_Current_ReadOnePrecharged(channel, 0U, &raw_lo) != BSP_STATUS_OK) { return 0U; }
-  if (BSP_ADC_Current_ReadOnePrecharged(channel, 1U, &raw_hi) != BSP_STATUS_OK) { return 0U; }
-  return ((raw_hi > raw_lo) && ((raw_hi - raw_lo) > BSP_ADC_CURRENT_FLOAT_DELTA_RAW)) ? 1U : 0U;
+  if (BSP_ADC_Current_ReadOnePrecharged(channel, 0U, &raw_lo) != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
+  if (BSP_ADC_Current_ReadOnePrecharged(channel, 1U, &raw_hi) != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
+  *floating = ((raw_hi > raw_lo) && ((raw_hi - raw_lo) > BSP_ADC_CURRENT_FLOAT_DELTA_RAW)) ? 1U : 0U;
+  return BSP_STATUS_OK;
 }
+#endif
 
+/**
+ * @brief 平均采样并换算引脚毫伏值；可选浮空探测的全部引脚操作受编译开关门控。
+ * @param[in] channel 第一或第二电流通道。
+ * @param[out] voltage_mv 成功时输出毫伏值，失败时保持原值。
+ * @return 参数、诊断探测或正常转换失败返回 ERROR，否则返回 OK。
+ */
 BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uint32_t *voltage_mv)
 {
   uint32_t raw = 0U;
   uint32_t vdda;
   uint32_t pin_mv;
-  uint8_t  floating;
+  uint8_t  floating = 0U;
   uint8_t  idx = (channel == BSP_ADC_CURRENT_BATTERY2) ? 1U : 0U;
 
   if (voltage_mv == 0) { return BSP_STATUS_ERROR; }
+  if ((channel != BSP_ADC_CURRENT_BATTERY1) && (channel != BSP_ADC_CURRENT_BATTERY2)) { return BSP_STATUS_ERROR; }
 
-  /* 先做浮空判定，仅用于诊断标志；再无条件采一次真实引脚电压。 */
-  floating = BSP_ADC_Current_PinFloating(channel);
+#if BSP_ADC_CURRENT_FLOAT_CHECK_ENABLE
+  if (BSP_ADC_Current_PinFloating(channel, &floating) != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
+#endif
 
   vdda = BSP_ADC_GetVddaMv(); /* 用 VREFINT 实测 VDDA 代替写死的 3.3V，消除电机负载导致的 VDDA 下陷误差 */
   if (BSP_ADC_Current_ReadAverage(channel, &raw, BSP_ADC_CURRENT_AVERAGE_COUNT) != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }

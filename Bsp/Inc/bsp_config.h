@@ -41,6 +41,8 @@
  */
 #define BSP_WATCHDOG_PRESCALER_CODE 4U    /**< IWDG_PR：4 表示 64 分频。 */
 #define BSP_WATCHDOG_RELOAD         1249U /**< IWDG_RLR：12 位重装值，上限 4095。 */
+#define BSP_WATCHDOG_BOOT_PRESCALER_CODE 6U /**< 启动窗口：256 分频。 */
+#define BSP_WATCHDOG_BOOT_RELOAD     4095U /**< 启动重装；按 LSI 最快频率留出有界初始化时间。 */
 #define BSP_WATCHDOG_FREEZE_ON_DEBUG 1U   /**< 调试器挂起内核时冻结 IWDG，便于单步。 */
 
 /* 调试 UART：USART1，PA9/PA10，115200 8N1。仅供 DebugConsole 使用，不再复用给树莓派。 */

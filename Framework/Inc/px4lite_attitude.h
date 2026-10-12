@@ -63,6 +63,7 @@ typedef struct {
   float gyro_prev_dps[3];        /**< 上一帧角速度，用于静止检测，单位 degree/s。 */
   uint32_t last_sample_time_ms;  /**< 上一次使用的 IMU 样本时间，单位 ms。 */
   uint16_t gyro_bias_sample_count; /**< 当前零偏校准累计样本数。 */
+  uint8_t calibration_started;   /**< 本次操作是否已记录实际开始，1 是。 */
   uint8_t valid;                 /**< 1 表示估计器已完成首帧初始化。 */
   uint8_t gyro_bias_valid;       /**< 1 表示陀螺零偏已完成静止校准。 */
   uint8_t motion_ref_valid;      /**< 1 表示 accel_prev/gyro_prev 已有上一帧数据。 */
@@ -77,6 +78,8 @@ void Px4Lite_AttitudeInit(Px4Lite_AttitudeState_t *state);
 
 /** @brief 估计任务内执行操作请求；无新鲜测量时拒绝，正在校准时返回 BUSY。 */
 Px4Lite_Result_t Px4Lite_AttitudeRequest(Px4Lite_AttitudeState_t *state, Px4Lite_AttitudeAction_t action, uint32_t now_ms);
+/** @brief 记录真实拒绝原因；Framework 请求入口在临界区外调用。 */
+void Px4Lite_AttitudeLogRejected(Px4Lite_AttitudeAction_t action, Px4Lite_Result_t result, uint32_t now_ms);
 /** @brief 每个估计周期调用；无样本时也推进失联/校准超时状态。 */
 void Px4Lite_AttitudeService(Px4Lite_AttitudeState_t *state, uint32_t now_ms);
 

@@ -1,9 +1,22 @@
-﻿#ifndef DISPLAY_H
+/** @file display.h @brief Display 层业务门面；消费者通过此接口读取状态和驱动显示，不访问 LVGL/BSP。 */
+#ifndef DISPLAY_H
 #define DISPLAY_H
 
 #include <stdint.h>
 #include "px4lite_attitude.h"
 #include "px4lite_control.h"
+
+/** @brief 显示任务内使用的运行状态；LCD 与触摸独立就绪。 */
+typedef struct {
+  uint8_t display_ready; /**< LCD/LVGL 已就绪。 */
+  uint8_t touch_registered; /**< LVGL 输入设备已在启动时注册。 */
+  uint8_t touch_ready; /**< 触摸控制器已就绪。 */
+  uint8_t touch_recovering; /**< 触摸正在初始化或等待重试。 */
+  uint8_t touch_last_error; /**< 最近触摸错误，恢复成功清零。 */
+  uint32_t touch_recovery_count; /**< 初始化尝试次数，含首次启动。 */
+} Display_RuntimeStatus_t;
+/** @brief 同一显示任务复制运行状态，无 I/O，无动态内存操作。 */
+void Display_GetRuntimeStatus(Display_RuntimeStatus_t *out);
 
 typedef enum {
   DISPLAY_OK = 0,    /* 显示模块正常 */
@@ -31,7 +44,9 @@ typedef enum {
   DISPLAY_HMI_PAGE_DATA,       /* 定位数据页：系统、GNSS 定位、消息日志*/
   DISPLAY_HMI_PAGE_MOTOR,      /* 电机控制页：四路油门滑条和急停入口 */
   DISPLAY_HMI_PAGE_ALARM,      /* 告警页：运行期告警码和原因表*/
-  DISPLAY_HMI_PAGE_HIDDEN,     /* 隐藏页：仅由 KEY0 弹出，只保留标题栏，正文留白；不参与翻页导航 */
+  DISPLAY_HMI_PAGE_HIDDEN,     /* 通信工作区；保留历史 ID，可由头部入口或 KEY0 打开。 */
+  DISPLAY_HMI_PAGE_DIAGNOSTICS, /**< 自检二级诊断：模块、故障与运行状态。 */
+  DISPLAY_HMI_PAGE_EVENT_HISTORY, /**< 本机二级事件历史；不改变活动告警。 */
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 

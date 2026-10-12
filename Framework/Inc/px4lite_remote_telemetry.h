@@ -5,7 +5,7 @@
  * @details
  * 本模块是远程显示状态的唯一真源。MAVLink RX 只负责逐字段解码，解码后的远端快照通过
  * 本模块提交；Business/Display 只能复制本模块发布的只读快照和节点表。所有缓存均为静态
- * 固定容量，不在运行期分配内存，不扩大 Comm task 栈。
+ * 固定容量，不在运行期分配内存；结构与任务栈容量随字段变更一起核验。
  */
 
 #ifndef PX4LITE_REMOTE_TELEMETRY_H
@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include "px4lite_types.h"
+#include "px4lite_config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +40,47 @@ void Px4Lite_RemoteTelemetryInit(uint32_t now_ms);
  * @note 链路断开后远端视图已经失效，复位时回到 LOCAL 模式并清除已发现节点、选中节点和远端数据。
  */
 void Px4Lite_RemoteTelemetryResetLink(uint32_t now_ms);
+
+/**
+ * @brief 根据真实毫秒时刻刷新调用方快照的各域及导航子字段过期位。
+ * @param[in,out] remote 调用方持有的快照；不访问内部槽位。
+ * @param[in] now_ms 当前时刻，单位：ms；支持 uint32_t 回绕，比较跨度应小于半周期。
+ */
+static inline void Px4Lite_RemoteTelemetryRefreshFreshness(Px4Lite_RemoteTelemetry_t *remote, uint32_t now_ms)
+{
+  uint32_t stale = 0U;
+  uint32_t nav_stale = 0U;
+  uint32_t battery_stale = 0U;
+  uint32_t environment_stale = 0U;
+
+  if (remote == 0) { return; }
+  if (((remote->navigation_valid_mask & PX4LITE_NAV_VALID_POSITION) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->position_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { nav_stale |= PX4LITE_NAV_VALID_POSITION; }
+  if (((remote->navigation_valid_mask & PX4LITE_NAV_VALID_VELOCITY) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->velocity_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { nav_stale |= PX4LITE_NAV_VALID_VELOCITY; }
+  if (((remote->navigation_valid_mask & PX4LITE_NAV_VALID_TIME) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->time_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { nav_stale |= PX4LITE_NAV_VALID_TIME; }
+  if (((remote->navigation_valid_mask & PX4LITE_NAV_VALID_ALTITUDE) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->altitude_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { nav_stale |= PX4LITE_NAV_VALID_ALTITUDE; }
+  remote->navigation_stale_mask = nav_stale;
+  if (remote->navigation_valid_mask != 0U) { remote->valid_mask |= PX4LITE_REMOTE_VALID_NAVIGATION; }
+  if (((remote->battery_valid_mask & PX4LITE_REMOTE_BATTERY_VALID_PRIMARY) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->battery1_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { battery_stale |= PX4LITE_REMOTE_BATTERY_VALID_PRIMARY; }
+  if (((remote->battery_valid_mask & PX4LITE_REMOTE_BATTERY_VALID_SECONDARY) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->battery2_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { battery_stale |= PX4LITE_REMOTE_BATTERY_VALID_SECONDARY; }
+  remote->battery_stale_mask = battery_stale;
+  if (remote->battery_valid_mask != 0U) { remote->valid_mask |= PX4LITE_REMOTE_VALID_BATTERY; }
+  if (((remote->environment_valid_mask & PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->pressure_temperature_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { environment_stale |= PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE; }
+  if (((remote->environment_valid_mask & PX4LITE_REMOTE_ENV_VALID_HUMIDITY) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->humidity_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { environment_stale |= PX4LITE_REMOTE_ENV_VALID_HUMIDITY; }
+  remote->environment_stale_mask = environment_stale;
+  if (remote->environment_valid_mask != 0U) { remote->valid_mask |= PX4LITE_REMOTE_VALID_ENVIRONMENT; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->heartbeat_update_ms) > PX4LITE_REMOTE_HEARTBEAT_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_HEARTBEAT; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_NAVIGATION) != 0U) && ((remote->navigation_valid_mask & ~nav_stale) == 0U)) { stale |= PX4LITE_REMOTE_VALID_NAVIGATION; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_ATTITUDE) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->attitude_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_ATTITUDE; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_ENVIRONMENT) != 0U) && ((remote->environment_valid_mask & ~environment_stale) == 0U)) { stale |= PX4LITE_REMOTE_VALID_ENVIRONMENT; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_BATTERY) != 0U) && ((remote->battery_valid_mask & ~battery_stale) == 0U)) { stale |= PX4LITE_REMOTE_VALID_BATTERY; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_MODULES) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->modules_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_MODULES; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_ALARM) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->alarm_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_ALARM; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_MOTOR) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->motor_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_MOTOR; }
+  if (((remote->valid_mask & PX4LITE_REMOTE_VALID_LOG) != 0U) && (Px4Lite_ElapsedMs(now_ms, remote->log_update_ms) > PX4LITE_REMOTE_DATA_STALE_MS)) { stale |= PX4LITE_REMOTE_VALID_LOG; }
+  remote->stale_mask = stale;
+}
+
+
 
 /**
  * @brief 设置本地/远程显示模式。

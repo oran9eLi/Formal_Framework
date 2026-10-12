@@ -27,6 +27,8 @@ typedef struct {
 
 /**
  * @brief 初始化 RTC 外设和备份域访问。
+ * @note 已选 LSI/LSE 也重新确保振荡器就绪；每次等待不超过配置的 5000 ms。
+ *       不自动重置备份域；失败不声明 ready。LSI 的有效时间标记不保证 VDD 断电期间走时。
  *
  * @return 初始化结果。
  */

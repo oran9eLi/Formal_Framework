@@ -20,6 +20,30 @@ static TIM_HandleTypeDef s_tim_motor34;
 static uint32_t s_arr;
 
 /**
+ * @brief 致命异常的独立撤收路径，先切断引脚上的波形再禁用通道。
+ * @note 固定对应本板 PA6/PA7、PD12/PD13；保留其他 GPIO 位和定时器通道。
+ *       不使用 HAL 句柄、不等待、不恢复中断，正常电机控制不得调用此入口。
+ */
+void BSP_PWM_EmergencyStop(void)
+{
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN;
+  (void)RCC->AHB1ENR;
+  GPIOA->BSRR = (uint32_t)(GPIO_PIN_6 | GPIO_PIN_7) << 16U;
+  GPIOD->BSRR = (uint32_t)(GPIO_PIN_12 | GPIO_PIN_13) << 16U;
+  GPIOA->OTYPER &= ~(uint32_t)(GPIO_PIN_6 | GPIO_PIN_7);
+  GPIOD->OTYPER &= ~(uint32_t)(GPIO_PIN_12 | GPIO_PIN_13);
+  GPIOA->PUPDR &= ~(0xFUL << 12U);
+  GPIOD->PUPDR &= ~(0xFUL << 24U);
+  GPIOA->MODER = (GPIOA->MODER & ~(0xFUL << 12U)) | (0x5UL << 12U);
+  GPIOD->MODER = (GPIOD->MODER & ~(0xFUL << 24U)) | (0x5UL << 24U);
+  RCC->APB1ENR |= RCC_APB1ENR_TIM3EN | RCC_APB1ENR_TIM4EN;
+  (void)RCC->APB1ENR;
+  TIM3->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC2E);
+  TIM4->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC2E);
+  __DSB();
+}
+
+/**
  * @brief PWM 通道到 TIM 句柄和 HAL 通道的映射。
  */
 typedef struct {

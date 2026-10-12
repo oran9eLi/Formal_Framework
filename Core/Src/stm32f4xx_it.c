@@ -20,6 +20,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "core_fatal.h"
 #include "stm32f4xx_it.h"
 #include "bsp_gnss.h"
 #include "bsp_config.h"
@@ -54,11 +55,12 @@ void Fault_CaptureAndHalt(uint32_t *stack, uint32_t exc_return, uint32_t fault_t
  * @param[in] exc_return 异常入口 LR/EXC_RETURN 值。
  * @param[in] fault_type Fault 类型，见 `Fault_CrashType_t`。
  *
- * @note 本函数运行在 fault 上下文，只允许保存寄存器快照，不打印、不访问文件系统、不做恢复。
+ * @note 先撤收四路 PWM，再对有效异常栈保存现场；不打印、不访问文件系统、不做恢复。
  */
 void Fault_CaptureAndHalt(uint32_t *stack, uint32_t exc_return, uint32_t fault_type)
 {
-  __disable_irq();
+  uint32_t frame_words = ((exc_return & 0x10U) != 0U) ? 8U : 26U;
+  Core_FatalQuiesce();
 
   g_fault_crash_snapshot.magic      = 0xFA417A11UL;
   g_fault_crash_snapshot.fault_type = fault_type;
@@ -67,7 +69,12 @@ void Fault_CaptureAndHalt(uint32_t *stack, uint32_t exc_return, uint32_t fault_t
   g_fault_crash_snapshot.psp        = __get_PSP();
   g_fault_crash_snapshot.active_sp  = (uint32_t)stack;
 
-  if (stack != 0) {
+  /* CFSR 的压栈/退栈/浮点延迟压栈错误使现场不可信，跳过解引用。
+     带浮点扩展帧时，基本整数寄存器在 18 个浮点保留字之后。 */
+  if ((((uintptr_t)stack & 3U) == 0U) &&
+      ((SCB->CFSR & 0x3838UL) == 0U) &&
+      (Core_FatalRamRangeValid((uintptr_t)stack, frame_words * sizeof(uint32_t)) != 0U)) {
+    if (frame_words == 26U) { stack += 18U; }
     g_fault_crash_snapshot.stacked_r0   = stack[0];
     g_fault_crash_snapshot.stacked_r1   = stack[1];
     g_fault_crash_snapshot.stacked_r2   = stack[2];
@@ -87,9 +94,7 @@ void Fault_CaptureAndHalt(uint32_t *stack, uint32_t exc_return, uint32_t fault_t
   g_fault_crash_snapshot.icsr  = SCB->ICSR;
   g_fault_crash_snapshot.shcsr = SCB->SHCSR;
 
-  while (1) {
-    __NOP();
-  }
+  Core_FatalHalt();
 }
 
 /******************************************************************************/

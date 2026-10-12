@@ -37,9 +37,21 @@ typedef struct {
 } Display_Gt911Debug_t;
 
 /**
- * @brief Initialize the GT911 touch controller.
+ * @brief 启动非阻塞触摸阶段机；就绪前返回 NOT_READY，后续由 Service 推进。
  */
 Display_Gt911Result_t Display_Gt911_Init(void);
+/** @brief 触摸独立运行状态，供同一显示任务读取。 */
+typedef struct {
+  uint8_t ready; /**< 1 表示控制器已就绪。 */
+  uint8_t recovering; /**< 1 表示正在初始化或退避等待恢复。 */
+  uint8_t last_error; /**< 最近故障码；恢复成功清零。 */
+  uint32_t recovery_count; /**< 累计初始化尝试次数，含首次启动。 */
+} Display_Gt911Status_t;
+/** @brief 显示任务每周期推进一次硬件恢复阶段；now_ms 为真实毫秒。 */
+void Display_Gt911_Service(uint32_t now_ms);
+/** @brief 复制纯软件状态，不访问硬件。 */
+void Display_Gt911_GetStatus(Display_Gt911Status_t *out);
+
 /**
  * @brief Scan one touch point and return landscape display coordinates.
  */

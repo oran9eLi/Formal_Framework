@@ -706,15 +706,20 @@ static Px4Lite_Result_t MavTx_SendGpsRaw(uint32_t now_ms)
   if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
   /* 首次定位前抑制 GPS_RAW，避免持续发送 no-fix 位置帧。 */
   if (gnss.fix_type == 0U) { return PX4LITE_NOT_READY; }
+  if ((gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION) == 0U) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_ElapsedMs(now_ms, gnss.position_update_ms) > PX4LITE_GNSS_MAX_AGE_MS) { return PX4LITE_STALE; }
   if (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
   if (gnss.header.sequence == s_last_gps_sequence[s_send_target]) { return PX4LITE_IDLE; }
 
   memset(&packet, 0, sizeof(packet));
 
   /* GNSS topic 不提供完整 UTC epoch，这里按 MAVLink 允许的系统启动后时间填充。 */
-  packet.time_usec = (uint64_t)gnss.header.sample_time_ms * 1000ULL;
+  packet.time_usec = (uint64_t)gnss.position_update_ms * 1000ULL;
 
   mav_fix                   = MavTx_MapGpsFixType(gnss.fix_type);
+  /* 高度已失效时只声明二维定位，不能以新的 GGA/RMC 刷新旧高度。 */
+  if (((gnss.valid_mask & PX4LITE_GNSS_VALID_ALTITUDE) == 0U) ||
+      (Px4Lite_ElapsedMs(now_ms, gnss.altitude_update_ms) > PX4LITE_GNSS_MAX_AGE_MS)) { mav_fix = (uint8_t)GPS_FIX_TYPE_2D_FIX; }
   packet.fix_type           = mav_fix;
   packet.eph                = (gnss.hdop_x100 != 0U) ? gnss.hdop_x100 : UINT16_MAX;
   packet.epv                = UINT16_MAX;
@@ -723,9 +728,14 @@ static Px4Lite_Result_t MavTx_SendGpsRaw(uint32_t now_ms)
   if (mav_fix >= (uint8_t)GPS_FIX_TYPE_2D_FIX) {
     packet.lat = gnss.latitude_e7;
     packet.lon = gnss.longitude_e7;
-    packet.alt = gnss.altitude_mm;
-    packet.vel = MavTx_SaturateUint16(gnss.ground_speed_cms);
-    packet.cog = MavTx_NormalizeHeading(gnss.heading_deg100);
+    packet.alt = (mav_fix >= (uint8_t)GPS_FIX_TYPE_3D_FIX) ? gnss.altitude_mm : 0;
+    packet.vel = UINT16_MAX;
+    packet.cog = UINT16_MAX;
+    if (((gnss.valid_mask & PX4LITE_GNSS_VALID_VELOCITY) != 0U) &&
+        (Px4Lite_ElapsedMs(now_ms, gnss.velocity_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS)) {
+      packet.vel = (gnss.ground_speed_cms < UINT16_MAX) ? (uint16_t)gnss.ground_speed_cms : (UINT16_MAX - 1U);
+      packet.cog = MavTx_NormalizeHeading(gnss.heading_deg100);
+    }
   } else {
     packet.vel = UINT16_MAX;
     packet.cog = UINT16_MAX;
@@ -764,6 +774,8 @@ static Px4Lite_Result_t MavTx_SendGnssDetail(uint32_t now_ms)
   if (result != PX4LITE_OK) { return PX4LITE_NOT_READY; }
   /* 卫星细节跟随 GPS_RAW 策略：定位成功后才发送。 */
   if (gnss.fix_type == 0U) { return PX4LITE_NOT_READY; }
+  if ((gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION) == 0U) { return PX4LITE_NOT_READY; }
+  if (Px4Lite_ElapsedMs(now_ms, gnss.position_update_ms) > PX4LITE_GNSS_MAX_AGE_MS) { return PX4LITE_STALE; }
   if (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
   if (gnss.header.sequence == s_last_detail_sequence[s_send_target]) { return PX4LITE_IDLE; }
 
@@ -822,7 +834,9 @@ static Px4Lite_Result_t MavTx_SendPosition(uint32_t now_ms)
 
   if (Px4Lite_CopyNavigation(&navigation) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
   if (Px4Lite_IsFresh(&navigation.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) == 0U) { return PX4LITE_STALE; }
-  if ((navigation.valid_mask & PX4LITE_NAV_VALID_POSITION) == 0U) { return PX4LITE_NOT_READY; }
+  /* GLOBAL_POSITION_INT 没有速度未知值；仅字段齐全时发送，位置单域由 GPS_RAW_INT 承载。 */
+  if ((navigation.valid_mask & (PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY | PX4LITE_NAV_VALID_ALTITUDE)) !=
+      (PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY | PX4LITE_NAV_VALID_ALTITUDE)) { return PX4LITE_NOT_READY; }
 
   memset(&packet, 0, sizeof(packet));
   packet.time_boot_ms = now_ms;
@@ -894,7 +908,7 @@ static Px4Lite_Result_t MavTx_SendBatteryStatus(uint32_t now_ms)
   packet.temperature      = INT16_MAX;
   for (i = 0U; i < 10U; ++i) { packet.voltages[i] = UINT16_MAX; }
   packet.voltages[0]       = MavTx_SaturateUint16(battery.voltage_mv);
-  packet.current_battery   = MavTx_SaturateCentiAmp(battery.current_ma);
+  packet.current_battery   = (battery.current_valid != 0U) ? MavTx_SaturateCentiAmp(battery.current_ma) : -1;
   packet.current_consumed  = -1;
   packet.energy_consumed   = -1;
   packet.battery_remaining = (int8_t)battery.percent;
@@ -959,7 +973,7 @@ static Px4Lite_Result_t MavTx_SendBattery2(uint32_t now_ms)
   packet.temperature      = INT16_MAX;
   for (i = 0U; i < 10U; ++i) { packet.voltages[i] = UINT16_MAX; }
   packet.voltages[0]       = MavTx_SaturateUint16(battery.voltage_mv);
-  packet.current_battery   = MavTx_SaturateCentiAmp(battery.current_ma);
+  packet.current_battery   = (battery.current_valid != 0U) ? MavTx_SaturateCentiAmp(battery.current_ma) : -1;
   packet.current_consumed  = -1;
   packet.energy_consumed   = -1;
   packet.battery_remaining = (int8_t)battery.percent;
@@ -1247,7 +1261,7 @@ static Px4Lite_Result_t MavTx_SendSystemStatus(uint32_t now_ms)
   packet.battery_remaining               = -1;
   if ((Px4Lite_CopyBattery(&battery) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery.header, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) != 0U)) {
     packet.voltage_battery   = MavTx_SaturateUint16(battery.voltage_mv);
-    packet.current_battery   = MavTx_SaturateCentiAmp(battery.current_ma);
+    packet.current_battery   = (battery.current_valid != 0U) ? MavTx_SaturateCentiAmp(battery.current_ma) : -1;
     packet.battery_remaining = (int8_t)battery.percent;
   }
 
@@ -1629,7 +1643,7 @@ static uint16_t MavTx_PackAlarmTable(uint8_t ver, uint32_t now_ms, uint8_t *out,
  * @details
  * 表头 3 字节：latest_seq(2,LE)+count；每条 8 字节：sequence(2,LE)+message_id(2,LE)+
  * time(3 字节，按 RPi 契约填时/分/秒各 1 字节)+severity(1)。取当前日志全量快照
- * (最多 PX4LITE_LOCAL_LOG_CAP 条)，RPi 侧按 sequence 去重。返回 payload 长度。
+ * (最近最多 9 条)，RPi 侧按 sequence 去重。返回 payload 长度。
  * 注意 time 用时/分/秒三字节，非旧 tunnel 的 U24 十进制，遵循 RPi 数据格式文档。
  */
 static uint16_t MavTx_PackMessageLogTable(uint8_t *out, uint16_t out_cap)
@@ -1637,7 +1651,7 @@ static uint16_t MavTx_PackMessageLogTable(uint8_t *out, uint16_t out_cap)
   /* 全量日志暂存(~144B)用 static 而非栈局部：本函数只由 CommTask 单线程调用，
      避免与调用方 MavTx_SendRpiMessageLogTable 的 mavlink_tunnel_t packet(133B)
      同时占栈约 277B(CommTask 栈仅 1536B)。static 不可重入，但此处无重入。 */
-  static Px4Lite_LogEntry_t entries[PX4LITE_LOCAL_LOG_CAP];
+  static Px4Lite_LogEntry_t entries[9U];
   uint16_t latest_seq = 0U;
   uint16_t count;
   uint16_t off = 3U;
@@ -1646,7 +1660,7 @@ static uint16_t MavTx_PackMessageLogTable(uint8_t *out, uint16_t out_cap)
 
   if ((out == 0) || (out_cap < 3U)) { return 0U; }
 
-  count = Px4Lite_LocalMsgLogCopy(entries, (uint16_t)PX4LITE_LOCAL_LOG_CAP, 0, &latest_seq);
+  count = Px4Lite_LocalMsgLogCopy(entries, 9U, 0, &latest_seq);
   for (i = 0U; i < count; ++i) {
     uint8_t *row;
     uint32_t t;
@@ -1804,7 +1818,7 @@ static Px4Lite_Result_t MavTx_SendRpiAlarmTable(uint32_t now_ms)
 /**
  * @brief RPi 专属：用 TUNNEL(payload_type=0x8002) 发送完整消息日志快照。
  * @details
- * 替代 LoRa 上的单条 LOGSYNC，一帧带当前全部日志(最多 PX4LITE_LOCAL_LOG_CAP 条)，
+ * 替代 LoRa 上的单条 LOGSYNC，一帧带当前全部日志(最近最多 9 条)，
  * RPi 侧按 sequence 去重。周期性重发即为全量重播。仅发 USART6。
  */
 static Px4Lite_Result_t MavTx_SendRpiMessageLogTable(uint32_t now_ms)
@@ -1985,7 +1999,7 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_catalog_index       = 0U;
   memset(&s_pending_command, 0, sizeof(s_pending_command));
   memset(s_pending_ack, 0, sizeof(s_pending_ack));
-  Px4Lite_LocalMsgLogReset();
+  /* 通信初始化/恢复不得清空由 Control、Estimator、Business 共写的事件环。 */
   return PX4LITE_OK;
 }
 

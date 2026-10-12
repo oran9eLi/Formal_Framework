@@ -26,13 +26,15 @@ typedef struct {
   uint8_t mount_result;     /**< 最近一次挂载结果。 */
   uint8_t last_command;     /**< 最近一次底层 SD 命令。 */
   uint8_t last_response;    /**< 最近一次底层 SD 响应。 */
-  uint8_t open_phase;       /**< 文件打开阶段。 */
-  uint8_t open_result;      /**< 最近一次文件打开结果。 */
-  uint8_t reserved[2];      /**< 保留字段，保持结构体对齐。 */
+  uint8_t open_phase;       /**< 最近故障阶段：1..6 打开/表头/seek，7 换日 sync，8 换日 close，9 写入，10 sync，11 mount，12 主动恢复 close。 */
+  uint8_t open_result;      /**< 最近故障真实 FatFs 结果；清理及成功重挂载不覆盖。 */
+  uint8_t short_write;      /**< 最近故障是否为 FR_OK 短写；真实 FatFs 结果仍保留。 */
+  uint8_t reserved;         /**< 保留字节。 */
   uint32_t written_count;   /**< 累计成功写入记录数。 */
+  uint32_t write_drop_count; /**< 累计提交后未完整写入的记录数；不含队列溢出。 */
   uint32_t error_count;     /**< 累计写入或挂载错误数。 */
   uint32_t last_write_ms;   /**< 最近成功写入时间，单位：ms。 */
-  uint32_t last_attempt_ms; /**< 最近一次挂载或写入尝试时间，单位：ms。 */
+  uint32_t last_attempt_ms; /**< 最近挂载时刻或失败清理完成时刻，单位：ms；失败后从此退避。 */
 } Storage_SdStatus_t;
 
 /**
@@ -41,6 +43,9 @@ typedef struct {
  * @note 实际挂载和文件打开可在 `Storage_SD_Service()` 中按需完成。
  */
 void Storage_SD_Init(void);
+
+/** @brief 仅由 storage task 释放运行期句柄并请求重挂载，保留统计与错误首因。 */
+void Storage_SD_Recover(uint32_t now_ms);
 
 /**
  * @brief 执行 SD 日志服务周期处理。
@@ -97,7 +102,7 @@ void Storage_SD_CopyStatus(Storage_SdStatus_t *out);
 /**
  * @brief 判断 SD 日志服务是否可写入。
  *
- * @return 1 表示已挂载且文件已打开，0 表示不可写入。
+ * @return 1 表示已挂载且服务在线，0 表示不可写入。
  */
 uint8_t Storage_SD_IsReady(void);
 

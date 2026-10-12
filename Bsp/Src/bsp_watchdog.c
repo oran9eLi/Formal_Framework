@@ -23,6 +23,9 @@
 
 static uint8_t s_reset_cause = BSP_RESET_CAUSE_NONE;
 static uint8_t s_started;
+static uint8_t s_runtime;
+static uint8_t s_failed;
+static uint8_t s_boot_sealed;
 
 void BSP_Watchdog_CaptureResetCause(void)
 {
@@ -67,43 +70,75 @@ static uint8_t Bsp_WatchdogWaitSync(uint32_t flag)
   return 0U;
 }
 
-BSP_Status_t BSP_Watchdog_Start(void)
+/** @brief 更新 IWDG 窗口；仅在同步成功后刷新，失败不会继续续期。 */
+static BSP_Status_t Bsp_WatchdogSetWindow(uint32_t prescaler, uint32_t reload)
 {
-  if (s_started != 0U) { return BSP_STATUS_OK; }
-
-#if BSP_WATCHDOG_FREEZE_ON_DEBUG
-  /* 调试器挂起内核时冻结 IWDG，否则断点一停就复位，无法单步。
-     STM32F4 的 DBGMCU 常供时钟，无需像 F1 那样先使能 APB2 时钟。 */
-  DBGMCU->APB1FZ |= DBGMCU_APB1_FZ_DBG_IWDG_STOP;
-#endif
-
-  /* 启动 IWDG，该命令同时自动使能 LSI，无需另行配置 RCC。 */
-  IWDG->KR = BSP_IWDG_KEY_ENABLE;
-
-  /* 解除写保护后配置分频与重装值；每次写入前必须等待对应更新标志清零。 */
   IWDG->KR = BSP_IWDG_KEY_WRITE;
-
   if (Bsp_WatchdogWaitSync(IWDG_SR_PVU) == 0U) { return BSP_STATUS_TIMEOUT; }
-  IWDG->PR = BSP_WATCHDOG_PRESCALER_CODE;
-
+  IWDG->PR = prescaler;
   if (Bsp_WatchdogWaitSync(IWDG_SR_RVU) == 0U) { return BSP_STATUS_TIMEOUT; }
-  IWDG->RLR = BSP_WATCHDOG_RELOAD;
-
-  /* 等待两个值都装载完成后再喂一次，确保首个超时窗口按新配置计时。 */
+  IWDG->RLR = reload;
   if (Bsp_WatchdogWaitSync(IWDG_SR_PVU | IWDG_SR_RVU) == 0U) { return BSP_STATUS_TIMEOUT; }
   IWDG->KR = BSP_IWDG_KEY_RELOAD;
-
-  s_started = 1U;
   return BSP_STATUS_OK;
 }
 
+/** @brief main 最早期启用启动窗口；不使用 HAL tick 或 RTOS。 */
+BSP_Status_t BSP_Watchdog_StartBoot(void)
+{
+  BSP_Status_t result;
+  if (s_failed != 0U) { return BSP_STATUS_ERROR; }
+  if (s_started != 0U) { return BSP_STATUS_OK; }
+#if BSP_WATCHDOG_FREEZE_ON_DEBUG
+  DBGMCU->APB1FZ |= DBGMCU_APB1_FZ_DBG_IWDG_STOP;
+#else
+  DBGMCU->APB1FZ &= ~DBGMCU_APB1_FZ_DBG_IWDG_STOP;
+#endif
+  IWDG->KR = BSP_IWDG_KEY_ENABLE;
+  s_started = 1U;
+  s_failed = 1U;
+  result = Bsp_WatchdogSetWindow(BSP_WATCHDOG_BOOT_PRESCALER_CODE, BSP_WATCHDOG_BOOT_RELOAD);
+  if (result == BSP_STATUS_OK) { s_failed = 0U; }
+  return result;
+}
+
+/** @brief 只允许调度前有限初始化进展点刷新启动窗口；失败后无效。 */
+void BSP_Watchdog_BootProgress(void)
+{
+  if ((s_started != 0U) && (s_failed == 0U) && (s_boot_sealed == 0U) && (s_runtime == 0U)) {
+    IWDG->KR = BSP_IWDG_KEY_RELOAD;
+  }
+}
+
+/** @brief 调度器交接或任一初始化失败后，永久关闭本次启动的进展刷新。 */
+void BSP_Watchdog_SealBootProgress(void)
+{
+  s_boot_sealed = 1U;
+}
+
+/** @brief 收齐首轮心跳后收紧窗口；失败锁存，重复成功调用不重新配置。 */
+BSP_Status_t BSP_Watchdog_EnterRuntime(void)
+{
+  BSP_Status_t result;
+  if ((s_started == 0U) || (s_failed != 0U) || (s_boot_sealed == 0U)) { return BSP_STATUS_ERROR; }
+  if (s_runtime != 0U) { return BSP_STATUS_OK; }
+  s_failed = 1U;
+  result = Bsp_WatchdogSetWindow(BSP_WATCHDOG_PRESCALER_CODE, BSP_WATCHDOG_RELOAD);
+  if (result == BSP_STATUS_OK) {
+    s_runtime = 1U;
+    s_failed = 0U;
+  }
+  return result;
+}
+
+/** @brief 查询硬件是否已发出启动命令，不能据此推断运行窗口已配置成功。 */
 uint8_t BSP_Watchdog_IsStarted(void)
 {
   return s_started;
 }
 
+/** @brief 仅运行配置成功后刷新；调用者必须先通过任务健康门控。 */
 void BSP_WatchdogRefresh(void)
 {
-  if (s_started == 0U) { return; }
-  IWDG->KR = BSP_IWDG_KEY_RELOAD;
+  if ((s_runtime != 0U) && (s_failed == 0U)) { IWDG->KR = BSP_IWDG_KEY_RELOAD; }
 }

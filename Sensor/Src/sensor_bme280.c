@@ -1,6 +1,8 @@
 /**
  * @file sensor_bme280.c
- * @brief Implement the typed BME280 environmental sensor driver.
+ * @brief BME280 强制测量、补偿及设备事实缓存。
+ * @details 属于 Sensor Driver 层，通过 BSP 访问总线和时间；sensor 任务唯一推进
+ *          测量与恢复。不得访问 HAL、发布 Framework topic 或判定 OFFLINE。
  */
 
 #include "sensor_bme280.h"
@@ -33,6 +35,7 @@
 
 #define BME280_OSRS_X1              0x01U
 #define BME280_MODE_FORCED          0x01U
+#define BME280_CTRL_MEAS_SLEEP_X1   ((BME280_OSRS_X1 << 5) | (BME280_OSRS_X1 << 2))
 #define BME280_CTRL_MEAS_FORCED_X1  ((BME280_OSRS_X1 << 5) | (BME280_OSRS_X1 << 2) | BME280_MODE_FORCED)
 #define BME280_CTRL_HUM_X1          BME280_OSRS_X1
 #define BME280_CONFIG_STANDBY_0_5MS 0x00U
@@ -234,13 +237,15 @@ static float Bme280_CompensateHumidity(int32_t adc_H)
   return (humidity_pct > 100.0f) ? 100.0f : humidity_pct;
 }
 
-static Bme280_Result_t Bme280_ConfigureForcedMode(void)
+/** @brief 初始化过采样参数并保持休眠，测量由周期服务显式触发。 */
+static Bme280_Result_t Bme280_ConfigureSleepMode(void)
 {
-  if ((Bme280_WriteReg(BME280_REG_CTRL_HUM, BME280_CTRL_HUM_X1) != BSP_STATUS_OK) || (Bme280_WriteReg(BME280_REG_CONFIG, BME280_CONFIG_STANDBY_0_5MS) != BSP_STATUS_OK) || (Bme280_WriteReg(BME280_REG_CTRL_MEAS, BME280_CTRL_MEAS_FORCED_X1) != BSP_STATUS_OK)) { return BME280_RESULT_IO_ERROR; }
+  if ((Bme280_WriteReg(BME280_REG_CTRL_HUM, BME280_CTRL_HUM_X1) != BSP_STATUS_OK) || (Bme280_WriteReg(BME280_REG_CONFIG, BME280_CONFIG_STANDBY_0_5MS) != BSP_STATUS_OK) || (Bme280_WriteReg(BME280_REG_CTRL_MEAS, BME280_CTRL_MEAS_SLEEP_X1) != BSP_STATUS_OK)) { return BME280_RESULT_IO_ERROR; }
 
   return BME280_RESULT_OK;
 }
 
+/** @brief 检查芯片、加载补偿参数并配置休眠；不隐式触发采样。 */
 Bme280_Result_t Sensor_BME280_Init(void)
 {
   Bme280_Result_t result;
@@ -271,7 +276,7 @@ Bme280_Result_t Sensor_BME280_Init(void)
   result = Bme280_ReadCalibration();
   if (result != BME280_RESULT_OK) { return result; }
 
-  result = Bme280_ConfigureForcedMode();
+  result = Bme280_ConfigureSleepMode();
   if (result == BME280_RESULT_OK) {
     s_initialized       = 1U;
     s_next_init_ms      = 0U;
@@ -311,7 +316,13 @@ void Sensor_BME280_RequestReinit(void)
   s_next_init_ms   = 0U;
 }
 
-Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
+/**
+ * @brief 由 sensor 任务推进初始化和测量，仅在空闲且获得许可时启动新转换。
+ * @param[in] now_ms 本次服务的真实毫秒时间，用于等待与退避判断。
+ * @param[in] start_measurement 非 0 允许启动一次测量；忙时忽略，不排队补采。
+ * @return OK 表示新快照仅产生一次，NO_DATA 表示等待或本周期无采样许可。
+ */
+Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms, uint8_t start_measurement)
 {
   uint8_t data[8];
   int32_t adc_P;
@@ -341,7 +352,7 @@ Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
     if (result != BME280_RESULT_OK) {
       uint32_t primask;
 
-      s_next_init_ms = now_ms + BME280_INIT_RETRY_MS;
+      s_next_init_ms = BSP_Time_GetTickMs() + BME280_INIT_RETRY_MS;
       primask = BSP_Critical_Enter();
       s_snapshot.error_count++;
       BSP_Critical_Exit(primask);
@@ -350,13 +361,14 @@ Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
   }
 
   if (s_measure_state == BME280_MEASURE_IDLE) {
-    result = Bme280_ConfigureForcedMode();
-    if (result != BME280_RESULT_OK) {
+    if (start_measurement == 0U) { return BME280_RESULT_NO_DATA; }
+    if (Bme280_WriteReg(BME280_REG_CTRL_MEAS, BME280_CTRL_MEAS_FORCED_X1) != BSP_STATUS_OK) {
       Bme280_NoteReadFailure();
-      return result;
+      return BME280_RESULT_IO_ERROR;
     }
 
-    s_measure_start_ms = now_ms;
+    /* 用成功触发写事务后的真实时间保守标记测量，不能用迟到的读取时间刷新年龄。 */
+    s_measure_start_ms = BSP_Time_GetTickMs();
     s_measure_state    = BME280_MEASURE_WAITING;
     return BME280_RESULT_NO_DATA;
   }
@@ -395,7 +407,7 @@ Bme280_Result_t Sensor_BME280_Service(uint32_t now_ms)
 
     candidate.rx_sequence++;
     if (candidate.rx_sequence == 0U) { candidate.rx_sequence = 1U; }
-    candidate.sample_time_ms        = now_ms;
+    candidate.sample_time_ms        = s_measure_start_ms;
     candidate.temperature_c         = Bme280_CompensateTemperature(adc_T);
     candidate.pressure_pa           = Bme280_CompensatePressurePa(adc_P);
     candidate.relative_humidity_pct = Bme280_CompensateHumidity(adc_H);

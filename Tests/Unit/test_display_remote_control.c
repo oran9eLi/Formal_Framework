@@ -7,6 +7,7 @@
 #include "../../Display/Src/display.c"
 
 static Px4Lite_RemoteMode_t view_mode;
+static uint8_t local_power_inhibited;
 static unsigned throttle_calls, takeoff_calls, landing_calls, attitude_calls, mode_calls, stop_calls;
 static Px4Lite_AttitudeAction_t last_attitude_action;
 static Px4Lite_ControlMode_t last_control_mode;
@@ -26,7 +27,7 @@ Px4Lite_Result_t App_SetMotorControlMode(Px4Lite_ControlMode_t mode)
 Px4Lite_Result_t App_CopyAttitudeStatus(App_AttitudeStatus_t *out)
 { *out = attitude_status; return PX4LITE_OK; }
 Px4Lite_Result_t App_EmergencyStopMotors(void) { stop_calls++; return PX4LITE_OK; }
-uint8_t App_IsMotorPowerInhibited(void) { return 0U; }
+uint8_t App_IsMotorPowerInhibited(void) { return local_power_inhibited; }
 void App_MessageLogPushThrottlePowerFail(uint32_t now) { (void)now; }
 void App_MessageLogPushLandingThrottleReject(uint32_t now) { (void)now; }
 void App_MessageLogPushTakeoffPowerFail(uint32_t now) { (void)now; }
@@ -44,6 +45,12 @@ int main(void)
   App_MotorSnapshot_t motor;
   s_display_initialized = 1U;
   s_display_ready = 1U;
+  local_power_inhibited = 1U;
+  s_motor_band = DISPLAY_MOTOR_BAND_OK;
+  assert(Display_MotorPowerAllowsOutput() == 0U);
+  local_power_inhibited = 0U;
+  s_motor_band = DISPLAY_MOTOR_BAND_DISCONNECT;
+  assert(Display_MotorPowerAllowsOutput() == 1U);
   view_mode = PX4LITE_REMOTE_MODE_REMOTE;
   for (i = 0U; i < 4U; i++) {
     Display_HmiVariableId_t id = (Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_PWM_1 + i);

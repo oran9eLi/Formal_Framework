@@ -143,11 +143,24 @@ typedef struct {
   App_AlarmRecord_t records[PX4LITE_MODULE_COUNT]; /**< 固定容量告警记录表。 */
 } App_AlarmSnapshot_t;
 
+#define APP_ENV_VALID_PRESSURE_TEMPERATURE (1UL << 0) /**< 气压和温度有效。 */
+#define APP_ENV_VALID_VOLTAGE1 (1UL << 1) /**< 主电池电压有效。 */
+#define APP_ENV_VALID_VOLTAGE2 (1UL << 2) /**< 第二电池电压有效。 */
+#define APP_ENV_VALID_CURRENT1 (1UL << 3) /**< 主电池电流有效。 */
+#define APP_ENV_VALID_PERCENT1 (1UL << 4) /**< 主电池电量百分比有效。 */
+#define APP_ENV_VALID_CURRENT2 (1UL << 5) /**< 第二电池电流有效。 */
+#define APP_ENV_VALID_PERCENT2 (1UL << 6) /**< 第二电池电量百分比有效。 */
+#define APP_ENV_VALID_HUMIDITY (1UL << 7) /**< 相对湿度有效。 */
+#define APP_ENV_VALID_ENVIRONMENT (APP_ENV_VALID_PRESSURE_TEMPERATURE | APP_ENV_VALID_HUMIDITY) /**< 环境来源字段组合。 */
+#define APP_ENV_VALID_BATTERY1 (APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_CURRENT1 | APP_ENV_VALID_PERCENT1) /**< 主电池来源字段组合。 */
+#define APP_ENV_VALID_BATTERY2 (APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_CURRENT2 | APP_ENV_VALID_PERCENT2) /**< 第二电池来源字段组合。 */
+
 /**
- * @brief 应用层环境和电源快照。
+ * @brief 应用层环境和电源快照；各来源分别报告有效性。
  */
 typedef struct {
   Px4Lite_TopicHeader_t header; /**< 快照头，包含环境数据发布时间。 */
+  uint32_t valid_mask;          /**< 新鲜字段位，使用 APP_ENV_VALID_*；未置位字段清零。 */
   float pressure_pa;            /**< 气压，单位：Pa。 */
   float temperature_c;          /**< 温度，单位：摄氏度。 */
   float relative_humidity_pct;  /**< 相对湿度，单位：%。 */
@@ -423,19 +436,7 @@ Px4Lite_Result_t App_SetMotorControlMode(Px4Lite_ControlMode_t mode);
 
 Px4Lite_Result_t App_EmergencyStopMotors(void);
 
-/**
- * @brief Latch or release the motor-battery power inhibit.
- *
- * @details Separate from emergency stop: this states the external fact that the motor battery
- * cannot support output. Callers must maintain it every cycle from the motor battery band.
- * Latching zeroes all four targets and cancels any auto throttle ramp; while latched every
- * non-zero throttle and auto takeoff is refused. Releasing restores nothing on its own.
- *
- * @param[in] inhibit Non-zero to inhibit output, zero to allow.
- *
- * @return Command result.
- */
-Px4Lite_Result_t App_SetMotorPowerInhibit(uint8_t inhibit);
+
 
 /**
  * @brief Report whether the motor-battery power inhibit is currently latched.
@@ -443,6 +444,9 @@ Px4Lite_Result_t App_SetMotorPowerInhibit(uint8_t inhibit);
  * @return 1 when output is inhibited, 0 when allowed.
  */
 uint8_t App_IsMotorPowerInhibited(void);
+
+/** @brief 只读查询本机有效新鲜采样的低压事实，缺帧/过期不冒称低压。 */
+uint8_t App_IsMotorPowerLowVoltage(void);
 
 /**
  * @brief 设置单路电机目标油门百分比，并返回应用层布尔结果。
@@ -491,7 +495,7 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_m
 /**
  * @brief 清空本机固定环形消息日志。
  *
- * @note 这是 Business 层访问 Framework 本机消息日志的唯一 App API 包装入口。
+ * @note 仅供系统启动且调度器尚未运行时显式复位；页面清视图及任务恢复不得调用。
  */
 void App_ResetLocalMessageLog(void);
 
@@ -519,6 +523,7 @@ void App_PushLocalMessageLog(uint16_t message_id, uint32_t time_hhmmss, int32_t 
  */
 uint16_t App_CopyLocalMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint32_t *version, uint16_t *last_seq);
 
+/** @brief 兼容旧远端缓存读取；主页面与本机历史不使用此接口，退出旧同步归 M4。 */
 uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint16_t *last_seq, uint32_t now_ms);
 
 /**
@@ -526,38 +531,38 @@ uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity
  *
  * @param[in] now_ms 当前系统毫秒时间，用于判断远端日志新鲜度。
  *
- * @return 远端日志最新序号；无新鲜远端日志时返回 0。
+ * @return 远端序号与更新时间组合值；无新鲜远端日志时返回 0。
  *
- * @note Display 用该版本驱动 LVGL 日志区重绘，避免远端日志依赖本机日志版本。
+ * @note 旧缓存兼容接口；当前 Display 不再导入远端历史。
  */
 uint32_t App_GetRemoteMessageLogVersion(uint32_t now_ms);
 
 /**
- * @brief 开启或关闭当前选中远端节点的主数据查看租约。
+ * @brief 兼容旧接口：全局远端模式已退出，启用请求返回 0。
  *
- * @param[in] enabled 1 表示开启主数据查看，0 表示关闭。
+ * @param[in] enabled 非零启用被拒绝，零仅确认本机模式，不改变通信发送。
  * @param[in] now_ms 当前系统毫秒时间。
  *
- * @return 1 表示命令已提交，0 表示当前没有合法远端节点或提交失败。
+ * @return enabled 为零返回 1；非零请求返回 0，不产生通信副作用。
  */
 uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms);
 
 /**
- * @brief 选择一个远端节点并开启主数据查看。
+ * @brief 选择通信诊断对象，不修改本机主页面和发送调度。
  *
  * @param[in] node_id 远端节点 ID，不能等于本机 DCDW 后缀。
  * @param[in] now_ms 当前系统毫秒时间。
  *
- * @return 1 表示选择成功，0 表示角色不允许、节点非法或命令提交失败。
+ * @return 1 表示选择成功，0 表示节点非法或选择失败。
  */
 uint8_t App_SelectRemoteNode(uint8_t node_id, uint32_t now_ms);
 
 /**
- * @brief 查询远端查看租约是否已经超时。
+ * @brief 兼容旧接口：不再存在全局查看租约。
  *
  * @param[in] now_ms 当前系统毫秒时间。
  *
- * @return 1 表示已超时，0 表示未超时；主机角色当前不会自动超时退回。
+ * @return 固定返回 0；显式远端数据页须使用快照时间判断 STALE。
  */
 uint8_t App_RemoteViewExpired(uint32_t now_ms);
 
@@ -650,9 +655,9 @@ const char *App_GetFaultReasonText(uint16_t fault_code);
 Px4Lite_Result_t App_RequestAttitudeLevelCalibration(void);
 
 /**
- * @brief 获取当前远程显示模式（LOCAL/REMOTE），供显示取数层选源。
+ * @brief 兼容旧调用者，主页面的数据来源固定本机。
  *
- * @return 当前模式，见 `Px4Lite_RemoteMode_t`。
+ * @return 固定返回 `PX4LITE_REMOTE_MODE_LOCAL`。
  */
 Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void);
 

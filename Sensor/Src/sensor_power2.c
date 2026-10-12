@@ -321,10 +321,12 @@ Power_Result_t Sensor_Power2_Service(uint32_t now_ms)
   if (BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CURRENT_BATTERY2, &current_adc_mv) == BSP_STATUS_OK) {
     current_ma             = Power2_FilterCurrent(Power2_CalcCurrentMa(current_adc_mv));
     s_snapshot2.current_ma = current_ma;
+    s_snapshot2.current_valid = 1U;
     s_snapshot2.power_mw   = Power2_CalcPowerMw(voltage_mv, current_ma);
   } else {
     s_snapshot2.error_count++;
     s_snapshot2.current_ma = 0;
+    s_snapshot2.current_valid = 0U;
     s_snapshot2.power_mw   = 0U;
   }
 
@@ -347,6 +349,7 @@ Power_Result_t Sensor_Power2_GetStatus(Power_Status_t *out)
   out->sample_time_ms = s_snapshot2.sample_time_ms;
   out->error_count    = s_snapshot2.error_count;
   out->current_ma     = s_snapshot2.current_ma;
+  out->current_valid = s_snapshot2.current_valid;
   out->power_mw       = s_snapshot2.power_mw;
   out->percent        = s_snapshot2.percent;
   out->low_voltage    = s_snapshot2.low_voltage;

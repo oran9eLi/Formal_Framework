@@ -34,13 +34,20 @@ static uint32_t s_baro_sequence;
 static uint32_t s_battery_sequence;
 static uint32_t s_battery2_sequence;
 static uint32_t s_navigation_sequence;
+static int32_t s_navigation_attitude_cache[6]; /**< 最近姿态/角速度，单位0.01度/0.01度每秒；仅估计任务写。 */
+static uint32_t s_navigation_last_valid_mask; /**< 上次发布字段位，断流过期时也必须发布撤销。 */
 static uint32_t s_health_sequence;
 static uint32_t s_start_ms;
 static volatile uint8_t s_remoteid_reinit_requested;
-static uint8_t s_remoteid_present_prev; /* PC8 在位上一拍，0xFF=未知(首拍)，用于热拔插边沿检测 */
-static uint8_t s_lora_link_reset_pending;
+#if PX4LITE_ENABLE_REMOTE_ID
+static uint8_t s_remoteid_present_prev; /**< PC8 上一拍在位状态，0xFF 为首拍未知，用于热插拔边沿。 */
+#endif
+#if PX4LITE_ENABLE_LORA
+static uint8_t s_lora_link_reset_pending; /**< 1 表示链路已复位且等待重新可用，避免每周期重复复位。 */
+#endif
 static uint32_t s_last_imu_work_ms;
 static uint32_t s_last_baro_work_ms;
+static uint8_t s_baro_work_started; /**< 是否已发出首个气压测量许可，避免 0 ms 哨兵冲突。 */
 static uint32_t s_last_battery_work_ms;
 static uint32_t s_last_battery2_work_ms;
 static Px4Lite_AttitudeState_t s_attitude_state;
@@ -230,6 +237,7 @@ Px4Lite_Result_t Px4Lite_ModulesInit(void)
   s_health_sequence      = 0U;
   s_last_imu_work_ms     = 0U;
   s_last_baro_work_ms    = 0U;
+  s_baro_work_started    = 0U;
   s_last_battery_work_ms = 0U;
   s_last_battery2_work_ms = 0U;
   s_start_ms             = Px4Lite_PlatformGetMs();
@@ -366,7 +374,7 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
   result = Px4Lite_GnssRead(&gnss);
 
   if (result == PX4LITE_OK) {
-    gnss.header.sample_time_ms  = (gnss.header.sample_time_ms != 0U) ? gnss.header.sample_time_ms : now_ms;
+    /* 零测量时刻合法；链路活动和各测量时间戳分别保留。 */
     gnss.header.publish_time_ms = now_ms;
     gnss.header.sequence        = ++s_gnss_sequence;
     gnss.header.device_id       = (uint16_t)PX4LITE_MODULE_GNSS;
@@ -377,10 +385,10 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
     Px4Lite_PublishGnss(&gnss);
 
     taskENTER_CRITICAL();
-    s_status[PX4LITE_MODULE_GNSS].last_rx_ms         = gnss.header.sample_time_ms;
+    s_status[PX4LITE_MODULE_GNSS].last_rx_ms         = gnss.last_rx_ms;
     s_status[PX4LITE_MODULE_GNSS].consecutive_errors = 0U;
     if (s_status[PX4LITE_MODULE_GNSS].consecutive_valid < 65535U) { s_status[PX4LITE_MODULE_GNSS].consecutive_valid++; }
-    if (gnss.fix_type != 0U) { s_status[PX4LITE_MODULE_GNSS].last_valid_ms = gnss.header.sample_time_ms; }
+    if ((gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION) != 0U) { s_status[PX4LITE_MODULE_GNSS].last_valid_ms = gnss.position_update_ms; }
     s_status_version++;
     taskEXIT_CRITICAL();
 
@@ -424,16 +432,21 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 #endif
 
 #if PX4LITE_ENABLE_BARO
-  if ((s_last_baro_work_ms == 0U) || ((uint32_t)(now_ms - s_last_baro_work_ms) >= PX4LITE_BARO_WORK_PERIOD_MS)) {
+  {
     Px4Lite_SensorBaro_t baro;
     Px4Lite_Result_t result;
+    uint8_t start_measurement = 0U;
 
-    s_last_baro_work_ms = now_ms;
+    /* 每拍推进转换；只按采样周期发许可，失败也等待下个周期，避免 10 ms 重触发。 */
+    if ((s_baro_work_started == 0U) || ((uint32_t)(now_ms - s_last_baro_work_ms) >= PX4LITE_BARO_WORK_PERIOD_MS)) {
+      s_last_baro_work_ms = now_ms;
+      s_baro_work_started = 1U;
+      start_measurement = 1U;
+    }
     memset(&baro, 0, sizeof(baro));
-    result = Px4Lite_BaroRead(&baro);
+    result = Px4Lite_BaroRead(&baro, start_measurement);
     if (result == PX4LITE_OK) {
-      baro.header.sample_time_ms  = (baro.header.sample_time_ms != 0U) ? baro.header.sample_time_ms : now_ms;
-      baro.header.publish_time_ms = now_ms;
+      baro.header.publish_time_ms = Px4Lite_PlatformGetMs();
       baro.header.sequence        = ++s_baro_sequence;
       baro.header.device_id       = (uint16_t)PX4LITE_MODULE_BARO;
       baro.header.valid           = 1U;
@@ -522,6 +535,8 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
  */
 Px4Lite_Result_t Px4Lite_EstimatorInit(void)
 {
+  s_navigation_last_valid_mask = 0U;
+  memset(s_navigation_attitude_cache, 0, sizeof(s_navigation_attitude_cache));
   Px4Lite_AttitudeInit(&s_attitude_state);
   s_attitude_action_request = 0U;
   memset(&s_attitude_status, 0, sizeof(s_attitude_status));
@@ -543,11 +558,15 @@ Px4Lite_Result_t Px4Lite_RequestAttitudeAction(Px4Lite_AttitudeAction_t action)
   taskENTER_CRITICAL();
   if ((s_attitude_action_request != 0U) || (s_attitude_status.phase == PX4LITE_ATTITUDE_REQUESTED) ||
       (s_attitude_status.phase == PX4LITE_ATTITUDE_WAIT_STILL) || (s_attitude_status.phase == PX4LITE_ATTITUDE_COLLECTING)) {
-    taskEXIT_CRITICAL(); return PX4LITE_BUSY;
+    taskEXIT_CRITICAL();
+    Px4Lite_AttitudeLogRejected(action, PX4LITE_BUSY, now_ms);
+    return PX4LITE_BUSY;
   }
   if ((s_attitude_status.measurement_valid == 0U) ||
       ((uint32_t)(now_ms - s_attitude_status.last_sample_ms) > PX4LITE_IMU_MAX_AGE_MS)) {
-    taskEXIT_CRITICAL(); return PX4LITE_NOT_READY;
+    taskEXIT_CRITICAL();
+    Px4Lite_AttitudeLogRejected(action, PX4LITE_NOT_READY, now_ms);
+    return PX4LITE_NOT_READY;
   }
   s_attitude_action_request = (uint8_t)action;
   s_attitude_status.action = (uint8_t)action;
@@ -597,35 +616,35 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
   }
   Px4Lite_AttitudeService(&s_attitude_state, now_ms);
 
-  if ((Px4Lite_CopyGnss(&gnss) == PX4LITE_OK) && (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) != 0U)) {
-    navigation.latitude_e7        = gnss.latitude_e7;
-    navigation.longitude_e7       = gnss.longitude_e7;
-    navigation.fused_altitude_mm  = gnss.altitude_mm;
-    navigation.gnss_utc_sec       = gnss.utc_sec;
-    navigation.gnss_utc_date      = gnss.utc_date;
-    navigation.hdop_x100          = gnss.hdop_x100;
-    navigation.satellites_used    = gnss.satellites_used;
-    navigation.gnss_fix_type      = Px4Lite_GnssDisplayFixState(&gnss);
-    navigation.navigation_quality = gnss.header.quality;
-
-    if (gnss.fix_type != 0U) {
-      /* GNSS 只提供地速(ground_speed_cms)+地面航向 COG(heading_deg100)，这里按航向把
-         地速分解成北/东速度分量(NED)：vN = 地速·cos(航向)，vE = 地速·sin(航向)。
-         垂直速度 GNSS 不提供，置 0。填好 velocity 分量后，定位页速度、GLOBAL_POSITION_INT
-         的 vx/vy、RemoteID 水平速度才有正确来源(此前从未赋值，恒为 0)。 */
-      float course_rad = (float)gnss.heading_deg100 * (3.14159265358979323846f / 18000.0f);
-      float speed_cms  = (float)gnss.ground_speed_cms;
-      navigation.velocity_north_cms = (int32_t)(speed_cms * cosf(course_rad));
-      navigation.velocity_east_cms  = (int32_t)(speed_cms * sinf(course_rad));
-      navigation.velocity_down_cms  = 0;
-      navigation.valid_mask = PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY;
-      if (gnss.fix_dimension == 3U) {
-        navigation.valid_mask |= PX4LITE_NAV_VALID_ALTITUDE;
-      }
-    } else {
-      navigation.header.flags |= PX4LITE_DATA_DEGRADED;
+  if (Px4Lite_CopyGnss(&gnss) == PX4LITE_OK) {
+    /* 每个测量域独立判新鲜；GSV/GSA 或 RMC 不得替 GGA 坐标续期。 */
+    if (((gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION) != 0U) &&
+        (Px4Lite_ElapsedMs(now_ms, gnss.position_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS)) {
+      navigation.latitude_e7 = gnss.latitude_e7; navigation.longitude_e7 = gnss.longitude_e7;
+      navigation.hdop_x100 = gnss.hdop_x100; navigation.satellites_used = gnss.satellites_used;
+      navigation.gnss_fix_type = Px4Lite_GnssDisplayFixState(&gnss);
+      navigation.navigation_quality = gnss.header.quality;
+      navigation.valid_mask |= PX4LITE_NAV_VALID_POSITION;
     }
-
+    if (((gnss.valid_mask & PX4LITE_GNSS_VALID_VELOCITY) != 0U) &&
+        (Px4Lite_ElapsedMs(now_ms, gnss.velocity_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS)) {
+      float course_rad = (float)gnss.heading_deg100 * (3.14159265358979323846f / 18000.0f);
+      float speed_cms = (float)gnss.ground_speed_cms;
+      navigation.velocity_north_cms = (int32_t)(speed_cms * cosf(course_rad));
+      navigation.velocity_east_cms = (int32_t)(speed_cms * sinf(course_rad));
+      navigation.valid_mask |= PX4LITE_NAV_VALID_VELOCITY;
+    }
+    if (((gnss.valid_mask & PX4LITE_GNSS_VALID_TIME) != 0U) &&
+        (Px4Lite_ElapsedMs(now_ms, gnss.time_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS)) {
+      navigation.gnss_utc_sec = gnss.utc_sec; navigation.gnss_utc_date = gnss.utc_date;
+      navigation.valid_mask |= PX4LITE_NAV_VALID_TIME;
+    }
+    if (((gnss.valid_mask & PX4LITE_GNSS_VALID_ALTITUDE) != 0U) &&
+        (Px4Lite_ElapsedMs(now_ms, gnss.altitude_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS)) {
+      navigation.fused_altitude_mm = gnss.altitude_mm;
+      navigation.valid_mask |= PX4LITE_NAV_VALID_ALTITUDE;
+    }
+    if ((navigation.valid_mask & PX4LITE_NAV_VALID_POSITION) == 0U) { navigation.header.flags |= PX4LITE_DATA_DEGRADED; }
     navigation.header.sample_time_ms = gnss.header.sample_time_ms;
     if (gnss.header.sequence != last_gnss_sequence) {
       last_gnss_sequence = gnss.header.sequence;
@@ -651,21 +670,30 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
   taskEXIT_CRITICAL();
 
   if (attitude_updated != 0U) {
-    navigation.roll_deg100       = roll_deg100;
-    navigation.pitch_deg100      = pitch_deg100;
-    navigation.yaw_deg100        = yaw_deg100;
-    navigation.roll_rate_dps100  = roll_rate_dps100;
-    navigation.pitch_rate_dps100 = pitch_rate_dps100;
-    navigation.yaw_rate_dps100   = yaw_rate_dps100;
-    navigation.valid_mask |= PX4LITE_NAV_VALID_ATTITUDE;
-    navigation.valid_mask |= PX4LITE_NAV_VALID_YAW_REL;
-    navigation.header.flags |= PX4LITE_DATA_FILTERED;
+    s_navigation_attitude_cache[0] = roll_deg100; s_navigation_attitude_cache[1] = pitch_deg100;
+    s_navigation_attitude_cache[2] = yaw_deg100; s_navigation_attitude_cache[3] = roll_rate_dps100;
+    s_navigation_attitude_cache[4] = pitch_rate_dps100; s_navigation_attitude_cache[5] = yaw_rate_dps100;
     publish_navigation = 1U;
   }
+  /* 周期间短暂没有新 FIFO 样本时保留最近新鲜姿态；到期则按字段变化发布撤销。 */
+  if ((s_attitude_state.valid != 0U) &&
+      (Px4Lite_ElapsedMs(now_ms, s_attitude_state.last_sample_time_ms) <= PX4LITE_IMU_MAX_AGE_MS)) {
+    if ((navigation.valid_mask == 0U) ||
+        (Px4Lite_ElapsedMs(now_ms, s_attitude_state.last_sample_time_ms) < Px4Lite_ElapsedMs(now_ms, navigation.header.sample_time_ms))) {
+      navigation.header.sample_time_ms = s_attitude_state.last_sample_time_ms;
+    }
+    navigation.attitude_update_ms = s_attitude_state.last_sample_time_ms;
+    navigation.roll_deg100 = s_navigation_attitude_cache[0]; navigation.pitch_deg100 = s_navigation_attitude_cache[1];
+    navigation.yaw_deg100 = s_navigation_attitude_cache[2]; navigation.roll_rate_dps100 = s_navigation_attitude_cache[3];
+    navigation.pitch_rate_dps100 = s_navigation_attitude_cache[4]; navigation.yaw_rate_dps100 = s_navigation_attitude_cache[5];
+    navigation.valid_mask |= PX4LITE_NAV_VALID_ATTITUDE | PX4LITE_NAV_VALID_YAW_REL;
+    navigation.header.flags |= PX4LITE_DATA_FILTERED;
+  }
 
+  if (navigation.valid_mask != s_navigation_last_valid_mask) { publish_navigation = 1U; }
   if (publish_navigation == 0U) { return; }
-
-  if (navigation.header.sample_time_ms == 0U) { navigation.header.sample_time_ms = now_ms; }
+  s_navigation_last_valid_mask = navigation.valid_mask;
+  /* 零时刻有效，发布失效字段时也不得伪造新的测量时间。 */
   navigation.header.publish_time_ms = now_ms;
   navigation.header.sequence        = ++s_navigation_sequence;
   navigation.header.device_id       = 0x0100U;
@@ -830,7 +858,7 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   Px4Lite_AlarmUpdateFromStatuses(status, (uint16_t)PX4LITE_MODULE_COUNT, now_ms);
 
   Px4Lite_PublishHealth(&health);
-  Px4Lite_PlatformWatchdogFeed(now_ms);
+  /* HealthTask 在本轮工作完成、心跳更新后统一执行 watchdog 门控。 */
 }
 
 /**
@@ -907,7 +935,10 @@ void Px4Lite_SetExternalModuleState(Px4Lite_ModuleId_t module_id, Px4Lite_State_
   s_status_version++;
   taskEXIT_CRITICAL();
 
-  if (state == PX4LITE_STATE_ONLINE) {
+  /* 触摸故障独立恢复；服务者确认 LCD 仍正常刷新时，保持显示主体的有效心跳。 */
+  if ((state == PX4LITE_STATE_ONLINE) ||
+      ((module_id == PX4LITE_MODULE_DISPLAY) && (state == PX4LITE_STATE_DEGRADED) &&
+       (fault_code == PX4LITE_FAULT_DISPLAY_TOUCH))) {
     taskENTER_CRITICAL();
     if (s_status[module_id].last_valid_ms != now_ms) {
       s_status[module_id].last_valid_ms = now_ms;
@@ -977,9 +1008,14 @@ Px4Lite_Result_t Px4Lite_RemoteIdModuleInit(void)
 #endif
 }
 
+#if PX4LITE_ENABLE_REMOTE_ID
+/**
+ * @brief 在 comm 所属上下文执行 Remote ID 恢复请求，关闭模块时不参与编译。
+ * @param[in] now_ms 当前真实毫秒时间。
+ * @return 重新初始化结果；没有请求时返回 OK，不表示设备已经在线。
+ */
 static Px4Lite_Result_t Px4Lite_RemoteIdRunReinitIfRequested(uint32_t now_ms)
 {
-#if PX4LITE_ENABLE_REMOTE_ID
   Px4Lite_Result_t result;
 
   if (s_remoteid_reinit_requested == 0U) { return PX4LITE_OK; }
@@ -991,11 +1027,8 @@ static Px4Lite_Result_t Px4Lite_RemoteIdRunReinitIfRequested(uint32_t now_ms)
 
   Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, (result == PX4LITE_OK) ? PX4LITE_STATE_STARTING : PX4LITE_STATE_FAILED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_COMM_OFFLINE, now_ms);
   return result;
-#else
-  (void)now_ms;
-  return PX4LITE_OK;
-#endif
 }
+#endif
 
 void Px4Lite_CommWorkRun(uint32_t now_ms)
 {

@@ -18,6 +18,7 @@
 #include "px4lite_registry.h"
 #include "task.h"
 
+#if BUSINESS_ENABLE_DISPLAY
 /**
  * @brief Display 模块注册表 init 回调。
  *
@@ -54,6 +55,7 @@ static Px4Lite_Result_t Business_DisplayModuleRecover(void)
 }
 
 static const Px4Lite_ModuleDescriptor_t s_display_descriptor = {PX4LITE_MODULE_DISPLAY, "display", PX4LITE_ENABLE_DISPLAY, 0U, Business_DisplayModuleInit, Business_DisplayModuleSelfCheck, 0, 0, Business_DisplayModuleRecover};
+#endif
 
 /**
  * @brief 初始化 Business 拥有的服务并创建 Business 任务。
@@ -83,15 +85,18 @@ BaseType_t Business_CreateTasks(void)
   task_handle = 0;
   if (xTaskCreate(Business_SystemTask, "biz_system", BUSINESS_SYSTEM_TASK_STACK_WORDS, 0, BUSINESS_PRIORITY_SYSTEM, &task_handle) != pdPASS) { return pdFAIL; }
   (void)DebugTaskMonitor_Register(task_handle, "biz_system", BUSINESS_SYSTEM_TASK_STACK_WORDS);
+  if (Business_StatusConfigureHeartbeat(BUSINESS_COMPONENT_SYSTEM, BUSINESS_SYSTEM_PERIOD_MS, 0U) == 0U) { return pdFAIL; }
 
   task_handle = 0;
   if (xTaskCreate(Business_AcquisitionTask, "biz_acq", BUSINESS_ACQUISITION_TASK_STACK_WORDS, 0, BUSINESS_PRIORITY_ACQUISITION, &task_handle) != pdPASS) { return pdFAIL; }
   (void)DebugTaskMonitor_Register(task_handle, "biz_acq", BUSINESS_ACQUISITION_TASK_STACK_WORDS);
+  if (Business_StatusConfigureHeartbeat(BUSINESS_COMPONENT_ACQUISITION, BUSINESS_ACQUISITION_PERIOD_MS, 0U) == 0U) { return pdFAIL; }
 
 #if BUSINESS_ENABLE_DISPLAY
   task_handle = 0;
   if (xTaskCreate(Business_DisplayServiceTask, "biz_display", BUSINESS_DISPLAY_TASK_STACK_WORDS, 0, BUSINESS_PRIORITY_DISPLAY, &task_handle) != pdPASS) { return pdFAIL; }
   (void)DebugTaskMonitor_Register(task_handle, "biz_display", BUSINESS_DISPLAY_TASK_STACK_WORDS);
+  if (Business_StatusConfigureHeartbeat(BUSINESS_COMPONENT_DISPLAY, BUSINESS_DISPLAY_SERVICE_PERIOD_MS, BUSINESS_DISPLAY_HEARTBEAT_MIN_MS) == 0U) { return pdFAIL; }
 #endif
 
   return pdPASS;

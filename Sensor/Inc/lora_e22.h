@@ -59,10 +59,10 @@ typedef struct {
   uint32_t tx_busy_count;     /**< 因发送忙拒绝新帧次数。 */
   uint32_t crc_error_count;   /**< MAVLink CRC 错误次数。 */
   uint32_t send_error_count;  /**< 发送提交错误次数。 */
-  uint32_t parse_error_count; /**< 接收解析错误次数。 */
+  uint32_t parse_error_count; /**< 结构解析及 CRC/签名拒绝总次数，CRC 是其中子集。 */
   uint32_t rx_byte_count;     /**< 接收字节累计数。 */
   uint32_t rx_overflow_count; /**< 接收缓冲溢出次数。 */
-  uint32_t rx_drop_count;     /**< 接收丢弃次数。 */
+  uint32_t rx_drop_count;     /**< 完整接收帧因本地队列满而丢弃的次数；不含 CRC、DMA 覆盖或序号缺口。 */
   uint32_t rx_sequence_expected_count; /**< MAVLink 序号估算的应收帧总数，含已收和跳号丢帧。 */
   uint32_t rx_sequence_lost_count;     /**< MAVLink 序号跳号估算的丢帧数量。 */
   uint32_t last_rx_ms;        /**< 最近收到任意完整 MAVLink 帧时间，单位：ms；不作为绿灯依据。 */

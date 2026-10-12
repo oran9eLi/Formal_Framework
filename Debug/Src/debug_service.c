@@ -18,9 +18,6 @@
 #if DEBUG_IMU_MONITOR_ENABLE
 #include "sensor_mpu6050.h"
 #endif
-#if DEBUG_POWER_MONITOR_ENABLE
-#include "bsp_adc_current.h" /* 临时诊断：读电流原始 adc_mv/浮空标志 */
-#endif
 #include "task.h"
 
 #if DEBUG_PERIODIC_SERVICE_ENABLE
@@ -138,37 +135,34 @@ static void DebugService_ReportBaro(uint32_t now_ms)
 #endif
 
 #if DEBUG_POWER_MONITOR_ENABLE
+/**
+ * @brief 仅在低优先级 DebugTask 输出两路电源快照，不访问 ADC 或驱动诊断。
+ * @param[in] now_ms 当前毫秒时间，用于报告已有样本的年龄。
+ */
 static void DebugService_ReportPower(uint32_t now_ms)
 {
   Px4Lite_BatteryStatus_t battery;
   Px4Lite_BatteryStatus_t battery2;
   Px4Lite_ModuleStatus_t status;
-  uint32_t adc_mv1 = 0U;
-  uint32_t adc_mv2 = 0U;
-  uint8_t  float1  = 0U;
-  uint8_t  float2  = 0U;
-  Px4Lite_Result_t bat2_rc;
+  Px4Lite_Result_t result1 = Px4Lite_CopyBattery(&battery);
+  Px4Lite_Result_t result2 = Px4Lite_CopyBattery2(&battery2);
+  Px4Lite_Result_t status_result = Px4Lite_GetModuleStatus(PX4LITE_MODULE_BATTERY, &status);
 
-  (void)now_ms;
-
-  /* 临时诊断：两路电流的原始引脚电压 + 浮空标志(来自 BSP 缓存，不再碰 ADC)。
-     判读：adc_mv≈0 且 float=1 -> 判为浮空(没接/悬空)；adc_mv≈0 且 float=0 -> 引脚确实读到 0V；
-     加负载时 adc_mv 跟着涨 -> 信号进来了，接线正常，剩下的是零点/灵敏度标定。 */
-  BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY1, &adc_mv1, &float1);
-  BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY2, &adc_mv2, &float2);
-  bat2_rc = Px4Lite_CopyBattery2(&battery2);
-
-  if ((Px4Lite_CopyBattery(&battery) == PX4LITE_OK) && (Px4Lite_GetModuleStatus(PX4LITE_MODULE_BATTERY, &status) == PX4LITE_OK)) {
-    DBG_PRINT("POWER: state=%u v_mv=%lu pct=%u low=%u | "
-              "I1(PC0) adc_mv=%lu float=%u cur_ma=%ld | "
-              "I2(PC1) adc_mv=%lu float=%u cur_ma=%ld",
-              (unsigned int)status.state, (unsigned long)battery.voltage_mv, (unsigned int)battery.percent, (unsigned int)battery.low_voltage,
-              (unsigned long)adc_mv1, (unsigned int)float1, (long)battery.current_ma,
-              (unsigned long)adc_mv2, (unsigned int)float2, (bat2_rc == PX4LITE_OK) ? (long)battery2.current_ma : 0L);
-  } else {
-    DBG_PRINT("POWER: no battery topic | I1(PC0) adc_mv=%lu float=%u | I2(PC1) adc_mv=%lu float=%u",
-              (unsigned long)adc_mv1, (unsigned int)float1, (unsigned long)adc_mv2, (unsigned int)float2);
-  }
+  DBG_PRINT("POWER: state=%u | B1 ready=%u v_mv=%lu cur_ma=%ld pct=%u low=%u age_ms=%lu | "
+            "B2 ready=%u v_mv=%lu cur_ma=%ld pct=%u low=%u age_ms=%lu",
+            (status_result == PX4LITE_OK) ? (unsigned int)status.state : (unsigned int)PX4LITE_STATE_DISABLED,
+            (unsigned int)(result1 == PX4LITE_OK),
+            (result1 == PX4LITE_OK) ? (unsigned long)battery.voltage_mv : 0UL,
+            (result1 == PX4LITE_OK) ? (long)battery.current_ma : 0L,
+            (result1 == PX4LITE_OK) ? (unsigned int)battery.percent : 0U,
+            (result1 == PX4LITE_OK) ? (unsigned int)battery.low_voltage : 0U,
+            (result1 == PX4LITE_OK) ? (unsigned long)(now_ms - battery.header.sample_time_ms) : 0UL,
+            (unsigned int)(result2 == PX4LITE_OK),
+            (result2 == PX4LITE_OK) ? (unsigned long)battery2.voltage_mv : 0UL,
+            (result2 == PX4LITE_OK) ? (long)battery2.current_ma : 0L,
+            (result2 == PX4LITE_OK) ? (unsigned int)battery2.percent : 0U,
+            (result2 == PX4LITE_OK) ? (unsigned int)battery2.low_voltage : 0U,
+            (result2 == PX4LITE_OK) ? (unsigned long)(now_ms - battery2.header.sample_time_ms) : 0UL);
 }
 #endif
 

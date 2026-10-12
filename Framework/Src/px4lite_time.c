@@ -180,7 +180,8 @@ static uint8_t Px4Lite_TimeCopyValidGnssTime(uint32_t now_ms, Px4Lite_UtcDateTim
 
   if (Px4Lite_CopyGnss(&gnss) != PX4LITE_OK) { return 0U; }
   if (Px4Lite_IsFresh(&gnss.header, now_ms, PX4LITE_GNSS_MAX_AGE_MS) == 0U) { return 0U; }
-  if (gnss.fix_type == 0U) { return 0U; }
+  if ((gnss.valid_mask & PX4LITE_GNSS_VALID_TIME) == 0U) { return 0U; }
+  if (Px4Lite_ElapsedMs(now_ms, gnss.time_update_ms) > PX4LITE_GNSS_MAX_AGE_MS) { return 0U; }
 
   return Px4Lite_TimeFromGnss(gnss.utc_date, gnss.utc_sec, out);
 }

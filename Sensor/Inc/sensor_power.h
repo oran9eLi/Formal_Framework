@@ -33,7 +33,8 @@ typedef struct {
   uint32_t power_mw;       /**< 功率，单位：mW，由电压和电流计算得到。 */
   uint8_t percent;         /**< 电量百分比，范围：0 到 100。 */
   uint8_t low_voltage;     /**< 低电压标志，1 表示低电压。 */
-  uint16_t reserved;       /**< 保留字段，保持结构体对齐。 */
+  uint8_t current_valid;   /**< 电流 ADC 本次采样成功为 1；有效零电流与未知电流由此区分。 */
+  uint8_t reserved;        /**< 保留字段，保持结构体对齐。 */
   uint32_t error_count;    /**< 累计错误次数。 */
 } Power_Snapshot_t;
 
@@ -51,7 +52,8 @@ typedef struct {
   uint32_t power_mw;       /**< 最近一次功率，单位：mW。 */
   uint8_t percent;         /**< 电量百分比，范围：0 到 100。 */
   uint8_t low_voltage;     /**< 低电压标志，1 表示低电压。 */
-  uint16_t reserved;       /**< 保留字段，保持结构体对齐。 */
+  uint8_t current_valid;   /**< 最近一帧电流 ADC 采样成功为 1。 */
+  uint8_t reserved;        /**< 保留字段，保持结构体对齐。 */
 } Power_Status_t;
 
 /**

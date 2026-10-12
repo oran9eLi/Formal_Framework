@@ -1,12 +1,12 @@
-﻿/**
+/**
  * @file display.c
- * @brief Coordinate display snapshots, touch navigation, and budgeted refresh.
+ * @brief Display 层本机快照、输入门面和预算化刷新。
+ * @details 仅消费 App 快照；事件由所属功能记录，LCD 生命周期不决定控制或日志。
  */
 
 #include "display.h"
 #include "app_data_api.h"
 #include "app_display_model.h"
-#include "app_message_log.h"
 #include "px4lite_faults.h"
 #include "px4lite_config.h"
 #include "px4lite_platform.h"
@@ -35,7 +35,7 @@ typedef struct {
 /*
  * 页面 ID 用于 App 和调试链路路由，枚举值保持稳定。
  */
-static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_MOTOR, 0x0006U, "motor", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}, {DISPLAY_HMI_PAGE_HIDDEN, 0x0007U, "hidden", 0U}};
+static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_MOTOR, 0x0006U, "motor", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}, {DISPLAY_HMI_PAGE_HIDDEN, 0x0007U, "comm", 200U}, {DISPLAY_HMI_PAGE_DIAGNOSTICS, 0x0008U, "diagnostics", 200U}, {DISPLAY_HMI_PAGE_EVENT_HISTORY, 0x0009U, "event_history", 200U}};
 
 /*
  * ATK-MD0700 800x480 显示变量配置。
@@ -189,14 +189,11 @@ static uint8_t s_display_initialized          = 0U;
 static volatile uint8_t s_recover_requested   = 0U;
 static uint32_t s_next_init_attempt_ms        = 0U;
 static uint8_t s_motor_band                   = 4U; /* 电机电池档位(带滞回)，初值=正常 */
-static uint8_t s_motor_power_inhibit          = 0U; /* 已下发给 Control 的动力电池闭锁状态，初值=允许输出 */
 static uint8_t s_main_band                    = 2U; /* 主控电池档位(带滞回)，初值=正常 */
 static uint16_t s_disp_main_dv                = 0U; /* 屏幕主控电压(去抖后)，单位 0.1V */
 static uint16_t s_disp_motor_dv               = 0U; /* 屏幕电机电压(去抖后)，单位 0.1V */
 static uint8_t s_disp_main_dv_valid           = 0U; /* 主控显示电压去抖状态是否已播种 */
 static uint8_t s_disp_motor_dv_valid          = 0U; /* 电机显示电压去抖状态是否已播种 */
-static uint8_t s_five_g_display_alarm_active  = 0U; /* 5G 在线判定接入前，用于自检/告警页显示占位离线告警 */
-static uint32_t s_last_display_date_ymd       = 0U;
 
 /*
  * 根据变量 ID 查找 HMI 变量配置项。
@@ -236,10 +233,6 @@ static uint8_t Display_MotorIndexFromId(Display_HmiVariableId_t id, uint8_t *ind
   return 0U;
 }
 
-/**
- * @brief 判断当前电机电池电压档位是否允许非零油门输出。
- */
-static uint8_t Display_MotorPowerAllowsOutput(void);
 static void Display_ClearMotorOutputFields(void);
 static void Display_ClearMotorFields(void);
 
@@ -258,52 +251,29 @@ static const Display_HmiVariableConfig_t *Display_FindMotorSliderByIndex(uint8_t
   return 0;
 }
 
+/** @brief 把本机目标交给 Control；显示层不重复维护准入策略或事件。 */
 static Display_Result_t Display_SetMotorThrottleCommand(const Display_HmiVariableConfig_t *variable, uint16_t throttle_percent)
 {
   uint8_t motor_index;
   Px4Lite_Result_t result;
-
   if ((variable == 0) || (Display_MotorIndexFromId(variable->id, &motor_index) == 0U)) { return DISPLAY_ERROR; }
-
-  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
-
   if (throttle_percent > DISPLAY_MOTOR_SLIDER_MAX_VALUE) { throttle_percent = DISPLAY_MOTOR_SLIDER_MAX_VALUE; }
-  /* 电机电池档位不足时拒绝非零油门，滑块会被弹回旧值；必须推日志说明原因，
-     否则用户只看到滑块"自己掉下来"而无从判断是电池门槛还是控制链路故障。 */
-  if ((throttle_percent != 0U) && (Display_MotorPowerAllowsOutput() == 0U)) {
-    App_MessageLogPushThrottlePowerFail(Px4Lite_PlatformGetMs());
-    return DISPLAY_NOT_READY;
-  }
-
+  /* 准入、拒绝原因和事件归 Control，避免显示提前拒绝而漏掉真实操作记录。 */
   result = App_SetMotorThrottlePercent(motor_index, (uint8_t)throttle_percent);
-  /* Control 也会拒绝：动力电池闭锁(与上面那道门同源，理论上已拦下)与一键降落进行中的非零
-     油门。两者原因不同，必须分开推日志，否则用户无法区分"电池不行"和"正在降落"。 */
-  if (result == PX4LITE_NOT_READY) {
-    if (App_IsMotorPowerInhibited() != 0U) {
-      App_MessageLogPushThrottlePowerFail(Px4Lite_PlatformGetMs());
-    } else {
-      App_MessageLogPushLandingThrottleReject(Px4Lite_PlatformGetMs());
-    }
-    return DISPLAY_NOT_READY;
-  }
+  if (result == PX4LITE_NOT_READY) { return DISPLAY_NOT_READY; }
   if (result != PX4LITE_OK) { return DISPLAY_ERROR; }
-
-  /* 学生操作后立即更新“设定”列；“实际输出”只接受 Control 下一份快照，
-     避免姿态辅助下短暂把目标伪装成已经生效的输出。 */
   (void)Display_SetHmiValueU16(
-      (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_MOTOR_TARGET_1 + motor_index),
-      throttle_percent);
-
+      (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_MOTOR_TARGET_1 + motor_index), throttle_percent);
   return DISPLAY_OK;
 }
 
+/** @brief 本机急停仅在所属服务确认成功后回显受控最小输出。 */
 static Display_Result_t Display_MotorEmergencyStop(void)
 {
   Px4Lite_Result_t result;
 
   result = App_EmergencyStopMotors();
-  /* 本机急停不改变远端遥测，避免让学生误以为远端也已停机。 */
-  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_LOCAL) {
+  if (result == PX4LITE_OK) {
     Display_ClearMotorOutputFields();
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, PX4LITE_MOTOR_OP_STOPPED);
   }
@@ -322,22 +292,11 @@ Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16
   return Display_SetMotorThrottleCommand(variable, throttle_percent);
 }
 
-/** @brief 仅允许本地视图发起本机升速；远端视图为只读。 */
+/** @brief 发起本机同步升速；由 Control 判断准入并记录实际过程。 */
 Display_Result_t Display_RequestMotorAutoTakeoff(void)
 {
-  Px4Lite_Result_t result;
-  uint32_t now_ms = Px4Lite_PlatformGetMs();
-
-  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
-  if (Display_MotorPowerAllowsOutput() == 0U) {
-    App_MessageLogPushTakeoffPowerFail(now_ms);
-    return DISPLAY_NOT_READY;
-  }
-  result = App_StartMotorAutoTakeoff();
-  if (result == PX4LITE_NOT_READY) {
-    App_MessageLogPushTakeoffSensorFail(now_ms);
-    return DISPLAY_NOT_READY;
-  }
+  Px4Lite_Result_t result = App_StartMotorAutoTakeoff();
+  if (result == PX4LITE_NOT_READY) { return DISPLAY_NOT_READY; }
   return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
 }
 
@@ -347,21 +306,11 @@ Display_Result_t Display_RequestMotorEmergencyStop(void)
   return Display_MotorEmergencyStop();
 }
 
-/** @brief 仅允许本地视图发起本机缓降停机。 */
+/** @brief 发起本机缓降；由 Control 记录接受和达到最小输出。 */
 Display_Result_t Display_RequestMotorAutoLanding(void)
 {
-  Px4Lite_Result_t result;
-
-  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return DISPLAY_NOT_READY; }
-  result = App_StartMotorAutoLanding();
-
-  /* 一键降落不设电池/姿态准入：撤收动作在传感器异常时更需要可用。失败只可能来自
-     Control 内部状态，仍推日志，避免按钮再次变成静默无响应。 */
-  if (result != PX4LITE_OK) {
-    App_MessageLogPushLandingFail(Px4Lite_PlatformGetMs());
-    return DISPLAY_ERROR;
-  }
-  return DISPLAY_OK;
+  Px4Lite_Result_t result = App_StartMotorAutoLanding();
+  return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
 }
 
 /** @brief 本机显式选择直控/姿态辅助；远端视图保持只读。 */
@@ -457,6 +406,18 @@ static Display_Result_t Display_SetValue(Display_HmiVariableId_t id, Display_Hmi
   (void)Display_LvglSetValue(id, value);
 #endif
   return DISPLAY_OK;
+}
+
+/** @brief 撤销一个 HMI 字段；保留原值但清除有效/已绘制标志，保证同值恢复也重绘。 */
+static void Display_InvalidateValue(Display_HmiVariableId_t id)
+{
+  if ((id >= DISPLAY_HMI_VAR_COUNT) || (s_hmi_values[id].valid == 0U)) { return; }
+  s_hmi_values[id].valid = 0U;
+  s_hmi_values[id].drawn_valid = 0U;
+  s_hmi_values[id].dirty = 1U;
+#if DISPLAY_USE_LVGL_BACKEND
+  (void)Display_LvglInvalidateValue(id);
+#endif
 }
 
 /*
@@ -605,14 +566,7 @@ Display_Result_t Display_Init(void)
     s_hmi_values[i].dirty           = 0U;
   }
 
-  /* 业务层消息日志生产者：一次性初始化。日志是历史记录，跨恢复保留，故用静态守卫。 */
-  {
-    static uint8_t s_msglog_inited = 0U;
-    if (s_msglog_inited == 0U) {
-      App_MessageLogInit(Px4Lite_PlatformGetMs());
-      s_msglog_inited = 1U;
-    }
-  }
+  /* LCD 恢复仅重建显示缓存，不初始化或清空生产日志。 */
 
 #if DISPLAY_USE_LVGL_BACKEND
   if (Display_LvglInit(Px4Lite_PlatformGetMs()) != DISPLAY_OK) {
@@ -652,30 +606,31 @@ void Display_RequestRecover(void)
  */
 static uint16_t Display_MapStateValue(Px4Lite_State_t state)
 {
-  if (state == PX4LITE_STATE_ONLINE) { return 2U; }
-
-  if ((state == PX4LITE_STATE_STARTING) || (state == PX4LITE_STATE_DEGRADED)) { return 1U; }
-
-  if ((state == PX4LITE_STATE_OFFLINE) || (state == PX4LITE_STATE_FAILED)) { return 3U; }
-
-  return 0U;
+  switch (state) {
+    case PX4LITE_STATE_STARTING: return 1U;
+    case PX4LITE_STATE_ONLINE: return 2U;
+    case PX4LITE_STATE_OFFLINE: return 3U;
+    case PX4LITE_STATE_DEGRADED: return 4U;
+    case PX4LITE_STATE_FAILED: return 5U;
+    case PX4LITE_STATE_DISABLED: return 6U;
+    default: return 0U;
+  }
 }
 
 /*
- * 存储自检为二元状态：内存卡就绪(ONLINE)显示绿灯(2)，否则一律红灯(3)。
+ * 存储状态保留启动、降级、离线、失败和禁用。
  */
 static uint16_t Display_MapStorageStateValue(Px4Lite_State_t state)
 {
-  return (state == PX4LITE_STATE_ONLINE) ? 2U : 3U;
+  return Display_MapStateValue(state);
 }
 
 /*
- * 通信(LoRa)模块二态：只表示本机通信模块是否插上并上电。
- * Framework 发布 ONLINE 时显示绿灯(2)，未接入/未上电/未初始化显示红灯(3)。
+ * 通信状态只表达本机模块事实，ONLINE 不代表对端连接。
  */
 static uint16_t Display_MapCommStateValue(Px4Lite_State_t state)
 {
-  return (state == PX4LITE_STATE_ONLINE) ? 2U : 3U;
+  return Display_MapStateValue(state);
 }
 
 /*
@@ -747,27 +702,6 @@ static uint32_t Display_GnssDateToLocalYmd(uint32_t utc_date, uint32_t utc_secon
   return (year * 10000UL) + (month * 100UL) + day;
 }
 
-static uint8_t Display_BuildMonthNumber(const char *month)
-{
-  static const char names[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
-  uint8_t i;
-
-  for (i = 0U; i < 12U; i++) {
-    if (strncmp(month, &names[(uint16_t)i * 3U], 3U) == 0) { return (uint8_t)(i + 1U); }
-  }
-  return 1U;
-}
-
-static uint32_t Display_BuildDateYmd(void)
-{
-  char month_text[4] = {__DATE__[0], __DATE__[1], __DATE__[2], '\0'};
-  uint32_t month = Display_BuildMonthNumber(month_text);
-  uint32_t day   = ((__DATE__[4] == ' ') ? 0UL : (uint32_t)(__DATE__[4] - '0')) * 10UL + (uint32_t)(__DATE__[5] - '0');
-  uint32_t year  = ((uint32_t)(__DATE__[7] - '0') * 1000UL) + ((uint32_t)(__DATE__[8] - '0') * 100UL) + ((uint32_t)(__DATE__[9] - '0') * 10UL) + (uint32_t)(__DATE__[10] - '0');
-
-  return (year * 10000UL) + (month * 100UL) + day;
-}
-
 static int16_t Display_FloatToI16Tenths(float value)
 {
   float scaled = value * 10.0f;
@@ -796,37 +730,35 @@ static uint32_t Display_FloatPaToU32(float pressure_pa)
   return (uint32_t)(pressure_pa + 0.5f);
 }
 
-static uint8_t Display_StateHasUsableData(Px4Lite_State_t state)
-{
-  return ((state == PX4LITE_STATE_ONLINE) || (state == PX4LITE_STATE_DEGRADED)) ? 1U : 0U;
-}
-
+/** @brief 撤销过期或缺失的显示字段，禁止以有效数值零代替未知。 */
 static void Display_ClearNavigationSnapshot(void)
 {
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, 0U);
-  (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LATITUDE, 0);
-  (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LONGITUDE, 0);
-  (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_ALTITUDE, 0);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SPEED, 0U);
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_ROLL, 0);
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_PITCH, 0);
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_YAW, 0);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_FIX);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_SAT_COUNT);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_HDOP);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_LATITUDE);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_LONGITUDE);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_ALTITUDE);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_SPEED);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_ROLL);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_PITCH);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_YAW);
 }
 
+/** @brief 撤销过期或缺失的显示字段，禁止以有效数值零代替未知。 */
 static void Display_ClearAttitudeFields(void)
 {
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_ROLL, 0);
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_PITCH, 0);
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_YAW, 0);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_ROLL);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_PITCH);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_YAW);
 }
 
+/** @brief 撤销过期或缺失的显示字段，禁止以有效数值零代替未知。 */
 static void Display_ClearEnvironmentFields(void)
 {
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_TEMPERATURE, 0);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_HUMIDITY, 0U);
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_PRESSURE, 0U);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_TEMPERATURE);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_HUMIDITY);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_PRESSURE);
 }
 
 /* 电机电池(ADC2)门限(单位 mV)：
@@ -869,42 +801,7 @@ static uint16_t Display_MotorSelfCheckValue(void)
   return 2U;
 }
 
-static uint8_t Display_MotorPowerAllowsOutput(void)
-{
-  return (s_motor_band > DISPLAY_MOTOR_BAND_LOWPOWER) ? 1U : 0U;
-}
 
-/**
- * @brief 把电机电池档位下发为 Control 的动力电池闭锁。
- *
- * @details 拒绝新的非零油门只挡得住"还没下发的命令"：档位在电机已经转起来之后才跌破运行
- * 门限时，Control 锁存的旧目标不会自己消失。断开/没电/供电不足三档都要求四路油门清零，
- * 因此必须把档位作为一个持续条件下发给 Control，由它清零并闭锁，而不是只在输入口拦截。
- *
- * 与急停分开：急停是用户动作，需要一次非零油门显式解锁；本闭锁是供电事实，档位恢复即自动
- * 解除，解除后四路仍停在 0%，要靠用户重新拖滑条，避免电压在门限附近跳动时电机自己转起来。
- *
- * 只在本机模式维护：远端查看时 s_motor_band 反映的是远端机的电池，不能用来闭锁本机电机。
- */
-static void Display_ApplyMotorPowerInhibit(void)
-{
-  uint8_t inhibit;
-
-  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return; }
-
-  inhibit = (Display_MotorPowerAllowsOutput() == 0U) ? 1U : 0U;
-
-  /* 每周期无条件下发，不做边沿判断：Control 侧只在 0->1 沿清零目标，重复下发是幂等的。
-     这样即使 Control 被重新初始化把闭锁丢掉，下一个显示周期也会自动补回；只按边沿下发的话
-     Display 会以为"已经发过了"而永不补发。 */
-  (void)App_SetMotorPowerInhibit(inhibit);
-
-  /* 日志仍只在生效沿推：解除沿不推，否则用户会误以为油门被自动恢复了。 */
-  if ((inhibit != 0U) && (s_motor_power_inhibit == 0U)) {
-    App_MessageLogPushMotorPowerCutoff(Px4Lite_PlatformGetMs());
-  }
-  s_motor_power_inhibit = inhibit;
-}
 
 /* 4 个电机自检灯共用同一块电机电池(ADC2)状态，统一刷新。 */
 static void Display_SetMotorSelfCheckLights(uint16_t value)
@@ -915,21 +812,26 @@ static void Display_SetMotorSelfCheckLights(uint16_t value)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4, value);
 }
 
+/** @brief 撤销过期或缺失的显示字段，禁止以有效数值零代替未知。 */
 static void Display_ClearBatteryFields(void)
 {
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_CURRENT, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, 0U);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_VOLTAGE);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_CURRENT);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_PERCENT);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT);
   /* 复位电压去抖状态，重新接入/上线时按首帧重新播种。 */
   s_disp_main_dv_valid  = 0U;
   s_disp_motor_dv_valid = 0U;
-  /* 电机电池数据无效(未接入/掉线)，电机自检灯一律红灯。 */
-  Display_SetMotorSelfCheckLights(3U);
+  /* 没有电压事实时状态未知，不伪造断开故障。 */
+  Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4);
 }
 
+/** @brief 已确认急停后的受控清零；数据不可用时禁止调用。 */
 static void Display_ClearMotorOutputFields(void)
 {
   uint8_t i;
@@ -951,12 +853,19 @@ static void Display_ClearMotorOutputFields(void)
 #endif
 }
 
-/** @brief 数据源无有效电机快照时清除数值，并显式标记模式和过程未知。 */
+/** @brief 数据源无有效电机快照时撤销所有控制反馈；不能把未知输出伪造为零。 */
 static void Display_ClearMotorFields(void)
 {
-  Display_ClearMotorOutputFields();
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, 2U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, 255U);
+  uint8_t i;
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; ++i) {
+    Display_InvalidateValue((Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_PWM_1 + i));
+    Display_InvalidateValue((Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_TARGET_1 + i));
+#if DISPLAY_USE_LVGL_BACKEND
+    (void)Display_LvglInvalidateMotorPulseUs(i);
+#endif
+  }
+  Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE);
 }
 
 /**
@@ -977,10 +886,10 @@ static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_2, motor->base_percent[1]);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_3, motor->base_percent[2]);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_TARGET_4, motor->base_percent[3]);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE,
-                               (motor->control_mode_valid != 0U) ? motor->control_mode : 2U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE,
-                               (motor->operation_state_valid != 0U) ? motor->operation_state : 255U);
+  if (motor->control_mode_valid != 0U) { (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, motor->control_mode); }
+  else { Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE); }
+  if (motor->operation_state_valid != 0U) { (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, motor->operation_state); }
+  else { Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE); }
 }
 
 /** @brief 发布姿态操作阶段到显示缓存；远端页面用 255 表示本机操作不可用。 */
@@ -1023,33 +932,35 @@ static void Display_LoadMotorPulseSnapshot(const App_MotorSnapshot_t *motor)
 #endif
 }
 
-/*
- * 将导航快照字段写入 Display 缓存。
- */
+/** @brief 按 POSITION/ALTITUDE/VELOCITY/ATTITUDE 独立有效位更新导航显示。 */
 static void Display_LoadNavigationSnapshot(const App_NavigationSnapshot_t *navigation)
 {
-  uint16_t ground_speed_cms;
-
-  if (navigation == 0) { return; }
-
-  ground_speed_cms = Display_GroundSpeedCms(navigation->velocity_north_cms, navigation->velocity_east_cms);
-
-  /* 定位状态取 GNSS 解算 fix 等级(0 无定位 / 2 2D / 3 3D / 4 差分)，而非模块在线粗判。
-     本地来自 Px4Lite_GnssDisplayFixState；远端来自 GPS_RAW 的 MAVLink fix_type(0..6)。 */
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, (uint16_t)navigation->gnss_fix_type);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, (uint16_t)navigation->satellites_used);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, navigation->hdop_x100);
-  (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LATITUDE, navigation->latitude_e7);
-  (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LONGITUDE, navigation->longitude_e7);
-  (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_ALTITUDE, navigation->altitude_mm);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SPEED, ground_speed_cms);
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_YAW, (int16_t)(navigation->yaw_deg100 / 10));
+  if (navigation == 0) { Display_ClearNavigationSnapshot(); return; }
+  if ((navigation->valid_mask & PX4LITE_NAV_VALID_POSITION) != 0U) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, navigation->gnss_fix_type);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, navigation->satellites_used);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, navigation->hdop_x100);
+    (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LATITUDE, navigation->latitude_e7);
+    (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LONGITUDE, navigation->longitude_e7);
+  } else {
+    Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_FIX);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_SAT_COUNT);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_HDOP);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_LATITUDE);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_LONGITUDE);
+  }
+  if ((navigation->valid_mask & PX4LITE_NAV_VALID_ALTITUDE) != 0U) {
+    (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_ALTITUDE, navigation->altitude_mm);
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_ALTITUDE); }
+  if ((navigation->valid_mask & PX4LITE_NAV_VALID_VELOCITY) != 0U) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SPEED,
+        Display_GroundSpeedCms(navigation->velocity_north_cms, navigation->velocity_east_cms));
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_SPEED); }
   if ((navigation->valid_mask & PX4LITE_NAV_VALID_ATTITUDE) != 0U) {
     (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_ROLL, (int16_t)(navigation->roll_deg100 / 10));
     (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_PITCH, (int16_t)(navigation->pitch_deg100 / 10));
-  } else {
-    Display_ClearAttitudeFields();
-  }
+    (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_YAW, (int16_t)(navigation->yaw_deg100 / 10));
+  } else { Display_ClearAttitudeFields(); }
 }
 
 /*
@@ -1062,11 +973,10 @@ static void Display_LoadDateTimeSnapshot(const App_DateTimeSnapshot_t *date_time
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, date_time->local_time_hhmmss);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_CLOCK_TIME, date_time->local_time_hhmmss);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, date_time->local_date_ymd);
-  if (date_time->local_date_ymd != 0U) { s_last_display_date_ymd = date_time->local_date_ymd; }
 }
 
 /**
- * @brief 本机统一时间暂不可用时，仅使用本机导航或本机运行时间生成顶栏时钟。
+ * @brief 本机统一时间暂不可用时，仅使用独立有效的本机导航 UTC；均无效时撤销时钟。
  *
  * @details
  * 本函数不得读取当前显示模式对应的导航快照，避免切换远端节点时把远端 GNSS 时间
@@ -1079,15 +989,22 @@ static void Display_LoadFallbackDateTime(uint32_t now_ms)
   uint32_t fallback_time;
   uint32_t fallback_date;
 
-  if (App_CopyNavigation(&local_navigation, now_ms) == PX4LITE_OK) { navigation = &local_navigation; }
-  fallback_time = ((navigation != 0) && (navigation->gnss_utc_sec < 86400UL)) ? Display_GnssUtcSecondsToLocalHhmmss(navigation->gnss_utc_sec) : Display_TimeSecondsToHhmmss(now_ms / 1000UL);
-  fallback_date = (navigation != 0) ? Display_GnssDateToLocalYmd(navigation->gnss_utc_date, navigation->gnss_utc_sec) : 0U;
-
-  if (fallback_date == 0U) { fallback_date = (s_last_display_date_ymd != 0U) ? s_last_display_date_ymd : Display_BuildDateYmd(); }
+  if ((App_CopyNavigation(&local_navigation, now_ms) == PX4LITE_OK) &&
+      ((local_navigation.valid_mask & PX4LITE_NAV_VALID_TIME) != 0U) &&
+      (local_navigation.gnss_utc_sec < 86400UL)) { navigation = &local_navigation; }
+  if (navigation == 0) {
+    Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_TIME);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_CLOCK_TIME);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_DATE);
+    return;
+  }
+  fallback_time = Display_GnssUtcSecondsToLocalHhmmss(navigation->gnss_utc_sec);
+  fallback_date = Display_GnssDateToLocalYmd(navigation->gnss_utc_date, navigation->gnss_utc_sec);
 
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, fallback_time);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_CLOCK_TIME, fallback_time);
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, fallback_date);
+  if (fallback_date != 0U) { (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, fallback_date); }
+  else { Display_InvalidateValue(DISPLAY_HMI_VAR_DATE); }
 }
 
 /*
@@ -1119,7 +1036,6 @@ static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
   /* 电机 4 个状态灯改由 Display_LoadEnvironmentSnapshot 依据电机电池(ADC2)
      电压驱动：<9.0V 红灯，9.0V~9.9V 黄灯，>=9.9V 绿灯，此处不再覆盖。 */
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, Display_MapStateValue(system->modules[PX4LITE_MODULE_5G].state));
-  s_five_g_display_alarm_active = (system->modules[PX4LITE_MODULE_5G].state == PX4LITE_STATE_ONLINE) ? 0U : 1U;
   /* 自检页错误码表由 Display_LoadAlarmSnapshot 按激活故障列表整体刷新，
      此处不再用单个 highest_fault_code 驱动。 */
 }
@@ -1139,7 +1055,6 @@ static void Display_ClearSystemSnapshot(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, 0U);
-  s_five_g_display_alarm_active = 0U;
   Display_SetMotorSelfCheckLights(0U);
 }
 
@@ -1161,22 +1076,27 @@ static uint8_t Display_BatBandHyst(uint8_t cur, uint32_t mv, const uint32_t *t, 
   return cur;
 }
 
-/* 每次快照按电压更新电机/主控电池档位(带滞回)，所有判定统一读档位避免阈值附近横跳。 */
+/** @brief 仅对应电压有效时更新电池档位，缺测不解释为断开。 */
 static void Display_UpdateBatteryBands(const App_EnvironmentSnapshot_t *environment)
 {
   static const uint32_t motor_t[4] = {DISPLAY_MOTOR_BAT_CONNECT_MV, DISPLAY_MOTOR_BAT_DEAD_MV, DISPLAY_MOTOR_BAT_RUN_MV, DISPLAY_MOTOR_BAT_OK_MV};
   static const uint32_t main_t[2]  = {DISPLAY_MAIN_BAT_PRESENT_MV, DISPLAY_MAIN_BAT_CHARGE_MV};
 
   if (environment == 0) { return; }
-  s_motor_band = Display_BatBandHyst(s_motor_band, environment->voltage2_mv, motor_t, 4U);
+  if ((environment->valid_mask & APP_ENV_VALID_VOLTAGE2) != 0U) {
+    s_motor_band = Display_BatBandHyst(s_motor_band, environment->voltage2_mv, motor_t, 4U);
   /* 超过在位上限视为悬空/未插，强制断开档：电压电量归 0、电机自检灯红、锁 PWM。 */
   if (environment->voltage2_mv > DISPLAY_MOTOR_BAT_MAX_MV) { s_motor_band = DISPLAY_MOTOR_BAND_DISCONNECT; }
-  s_main_band  = Display_BatBandHyst(s_main_band, environment->voltage_mv, main_t, 2U);
+  }
+  if ((environment->valid_mask & APP_ENV_VALID_VOLTAGE1) != 0U) {
+    s_main_band = Display_BatBandHyst(s_main_band, environment->voltage_mv, main_t, 2U);
+  }
 }
 
+/** @brief 仅凭有效电机电压产生电源告警，缺测交由模块状态报告。 */
 static uint16_t Display_EvalMotorFault(const App_EnvironmentSnapshot_t *environment)
 {
-  (void)environment;
+  if ((environment == 0) || ((environment->valid_mask & APP_ENV_VALID_VOLTAGE2) == 0U)) { return 0U; }
   switch (s_motor_band) {
     case DISPLAY_MOTOR_BAND_DISCONNECT:
       return (uint16_t)PX4LITE_FAULT_MOTOR_DISCONNECT;
@@ -1191,108 +1111,76 @@ static uint16_t Display_EvalMotorFault(const App_EnvironmentSnapshot_t *environm
   }
 }
 
-/* 主控电池告警：5~10.5V 报“需充电”；未接入或正常不报。 */
+/** @brief 主控电压有效且档位偏低时提示充电，其他数据不能授权此告警。 */
 static uint16_t Display_EvalMainFault(const App_EnvironmentSnapshot_t *environment)
 {
-  (void)environment;
+  if ((environment == 0) || ((environment->valid_mask & APP_ENV_VALID_VOLTAGE1) == 0U)) { return 0U; }
   return (s_main_band == DISPLAY_MAIN_BAND_CHARGE) ? (uint16_t)PX4LITE_FAULT_POWER_CHARGE : 0U;
 }
 
+/** @brief 同一份本机活动告警驱动头部、自检摘要和完整表；不虚构网络占位告警。 */
 static void Display_LoadAlarmSnapshot(const App_AlarmSnapshot_t *alarm, uint16_t motor_fault, uint16_t main_fault)
 {
-  static const Display_HmiVariableId_t row_ids[] = {DISPLAY_HMI_VAR_ALARM_ROW1_CODE, DISPLAY_HMI_VAR_ALARM_ROW2_CODE, DISPLAY_HMI_VAR_ALARM_ROW3_CODE, DISPLAY_HMI_VAR_ALARM_ROW4_CODE, DISPLAY_HMI_VAR_ALARM_ROW5_CODE};
+  static const Display_HmiVariableId_t row_ids[] = {
+    DISPLAY_HMI_VAR_ALARM_ROW1_CODE, DISPLAY_HMI_VAR_ALARM_ROW2_CODE,
+    DISPLAY_HMI_VAR_ALARM_ROW3_CODE, DISPLAY_HMI_VAR_ALARM_ROW4_CODE, DISPLAY_HMI_VAR_ALARM_ROW5_CODE
+  };
+  uint32_t packed[APP_DISPLAY_ALARM_MAX];
+  uint16_t count = 0U;
+  uint16_t i;
   int32_t severity;
-  uint16_t record_index;
   uint32_t active_mask = 0U;
-  uint16_t selfcheck_count = 0U;
-  uint8_t five_g_record_active = 0U;
-  uint32_t selfcheck_fp    = 0U;
-  uint32_t motor_packed    = ((uint32_t)0xFFFFU << 16) | (uint32_t)motor_fault;
-  uint32_t main_packed     = ((uint32_t)PX4LITE_MODULE_BATTERY << 16) | (uint32_t)main_fault;
-  uint32_t five_g_packed   = ((uint32_t)PX4LITE_MODULE_5G << 16) | (uint32_t)PX4LITE_FAULT_COMM_OFFLINE;
-
+  uint32_t fingerprint = 0U;
   if (alarm == 0) { return; }
-
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ALARM_CODE, alarm->highest_fault_code);
-
-  for (record_index = 0U; record_index < (uint16_t)PX4LITE_MODULE_COUNT; record_index++) {
-    const App_AlarmRecord_t *record = &alarm->records[record_index];
-
-    if ((record->active != 0U) && (record->source_id < 32U)) { active_mask |= (1UL << record->source_id); }
-    if ((record->active != 0U) && (record->source_id == (uint16_t)PX4LITE_MODULE_5G) && (record->fault_code != 0U)) { five_g_record_active = 1U; }
-
-    /* 收集自检页错误码表的激活故障：有一条记一条，故障恢复(active=0)
-       后不再计入，对应行会随之消失。 */
-    if ((record->active != 0U) && (record->fault_code != 0U)) {
-      uint32_t packed = ((uint32_t)record->source_id << 16) | (uint32_t)record->fault_code;
-      if (selfcheck_count < (uint16_t)PX4LITE_MODULE_COUNT) {
-        selfcheck_count++;
+  /* 动力/主电电压提示属于对应电源来源，只补充源告警中尚未报告的同一故障。 */
+  for (i = 0U; i < PX4LITE_MODULE_COUNT; i++) {
+    const App_AlarmRecord_t *record = &alarm->records[i];
+    if (record->active == 0U) { continue; }
+    if ((record->source_id == PX4LITE_MODULE_BATTERY) && (record->fault_code == motor_fault)) { motor_fault = 0U; }
+    if ((record->source_id == PX4LITE_MODULE_BATTERY) && (record->fault_code == main_fault)) { main_fault = 0U; }
+  }
+  for (severity = PX4LITE_ALARM_FATAL; severity >= PX4LITE_ALARM_INFO; severity--) {
+    for (i = 0U; (i < PX4LITE_MODULE_COUNT) && (count < APP_DISPLAY_ALARM_MAX); i++) {
+      const App_AlarmRecord_t *record = &alarm->records[i];
+      if ((record->active != 0U) && (record->fault_code != 0U) && ((int32_t)record->severity == severity)) {
+        packed[count++] = ((uint32_t)record->source_id << 16) | record->fault_code;
       }
-      selfcheck_fp = (selfcheck_fp * 31U) + packed;
+    }
+    if (severity == PX4LITE_ALARM_WARNING) {
+      if ((motor_fault != 0U) && (count < APP_DISPLAY_ALARM_MAX)) {
+        packed[count++] = ((uint32_t)PX4LITE_MODULE_BATTERY << 16) | motor_fault;
+      }
+      if ((main_fault != 0U) && (count < APP_DISPLAY_ALARM_MAX)) {
+        packed[count++] = ((uint32_t)PX4LITE_MODULE_BATTERY << 16) | main_fault;
+      }
     }
   }
-
-  /* 5G 临时占位告警和电机/主控电池告警不一定在框架告警记录里，单独追加到两张表。 */
-  if ((s_five_g_display_alarm_active != 0U) && (five_g_record_active == 0U) && (selfcheck_count < (uint16_t)(PX4LITE_MODULE_COUNT + 3U))) {
-    if ((uint16_t)PX4LITE_MODULE_5G < 32U) { active_mask |= (1UL << (uint16_t)PX4LITE_MODULE_5G); }
-    selfcheck_count++;
-    selfcheck_fp = (selfcheck_fp * 31U) + five_g_packed;
+  for (i = 0U; i < count; i++) {
+    uint16_t source = (uint16_t)(packed[i] >> 16);
+    if (source < 32U) { active_mask |= (1UL << source); }
+    fingerprint = fingerprint * 31U + packed[i];
   }
-  if ((motor_fault != 0U) && (selfcheck_count < (uint16_t)(PX4LITE_MODULE_COUNT + 3U))) {
-    selfcheck_count++;
-    selfcheck_fp = (selfcheck_fp * 31U) + motor_packed;
-  }
-  if ((main_fault != 0U) && (selfcheck_count < (uint16_t)(PX4LITE_MODULE_COUNT + 3U))) {
-    selfcheck_count++;
-    selfcheck_fp = (selfcheck_fp * 31U) + main_packed;
-  }
-
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_ALARM_CODE, (count != 0U) ? (uint16_t)packed[0] : 0U);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, active_mask);
-
-  /* 用激活故障集合的指纹驱动错误码表重绘：
-     故障集合不变则指纹不变(不重绘)，新增/消除任一故障即触发刷新。 */
-  selfcheck_fp = (selfcheck_fp ^ (selfcheck_fp >> 16)) + selfcheck_count;
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE, (uint16_t)selfcheck_fp);
-
-  /* 收集全部激活告警(按严重度 FATAL→INFO 排序)+电机/主控，最多 APP_DISPLAY_ALARM_MAX 条。
-     LVGL 后端按全量渲染并支持滚动；非 LVGL 后端仍取前 5 条写入 ALARM_ROW1..5 单值变量。 */
-  {
-    uint32_t packed[APP_DISPLAY_ALARM_MAX];
-    uint16_t packed_count = 0U;
-    uint16_t k;
-
-    for (severity = (int32_t)PX4LITE_ALARM_FATAL; (severity >= (int32_t)PX4LITE_ALARM_INFO) && (packed_count < (uint16_t)APP_DISPLAY_ALARM_MAX); severity--) {
-      for (record_index = 0U; (record_index < (uint16_t)PX4LITE_MODULE_COUNT) && (packed_count < (uint16_t)APP_DISPLAY_ALARM_MAX); record_index++) {
-        const App_AlarmRecord_t *record = &alarm->records[record_index];
-
-        if ((record->active != 0U) && (record->fault_code != 0U) && (record->severity == (uint8_t)severity)) {
-          packed[packed_count++] = ((uint32_t)record->source_id << 16) | record->fault_code;
-        }
-      }
-    }
-    if ((s_five_g_display_alarm_active != 0U) && (five_g_record_active == 0U) && (packed_count < (uint16_t)APP_DISPLAY_ALARM_MAX)) { packed[packed_count++] = five_g_packed; }
-    if ((motor_fault != 0U) && (packed_count < (uint16_t)APP_DISPLAY_ALARM_MAX)) { packed[packed_count++] = motor_packed; }
-    if ((main_fault != 0U) && (packed_count < (uint16_t)APP_DISPLAY_ALARM_MAX)) { packed[packed_count++] = main_packed; }
-
-    for (k = 0U; k < DISPLAY_ARRAY_SIZE(row_ids); k++) {
-      (void)Display_SetHmiValueU32(row_ids[k], (k < packed_count) ? packed[k] : 0U);
-    }
-
-#if DISPLAY_USE_LVGL_BACKEND
-    Display_LvglSetAlarmRows(packed, packed_count);
-#endif
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE,
+                             (uint16_t)((fingerprint ^ (fingerprint >> 16)) + count));
+  for (i = 0U; i < DISPLAY_ARRAY_SIZE(row_ids); i++) {
+    (void)Display_SetHmiValueU32(row_ids[i], (i < count) ? packed[i] : 0U);
   }
+  Display_LvglSetAlarmSnapshot(alarm, packed, count);
 }
 
+/** @brief 撤下不可确认的旧告警行；摘要和详情同时标为不可用，不能短暂显示零告警。 */
 static void Display_ClearAlarmSnapshot(void)
 {
-  App_AlarmSnapshot_t alarm;
-  uint8_t five_g_alarm_active = s_five_g_display_alarm_active;
-
-  memset(&alarm, 0, sizeof(alarm));
-  s_five_g_display_alarm_active = 0U;
-  Display_LoadAlarmSnapshot(&alarm, 0U, 0U);
-  s_five_g_display_alarm_active = five_g_alarm_active;
+  uint8_t i;
+  Display_InvalidateValue(DISPLAY_HMI_VAR_ALARM_CODE);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_ERROR_CODE);
+  for (i = 0U; i < 5U; ++i) {
+    Display_InvalidateValue((Display_HmiVariableId_t)(DISPLAY_HMI_VAR_ALARM_ROW1_CODE + i));
+  }
+  Display_LvglSetAlarmSnapshot(0, 0, 0U);
 }
 
 static uint8_t Display_LoadModuleStatusFallback(void)
@@ -1320,7 +1208,6 @@ static uint8_t Display_LoadModuleStatusFallback(void)
   }
   if (App_GetModuleStatus(PX4LITE_MODULE_5G, &status) == PX4LITE_OK) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, Display_MapStateValue(status.state));
-    s_five_g_display_alarm_active = (status.state == PX4LITE_STATE_ONLINE) ? 0U : 1U;
     loaded = 1U;
   }
   if (App_GetModuleStatus(PX4LITE_MODULE_REMOTE_ID, &status) == PX4LITE_OK) {
@@ -1333,17 +1220,6 @@ static uint8_t Display_LoadModuleStatusFallback(void)
   }
 
   return loaded;
-}
-
-static void Display_ApplyOfflineDataPolicy(void)
-{
-  Px4Lite_ModuleStatus_t status;
-
-  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return; }
-
-  if ((App_GetModuleStatus(PX4LITE_MODULE_IMU, &status) != PX4LITE_OK) || (Display_StateHasUsableData(status.state) == 0U)) { Display_ClearAttitudeFields(); }
-  if ((App_GetModuleStatus(PX4LITE_MODULE_BARO, &status) != PX4LITE_OK) || (Display_StateHasUsableData(status.state) == 0U)) { Display_ClearEnvironmentFields(); }
-  if ((App_GetModuleStatus(PX4LITE_MODULE_BATTERY, &status) != PX4LITE_OK) || (Display_StateHasUsableData(status.state) == 0U)) { Display_ClearBatteryFields(); }
 }
 
 /* 屏幕电压去抖：把 mV 量化到 0.1V 并加滞回，保证显示末位不在相邻 0.1V 档间抖动。
@@ -1385,35 +1261,49 @@ static uint16_t Display_CurrentMaToDeciA(int32_t current_ma)
   return (deci_a > 0xFFFFU) ? (uint16_t)0xFFFFU : (uint16_t)deci_a;
 }
 
+/** @brief 每个环境/电源字段仅由自己的有效位授权，部分快照不能填补其他域。 */
 static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *environment)
 {
-  if (environment == 0) { return; }
-
-  (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_TEMPERATURE, Display_FloatToI16Tenths(environment->temperature_c));
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_HUMIDITY, Display_FloatToU16Tenths(environment->relative_humidity_pct));
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_PRESSURE, Display_FloatPaToU32(environment->pressure_pa));
-
-  /* 主控/电机电池：未接入(档位为未接入/断开)时电压与电量都显示 0，接入后才显示真实值；
-     电压保留一位小数由显示层格式化。档位带滞回，避免噪声横跳。 */
-  {
-    uint16_t main_cv  = Display_StabilizeVoltCv(environment->voltage_mv, (s_main_band != DISPLAY_MAIN_BAND_ABSENT) ? 1U : 0U, &s_disp_main_dv, &s_disp_main_dv_valid);
-    uint8_t main_pct  = (s_main_band != DISPLAY_MAIN_BAND_ABSENT) ? environment->battery_percent : 0U;
-    uint16_t main_ca  = (s_main_band != DISPLAY_MAIN_BAND_ABSENT) ? Display_CurrentMaToDeciA(environment->current_ma) : 0U;
-    uint16_t motor_cv = Display_StabilizeVoltCv(environment->voltage2_mv, (s_motor_band != DISPLAY_MOTOR_BAND_DISCONNECT) ? 1U : 0U, &s_disp_motor_dv, &s_disp_motor_dv_valid);
-    uint8_t motor_pct = (s_motor_band != DISPLAY_MOTOR_BAND_DISCONNECT) ? environment->battery2_percent : 0U;
-    uint16_t motor_ca = (s_motor_band != DISPLAY_MOTOR_BAND_DISCONNECT) ? Display_CurrentMaToDeciA(environment->current2_ma) : 0U;
-
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, main_cv);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_CURRENT, main_ca);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, main_pct);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, motor_cv);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, motor_ca);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, motor_pct);
+  uint32_t valid;
+  if (environment == 0) { Display_ClearEnvironmentFields(); Display_ClearBatteryFields(); return; }
+  valid = environment->valid_mask;
+  if ((valid & APP_ENV_VALID_PRESSURE_TEMPERATURE) != 0U) {
+    (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_TEMPERATURE, Display_FloatToI16Tenths(environment->temperature_c));
+    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_PRESSURE, Display_FloatPaToU32(environment->pressure_pa));
+  } else {
+    Display_InvalidateValue(DISPLAY_HMI_VAR_TEMPERATURE);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_PRESSURE);
   }
-
-  /* 电机自检灯跟随电机电池档位：<9.9V 红灯，9.9~10.5V 黄灯，>=10.5V 绿灯。
-     本地非零油门和一键起飞共用该档位做电源门禁，避免低压时误启动。 */
-  Display_SetMotorSelfCheckLights(Display_MotorSelfCheckValue());
+  if ((valid & APP_ENV_VALID_HUMIDITY) != 0U) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_HUMIDITY, Display_FloatToU16Tenths(environment->relative_humidity_pct));
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_HUMIDITY); }
+  if ((valid & APP_ENV_VALID_VOLTAGE1) != 0U) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, Display_StabilizeVoltCv(environment->voltage_mv,
+        (s_main_band != DISPLAY_MAIN_BAND_ABSENT) ? 1U : 0U, &s_disp_main_dv, &s_disp_main_dv_valid));
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_VOLTAGE); s_disp_main_dv_valid = 0U; }
+  if ((valid & APP_ENV_VALID_CURRENT1) != 0U) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_CURRENT, Display_CurrentMaToDeciA(environment->current_ma));
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_CURRENT); }
+  if ((valid & APP_ENV_VALID_PERCENT1) != 0U) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, environment->battery_percent);
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_PERCENT); }
+  if ((valid & APP_ENV_VALID_VOLTAGE2) != 0U) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, Display_StabilizeVoltCv(environment->voltage2_mv,
+        (s_motor_band != DISPLAY_MOTOR_BAND_DISCONNECT) ? 1U : 0U, &s_disp_motor_dv, &s_disp_motor_dv_valid));
+    Display_SetMotorSelfCheckLights(Display_MotorSelfCheckValue());
+  } else {
+    Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE); s_disp_motor_dv_valid = 0U;
+    Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4);
+  }
+  if ((valid & APP_ENV_VALID_CURRENT2) != 0U) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, Display_CurrentMaToDeciA(environment->current2_ma));
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT); }
+  if ((valid & APP_ENV_VALID_PERCENT2) != 0U) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, environment->battery2_percent);
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT); }
 }
 
 /*
@@ -1442,140 +1332,77 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   App_AlarmSnapshot_t alarm;
   App_DateTimeSnapshot_t date_time;
   App_MotorSnapshot_t motor;
+  /* 显示任务独占，避免 32 条事件历史额外占用调用栈。 */
+  static App_DisplayLogSnapshot_t log;
   Px4Lite_Result_t navigation_result;
   Px4Lite_Result_t system_result;
   Px4Lite_Result_t environment_result;
   Px4Lite_Result_t alarm_result;
   Px4Lite_Result_t date_time_result;
   Px4Lite_Result_t motor_result;
-  Px4Lite_RemoteMode_t display_mode;
+  Px4Lite_Result_t log_result;
   uint16_t motor_fault = 0U;
-  uint16_t main_fault  = 0U;
+  uint16_t main_fault = 0U;
   uint8_t status_fallback_loaded = 0U;
-  uint16_t msglog_highest        = 0U;
+  uint8_t frozen;
 
   if (Display_EnsureInit() != DISPLAY_OK) { return DISPLAY_NOT_READY; }
-
-  /* 每周期驱动本机消息日志生产者：生成条目入 Framework local_msglog（单一真值源），
-     供 LoRa MAVLink TX 打包发送(远端消息日志)。本机显示仍走既有渲染路径，不受影响。 */
-  App_MessageLogUpdate(now_ms);
-
-  display_mode = App_GetRemoteDisplayMode();
-
-  /* 右上角身份显示：本地模式=本机 sysid(UID派生)，远端模式=当前选中远端节点。 */
-  {
-    uint8_t view_id = 0U;
-    uint8_t selected_node = 0U;
-    if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
-      (void)App_GetSelectedRemoteNode(&selected_node);
-      if (selected_node != 0U) { view_id = selected_node; }
-    }
-    if (view_id == 0U) { view_id = App_GetLocalNodeId(); }
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_VIEW_NODE_ID, view_id);
-  }
-
+  frozen = Display_LvglObservationFrozen();
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_VIEW_NODE_ID, App_GetLocalNodeId());
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_UPTIME_MS, now_ms);
-  /* 飞行时间(上电后运行)，秒粒度，避免毫秒每帧抖动导致重绘 */
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_FLIGHT_TIME_S, now_ms / 1000U);
 
   navigation_result = App_GetDisplayNavigation(&navigation, now_ms);
-  if (navigation_result == PX4LITE_OK) {
-    Display_LoadNavigationSnapshot(&navigation);
-  } else {
-    Display_ClearNavigationSnapshot();
+  if (frozen == 0U) {
+    if (navigation_result == PX4LITE_OK) { Display_LoadNavigationSnapshot(&navigation); }
+    else { Display_ClearNavigationSnapshot(); }
   }
-  Display_LoadAttitudeOperationStatus(display_mode);
+  Display_LoadAttitudeOperationStatus(PX4LITE_REMOTE_MODE_LOCAL);
 
   date_time_result = App_GetDisplayDateTime(&date_time, now_ms);
-  if ((date_time_result == PX4LITE_OK) && (date_time.local_date_ymd != 0U)) {
-    Display_LoadDateTimeSnapshot(&date_time);
-  } else {
-    Display_LoadFallbackDateTime(now_ms);
-  }
+  if ((date_time_result == PX4LITE_OK) && (date_time.local_date_ymd != 0U)) { Display_LoadDateTimeSnapshot(&date_time); }
+  else { Display_LoadFallbackDateTime(now_ms); }
 
   system_result = App_GetDisplaySystem(&system, now_ms);
-  if (system_result == PX4LITE_OK) {
-    Display_LoadSystemSnapshot(&system);
-    msglog_highest = system.highest_fault_code;
-  } else if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
+  if (system_result == PX4LITE_OK) { Display_LoadSystemSnapshot(&system); }
+  else {
     Display_ClearSystemSnapshot();
-  } else {
     status_fallback_loaded = Display_LoadModuleStatusFallback();
   }
 
-  /* 环境快照提前取，先用带滞回的档位刷新，再算电机/主控电池告警注入告警表与自检错误码表。 */
+  /* 冻结不暂停电源事实、告警与控制反馈，只有测量观察字段保持。 */
   environment_result = App_GetDisplayEnvironment(&environment, now_ms);
-  if (environment_result == PX4LITE_OK) { Display_UpdateBatteryBands(&environment); }
-  /* 档位刷新后立刻下发闭锁：档位是带滞回的锁存状态，与滑条输入门 Display_MotorPowerAllowsOutput()
-     同源，保证"拒绝新命令"和"清零旧目标"永远同时生效，不会一边拒一边继续输出。 */
-  Display_ApplyMotorPowerInhibit();
-  motor_fault = (environment_result == PX4LITE_OK) ? Display_EvalMotorFault(&environment) : 0U;
-  main_fault  = (environment_result == PX4LITE_OK) ? Display_EvalMainFault(&environment) : 0U;
-
+  if (environment_result == PX4LITE_OK) {
+    Display_UpdateBatteryBands(&environment);
+    motor_fault = Display_EvalMotorFault(&environment);
+    main_fault = Display_EvalMainFault(&environment);
+  }
   alarm_result = App_GetDisplayAlarm(&alarm, now_ms);
   if (alarm_result == PX4LITE_OK) {
     Display_LoadAlarmSnapshot(&alarm, motor_fault, main_fault);
-    msglog_highest = alarm.highest_fault_code;
-  } else if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
+  } else {
     Display_ClearAlarmSnapshot();
   }
 
-  /* 消息日志统一经业务层获取：LOCAL=本机业务日志(app_message_log 生产，与旧显示
-     内部日志同源同算)，REMOTE=远端同步日志。增量按 sequence 桥接进既有渲染环；
-     切换本地/远端时清环重建，避免残留历史。 */
-  {
-    static uint16_t s_log_bridged_seq = 0U;
-    static uint8_t  s_log_last_remote = 0xFFU;
-    uint8_t is_remote = (display_mode == PX4LITE_REMOTE_MODE_REMOTE) ? 1U : 0U;
-    App_DisplayLogSnapshot_t log;
-
-    if (is_remote != s_log_last_remote) {
-      Display_PagesClearLogMessages();
-      s_log_bridged_seq = 0U;
-      s_log_last_remote = is_remote;
-    }
-
-    if (App_GetDisplayMessageLog(&log, now_ms) == PX4LITE_OK) {
-      uint16_t li;
-      for (li = 0U; li < log.count; ++li) {
-        uint16_t seq = log.entries[li].sequence;
-        if ((seq != 0U) && (seq > s_log_bridged_seq)) {
-          Display_PagesPushLogMessage((Display_LogMsg_t)log.entries[li].message_id, log.entries[li].time_hhmmss);
-          s_log_bridged_seq = seq;
-        }
-      }
-    } else if (is_remote != 0U) {
-      Display_PagesClearLogMessages();
-      s_log_bridged_seq = 0U;
-    }
+  log_result = App_GetDisplayMessageLog(&log, now_ms);
+  if ((log_result == PX4LITE_OK) || (log_result == PX4LITE_NOT_READY)) {
+    Display_PagesSetLogSnapshot(&log);
+    Display_LvglSetLogSnapshotVersion(log.version);
   }
-  (void)msglog_highest;
+  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, Display_PagesGetLogVersion());
 
-  if (environment_result == PX4LITE_OK) {
-    Display_LoadEnvironmentSnapshot(&environment);
-  } else {
-    Display_ClearEnvironmentFields();
-    Display_ClearBatteryFields();
+  if (frozen == 0U) {
+    if (environment_result == PX4LITE_OK) { Display_LoadEnvironmentSnapshot(&environment); }
+    else { Display_ClearEnvironmentFields(); Display_ClearBatteryFields(); }
   }
-
   motor_result = App_GetDisplayMotor(&motor, now_ms);
   if (motor_result == PX4LITE_OK) {
     Display_LoadMotorSnapshot(&motor);
     Display_LoadMotorPulseSnapshot(&motor);
-  } else if (display_mode == PX4LITE_REMOTE_MODE_REMOTE) {
-    Display_ClearMotorFields();
-  }
-
-  /* LoRa 收发帧计数为累计值，独立于上面三个快照，每帧都刷新 */
+  } else { Display_ClearMotorFields(); }
   Display_LoadLoraStats();
-
-  Display_ApplyOfflineDataPolicy();
-
-  /* 消息日志缓冲版本变化即触发日志区重绘 */
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, Display_PagesGetLogVersion());
-
-  if ((display_mode == PX4LITE_REMOTE_MODE_LOCAL) && (navigation_result != PX4LITE_OK) && (system_result != PX4LITE_OK) && (environment_result != PX4LITE_OK) && (status_fallback_loaded == 0U)) { return DISPLAY_NOT_READY; }
-
+  if ((navigation_result != PX4LITE_OK) && (system_result != PX4LITE_OK) &&
+      (environment_result != PX4LITE_OK) && (status_fallback_loaded == 0U)) { return DISPLAY_NOT_READY; }
   return DISPLAY_OK;
 }
 
@@ -1709,4 +1536,17 @@ uint16_t Display_GetHmiTouchRegionCount(void)
 const Display_HmiTouchRegionConfig_t *Display_GetHmiTouchRegionTable(void)
 {
   return 0;
+}
+
+/** @brief 显示门面状态入口；不暴露 LVGL 类型，不发起触摸 I/O。 */
+void Display_GetRuntimeStatus(Display_RuntimeStatus_t *out)
+{
+  if (out == 0) { return; }
+#if DISPLAY_USE_LVGL_BACKEND
+  Display_LvglGetStatus(out);
+#else
+  memset(out, 0, sizeof(*out));
+  out->display_ready = s_display_ready;
+  /* 此后端没有可确认的触摸采集路径，保持 touch_ready 为 0。 */
+#endif
 }

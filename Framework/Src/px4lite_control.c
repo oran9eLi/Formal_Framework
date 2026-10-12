@@ -16,6 +16,8 @@
 #include "px4lite_modules.h"
 #include "px4lite_platform.h"
 #include "px4lite_topics.h"
+#include "px4lite_local_msglog.h"
+#include "px4lite_log_message_ids.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -66,9 +68,9 @@ static volatile int32_t s_target_roll_deg100;
 static volatile int32_t s_target_pitch_deg100;
 static volatile int32_t s_target_yaw_deg100;
 static volatile uint8_t s_estop_latched;
-/* 动力电池闭锁：与急停分开。急停是用户动作、需要非零油门显式解锁；本标志是外部供电条件，
-   由上层按电机电池档位持续维护，档位恢复即自动解除，不锁存。 */
-static volatile uint8_t s_power_inhibited;
+/**< 本机供电闭锁，启动默认关闭输出；只有 Control 根据 Battery2 更新。 */
+static volatile uint8_t s_power_inhibited = 1U;
+static volatile uint8_t s_power_low_voltage;
 static Px4Lite_VehicleNavigation_t s_last_attitude_navigation;
 static uint8_t s_last_attitude_valid;
 static uint32_t s_arm_start_ms;
@@ -85,6 +87,55 @@ static uint8_t s_button_count[PX4LITE_BUTTON_COUNT];
 static const int8_t s_attitude_roll_mix[PX4LITE_MOTOR_COUNT]  = {1, -1, 1, -1};
 static const int8_t s_attitude_pitch_mix[PX4LITE_MOTOR_COUNT] = {-1, -1, 1, 1};
 static const int8_t s_attitude_yaw_mix[PX4LITE_MOTOR_COUNT]   = {-1, 1, 1, -1};
+
+/** @brief 日志辅助状态仅由已串行化的控制路径访问。 */
+static uint8_t s_auto_logged_start;
+static uint8_t s_output_above_minimum;
+static uint8_t s_output_write_failed;
+static uint8_t s_power_observed;
+static uint8_t s_power_cutoff_pending;
+static Px4Lite_ControlAutoProfile_t s_auto_complete_pending;
+static uint16_t s_last_command_log = PX4LITE_LOGMSG_COUNT;
+static uint32_t s_last_command_log_ms;
+/** @brief 立即记录所属状态机事实，保护动作不参与状态去抖。 */
+static void Px4Lite_ControlLog(uint16_t message, uint32_t now_ms)
+{
+  Px4Lite_LocalMsgLogEvent(message, now_ms, 0U, PX4LITE_MODULE_CONTROL,
+                           (Px4Lite_LogMessageSeverity(message) != 0U) ? 1U : 0U);
+}
+/** @brief 合并同一请求反馈的连续重复；原因变化立即写入。 */
+static void Px4Lite_ControlLogCommand(uint16_t message, uint32_t now_ms)
+{
+  if ((message == s_last_command_log) && ((uint32_t)(now_ms - s_last_command_log_ms) < 3000U)) { return; }
+  s_last_command_log = message;
+  s_last_command_log_ms = now_ms;
+  Px4Lite_ControlLog(message, now_ms);
+}
+/** @brief PWM 写入结果是输出事实边界；仅全部通道成功才能记录最小输出。 */
+static void Px4Lite_ControlLogOutput(Px4Lite_Result_t result, uint8_t above_minimum, uint32_t now_ms)
+{
+  if (result != PX4LITE_OK) {
+    if (s_output_write_failed == 0U) { Px4Lite_ControlLog(PX4LITE_LOGMSG_OUTPUT_WRITE_FAILED, now_ms); }
+    s_output_write_failed = 1U;
+    return;
+  }
+  s_output_write_failed = 0U;
+  if (above_minimum == 0U) {
+    if (s_power_cutoff_pending != 0U) {
+      Px4Lite_ControlLog(PX4LITE_LOGMSG_MOTOR_POWER_CUTOFF, now_ms);
+      s_power_cutoff_pending = 0U;
+    }
+    if (s_output_above_minimum != 0U) { Px4Lite_ControlLog(PX4LITE_LOGMSG_OUTPUT_MINIMUM, now_ms); }
+  }
+  s_output_above_minimum = above_minimum;
+}
+/** @brief 撤收输出并记录实际写入结果；不将命令提交冒充硬件成功。 */
+static Px4Lite_Result_t Px4Lite_ControlDisarmLogged(uint32_t now_ms)
+{
+  Px4Lite_Result_t result = Px4Lite_MotorDisarmAll();
+  Px4Lite_ControlLogOutput(result, 0U, now_ms);
+  return result;
+}
 
 static int32_t Px4Lite_ControlClampI32(int32_t value, int32_t min_value, int32_t max_value);
 
@@ -320,12 +371,15 @@ static void Px4Lite_ControlApplyAttitudeAssist(uint32_t now_ms, int32_t duty_per
 static Px4Lite_Result_t Px4Lite_ControlWriteAll(const uint16_t pulse_us[PX4LITE_MOTOR_COUNT])
 {
   uint8_t i;
+  uint8_t above = 0U;
   Px4Lite_Result_t result = PX4LITE_OK;
 
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (pulse_us[i] > PX4LITE_CONTROL_ESC_MIN_PULSE_US) { above = 1U; }
     if (Px4Lite_MotorWritePulseUs(i, pulse_us[i]) != PX4LITE_OK) { result = PX4LITE_IO_ERROR; }
   }
 
+  Px4Lite_ControlLogOutput(result, above, Px4Lite_PlatformGetMs());
   return result;
 }
 
@@ -346,13 +400,14 @@ static void Px4Lite_ControlClearTargets(void)
 }
 
 /**
- * @brief 复位控制状态并把电机输出降到最小脉宽。
+ * @brief 清除自动斜坡参数；本函数不写 PWM，不能单独证明输出已撤收。
  */
 static void Px4Lite_ControlClearAutoThrottle(void)
 {
   uint8_t i;
 
   s_auto_profile      = PX4LITE_CONTROL_AUTO_NONE;
+  s_auto_logged_start = 0U;
   s_auto_landing_user = 0U;
   s_auto_start_ms    = 0U;
   s_auto_duration_ms = 0U;
@@ -362,10 +417,22 @@ static void Px4Lite_ControlClearAutoThrottle(void)
   }
 }
 
+/** @brief 因手动接管、保护、急停或恢复中止自动过程，保留中止事实。 */
+static void Px4Lite_ControlAbortAuto(uint32_t now_ms)
+{
+  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) {
+    Px4Lite_ControlLog((s_auto_profile == PX4LITE_CONTROL_AUTO_TAKEOFF) ?
+      PX4LITE_LOGMSG_RAMP_UP_ABORTED : PX4LITE_LOGMSG_RAMP_DOWN_ABORTED, now_ms);
+  }
+  s_auto_complete_pending = PX4LITE_CONTROL_AUTO_NONE;
+  Px4Lite_ControlClearAutoThrottle();
+}
+/** @brief 明确非零新请求解除急停后，输出重新经历预解锁。 */
 static void Px4Lite_ControlReleaseEmergencyStop(uint32_t now_ms)
 {
   if (s_estop_latched == 0U) { return; }
   s_estop_latched = 0U;
+  Px4Lite_ControlLog(PX4LITE_LOGMSG_ESTOP_RELEASED, now_ms);
   s_esc_armed = 0U;
   s_arm_start_ms = now_ms;
   s_last_run_ms = now_ms;
@@ -381,6 +448,7 @@ static uint8_t Px4Lite_ControlCurrentTargetPercent(uint8_t motor_index)
   return (value > 100U) ? 100U : value;
 }
 
+/** @brief 建立同步升速/缓降目标；接受不代表 ESC 已解锁或开始输出。 */
 static Px4Lite_Result_t Px4Lite_ControlStartAutoThrottle(Px4Lite_ControlAutoProfile_t profile)
 {
   uint8_t i;
@@ -393,6 +461,7 @@ static Px4Lite_Result_t Px4Lite_ControlStartAutoThrottle(Px4Lite_ControlAutoProf
   if ((s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) && (profile == PX4LITE_CONTROL_AUTO_TAKEOFF)) {
     return PX4LITE_BUSY;
   }
+  if (s_auto_profile == profile) { return PX4LITE_BUSY; }
   if (s_estop_latched != 0U) {
     if (profile == PX4LITE_CONTROL_AUTO_TAKEOFF) {
       Px4Lite_ControlReleaseEmergencyStop(Px4Lite_PlatformGetMs());
@@ -401,6 +470,8 @@ static Px4Lite_Result_t Px4Lite_ControlStartAutoThrottle(Px4Lite_ControlAutoProf
     }
   }
 
+  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { Px4Lite_ControlAbortAuto(Px4Lite_PlatformGetMs()); }
+  s_auto_logged_start = 0U;
   target   = (profile == PX4LITE_CONTROL_AUTO_TAKEOFF) ? PX4LITE_CONTROL_AUTO_TAKEOFF_TARGET_PERCENT : 0U;
   duration = (profile == PX4LITE_CONTROL_AUTO_TAKEOFF) ? PX4LITE_CONTROL_AUTO_TAKEOFF_RAMP_MS : PX4LITE_CONTROL_AUTO_LANDING_RAMP_MS;
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
@@ -422,6 +493,9 @@ static Px4Lite_Result_t Px4Lite_ControlStartAutoThrottle(Px4Lite_ControlAutoProf
 static void Px4Lite_ControlForceAutoLanding(uint32_t now_ms)
 {
   uint8_t i;
+
+  Px4Lite_ControlLog(PX4LITE_LOGMSG_RAMP_SENSOR_ABORT, now_ms);
+  s_auto_logged_start = 0U;
 
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     s_auto_start_percent[i]  = Px4Lite_ControlCurrentTargetPercent(i);
@@ -456,6 +530,7 @@ static void Px4Lite_ControlMonitorAutoTakeoff(uint32_t now_ms)
   Px4Lite_ControlForceAutoLanding(now_ms);
 }
 
+/** @brief 计算本周期斜坡目标；结束事件延迟到四路 PWM 成功写入后确认。 */
 static void Px4Lite_ControlApplyAutoThrottle(uint32_t now_ms)
 {
   uint8_t i;
@@ -464,7 +539,7 @@ static void Px4Lite_ControlApplyAutoThrottle(uint32_t now_ms)
 
   if (s_auto_profile == PX4LITE_CONTROL_AUTO_NONE) { return; }
   if ((s_estop_latched != 0U) || (s_power_inhibited != 0U)) {
-    Px4Lite_ControlClearAutoThrottle();
+    Px4Lite_ControlAbortAuto(now_ms);
     return;
   }
   elapsed_ms = Px4Lite_ElapsedMs(now_ms, s_auto_start_ms);
@@ -484,6 +559,7 @@ static void Px4Lite_ControlApplyAutoThrottle(uint32_t now_ms)
   }
 
   if (elapsed_ms >= duration_ms) {
+    s_auto_complete_pending = s_auto_profile;
     Px4Lite_ControlClearAutoThrottle();
   }
 }
@@ -491,12 +567,12 @@ static void Px4Lite_ControlApplyAutoThrottle(uint32_t now_ms)
 /**
  * @brief 复位 Control 内部状态并把电机输出降到最小脉宽。
  *
- * @details 故意不复位 s_power_inhibited：闭锁表达的是"动力电池当前不满足运行条件"这一外部
- * 供电事实，不是 Control 的内部状态，重新初始化控制器并不会让电池变得能用。清掉它会在
- * 上层补发之前留出一个允许输出的窗口。上层每周期无条件重发该标志，两侧都不依赖边沿。
+ * @details 恢复时清零目标并重新闭锁，下一次本机有效采样才允许解除。
  */
 static void Px4Lite_ControlReset(uint32_t now_ms)
 {
+  s_power_inhibited = 1U;
+  s_power_low_voltage = 0U;
   s_esc_armed      = 0U;
   s_last_run_valid = 0U;
   s_estop_latched  = 0U;
@@ -509,11 +585,11 @@ static void Px4Lite_ControlReset(uint32_t now_ms)
   memset(&s_last_attitude_navigation, 0, sizeof(s_last_attitude_navigation));
   s_last_attitude_valid = 0U;
   Px4Lite_ControlClearTargets();
-  Px4Lite_ControlClearAutoThrottle();
+  Px4Lite_ControlAbortAuto(now_ms);
   memset(s_button_stable, 0, sizeof(s_button_stable));
   memset(s_button_last_raw, 0, sizeof(s_button_last_raw));
   memset(s_button_count, 0, sizeof(s_button_count));
-  (void)Px4Lite_MotorDisarmAll();
+  (void)Px4Lite_ControlDisarmLogged(now_ms);
 }
 
 /**
@@ -606,35 +682,53 @@ static void Px4Lite_ControlCopyTargetPercent(uint8_t duty_percent[PX4LITE_MOTOR_
 }
 
 /**
- * @brief 设置或解除动力电池闭锁。
- *
- * @details 上层按电机电池档位每周期维护本标志。置位沿立即清零四路目标并撤销自动油门，
- * 置位期间拒绝一切非零油门命令；清零沿只解除闭锁，不自动恢复任何油门——恢复供电后必须
- * 由用户重新拖动滑条，避免电压在门限附近跳动时电机自己转起来。
- *
- * @param[in] inhibit 非 0 表示闭锁，0 表示允许输出。
- *
- * @return 总是 PX4LITE_OK。
+ * @brief 在控制周期或命令提交前，依据本机 Battery2 更新供电门禁。
+ * @param[in] now_ms 当前真实毫秒时间。
+ * @note 调用者已挂起任务调度；快照内部短临界区，不依赖显示或远端数据。
+ *       闭锁同时清目标、自动过程及预解锁进度，恢复不会重放旧命令。
  */
-Px4Lite_Result_t Px4Lite_ControlSetPowerInhibit(uint8_t inhibit)
+static void Px4Lite_ControlRefreshPowerGate(uint32_t now_ms)
 {
-  uint8_t normalized = (inhibit != 0U) ? 1U : 0U;
-
-  if ((normalized != 0U) && (s_power_inhibited == 0U)) {
-    Px4Lite_ControlClearTargets();
-    Px4Lite_ControlClearAutoThrottle();
+  Px4Lite_BatteryStatus_t battery;
+  uint8_t inhibit = 1U;
+  s_power_low_voltage = 0U;
+  if ((Px4Lite_CopyBattery2(&battery) == PX4LITE_OK) &&
+      (battery.header.valid != 0U) &&
+      (Px4Lite_ElapsedMs(now_ms, battery.header.sample_time_ms) <= PX4LITE_BATTERY_MAX_AGE_MS)) {
+    s_power_low_voltage = (battery.voltage_mv < PX4LITE_CONTROL_POWER_CUTOFF_MV) ? 1U : 0U;
+    if ((battery.voltage_mv <= PX4LITE_CONTROL_POWER_MAX_MV) &&
+        (battery.voltage_mv >= ((s_power_inhibited != 0U) ? PX4LITE_CONTROL_POWER_RECOVER_MV : PX4LITE_CONTROL_POWER_CUTOFF_MV))) {
+      inhibit = 0U;
+    }
   }
-  s_power_inhibited = normalized;
-  return PX4LITE_OK;
+  if ((s_power_observed == 0U) || (inhibit != s_power_inhibited)) {
+    Px4Lite_ControlLog((inhibit != 0U) ? PX4LITE_LOGMSG_POWER_INHIBITED : PX4LITE_LOGMSG_POWER_RELEASED, now_ms);
+    s_power_observed = 1U;
+    if ((inhibit != 0U) && (s_output_above_minimum != 0U)) { s_power_cutoff_pending = 1U; }
+  }
+  if (inhibit != 0U) {
+    Px4Lite_ControlClearTargets();
+    Px4Lite_ControlAbortAuto(now_ms);
+    s_esc_armed = 0U;
+    s_arm_start_ms = now_ms;
+  }
+  s_power_inhibited = inhibit;
 }
 
+/** @brief 只读查询：最近一次本机有效新鲜采样是否低于停机门限。 */
+uint8_t Px4Lite_ControlIsPowerLowVoltage(void)
+{
+  return s_power_low_voltage;
+}
+
+/** @brief 查询本机供电闭锁，不允许上层写入解除。 */
 uint8_t Px4Lite_ControlIsPowerInhibited(void)
 {
   return s_power_inhibited;
 }
 
 /**
- * @brief 提交完整四路目标；进入临界区前完成换算，区内只校验门禁和复制状态。
+ * @brief 提交完整四路目标；暂停任务调度期间检查本机供电并整体更新状态。
  * @details 百分比保持当前模式，脉宽命令同时选择 DIRECT。用户缓降中的全零命令
  *          只确认已有撤收意图，不改变曲线或模式；被拒命令不解除急停。
  */
@@ -643,19 +737,23 @@ static Px4Lite_Result_t Px4Lite_ControlCommitMotorTargets(const uint8_t percent[
                                                          uint8_t is_pulse, uint8_t nonzero)
 {
   uint8_t i;
-  uint32_t now_ms = Px4Lite_PlatformGetMs();
+  uint32_t now_ms;
 
-  taskENTER_CRITICAL();
+  vTaskSuspendAll();
+  now_ms = Px4Lite_PlatformGetMs();
+  Px4Lite_ControlRefreshPowerGate(now_ms);
   if ((s_power_inhibited != 0U) && (nonzero != 0U)) {
-    taskEXIT_CRITICAL();
+    Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_THROTTLE_POWER_FAIL, now_ms);
+    (void)xTaskResumeAll();
     return PX4LITE_NOT_READY;
   }
   if ((s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) && (s_auto_landing_user != 0U)) {
-    taskEXIT_CRITICAL();
+    if (nonzero != 0U) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_LANDING_THROTTLE_REJECT, now_ms); }
+    (void)xTaskResumeAll();
     return (nonzero != 0U) ? PX4LITE_NOT_READY : PX4LITE_OK;
   }
   if (nonzero != 0U) { Px4Lite_ControlReleaseEmergencyStop(now_ms); }
-  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { Px4Lite_ControlClearAutoThrottle(); }
+  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { Px4Lite_ControlAbortAuto(Px4Lite_PlatformGetMs()); }
   if (is_pulse != 0U) { s_control_mode = PX4LITE_CONTROL_MODE_DIRECT; }
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     s_target_throttle_percent[i] = percent[i];
@@ -664,7 +762,8 @@ static Px4Lite_Result_t Px4Lite_ControlCommitMotorTargets(const uint8_t percent[
     s_target_update_ms[i] = now_ms;
     s_target_valid[i] = 1U;
   }
-  taskEXIT_CRITICAL();
+  Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_THROTTLE_ACCEPTED, now_ms);
+  (void)xTaskResumeAll();
   return PX4LITE_OK;
 }
 
@@ -701,24 +800,25 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorPulses(const uint16_t pulse[PX4LITE_MOTO
   return Px4Lite_ControlCommitMotorTargets(percent, pulse, 1U, nonzero);
 }
 
-Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
+/** @brief 单路百分比目标准入；保护、缓降拒绝和人工接管均在此处成为事实。 */
+static Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercentImpl(uint8_t motor_index, uint8_t throttle_percent)
 {
   if (motor_index >= PX4LITE_MOTOR_COUNT) { return PX4LITE_INVALID_PARAM; }
   if (throttle_percent > 100U) { throttle_percent = 100U; }
   /* 动力电池不满足运行条件时只接受 0：拒绝要发生在解除急停和撤销自动油门之前，
      否则一次被拒的滑条命令会顺带把急停解锁、把降落斜坡撤掉。 */
-  if ((s_power_inhibited != 0U) && (throttle_percent != 0U)) { return PX4LITE_NOT_READY; }
+  if ((s_power_inhibited != 0U) && (throttle_percent != 0U)) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_THROTTLE_POWER_FAIL, Px4Lite_PlatformGetMs()); return PX4LITE_NOT_READY; }
   /* 一键降落是用户明确的撤收动作，进行中不接受新的非零手动油门；0 与降落终点一致，接受但
      不打断斜坡。姿态丢失触发的强制降落不在此列——那是内部保护，必须留出手动接管的出口。
      一键起飞也不做此限制，手动接管随时可以打断上升。 */
   if ((s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) && (s_auto_landing_user != 0U)) {
-    if (throttle_percent != 0U) { return PX4LITE_NOT_READY; }
+    if (throttle_percent != 0U) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_LANDING_THROTTLE_REJECT, Px4Lite_PlatformGetMs()); return PX4LITE_NOT_READY; }
     return PX4LITE_OK;
   }
   if ((s_estop_latched != 0U) && (throttle_percent != 0U)) {
     Px4Lite_ControlReleaseEmergencyStop(Px4Lite_PlatformGetMs());
   }
-  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { Px4Lite_ControlClearAutoThrottle(); }
+  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { Px4Lite_ControlAbortAuto(Px4Lite_PlatformGetMs()); }
 
   s_target_throttle_percent[motor_index] = throttle_percent;
   s_target_pulse_us[motor_index]          = Px4Lite_ControlThrottleToPulseUs(throttle_percent);
@@ -728,21 +828,22 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uin
   return PX4LITE_OK;
 }
 
-Px4Lite_Result_t Px4Lite_ControlSetMotorPulseUs(uint8_t motor_index, uint16_t pulse_us)
+/** @brief 单路脉宽准入；最小输出语义独立于动力电压的状态观察。 */
+static Px4Lite_Result_t Px4Lite_ControlSetMotorPulseUsImpl(uint8_t motor_index, uint16_t pulse_us)
 {
   if (motor_index >= PX4LITE_MOTOR_COUNT) { return PX4LITE_INVALID_PARAM; }
   if ((pulse_us < PX4LITE_CONTROL_ESC_MIN_PULSE_US) ||
       (pulse_us > PX4LITE_CONTROL_ESC_MAX_PULSE_US)) { return PX4LITE_INVALID_PARAM; }
   /* 与百分比入口同口径：闭锁和一键降落期间只接受最小脉宽。 */
-  if ((s_power_inhibited != 0U) && (pulse_us != PX4LITE_CONTROL_ESC_MIN_PULSE_US)) { return PX4LITE_NOT_READY; }
+  if ((s_power_inhibited != 0U) && (pulse_us != PX4LITE_CONTROL_ESC_MIN_PULSE_US)) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_THROTTLE_POWER_FAIL, Px4Lite_PlatformGetMs()); return PX4LITE_NOT_READY; }
   if ((s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) && (s_auto_landing_user != 0U)) {
-    if (pulse_us != PX4LITE_CONTROL_ESC_MIN_PULSE_US) { return PX4LITE_NOT_READY; }
+    if (pulse_us != PX4LITE_CONTROL_ESC_MIN_PULSE_US) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_LANDING_THROTTLE_REJECT, Px4Lite_PlatformGetMs()); return PX4LITE_NOT_READY; }
     return PX4LITE_OK;
   }
   if ((s_estop_latched != 0U) && (pulse_us != PX4LITE_CONTROL_ESC_MIN_PULSE_US)) {
     Px4Lite_ControlReleaseEmergencyStop(Px4Lite_PlatformGetMs());
   }
-  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { Px4Lite_ControlClearAutoThrottle(); }
+  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { Px4Lite_ControlAbortAuto(Px4Lite_PlatformGetMs()); }
 
   s_target_pulse_us[motor_index]          = pulse_us;
   s_target_throttle_percent[motor_index] = Px4Lite_ControlPulseToThrottlePercent(pulse_us);
@@ -752,16 +853,20 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorPulseUs(uint8_t motor_index, uint16_t pu
   return PX4LITE_OK;
 }
 
-Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoff(void)
+/** @brief 在状态机内给出精确拒绝原因；重复过程不重置已有斜坡计时。 */
+static Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoffImpl(void)
 {
-  if (s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) {
+  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) {
+    Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_RAMP_UP_BUSY, Px4Lite_PlatformGetMs());
     return PX4LITE_BUSY;
   }
   /* 起飞是加油门动作，动力电池闭锁时一律拒绝；降落不设此门槛，撤收永远允许。 */
   if (s_power_inhibited != 0U) {
+    Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_TAKEOFF_POWER_FAIL, Px4Lite_PlatformGetMs());
     return PX4LITE_NOT_READY;
   }
   if (Px4Lite_ControlAutoTakeoffSensorsReady(Px4Lite_PlatformGetMs()) == 0U) {
+    Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_TAKEOFF_SENSOR_FAIL, Px4Lite_PlatformGetMs());
     return PX4LITE_NOT_READY;
   }
 
@@ -778,10 +883,15 @@ Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoff(void)
  * `Px4Lite_ControlMonitorAutoTakeoff()` 自动转入本斜坡；手动油门下用户也可随时按降落。
  * 当前控制模式在缓降过程中保持不变；姿态辅助只有在学生已经明确选择时才生效。
  */
-Px4Lite_Result_t Px4Lite_ControlStartAutoLanding(void)
+static Px4Lite_Result_t Px4Lite_ControlStartAutoLandingImpl(void)
 {
   Px4Lite_Result_t result;
 
+  if ((s_power_inhibited != 0U) || (s_estop_latched != 0U)) {
+    Px4Lite_ControlAbortAuto(Px4Lite_PlatformGetMs());
+    Px4Lite_ControlClearTargets();
+    return Px4Lite_ControlDisarmLogged(Px4Lite_PlatformGetMs());
+  }
   result = Px4Lite_ControlStartAutoThrottle(PX4LITE_CONTROL_AUTO_LANDING);
   if (result == PX4LITE_OK) {
     /* 用户明确要求撤收：斜坡跑完之前不再接受非零手动油门。 */
@@ -836,19 +946,20 @@ Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll_deg100, int32_t p
 /**
  * @brief 锁存急停状态、清零目标油门，并立即写入 ESC 最小脉宽。
  */
-Px4Lite_Result_t Px4Lite_ControlEmergencyStop(uint32_t now_ms)
+static Px4Lite_Result_t Px4Lite_ControlEmergencyStopImpl(uint32_t now_ms)
 {
   Px4Lite_Result_t result;
 
+  Px4Lite_ControlLog(PX4LITE_LOGMSG_ESTOP, now_ms);
   s_estop_latched  = 1U;
   s_esc_armed      = 0U;
   s_arm_start_ms   = now_ms;
   s_last_run_ms    = now_ms;
   s_last_run_valid = 1U;
   Px4Lite_ControlClearTargets();
-  Px4Lite_ControlClearAutoThrottle();
+  Px4Lite_ControlAbortAuto(now_ms);
 
-  result = Px4Lite_MotorDisarmAll();
+  result = Px4Lite_ControlDisarmLogged(now_ms);
   Px4Lite_SetExternalModuleState(PX4LITE_MODULE_CONTROL, PX4LITE_STATE_DEGRADED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SYSTEM_SELF_CHECK, now_ms);
   return result;
 }
@@ -864,7 +975,7 @@ Px4Lite_Result_t Px4Lite_ControlModuleInit(void)
   return result;
 }
 
-Px4Lite_Result_t Px4Lite_ControlRecover(void)
+static Px4Lite_Result_t Px4Lite_ControlRecoverImpl(void)
 {
   uint32_t now_ms = Px4Lite_PlatformGetMs();
 
@@ -884,21 +995,19 @@ static void Px4Lite_ControlRunCycle(uint32_t now_ms)
   Px4Lite_Result_t result;
 
   if ((s_last_run_valid != 0U) && (Px4Lite_ElapsedMs(now_ms, s_last_run_ms) > PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS)) {
+    Px4Lite_ControlLog(PX4LITE_LOGMSG_CONTROL_TIMEOUT, now_ms);
     s_esc_armed = 0U;
     s_arm_start_ms = now_ms;
     Px4Lite_ControlClearTargets();
-    Px4Lite_ControlClearAutoThrottle();
-    (void)Px4Lite_MotorDisarmAll();
+    Px4Lite_ControlAbortAuto(now_ms);
+    (void)Px4Lite_ControlDisarmLogged(now_ms);
   }
   s_last_run_valid = 1U;
   s_last_run_ms    = now_ms;
   Px4Lite_ControlRefreshAttitudeCache(now_ms);
 
   if (Px4Lite_ControlPressEdge(PX4LITE_BUTTON_KEY1) != 0U) {
-    s_estop_latched = 1U;
-    Px4Lite_ControlClearTargets();
-    Px4Lite_ControlClearAutoThrottle();
-    (void)Px4Lite_MotorDisarmAll();
+    (void)Px4Lite_ControlEmergencyStopImpl(now_ms);
   }
 
   if (s_esc_armed == 0U) {
@@ -940,7 +1049,7 @@ static void Px4Lite_ControlRunCycle(uint32_t now_ms)
     base_percent[i]      = duty_percent[i];
     duty_percent_x100[i] = (int32_t)duty_percent[i] * PX4LITE_CONTROL_PERCENT_X100_SCALE;
   }
-  if (s_estop_latched == 0U) { Px4Lite_ControlApplyAttitudeAssist(now_ms, duty_percent_x100); }
+  if ((s_estop_latched == 0U) && (s_power_inhibited == 0U)) { Px4Lite_ControlApplyAttitudeAssist(now_ms, duty_percent_x100); }
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     if ((s_target_is_pulse[i] != 0U) &&
         (s_control_mode == PX4LITE_CONTROL_MODE_DIRECT) &&
@@ -954,7 +1063,23 @@ static void Px4Lite_ControlRunCycle(uint32_t now_ms)
   }
 
   result = Px4Lite_ControlWriteAll(pulse_us);
-  Px4Lite_ControlPublish(now_ms, duty_percent, base_percent, pulse_us, (s_estop_latched == 0U) ? 1U : 0U);
+  if (result == PX4LITE_OK) {
+    if ((s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) && (s_auto_logged_start == 0U)) {
+      Px4Lite_ControlLog((s_auto_profile == PX4LITE_CONTROL_AUTO_TAKEOFF) ? PX4LITE_LOGMSG_RAMP_UP_STARTED :
+        ((s_auto_landing_user != 0U) ? PX4LITE_LOGMSG_RAMP_DOWN_STARTED : PX4LITE_LOGMSG_PROTECT_DOWN_STARTED), now_ms);
+      s_auto_logged_start = 1U;
+    }
+    if (s_auto_complete_pending != PX4LITE_CONTROL_AUTO_NONE) {
+      Px4Lite_ControlLog((s_auto_complete_pending == PX4LITE_CONTROL_AUTO_TAKEOFF) ?
+        PX4LITE_LOGMSG_RAMP_UP_COMPLETED : PX4LITE_LOGMSG_RAMP_DOWN_COMPLETED, now_ms);
+      s_auto_complete_pending = PX4LITE_CONTROL_AUTO_NONE;
+    }
+  } else if ((s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) || (s_auto_complete_pending != PX4LITE_CONTROL_AUTO_NONE)) {
+    if (s_auto_profile == PX4LITE_CONTROL_AUTO_NONE) { s_auto_profile = s_auto_complete_pending; }
+    Px4Lite_ControlAbortAuto(now_ms);
+    Px4Lite_ControlClearTargets();
+  }
+  Px4Lite_ControlPublish(now_ms, duty_percent, base_percent, pulse_us, ((s_estop_latched == 0U) && (s_power_inhibited == 0U)) ? 1U : 0U);
   Px4Lite_SetExternalModuleState(PX4LITE_MODULE_CONTROL, ((result == PX4LITE_OK) && (s_estop_latched == 0U)) ? PX4LITE_STATE_ONLINE : PX4LITE_STATE_DEGRADED, (result == PX4LITE_OK) ? PX4LITE_FAULT_NONE : PX4LITE_FAULT_SYSTEM_SELF_CHECK, now_ms);
 }
 
@@ -962,12 +1087,92 @@ static void Px4Lite_ControlRunCycle(uint32_t now_ms)
  * @brief 控制周期与任务中的命令提交串行，避免计算中途被另一任务切换目标/模式。
  * @details 保持中断可用；本周期只允许快照、计算和同步 PWM 寄存器写入，禁止阻塞
  *          I/O 或等待调度器。健康状态和 topic 发布均为短临界区操作。M4 测量周期耗时。
+ * @param[in] now_ms 调用者调度时刻，单位 ms；进入调度互斥后重新取时，避免锁前抢占使用旧年龄。
  */
 void Px4Lite_ControlRun(uint32_t now_ms)
 {
   vTaskSuspendAll();
+  now_ms = Px4Lite_PlatformGetMs();
+  Px4Lite_ControlRefreshPowerGate(now_ms);
   Px4Lite_ControlRunCycle(now_ms);
   (void)xTaskResumeAll();
+}
+
+/** @brief 与控制周期串行提交，确保门禁和目标变更不可被其他任务交错。 */
+Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
+{
+  Px4Lite_Result_t result;
+  vTaskSuspendAll();
+  Px4Lite_ControlRefreshPowerGate(Px4Lite_PlatformGetMs());
+  result = Px4Lite_ControlSetMotorThrottlePercentImpl(motor_index, throttle_percent);
+  if (result == PX4LITE_OK) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_THROTTLE_ACCEPTED, Px4Lite_PlatformGetMs()); }
+  else if (result == PX4LITE_INVALID_PARAM) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_THROTTLE_INVALID, Px4Lite_PlatformGetMs()); }
+  (void)xTaskResumeAll();
+  return result;
+}
+
+/** @brief 与控制周期串行提交，确保门禁和目标变更不可被其他任务交错。 */
+Px4Lite_Result_t Px4Lite_ControlSetMotorPulseUs(uint8_t motor_index, uint16_t pulse_us)
+{
+  Px4Lite_Result_t result;
+  vTaskSuspendAll();
+  Px4Lite_ControlRefreshPowerGate(Px4Lite_PlatformGetMs());
+  result = Px4Lite_ControlSetMotorPulseUsImpl(motor_index, pulse_us);
+  if (result == PX4LITE_OK) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_THROTTLE_ACCEPTED, Px4Lite_PlatformGetMs()); }
+  else if (result == PX4LITE_INVALID_PARAM) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_THROTTLE_INVALID, Px4Lite_PlatformGetMs()); }
+  (void)xTaskResumeAll();
+  return result;
+}
+
+/** @brief 与控制周期串行提交，确保门禁和目标变更不可被其他任务交错。 */
+Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoff(void)
+{
+  Px4Lite_Result_t result;
+  vTaskSuspendAll();
+  Px4Lite_ControlRefreshPowerGate(Px4Lite_PlatformGetMs());
+  result = Px4Lite_ControlStartAutoTakeoffImpl();
+  if (result == PX4LITE_OK) { Px4Lite_ControlLog(PX4LITE_LOGMSG_RAMP_UP_ACCEPTED, Px4Lite_PlatformGetMs()); s_last_command_log = PX4LITE_LOGMSG_COUNT; }
+  (void)xTaskResumeAll();
+  return result;
+}
+
+/** @brief 与控制周期串行提交，确保门禁和目标变更不可被其他任务交错。 */
+Px4Lite_Result_t Px4Lite_ControlStartAutoLanding(void)
+{
+  Px4Lite_Result_t result;
+  vTaskSuspendAll();
+  Px4Lite_ControlRefreshPowerGate(Px4Lite_PlatformGetMs());
+  result = Px4Lite_ControlStartAutoLandingImpl();
+  if (result == PX4LITE_OK) {
+    Px4Lite_ControlLog(PX4LITE_LOGMSG_RAMP_DOWN_ACCEPTED, Px4Lite_PlatformGetMs());
+    if (s_auto_profile == PX4LITE_CONTROL_AUTO_NONE) {
+      Px4Lite_ControlLog(PX4LITE_LOGMSG_OUTPUT_MINIMUM, Px4Lite_PlatformGetMs());
+      Px4Lite_ControlLog(PX4LITE_LOGMSG_RAMP_DOWN_COMPLETED, Px4Lite_PlatformGetMs());
+    }
+    s_last_command_log = PX4LITE_LOGMSG_COUNT;
+  } else { Px4Lite_ControlLogCommand((result == PX4LITE_BUSY) ? PX4LITE_LOGMSG_RAMP_DOWN_BUSY : PX4LITE_LOGMSG_LANDING_FAIL, Px4Lite_PlatformGetMs()); }
+  (void)xTaskResumeAll();
+  return result;
+}
+
+/** @brief 与控制周期串行提交，确保门禁和目标变更不可被其他任务交错。 */
+Px4Lite_Result_t Px4Lite_ControlEmergencyStop(uint32_t now_ms)
+{
+  Px4Lite_Result_t result;
+  vTaskSuspendAll();
+  result = Px4Lite_ControlEmergencyStopImpl(now_ms);
+  (void)xTaskResumeAll();
+  return result;
+}
+
+/** @brief 与控制周期串行提交，确保门禁和目标变更不可被其他任务交错。 */
+Px4Lite_Result_t Px4Lite_ControlRecover(void)
+{
+  Px4Lite_Result_t result;
+  vTaskSuspendAll();
+  result = Px4Lite_ControlRecoverImpl();
+  (void)xTaskResumeAll();
+  return result;
 }
 
 #else
@@ -988,24 +1193,24 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercent(uint8_t motor_index, uin
 {
   (void)motor_index;
   (void)throttle_percent;
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 Px4Lite_Result_t Px4Lite_ControlSetMotorPulseUs(uint8_t motor_index, uint16_t pulse_us)
 {
   (void)motor_index;
   (void)pulse_us;
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoff(void)
 {
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 Px4Lite_Result_t Px4Lite_ControlStartAutoLanding(void)
 {
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 /**
@@ -1014,7 +1219,7 @@ Px4Lite_Result_t Px4Lite_ControlStartAutoLanding(void)
 Px4Lite_Result_t Px4Lite_ControlSetMode(Px4Lite_ControlMode_t mode)
 {
   (void)mode;
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 /**
@@ -1024,7 +1229,7 @@ Px4Lite_Result_t Px4Lite_ControlGetMode(Px4Lite_ControlMode_t *mode)
 {
   if (mode == 0) { return PX4LITE_INVALID_PARAM; }
   *mode = PX4LITE_CONTROL_MODE_DIRECT;
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 /**
@@ -1035,7 +1240,7 @@ Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll_deg100, int32_t p
   (void)roll_deg100;
   (void)pitch_deg100;
   (void)yaw_deg100;
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 /**
@@ -1044,31 +1249,30 @@ Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll_deg100, int32_t p
 Px4Lite_Result_t Px4Lite_ControlEmergencyStop(uint32_t now_ms)
 {
   (void)now_ms;
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 /**
  * @brief Control 模块关闭时的动力电池闭锁空实现。
  */
-Px4Lite_Result_t Px4Lite_ControlSetPowerInhibit(uint8_t inhibit)
-{
-  (void)inhibit;
-  return PX4LITE_OK;
-}
-
-uint8_t Px4Lite_ControlIsPowerInhibited(void)
+uint8_t Px4Lite_ControlIsPowerLowVoltage(void)
 {
   return 0U;
 }
 
+uint8_t Px4Lite_ControlIsPowerInhibited(void)
+{
+  return 1U;
+}
+
 Px4Lite_Result_t Px4Lite_ControlModuleInit(void)
 {
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 Px4Lite_Result_t Px4Lite_ControlRecover(void)
 {
-  return PX4LITE_OK;
+  return PX4LITE_NOT_READY;
 }
 
 void Px4Lite_ControlRun(uint32_t now_ms)

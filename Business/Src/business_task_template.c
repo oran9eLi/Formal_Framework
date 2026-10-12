@@ -10,6 +10,7 @@
 #include "business_task_template.h"
 
 #include "business_template_config.h"
+#include "app_message_log.h"
 #include "FreeRTOS.h"
 #include "px4lite_registry.h"
 #include "task.h"
@@ -76,11 +77,13 @@ void Business_AcquisitionTask(void *argument)
   TickType_t last_wake;
 
   (void)argument;
+  App_MessageLogInit(Business_PlatformGetMs());
   last_wake = xTaskGetTickCount();
 
   for (;;) {
     uint32_t now_ms = Business_PlatformGetMs();
 
+    App_MessageLogUpdate(now_ms);
     (void)Business_AcquisitionRunOnce(now_ms);
     Business_StatusHeartbeat(BUSINESS_COMPONENT_ACQUISITION);
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BUSINESS_ACQUISITION_PERIOD_MS));
@@ -106,12 +109,13 @@ void Business_DisplayServiceTask(void *argument)
   /* Let the independently powered LCD controller complete its cold-start ramp. */
   vTaskDelay(pdMS_TO_TICKS(BUSINESS_DISPLAY_STARTUP_DELAY_MS));
 
+  last_wake = xTaskGetTickCount();
   for (;;) {
     uint32_t init_ms = Business_PlatformGetMs();
 
     if (Px4Lite_RegistryStart(PX4LITE_MODULE_DISPLAY, init_ms) == PX4LITE_OK) { break; }
     Business_StatusHeartbeat(BUSINESS_COMPONENT_DISPLAY);
-    vTaskDelay(pdMS_TO_TICKS(BUSINESS_DISPLAY_INIT_RETRY_MS));
+    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BUSINESS_DISPLAY_INIT_RETRY_MS));
   }
 
   last_wake       = xTaskGetTickCount();

@@ -14,6 +14,8 @@
 #include <stdint.h>
 #include "px4lite_local_msglog.h"
 
+#define PX4LITE_REMOTE_LOG_CAP 9U /**< 旧远端日志缓存容量；不随本机历史扩容。 */
+
 #define PX4LITE_COMM_RX_PAYLOAD_MAX 255U /**< 通信接收帧 payload 最大长度，单位：byte。 */
 
 /**
@@ -131,11 +133,22 @@ typedef struct {
   uint16_t consecutive_valid;   /**< 连续有效次数。 */
 } Px4Lite_ModuleStatus_t;
 
+#define PX4LITE_GNSS_VALID_POSITION (1UL << 0) /**< 经纬度及定位质量有效。 */
+#define PX4LITE_GNSS_VALID_VELOCITY (1UL << 1) /**< 地速和地面航迹角有效。 */
+#define PX4LITE_GNSS_VALID_TIME (1UL << 2) /**< 完整 UTC 日期和当日秒有效，午夜秒数可为 0。 */
+#define PX4LITE_GNSS_VALID_ALTITUDE (1UL << 3) /**< GNSS 海拔高度有效。 */
+
 /**
- * @brief GNSS 传感器测量 topic。
+ * @brief GNSS 传感器测量 topic；链路活动不得替代各字段测量年龄。
  */
 typedef struct {
   Px4Lite_TopicHeader_t header; /**< topic 公共头。 */
+  uint32_t valid_mask;          /**< 字段有效位，使用 PX4LITE_GNSS_VALID_*；消费时还须检查各字段年龄。 */
+  uint32_t position_update_ms;  /**< 最近有效位置测量时间，单位：ms，0 也是合法启动时刻。 */
+  uint32_t velocity_update_ms;  /**< 最近有效地速和航迹角时间，单位：ms。 */
+  uint32_t time_update_ms;      /**< 最近有效完整 UTC 时间测量时刻，单位：ms。 */
+  uint32_t altitude_update_ms;  /**< 最近有效 GNSS 海拔测量时间，单位：ms。 */
+  uint32_t last_rx_ms;          /**< 最近校验有效 NMEA 链路活动时间，单位：ms，不代表测量更新。 */
   int32_t latitude_e7;          /**< 纬度，单位：degree * 1e7。 */
   int32_t longitude_e7;         /**< 经度，单位：degree * 1e7。 */
   int32_t altitude_mm;          /**< 海拔高度，单位：mm。 */
@@ -187,7 +200,8 @@ typedef struct {
   int32_t current_ma;           /**< 电流，单位：mA；未知时可为 0。 */
   uint8_t percent;              /**< 电量百分比，范围：0 到 100。 */
   uint8_t low_voltage;          /**< 低电压标志，1 表示低电压。 */
-  uint16_t reserved;            /**< 保留字段，保持结构体对齐。 */
+  uint8_t current_valid;        /**< 本帧电流测量有效为 1，0 表示未知；有效零电流仍为 1。 */
+  uint8_t reserved;             /**< 保留字段，保持结构体对齐。 */
 } Px4Lite_BatteryStatus_t;
 
 #ifndef PX4LITE_MOTOR_COUNT
@@ -231,9 +245,10 @@ typedef struct {
 
 #define PX4LITE_NAV_VALID_ATTITUDE (1UL << 0) /**< 姿态角和角速度有效。 */
 #define PX4LITE_NAV_VALID_POSITION (1UL << 1) /**< 经纬度位置有效。 */
-#define PX4LITE_NAV_VALID_VELOCITY (1UL << 2) /**< NED 速度有效。 */
-#define PX4LITE_NAV_VALID_ALTITUDE (1UL << 3) /**< 高度和垂直速度有效。 */
+#define PX4LITE_NAV_VALID_VELOCITY (1UL << 2) /**< 水平速度有效；本机 GNSS 仅提供北/东分量，不授权垂直速度。 */
+#define PX4LITE_NAV_VALID_ALTITUDE (1UL << 3) /**< 高度有效，不授权垂直速度。 */
 #define PX4LITE_NAV_VALID_YAW_REL  (1UL << 4) /**< 航向相对参考有效。 */
+#define PX4LITE_NAV_VALID_TIME     (1UL << 5) /**< GNSS UTC 日期和当日秒有效。 */
 
 /**
  * @brief 车辆导航域 topic。
@@ -241,12 +256,13 @@ typedef struct {
 typedef struct {
   Px4Lite_TopicHeader_t header; /**< topic 公共头。 */
   uint32_t valid_mask;          /**< 导航字段有效位，使用 `PX4LITE_NAV_VALID_*`。 */
+  uint32_t attitude_update_ms;  /**< 当前有效姿态对应的 IMU 测量时间，单位：ms；仅 ATTITUDE 位有效时解释。 */
   uint32_t gnss_utc_sec;        /**< GNSS UTC 当日秒数，单位：s。 */
   uint32_t gnss_utc_date;       /**< RMC 日期，压缩格式 yymmdd；无有效日期时为 0。 */
   int32_t latitude_e7;          /**< 纬度，单位：degree * 1e7。 */
   int32_t longitude_e7;         /**< 经度，单位：degree * 1e7。 */
   int32_t fused_altitude_mm;    /**< 融合高度，单位：mm。 */
-  int32_t vertical_speed_cms;   /**< 垂直速度，单位：cm/s。 */
+  int32_t vertical_speed_cms;   /**< 预留垂直速度，单位：cm/s；当前 Navigation 无测量来源，不得作为实测值。 */
   int32_t roll_deg100;          /**< 横滚角，单位：degree * 100。 */
   int32_t pitch_deg100;         /**< 俯仰角，单位：degree * 100。 */
   int32_t yaw_deg100;           /**< 航向角，单位：degree * 100。 */
@@ -255,7 +271,7 @@ typedef struct {
   int32_t yaw_rate_dps100;      /**< 航向角速度，单位：(degree/s) * 100。 */
   int32_t velocity_north_cms;   /**< 北向速度，单位：cm/s。 */
   int32_t velocity_east_cms;    /**< 东向速度，单位：cm/s。 */
-  int32_t velocity_down_cms;    /**< 地向速度，单位：cm/s。 */
+  int32_t velocity_down_cms;    /**< 地向速度，单位：cm/s；当前本机为 0 占位，非实测垂直速度。 */
   uint16_t hdop_x100;           /**< 水平精度因子，单位：HDOP * 100。 */
   uint8_t satellites_used;      /**< 当前定位使用的卫星数量。 */
   uint8_t gnss_fix_type;        /**< GNSS 定位类型。 */
@@ -378,12 +394,12 @@ typedef struct {
   uint32_t mav_stale_count;           /**< 因数据过期未发送的次数。 */
   uint32_t mav_error_count;           /**< MAVLink 编码或发送错误次数。 */
   uint32_t mav_last_tx_msg_id;        /**< 最近调度的 MAVLink message id。 */
-  uint32_t crc_error_count;           /**< 接收 CRC 错误次数。 */
+  uint32_t crc_error_count;           /**< 接收 CRC 拒绝次数，属于 parse_error_count 的子集。 */
   uint32_t send_error_count;          /**< 底层发送错误次数。 */
-  uint32_t parse_error_count;         /**< 接收解析错误次数。 */
+  uint32_t parse_error_count;         /**< MAVLink 库结构拒绝与 CRC/签名拒绝总次数。 */
   uint32_t rx_byte_count;             /**< 接收字节累计数。 */
   uint32_t rx_overflow_count;         /**< 接收缓冲溢出次数。 */
-  uint32_t rx_drop_count;             /**< 接收丢弃次数。 */
+  uint32_t rx_drop_count;             /**< 完整接收帧因队列已满而丢弃的次数；独立于 DMA 溢出和序号缺失。 */
   uint32_t rx_sequence_expected_count; /**< MAVLink 序号估算的应收帧总数，含已收和跳号丢帧。 */
   uint32_t rx_sequence_lost_count;     /**< MAVLink 序号跳号估算的丢帧数量。 */
   uint32_t last_rx_ms;                /**< 最近收到对端合法 MAVLink 帧时间，单位：ms。 */
@@ -419,6 +435,16 @@ typedef struct {
 #define PX4LITE_REMOTE_VALID_ALARM       (1UL << 6) /**< 已收到远端告警数据。 */
 #define PX4LITE_REMOTE_VALID_MOTOR       (1UL << 7) /**< 已收到远端电机目标油门数据。 */
 #define PX4LITE_REMOTE_VALID_LOG         (1UL << 8) /**< 已收到远端消息日志数据。 */
+#define PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE1 (1UL << 0) /**< 主电池电压有效。 */
+#define PX4LITE_REMOTE_BATTERY_VALID_CURRENT1 (1UL << 1) /**< 主电池电流有效。 */
+#define PX4LITE_REMOTE_BATTERY_VALID_PERCENT1 (1UL << 2) /**< 主电池电量百分比有效。 */
+#define PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE2 (1UL << 3) /**< 第二电池电压有效。 */
+#define PX4LITE_REMOTE_BATTERY_VALID_CURRENT2 (1UL << 4) /**< 第二电池电流有效。 */
+#define PX4LITE_REMOTE_BATTERY_VALID_PERCENT2 (1UL << 5) /**< 第二电池电量百分比有效。 */
+#define PX4LITE_REMOTE_BATTERY_VALID_PRIMARY (PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE1 | PX4LITE_REMOTE_BATTERY_VALID_CURRENT1 | PX4LITE_REMOTE_BATTERY_VALID_PERCENT1) /**< 主电池来源字段组合。 */
+#define PX4LITE_REMOTE_BATTERY_VALID_SECONDARY (PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE2 | PX4LITE_REMOTE_BATTERY_VALID_CURRENT2 | PX4LITE_REMOTE_BATTERY_VALID_PERCENT2) /**< 第二电池来源字段组合。 */
+#define PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE (1UL << 0) /**< 温度和气压有效。 */
+#define PX4LITE_REMOTE_ENV_VALID_HUMIDITY (1UL << 1) /**< 湿度有效。 */
 
 typedef enum {
   PX4LITE_REMOTE_NODE_EMPTY = 0,
@@ -454,9 +480,23 @@ typedef struct {
   uint32_t last_rx_ms;                                /**< 最近收到远端合法 MAVLink 帧时间，单位：ms。 */
   uint32_t heartbeat_update_ms;                       /**< 最近收到 HEARTBEAT 的时间，单位：ms。 */
   uint32_t navigation_update_ms;                      /**< 最近收到导航数据的时间，单位：ms。 */
+  uint32_t navigation_valid_mask;                    /**< 导航字段有效位，使用 NAV_VALID_POSITION/VELOCITY/TIME/ALTITUDE。 */
+  uint32_t navigation_stale_mask;                    /**< 导航字段过期位，消费时与 navigation_valid_mask 联合判断。 */
+  uint32_t position_update_ms;                       /**< 最近有效远端位置接收时间，单位：ms。 */
+  uint32_t velocity_update_ms;                       /**< 最近有效远端速度接收时间，单位：ms。 */
+  uint32_t time_update_ms;                           /**< 最近有效远端 UTC 接收时间，单位：ms。 */
+  uint32_t altitude_update_ms;                       /**< 最近有效远端高度接收时间，单位：ms。 */
   uint32_t attitude_update_ms;                        /**< 最近收到姿态数据的时间，单位：ms。 */
   uint32_t environment_update_ms;                     /**< 最近收到环境数据的时间，单位：ms。 */
+  uint32_t environment_valid_mask;                   /**< 环境字段有效位，使用 REMOTE_ENV_VALID_*。 */
+  uint32_t environment_stale_mask;                   /**< 环境字段过期位。 */
+  uint32_t pressure_temperature_update_ms;            /**< 最近温压接收时间，单位：ms。 */
+  uint32_t humidity_update_ms;                        /**< 最近湿度接收时间，单位：ms。 */
   uint32_t battery_update_ms;                         /**< 最近收到电源数据的时间，单位：ms。 */
+  uint32_t battery_valid_mask;                       /**< 已收到的电池来源位，使用 REMOTE_BATTERY_VALID_*。 */
+  uint32_t battery_stale_mask;                       /**< 过期电池来源位；两路接收时间独立。 */
+  uint32_t battery1_update_ms;                       /**< 最近主电池接收时间，单位：ms。 */
+  uint32_t battery2_update_ms;                       /**< 最近第二电池接收时间，单位：ms。 */
   uint32_t modules_update_ms;                         /**< 最近收到模块状态数据的时间，单位：ms。 */
   uint32_t alarm_update_ms;                           /**< 最近收到告警数据的时间，单位：ms。 */
   uint32_t motor_update_ms;                           /**< 最近收到电机目标油门数据的时间，单位：ms。 */
@@ -518,7 +558,7 @@ typedef struct {
   uint8_t motor_speed_level;                          /**< 远端四路目标油门最大值，范围 0 到 100。 */
   uint8_t remote_log_count;                           /**< 远端消息日志缓存条目数量。 */
   uint16_t remote_log_latest_seq;                     /**< 远端消息日志最新序号。 */
-  Px4Lite_LogEntry_t remote_log_entries[PX4LITE_LOCAL_LOG_CAP]; /**< 远端消息日志固定环形显示缓存。 */
+  Px4Lite_LogEntry_t remote_log_entries[PX4LITE_REMOTE_LOG_CAP]; /**< 远端消息日志固定环形显示缓存。 */
   uint8_t system_id;                                  /**< 远端 MAVLink system id。 */
   uint8_t component_id;                               /**< 远端 MAVLink component id。 */
 } Px4Lite_RemoteTelemetry_t;
