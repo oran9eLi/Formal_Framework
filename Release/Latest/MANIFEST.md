@@ -1,58 +1,37 @@
-# Latest Firmware
+# 最新全量构建固件（开发存档）
 
-- Build date: `2026-06-11`
-- Project: `formal_framework.uvprojx`
-- Target: `Target 1`
-- Compiler: `ARMCC 5.06 update 7 build 960`
-- Result: `0 Error / 0 Warning`
-- Code: `34420 bytes`
-- RO data: `776 bytes`
-- RW data: `236 bytes`
-- ZI data: `47332 bytes`
+| 项目 | 记录 |
+|---|---|
+| 构建日期 | 2026-10-12（UTC+8） |
+| 工程 / Target | `MDK-ARM/formal_framework.uvprojx` / `Target 1` |
+| 芯片 | STM32F407ZGTx |
+| 实际编译器 | ARM Compiler 5.06 update 5 (build 528)，由 `armcc --vsn` 核对 |
+| 工程 Pack | Keil.STM32F4xx_DFP.2.17.0 |
+| 构建方式 / 结果 | Rebuild All / 退出码 0 / 0 Error(s), 0 Warning(s) / 32 s |
+| 固件对应源码 | `5978dc6347ba3970cf4689a859e5d004001b1ff4` |
+| 标签 | `v1.0.0-pre.m3.20261012` |
+| 发布性质 | GitHub Pre-release 开发存档，未建立稳定版或发布 rc |
+| Code / RO / RW / ZI | 300440 / 106016 / 1688 / 121240 B |
+| 主 SRAM 静态用量 / 余量 | 122928 / 8144 B；不是运行时堆峰值 |
 
-Included artifacts:
+[GitHub 版本与固件下载](https://github.com/oran9eLi/Formal_Framework/releases/tag/v1.0.0-pre.m3.20261012)。[归档记录](../V1.0_M3_GitHub归档记录.md)包含回下载核对结果与验证范围。
 
-- `formal_framework.hex`
-- `formal_framework.axf`
-- `formal_framework.map`
-- `build.log`
+## 同次构建产物
 
-This release includes the six-task framework, business EventBus and enabled
-Display placeholder service. Business source is grouped under `Business/Inc`
-and `Business/Src`. It also includes the first-stage data/status contract and
-the application read-only snapshot API. Self-written source functions and
-public APIs now have separate purpose comments; vendor and third-party source
-remains unchanged. This build also includes the first module registry,
-lifecycle, work-item scheduler, and optional task stack/heap serial monitor.
-The target is STM32F407ZGTx, matching STM32F407ZGT6. The GNSS legacy generic
-driver table, channel samples, status model, and compatibility headers have
-been removed. GNSS now exposes only the typed `Init/Service` snapshot API,
-which is converted to Framework measurement format by the platform adapter.
-The measured Business System stack remains adjusted from 256 to 320 words.
-Debug monitoring now uses independent Stack, GNSS, BSP, business, and reserved
-module switches. Periodic reports run in a dedicated low-priority DebugTask;
-HealthTask no longer formats or transmits diagnostic output. The released
-configuration enables boot logging, all registered task Stack/Heap monitoring,
-and GNSS periodic monitoring.
+- `formal_framework.hex`：可烧录固件。
+- `formal_framework.axf`：调试文件。
+- `formal_framework.map`：链接与资源记录。
+- `build.log`：本次全量构建日志。
 
-Framework no longer includes or initializes Business. `main.c` is the
-composition root, and Business initializes its own EventBus and tasks through
-`Business_AppInit()`. Business source identifiers now use a typed enum.
-Disabled Alarm and Command/ACK queues are no longer allocated from the
-FreeRTOS heap.
+上述四个二进制/日志文件按仓库规则保留在本地、不提交到 Git；GitHub Release 提供 HEX 和完整构建 ZIP。1003 个生产输入构建前后不变，并已核对与 Git 内容一致。
 
-Task priorities are now configuration macros. SensorTask runs at idle+4,
-Estimator at idle+3, Health and Business Acquisition at idle+2. The recovery
-monitor call is permanently wired into HealthRun, while GNSS automatic
-recovery remains disabled until hardware fault-injection testing is complete.
-The Log Pool contract is guarded by `PX4LITE_ENABLE_LOG_POOL=0` and allocates
-no runtime resources.
-
-SHA-256:
+## SHA-256
 
 ```text
-formal_framework.hex 11574F5001DE3CE726CA7E3BC172933B6DC5162A6C123652CFF888B66543DD4E
-formal_framework.axf E6641E76DCC7677480C62710AFF0FEEDB418D603230D9BE7A69DC94A36FD7E82
-formal_framework.map 1218AED917424DB8FF066CFD421813F5ECE6F4F962D2F4A983648C21AE17D6AE
-build.log 03136FAEC507E407E8EECDFD0AB71655A79D1222FEC998C3C5598E4B58CC61E1
+formal_framework.hex 0032581ae03f962fa76594b0b62e04ffb99b8195d812c5e1668f03849502bd19
+formal_framework.axf 2f6f230fec09011ba5b33030efd67c02c0dfdf0fc0976ce289be241f5882ad89
+formal_framework.map fde13ec6ca0f36778e61eec5d05020fa606d419183e897d0a292724480673f49
+build.log a1394e2ec189fec7ec0f77e12fc999b0c9cc6e260aebb3f9f5de25d790d6e3c7
 ```
+
+HEX 与 2026-10-03 的 M3 HEX 相同。此文件在固件归档后仅补记文档；M4 仍为设计准备。本次没有重新进行 host 回归、实板逐项验收、运行资源实测或 24 小时长稳，不能据此关闭任务或宣布稳定版。
