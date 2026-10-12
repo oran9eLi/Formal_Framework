@@ -50,10 +50,6 @@ typedef enum {
 
 static uint8_t s_esc_armed;
 static uint8_t s_config_maintenance;
-static uint8_t s_config_power_stable;
-static uint32_t s_config_stable_since_ms;
-static uint32_t s_config_voltage_mv;
-static uint32_t s_config_last_sample_ms,s_config_last_sequence;
 static uint8_t s_last_run_valid;
 static volatile uint8_t s_target_throttle_percent[PX4LITE_MOTOR_COUNT];
 static volatile uint16_t s_target_pulse_us[PX4LITE_MOTOR_COUNT];
@@ -696,7 +692,6 @@ static void Px4Lite_ControlRefreshPowerGate(uint32_t now_ms)
 {
   Px4Lite_BatteryStatus_t battery;
   uint8_t inhibit = 1U;
-  uint8_t config_power_valid = 0U;
   s_power_low_voltage = 0U;
   if ((Px4Lite_CopyBattery2(&battery) == PX4LITE_OK) &&
       (battery.header.valid != 0U) &&
@@ -705,21 +700,6 @@ static void Px4Lite_ControlRefreshPowerGate(uint32_t now_ms)
     if ((battery.voltage_mv <= PX4LITE_CONTROL_POWER_MAX_MV) &&
         (battery.voltage_mv >= ((s_power_inhibited != 0U) ? PX4LITE_CONTROL_POWER_RECOVER_MV : PX4LITE_CONTROL_POWER_CUTOFF_MV))) {
       inhibit = 0U;
-      if(battery.voltage_mv>=PX4LITE_CONTROL_POWER_RECOVER_MV &&
-         Px4Lite_ElapsedMs(now_ms,battery.header.sample_time_ms)<=PX4LITE_CONTROL_CONFIG_POWER_MAX_AGE_MS) {
-        config_power_valid=1U;
-        if(!s_config_power_stable || battery.header.sequence!=s_config_last_sequence ||
-           battery.header.sample_time_ms!=s_config_last_sample_ms) {
-          if(!s_config_power_stable ||
-             Px4Lite_ElapsedMs(battery.header.sample_time_ms,s_config_last_sample_ms)>PX4LITE_CONTROL_CONFIG_POWER_MAX_AGE_MS ||
-             battery.voltage_mv+PX4LITE_CONTROL_CONFIG_POWER_DELTA_MV<s_config_voltage_mv ||
-             battery.voltage_mv>s_config_voltage_mv+PX4LITE_CONTROL_CONFIG_POWER_DELTA_MV) {
-            s_config_stable_since_ms=battery.header.sample_time_ms; s_config_voltage_mv=battery.voltage_mv;
-          }
-          s_config_last_sample_ms=battery.header.sample_time_ms; s_config_last_sequence=battery.header.sequence;
-        }
-        s_config_power_stable=1U;
-      }
     }
   }
   if ((s_power_observed == 0U) || (inhibit != s_power_inhibited)) {
@@ -733,7 +713,6 @@ static void Px4Lite_ControlRefreshPowerGate(uint32_t now_ms)
     s_esc_armed = 0U;
     s_arm_start_ms = now_ms;
   }
-  if(!config_power_valid) { s_config_power_stable=0U; }
   s_power_inhibited = inhibit;
 }
 
@@ -1198,31 +1177,41 @@ Px4Lite_Result_t Px4Lite_ControlRecover(void)
   return result;
 }
 
-/** @brief 在调度互斥内确认实际最小输出与全部目标停止，再建立维护锁。 */
-Px4Lite_Result_t Px4Lite_ControlBeginConfigMaintenance(void)
+/**
+ * @brief 确认最近 PWM 写入成功、全部目标停止且没有自动过程。
+ * @note 调用者必须已挂起任务调度；只检查 Control 输出事实，不要求接入动力电源。
+ */
+static uint8_t Px4Lite_ControlConfigOutputsStopped(void)
 {
-  uint8_t i, safe=1U;
-  uint32_t now;
-  vTaskSuspendAll(); now=Px4Lite_PlatformGetMs(); Px4Lite_ControlRefreshPowerGate(now);
-  if(s_config_maintenance || !s_last_run_valid || !s_config_power_stable ||
-     Px4Lite_ElapsedMs(s_config_last_sample_ms,s_config_stable_since_ms)<PX4LITE_CONTROL_CONFIG_POWER_STABLE_MS ||
-     s_output_above_minimum || s_output_write_failed ||
-     s_auto_profile!=PX4LITE_CONTROL_AUTO_NONE) { safe=0U; }
-  for(i=0U;i<PX4LITE_MOTOR_COUNT;i++) {
-    if(s_target_valid[i] && (s_target_throttle_percent[i]!=0U || s_target_pulse_us[i]>PX4LITE_CONTROL_ESC_MIN_PULSE_US)) { safe=0U; }
+  uint8_t i;
+  if (!s_last_run_valid || s_output_above_minimum || s_output_write_failed ||
+      s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) { return 0U; }
+  for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
+    if (s_target_valid[i] && (s_target_throttle_percent[i] != 0U ||
+        s_target_pulse_us[i] > PX4LITE_CONTROL_ESC_MIN_PULSE_US)) { return 0U; }
   }
-  if(safe) { s_config_maintenance=1U; s_esc_armed=0U; s_arm_start_ms=now; Px4Lite_ControlClearTargets(); }
-  (void)xTaskResumeAll(); return safe?PX4LITE_OK:PX4LITE_NOT_READY;
+  return 1U;
 }
-/** @brief 写入间隔刷新供电事实；维护锁由结束接口显式释放。 */
-Px4Lite_Result_t Px4Lite_ControlCheckConfigMaintenance(void)
+
+/**
+ * @brief 在调度互斥内确认停止并建立配置维护锁，允许未接动力电源时保存。
+ * @note 本接口假定主控供电符合 Flash 编程要求；动力电压闭锁仍只约束电机运行。
+ */
+Px4Lite_Result_t Px4Lite_ControlBeginConfigMaintenance(void)
 {
   uint8_t safe;
   uint32_t now;
-  vTaskSuspendAll(); now=Px4Lite_PlatformGetMs(); Px4Lite_ControlRefreshPowerGate(now);
-  safe=(s_config_maintenance && s_config_power_stable &&
-    Px4Lite_ElapsedMs(s_config_last_sample_ms,s_config_stable_since_ms)>=PX4LITE_CONTROL_CONFIG_POWER_STABLE_MS &&
-    !s_power_inhibited && !s_output_above_minimum && !s_output_write_failed)?1U:0U;
+  vTaskSuspendAll(); now=Px4Lite_PlatformGetMs();
+  safe=(!s_config_maintenance && Px4Lite_ControlConfigOutputsStopped())?1U:0U;
+  if(safe) { s_config_maintenance=1U; s_esc_armed=0U; s_arm_start_ms=now; Px4Lite_ControlClearTargets(); }
+  (void)xTaskResumeAll(); return safe?PX4LITE_OK:PX4LITE_NOT_READY;
+}
+/** @brief 每步复核维护锁与停止事实，不以动力电压闭锁拒绝配置保存。 */
+Px4Lite_Result_t Px4Lite_ControlCheckConfigMaintenance(void)
+{
+  uint8_t safe;
+  vTaskSuspendAll();
+  safe=(s_config_maintenance && Px4Lite_ControlConfigOutputsStopped())?1U:0U;
   (void)xTaskResumeAll(); return safe?PX4LITE_OK:PX4LITE_NOT_READY;
 }
 /** @brief 撤销旧命令并恢复预解锁，结束维护不启动电机。 */

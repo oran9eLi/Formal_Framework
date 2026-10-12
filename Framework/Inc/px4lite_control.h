@@ -149,9 +149,9 @@ Px4Lite_Result_t Px4Lite_ControlRecover(void);
  */
 void Px4Lite_ControlRun(uint32_t now_ms);
 
-/** @brief 电机停止且动力采样稳定时锁定维护；拒绝新非零输出。 */
+/** @brief 电机目标及实际 PWM 输出停止后锁定维护；不要求动力电源接入，拒绝新非零输出。 */
 Px4Lite_Result_t Px4Lite_ControlBeginConfigMaintenance(void);
-/** @brief 更新供电事实并检查维护期间的安全门禁。 */
+/** @brief 复核维护锁、停止目标和成功的最小 PWM 输出，不检查动力电压。 */
 Px4Lite_Result_t Px4Lite_ControlCheckConfigMaintenance(void);
 /** @brief 解除维护，清除旧目标并重新开始预解锁。 */
 void Px4Lite_ControlEndConfigMaintenance(void);

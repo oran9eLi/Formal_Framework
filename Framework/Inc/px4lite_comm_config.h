@@ -12,7 +12,7 @@ typedef enum {
   PX4LITE_CONFIG_WRITING, /**< 正在分步追加记录。 */
   PX4LITE_CONFIG_SAVED, /**< 已提交且读回验证通过。 */
   PX4LITE_CONFIG_FULL, /**< 无空白槽，运行期不擦除。 */
-  PX4LITE_CONFIG_POWER, /**< 供电或电机维护门禁拒绝。 */
+  PX4LITE_CONFIG_INTERLOCK, /**< 电机未停止、输出失败或维护锁不可用；不判断动力供电。 */
   PX4LITE_CONFIG_ERROR /**< 编程、读取或校验失败。 */
 } Px4Lite_CommConfigResult_t;
 /** @brief 本机地址配置只读快照。 */
@@ -30,7 +30,7 @@ typedef struct {
 } Px4Lite_CommConfigSnapshot_t;
 /** @brief 在任何链路身份初始化前加载，启动阶段可扫描 2048 个固定槽。 */
 void Px4Lite_CommConfigInit(void);
-/** @brief CommTask 请求保存地址，0 表示恢复 UID 默认；其他合法值为 1..250。 */
+/** @brief CommTask 在停机维护锁内保存地址；0 恢复 UID 默认，1..250 为手动地址，不要求 LoRa 或动力电源在线。 */
 Px4Lite_Result_t Px4Lite_CommConfigRequest(uint8_t node_id, uint32_t now_ms);
 /** @brief CommTask 每周期推进至多一个字编程，禁止在临界区内调用 Flash I/O。 */
 void Px4Lite_CommConfigRun(uint32_t now_ms);

@@ -3,6 +3,7 @@
  * @brief Framework 层 UID 绑定的 Node ID 追加记录、掉电提交和启动加载。
  * @details 依赖 Platform Adapter、Identity、Control；不包含 BSP/HAL，不在运行期擦 Flash。
  * 记录逐字段小端编码，CRC 和末尾提交字验证后才报告 Saved，UI 只复制已发布快照。
+ * 正常主控供电下，保存不依赖 LoRa 在线或动力电源接入；Control 只提供停机维护互锁。
  */
 #include "px4lite_comm_config.h"
 #include "px4lite_identity.h"
@@ -83,7 +84,7 @@ Px4Lite_Result_t Px4Lite_CommConfigRequest(uint8_t node_id,uint32_t now_ms)
   if(!s_state.available) { s_state.result=PX4LITE_CONFIG_ERROR; s_state.generation++; Config_Publish(); return PX4LITE_NOT_READY; }
   if(node_id==s_saved_setting) { s_state.result=PX4LITE_CONFIG_SAVED; s_state.generation++; Config_Publish(); return PX4LITE_OK; }
   if(s_state.used_slots>=CONFIG_SLOT_COUNT) { s_state.result=PX4LITE_CONFIG_FULL; s_state.generation++; Config_Publish(); return PX4LITE_OVERFLOW; }
-  if(Px4Lite_ControlBeginConfigMaintenance()!=PX4LITE_OK) { s_state.result=PX4LITE_CONFIG_POWER; s_state.generation++; Config_Publish(); return PX4LITE_NOT_READY; }
+  if(Px4Lite_ControlBeginConfigMaintenance()!=PX4LITE_OK) { s_state.result=PX4LITE_CONFIG_INTERLOCK; s_state.generation++; Config_Publish(); return PX4LITE_NOT_READY; }
   memset(s_record,0xFF,sizeof(s_record));
   Config_Put32(s_record,CONFIG_MAGIC); Config_Put32(s_record+4U,1U); Config_Put32(s_record+8U,s_state.sequence+1U);
   for(i=0U;i<3U;i++) { Config_Put32(s_record+12U+4U*i,s_uid[i]); }
@@ -115,7 +116,8 @@ void Px4Lite_CommConfigRun(uint32_t now_ms)
   }
   while(s_word<16U && Config_Get32(s_record+(uint16_t)s_word*4U)==UINT32_MAX) { s_word++; }
   if(s_word<16U) {
-    if(Px4Lite_ControlCheckConfigMaintenance()!=PX4LITE_OK || Px4Lite_ElapsedMs(now_ms,s_write_started_ms)>2000U) { Config_Finish(PX4LITE_CONFIG_POWER); return; }
+    if(Px4Lite_ControlCheckConfigMaintenance()!=PX4LITE_OK) { Config_Finish(PX4LITE_CONFIG_INTERLOCK); return; }
+    if(Px4Lite_ElapsedMs(now_ms,s_write_started_ms)>2000U) { Config_Finish(PX4LITE_CONFIG_ERROR); return; }
     result=Px4Lite_ConfigStoreProgramWord((uint32_t)s_state.used_slots*CONFIG_RECORD_BYTES+(uint32_t)s_word*4U,Config_Get32(s_record+(uint16_t)s_word*4U));
     if(result==PX4LITE_BUSY) { s_word_pending=1U; return; }
     if(result!=PX4LITE_OK) { Config_Finish(PX4LITE_CONFIG_ERROR); return; }

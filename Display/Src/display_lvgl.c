@@ -1494,7 +1494,7 @@ static void Display_LvglUpdateRemote(void)
 {
   uint8_t i;
   static const char * const results[]={"STOPPED","RUNNING","Queued","No data","Rate limit","Unavailable","Config busy","Profile mismatch","Error"};
-  static const char * const address[]={"Idle","Writing","Saved","Full","Power gate","Error"};
+  static const char * const address[]={"Idle","Writing","Saved","Full","Motor lock","Error"};
   static const char * const radio[]={"Unknown","Busy","Ready","Profile mismatch","Timeout","I/O error","Verify failed"};
   if(s_current_lvgl_page!=DISPLAY_HMI_PAGE_HIDDEN) { return; }
   App_CopyLoraLab(&s_comm_state);
