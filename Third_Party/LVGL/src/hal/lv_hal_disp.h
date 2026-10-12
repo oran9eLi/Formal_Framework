@@ -136,6 +136,10 @@ typedef struct _lv_disp_drv_t {
     /** OPTIONAL: called when start rendering */
     void (*render_start_cb)(struct _lv_disp_drv_t * disp_drv);
 
+    /** 可选：单缓冲部分刷新在完整同步条带之间检查预算；NULL保持上游行为。 */
+    bool (*refr_continue_cb)(struct _lv_disp_drv_t * disp_drv);
+    uint16_t refr_max_rows; /**< 可选条带上限，行；0禁用预算推进。 */
+
     /** On CHROMA_KEYED images this color will be transparent.
      * `LV_COLOR_CHROMA_KEY` by default. (lv_conf.h)*/
     lv_color_t color_chroma_key;

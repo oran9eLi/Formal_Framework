@@ -50,6 +50,7 @@ extern uint32_t SystemCoreClock;
 #define INCLUDE_vTaskDelay                      1
 #define INCLUDE_xTaskGetSchedulerState          1
 #define INCLUDE_xTaskGetCurrentTaskHandle       1
+#define INCLUDE_xTaskGetIdleTaskHandle          1
 #define INCLUDE_uxTaskGetStackHighWaterMark     1
 
 #ifdef __NVIC_PRIO_BITS

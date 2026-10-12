@@ -117,6 +117,10 @@ static lv_obj_t *s_runtime_label;
 static lv_style_t s_base_style, s_label_style, s_button_style, s_panel_style;
 static uint8_t s_label_used, s_button_used;
 static uint8_t s_workspace_ready, s_lvgl_core_ready, s_lvgl_display_ready;
+static uint32_t s_lvgl_memory_ms;
+static uint8_t s_layout_stage;
+static uint8_t s_value_pending[(DISPLAY_HMI_VAR_COUNT + 7U) / 8U];
+static uint16_t s_value_cursor;
 static uint8_t s_page_change_requested, s_layout_requested;
 static uint8_t s_observation_frozen;
 static uint8_t s_alarm_available;
@@ -124,6 +128,7 @@ static uint16_t s_alarm_count;
 static uint32_t s_alarm_packed[UI_ALARM_CAP];
 static App_AlarmSnapshot_t s_alarm_details;
 static uint8_t s_alarm_offset, s_diag_offset, s_remote_offset;
+static uint8_t s_diag_view;
 
 
 static uint8_t s_history_offset, s_history_filter;
@@ -152,6 +157,7 @@ static Display_HmiPage_t s_primary_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static uint32_t s_last_tick_ms, s_next_status_ms, s_next_remote_ms;
 
 static void Display_LvglLayout(void);
+static void Display_LvglApplyValue(Display_HmiVariableId_t id);
 static void Display_LvglUpdateLogs(void);
 static void Display_LvglUpdateAlarms(void);
 static void Display_LvglUpdateModules(void);
@@ -920,7 +926,16 @@ static void UiButtonEvent(lv_event_t *event)
       s_alarm_offset = ((uint16_t)s_alarm_offset + 5U < s_alarm_count) ? (uint8_t)(s_alarm_offset + 5U) : 0U;
       Display_LvglUpdateAlarms(); break;
     case UI_ACTION_DIAG_NEXT:
-      s_diag_offset = ((uint16_t)s_diag_offset + 6U < PX4LITE_MODULE_COUNT) ? (uint8_t)(s_diag_offset + 6U) : 0U;
+      if (s_diag_view == 0U) {
+        if ((uint16_t)s_diag_offset + 6U < PX4LITE_MODULE_COUNT) { s_diag_offset += 6U; }
+        else { s_diag_offset = 0U; s_diag_view = 1U; }
+      } else if (s_diag_view == 1U) { s_diag_view = 2U; s_diag_offset = 0U; }
+      else {
+        App_RuntimeSnapshot_t runtime;
+        (void)App_CopyRuntimeStats(&runtime, s_last_tick_ms);
+        if ((uint16_t)s_diag_offset + 6U < runtime.task_count) { s_diag_offset += 6U; }
+        else { s_diag_offset = 0U; s_diag_view = 0U; }
+      }
       Display_LvglUpdateModules(); break;
     case UI_ACTION_REMOTE_NEXT:
       s_remote_offset = ((uint16_t)s_remote_offset + 3U < s_remote_count) ? (uint8_t)(s_remote_offset + 3U) : 0U;
@@ -1457,6 +1472,36 @@ static void Display_LvglUpdateModules(void)
       }
     }
   } else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DIAGNOSTICS) {
+    if (s_diag_view != 0U) {
+      App_RuntimeSnapshot_t resources;
+      (void)App_CopyRuntimeStats(&resources, s_last_tick_ms);
+      (void)snprintf(s_runtime_text, sizeof(s_runtime_text), "Resources / Tasks  age %lums  register errors %lu",
+        (unsigned long)(s_last_tick_ms - resources.measured_ms), (unsigned long)resources.registration_errors);
+      UiText(s_runtime_label, s_runtime_text);
+      UiText(s_page_info, s_diag_view == 1U ? "Heap / LVGL / Timing / Production counters" : "Task / cfg word / min word / age / margin");
+      for (i = 0U; i < 6U; i++) {
+        if (s_diag_view == 2U) {
+          App_TaskRuntime_t row;
+          if (App_CopyTaskRuntime((uint8_t)(s_diag_offset + i), &row, s_last_tick_ms) == PX4LITE_OK) {
+            if (row.measured) { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%s  cfg %uW  min %uW  age %lus  %s", row.name,
+              (unsigned int)row.configured_words, (unsigned int)row.minimum_free_words,
+              (unsigned long)((s_last_tick_ms - row.measured_ms) / 1000U), row.warning ? "WARN" : "OK"); }
+            else { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%s  cfg %uW  unmeasured", row.name, (unsigned int)row.configured_words); }
+          } else { s_row_text[i][0] = '\0'; }
+        } else {
+          switch (i) {
+            case 0: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "RTOS heap %luB / free %luB / min %luB", (unsigned long)resources.heap_total, (unsigned long)resources.heap_free, (unsigned long)resources.heap_minimum); break;
+            case 1: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "LVGL used %luB / peak %luB / max block %luB / frag %u%%", (unsigned long)resources.display.lvgl_used, (unsigned long)resources.display.lvgl_peak, (unsigned long)resources.display.lvgl_max_free, (unsigned int)resources.display.lvgl_fragmentation); break;
+            case 2: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "Display whole %luus / max %luus / overruns %lu", (unsigned long)resources.display.service_us, (unsigned long)resources.display.service_max_us, (unsigned long)resources.display.overruns); break;
+            case 3: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "Render %luus max %luus / Flush %luus max %luus", (unsigned long)resources.display.render_us, (unsigned long)resources.display.render_max_us, (unsigned long)resources.display.flush_us, (unsigned long)resources.display.flush_max_us); break;
+            case 4: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "IMU FIFO %u / peak %u / overflow %lu", (unsigned int)resources.imu_count, (unsigned int)resources.imu_peak, (unsigned long)resources.imu_overflows); break;
+            default: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "RX drop %lu / DMA overflow %lu / comm max %lums", (unsigned long)resources.rx_drops, (unsigned long)resources.rx_overflows, (unsigned long)resources.comm_period_max_ms); break;
+          }
+        }
+        UiText(s_row_labels[i], s_row_text[i]);
+      }
+      return;
+    }
     Display_RuntimeStatus_t runtime;
     Display_LvglGetStatus(&runtime);
     (void)snprintf(s_runtime_text, sizeof(s_runtime_text), "LCD %s  Touch %s  retries %lu  error %u",
@@ -1573,6 +1618,8 @@ static void Display_LvglUpdateRemote(void)
 static void Display_LvglLayout(void)
 {
   uint16_t i;
+  if (s_layout_stage == 0U) { s_layout_stage = 1U; }
+  if (s_layout_stage == 1U) {
   /* 外部按键也可切页。先取消旧触点，防止同一池对象改绑后把松手识别为新动作。 */
   lv_indev_t *indev = lv_indev_get_next(0);
   while (indev != 0) {
@@ -1583,7 +1630,13 @@ static void Display_LvglLayout(void)
   Display_LvglResetWorkspace();
   /* WRAP 也使用静态文本，不启用滚动动画；下个页面恢复普通裁剪。 */
   for (i = 0U; i < UI_LABEL_COUNT; i++) { lv_label_set_long_mode(s_labels[i], LV_LABEL_LONG_CLIP); }
+    s_layout_stage = 2U; return;
+  }
+  if (s_layout_stage == 2U) {
   Display_LvglLayoutChrome();
+    s_layout_stage = 3U; return;
+  }
+  if (s_layout_stage == 3U) {
   switch (s_current_lvgl_page) {
     case DISPLAY_HMI_PAGE_SELF_CHECK: Display_LvglLayoutSelfCheck(); break;
     case DISPLAY_HMI_PAGE_FLIGHT: Display_LvglLayoutFlight(); break;
@@ -1596,12 +1649,18 @@ static void Display_LvglLayout(void)
     case DISPLAY_HMI_PAGE_HIDDEN: Display_LvglLayoutComm(); break;
     default: break;
   }
+    s_layout_stage = 4U; return;
+  }
+  if (s_layout_stage == 4U) {
   if ((s_current_lvgl_page != DISPLAY_HMI_PAGE_DIAGNOSTICS) && (s_current_lvgl_page != DISPLAY_HMI_PAGE_EVENT_HISTORY)) { Display_LvglLayoutSummary(); }
+    s_layout_stage = 5U; return;
+  }
   memset(s_state_text, 0, sizeof(s_state_text));
   Display_LvglUpdateAlarms();
   Display_LvglUpdateLogs();
   Display_LvglUpdateModules();
   Display_LvglUpdateRemote();
+  s_layout_stage = 0U;
 }
 
 /** @brief 初始化硬件与静态工作区；显示恢复复用已有对象和事件历史。 */
@@ -1613,7 +1672,7 @@ Display_Result_t Display_LvglInit(uint32_t now_ms)
   s_last_tick_ms = now_ms;
   Display_LvglInitWorkspace();
   s_lvgl_display_ready = 1U;
-  Display_LvglLayout();
+  do { Display_LvglLayout(); } while (s_layout_stage != 0U);
   return DISPLAY_OK;
 }
 
@@ -1637,8 +1696,12 @@ uint8_t Display_LvglNeedsRefresh(void)
 Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
 {
   uint32_t elapsed_ms;
-  (void)budget_us;
+  uint32_t started_us = App_RuntimeGetUs();
+  uint32_t handler_started_us;
+  uint32_t handler_us;
+  App_RuntimeSnapshot_t runtime;
   if (!s_lvgl_display_ready) { return DISPLAY_NOT_READY; }
+  LvPortDisp_BeginStep(started_us, budget_us);
   Display_Gt911_Service(now_ms);
   elapsed_ms = now_ms - s_last_tick_ms;
   s_last_tick_ms = now_ms;
@@ -1658,10 +1721,40 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
     Display_LvglUpdateRemote();
   }
   if(s_current_lvgl_page==DISPLAY_HMI_PAGE_HIDDEN && (int32_t)(now_ms-s_next_comm_ms)>=0) { Display_LvglUpdateRemote(); s_next_comm_ms=now_ms+200U; }
-  if (s_layout_requested) { s_layout_requested = 0U; Display_LvglLayout(); }
-  if ((int32_t)(now_ms - s_next_status_ms) >= 0) { Display_LvglUpdateModules(); s_next_status_ms = now_ms + 200U; }
-  if (s_log_version != Display_PagesGetLogVersion()) { Display_LvglUpdateLogs(); }
+  if (s_layout_requested) { s_layout_requested = 0U; s_layout_stage = 1U; }
+  if (App_RuntimeGetUs() - started_us < budget_us) {
+    if (s_layout_stage) { Display_LvglLayout(); }
+    else if ((int32_t)(now_ms - s_next_status_ms) >= 0) { Display_LvglUpdateModules(); s_next_status_ms = now_ms + 1000U; }
+    else if (s_log_version != Display_PagesGetLogVersion()) { Display_LvglUpdateLogs(); }
+  }
+  if (!s_layout_stage) {
+    uint16_t scanned = 0U;
+    while (scanned++ < DISPLAY_HMI_VAR_COUNT && App_RuntimeGetUs() - started_us < budget_us) {
+      uint16_t id = s_value_cursor;
+      s_value_cursor = (uint16_t)((s_value_cursor + 1U) % DISPLAY_HMI_VAR_COUNT);
+      if (s_value_pending[id / 8U] & (1U << (id % 8U))) {
+        s_value_pending[id / 8U] &= (uint8_t)~(1U << (id % 8U));
+        Display_LvglApplyValue((Display_HmiVariableId_t)id);
+      }
+    }
+  } else { LvPortDisp_BeginStep(started_us, 0U); }
+  handler_started_us = App_RuntimeGetUs();
   lv_timer_handler();
+  handler_us = App_RuntimeGetUs() - handler_started_us;
+  (void)App_CopyRuntimeStats(&runtime, now_ms);
+  LvPortDisp_GetFlushTime(&runtime.display.flush_us, &runtime.display.flush_max_us);
+  runtime.display.render_us = (handler_us >= runtime.display.flush_us) ? handler_us - runtime.display.flush_us : 0U;
+  if (runtime.display.render_us > runtime.display.render_max_us) { runtime.display.render_max_us = runtime.display.render_us; }
+  if (now_ms - s_lvgl_memory_ms >= 1000U) {
+    lv_mem_monitor_t memory;
+    lv_mem_monitor(&memory);
+    runtime.display.lvgl_used = memory.total_size - memory.free_size;
+    runtime.display.lvgl_peak = memory.max_used;
+    runtime.display.lvgl_max_free = memory.free_biggest_size;
+    runtime.display.lvgl_fragmentation = memory.frag_pct;
+    s_lvgl_memory_ms = now_ms;
+  }
+  App_ReportDisplayRuntime(&runtime.display);
   return DISPLAY_OK;
 }
 
@@ -1669,18 +1762,24 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
 Display_Result_t Display_LvglSetValue(Display_HmiVariableId_t id, uint32_t value)
 {
   uint8_t changed;
-  uint8_t was_valid;
   if (id >= DISPLAY_HMI_VAR_COUNT) { return DISPLAY_ERROR; }
-  was_valid = s_value_valid[id];
   changed = (uint8_t)(!s_value_valid[id] || s_values[id] != value);
   s_values[id] = value; s_value_valid[id] = 1U;
-  if (!changed || !s_workspace_ready) { return DISPLAY_OK; }
+  if (changed) { s_value_pending[id / 8U] |= (uint8_t)(1U << (id % 8U)); }
+  return DISPLAY_OK;
+}
+
+/** @brief 预算允许时应用一个缓存值，解析/快照复制阶段不操作LVGL。 */
+static void Display_LvglApplyValue(Display_HmiVariableId_t id)
+{
+  uint32_t value = s_values[id];
+  if (!s_workspace_ready) { return; }
   if (s_value_slots[id].label) { Display_LvglFormatValue(id, value); UiText(s_value_slots[id].label, s_value_slots[id].text); }
-  if (id == DISPLAY_HMI_VAR_MESSAGE_LOG) { Display_LvglUpdateLogs(); }
   if ((id >= DISPLAY_HMI_VAR_MOTOR_TARGET_1) && (id <= DISPLAY_HMI_VAR_MOTOR_TARGET_4) && (s_current_lvgl_page == DISPLAY_HMI_PAGE_MOTOR)) {
     uint8_t index = (uint8_t)(id - DISPLAY_HMI_VAR_MOTOR_TARGET_1);
+    if (!s_value_valid[id]) { lv_obj_add_flag(s_motor_pwm_bars[index], LV_OBJ_FLAG_HIDDEN); return; }
     lv_obj_clear_flag(s_motor_pwm_bars[index], LV_OBJ_FLAG_HIDDEN);
-    if (!was_valid || (!s_motor_slider_dragging[index] && !lv_slider_is_dragged(s_motor_pwm_bars[index]))) {
+    if (!s_motor_slider_dragging[index] && !lv_slider_is_dragged(s_motor_pwm_bars[index])) {
       s_control_update_active = 1U; lv_slider_set_value(s_motor_pwm_bars[index], Display_LvglClampPercent(value), LV_ANIM_OFF); s_control_update_active = 0U;
     }
   }
@@ -1694,9 +1793,8 @@ Display_Result_t Display_LvglSetValue(Display_HmiVariableId_t id, uint32_t value
     s_attitude_yaw_deg10 = (int16_t)s_values[DISPLAY_HMI_VAR_YAW];
     if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_AIRCRAFT) && s_value_valid[DISPLAY_HMI_VAR_ROLL] && s_value_valid[DISPLAY_HMI_VAR_PITCH] && s_value_valid[DISPLAY_HMI_VAR_YAW]) {
       lv_obj_clear_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); lv_obj_invalidate(s_attitude_obj);
-    }
+    } else { lv_obj_add_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); }
   }
-  return DISPLAY_OK;
 }
 
 /** @brief 值无效时撤销旧值，不把未知数字变成有效零。 */
@@ -1705,15 +1803,10 @@ Display_Result_t Display_LvglInvalidateValue(Display_HmiVariableId_t id)
   if (id >= DISPLAY_HMI_VAR_COUNT) { return DISPLAY_ERROR; }
   if (s_value_valid[id] == 0U) { return DISPLAY_OK; }
   s_value_valid[id] = 0U;
-  Display_LvglFormatValue(id, s_values[id]);
-  UiText(s_value_slots[id].label, s_value_slots[id].text);
+  s_value_pending[id / 8U] |= (uint8_t)(1U << (id % 8U));
   if ((id >= DISPLAY_HMI_VAR_MOTOR_TARGET_1) && (id <= DISPLAY_HMI_VAR_MOTOR_TARGET_4)) {
     uint8_t index = (uint8_t)(id - DISPLAY_HMI_VAR_MOTOR_TARGET_1);
     s_motor_slider_dragging[index] = 0U; s_motor_touch_valid[index] = 0U;
-    if (s_motor_pwm_bars[index]) { lv_obj_add_flag(s_motor_pwm_bars[index], LV_OBJ_FLAG_HIDDEN); }
-  }
-  if (((id == DISPLAY_HMI_VAR_ROLL) || (id == DISPLAY_HMI_VAR_PITCH) || (id == DISPLAY_HMI_VAR_YAW)) && s_attitude_obj) {
-    lv_obj_add_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN);
   }
   return DISPLAY_OK;
 }
@@ -1751,7 +1844,7 @@ Display_Result_t Display_LvglSetPage(Display_HmiPage_t page)
   if (page >= DISPLAY_HMI_PAGE_COUNT) { return DISPLAY_ERROR; }
   if (page <= DISPLAY_HMI_PAGE_ALARM) { s_primary_page = page; }
   s_current_lvgl_page = page;
-  Display_LvglLayout();
+  s_layout_requested = 1U;
   return DISPLAY_OK;
 }
 

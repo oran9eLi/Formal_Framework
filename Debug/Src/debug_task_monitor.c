@@ -1,6 +1,7 @@
 /**
  * @file debug_task_monitor.c
- * @brief Implement optional serial reporting of task stack and heap usage.
+ * @brief 兼容任务登记入口；常驻资源表归Framework，串口打印为可选消费者。
+ * @details 关闭debug打印仍登记任务；栈扫描由biz_system分次执行，报告只复制副本。
  */
 
 #include "debug_task_monitor.h"
@@ -9,76 +10,40 @@
 #include "debug_console.h"
 #include <string.h>
 
-#define DEBUG_TASK_MONITOR_CAPACITY 16U
-#define DEBUG_STACK_WARN_MIN_WORDS  100U
-
-typedef struct {
-  TaskHandle_t handle;
-  const char *name;
-  uint16_t configured_words;
-} DebugTaskMonitor_Record_t;
-
-#if DEBUG_STACK_MONITOR_ENABLE
-static DebugTaskMonitor_Record_t s_task_records[DEBUG_TASK_MONITOR_CAPACITY];
-static uint16_t s_task_count;
-#endif
+#include "px4lite_runtime_stats.h"
 
 /**
- * @brief Reset the debug-only task stack registry.
+ * @brief 启动阶段复位唯一任务资源表。
  */
 void DebugTaskMonitor_Init(void)
 {
-#if DEBUG_STACK_MONITOR_ENABLE
-  memset(s_task_records, 0, sizeof(s_task_records));
-  s_task_count = 0U;
-#endif
+  Px4Lite_RuntimeInit();
 }
 
 /**
- * @brief Register one application task and its configured stack depth in words.
+ * @brief 调度前登记任务及配置栈深度，单位word；失败返回pdFAIL。
  */
 BaseType_t DebugTaskMonitor_Register(TaskHandle_t handle, const char *name, uint16_t stack_words)
 {
-#if DEBUG_STACK_MONITOR_ENABLE
-  if ((handle == 0) || (name == 0) || (stack_words == 0U) || (s_task_count >= DEBUG_TASK_MONITOR_CAPACITY)) { return pdFAIL; }
-
-  s_task_records[s_task_count].handle           = handle;
-  s_task_records[s_task_count].name             = name;
-  s_task_records[s_task_count].configured_words = stack_words;
-  s_task_count++;
-  return pdPASS;
-#else
-  (void)handle;
-  (void)name;
-  (void)stack_words;
-  return pdPASS;
-#endif
+  return Px4Lite_RuntimeRegister(handle, name, stack_words);
 }
 
 /**
- * @brief Print registered task stack high-water marks and heap statistics.
+ * @brief 按开关打印已测量的水位副本；不执行第二次全表扫描。
  */
 void DebugTaskMonitor_Report(void)
 {
 #if DEBUG_STACK_MONITOR_ENABLE
-  uint16_t index;
-  size_t heap_free;
-  size_t heap_min;
-
-  heap_free = xPortGetFreeHeapSize();
-  heap_min  = xPortGetMinimumEverFreeHeapSize();
-  DBG_PRINT("MEM: heap_cfg=%lu heap_free=%lu heap_min=%lu heap_peak_used=%lu", (unsigned long)configTOTAL_HEAP_SIZE, (unsigned long)heap_free, (unsigned long)heap_min, (unsigned long)(configTOTAL_HEAP_SIZE - heap_min));
-
-  for (index = 0U; index < s_task_count; ++index) {
-    UBaseType_t free_words;
-    uint32_t used_words;
-    uint8_t warning;
-
-    free_words = uxTaskGetStackHighWaterMark(s_task_records[index].handle);
-    used_words = (free_words < s_task_records[index].configured_words) ? ((uint32_t)s_task_records[index].configured_words - (uint32_t)free_words) : 0U;
-    warning    = ((free_words < DEBUG_STACK_WARN_MIN_WORDS) || (((uint32_t)free_words * 4U) < s_task_records[index].configured_words)) ? 1U : 0U;
-
-    DBG_PRINT("STACK: task=%s cfg=%uW peak=%luW min_free=%luW/%luB %s", s_task_records[index].name, (unsigned int)s_task_records[index].configured_words, (unsigned long)used_words, (unsigned long)free_words, (unsigned long)((uint32_t)free_words * sizeof(StackType_t)), (warning != 0U) ? "WARN" : "OK");
+  Px4Lite_RuntimeSnapshot_t runtime;
+  Px4Lite_TaskRuntime_t row;
+  uint8_t index;
+  (void)Px4Lite_RuntimeCopy(&runtime);
+  DBG_PRINT("MEM: cfg=%lu free=%lu min=%lu", (unsigned long)runtime.heap_total, (unsigned long)runtime.heap_free, (unsigned long)runtime.heap_minimum);
+  for (index = 0U; index < runtime.task_count; ++index) {
+    if (Px4Lite_RuntimeCopyTask(index, &row) == PX4LITE_OK && row.measured) {
+      DBG_PRINT("STACK: %s cfg=%uW min=%uW %s", row.name, (unsigned int)row.configured_words,
+        (unsigned int)row.minimum_free_words, row.warning ? "WARN" : "OK");
+    }
   }
 #endif
 }

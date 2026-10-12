@@ -339,10 +339,27 @@ void _lv_disp_refr_timer(lv_timer_t * tmr)
             }
         }
 
-        /*Clean up*/
-        lv_memset_00(disp_refr->inv_areas, sizeof(disp_refr->inv_areas));
-        lv_memset_00(disp_refr->inv_area_joined, sizeof(disp_refr->inv_area_joined));
-        disp_refr->inv_p = 0;
+        /* M5：预算推进只保留尚未写入的区域；新的失效仍可在下一轮合并。
+         * 不延迟flush_ready，不保留栈上的draw_ctx area指针跨轮使用。 */
+        if(disp_refr->driver->refr_continue_cb && disp_refr->driver->refr_max_rows &&
+           !disp_refr->driver->full_refresh && !disp_refr->driver->direct_mode &&
+           !disp_refr->driver->draw_buf->buf2) {
+            uint16_t read_index;
+            uint16_t remaining = 0;
+            for(read_index = 0; read_index < disp_refr->inv_p; read_index++) {
+                if(!disp_refr->inv_area_joined[read_index]) {
+                    disp_refr->inv_areas[remaining++] = disp_refr->inv_areas[read_index];
+                }
+            }
+            lv_memset_00(disp_refr->inv_area_joined, sizeof(disp_refr->inv_area_joined));
+            disp_refr->inv_p = remaining;
+            if(remaining) lv_timer_resume(disp_refr->refr_timer);
+        }
+        else {
+            lv_memset_00(disp_refr->inv_areas, sizeof(disp_refr->inv_areas));
+            lv_memset_00(disp_refr->inv_area_joined, sizeof(disp_refr->inv_area_joined));
+            disp_refr->inv_p = 0;
+        }
 
         elaps = lv_tick_elaps(start);
 
@@ -606,6 +623,34 @@ static void refr_invalid_areas(void)
     disp_refr->driver->draw_buf->last_area = 0;
     disp_refr->driver->draw_buf->last_part = 0;
     disp_refr->rendering_in_progress = true;
+
+    /* 可选协作刷新：一次只绘制可完整flush的小区域，归还任务时缓冲已完成写入。
+     * full/direct/双缓冲模式仍走原始实现，驱动默认零初始化不会改变其行为。 */
+    if(disp_refr->driver->refr_continue_cb && disp_refr->driver->refr_max_rows &&
+       !disp_refr->driver->full_refresh && !disp_refr->driver->direct_mode &&
+       !disp_refr->driver->draw_buf->buf2) {
+        for(i = 0; i < disp_refr->inv_p; i++) {
+            if(disp_refr->inv_area_joined[i]) continue;
+            while(disp_refr->inv_areas[i].y1 <= disp_refr->inv_areas[i].y2) {
+                lv_area_t band = disp_refr->inv_areas[i];
+                if(!disp_refr->driver->refr_continue_cb(disp_refr->driver)) {
+                    disp_refr->rendering_in_progress = false;
+                    return;
+                }
+                if(lv_area_get_height(&band) > disp_refr->driver->refr_max_rows) {
+                    band.y2 = band.y1 + disp_refr->driver->refr_max_rows - 1;
+                }
+                disp_refr->driver->draw_buf->last_area = (i == last_i && band.y2 == disp_refr->inv_areas[i].y2);
+                disp_refr->driver->draw_buf->last_part = 0;
+                refr_area(&band);
+                px_num += lv_area_get_size(&band);
+                disp_refr->inv_areas[i].y1 = band.y2 + 1;
+            }
+            disp_refr->inv_area_joined[i] = 1;
+        }
+        disp_refr->rendering_in_progress = false;
+        return;
+    }
 
     for(i = 0; i < disp_refr->inv_p; i++) {
         /*Refresh the unjoined areas*/

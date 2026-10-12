@@ -15,6 +15,20 @@
 #include <stdint.h>
 #include "px4lite_time.h"
 #include "px4lite_types.h"
+#include "px4lite_runtime_stats.h"
+typedef Px4Lite_RuntimeSnapshot_t App_RuntimeSnapshot_t; /**< 常驻资源只读摘要。 */
+typedef Px4Lite_TaskRuntime_t App_TaskRuntime_t; /**< 任务栈只读行。 */
+typedef Px4Lite_DisplayRuntime_t App_DisplayRuntime_t; /**< 显示所有者测量摘要。 */
+/** @brief biz_system调用低频采集，不调用LVGL。 */
+void App_RuntimeStatsStep(uint32_t now_ms);
+/** @brief 复制资源摘要，年龄由measured_ms判断。 */
+Px4Lite_Result_t App_CopyRuntimeStats(App_RuntimeSnapshot_t *out, uint32_t now_ms);
+/** @brief 复制任务资源行，不触发扫描。 */
+Px4Lite_Result_t App_CopyTaskRuntime(uint8_t index, App_TaskRuntime_t *out, uint32_t now_ms);
+/** @brief 唯一显示任务提交耗时及LVGL测量。 */
+void App_ReportDisplayRuntime(const App_DisplayRuntime_t *sample);
+/** @brief 单调微秒时基，用于短周期耗时无符号差值。 */
+uint32_t App_RuntimeGetUs(void);
 #include "px4lite_lora_lab.h"
 #include "px4lite_attitude.h"
 #include "px4lite_control.h"

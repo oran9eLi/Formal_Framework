@@ -25,6 +25,19 @@
 #include "px4lite_remote_telemetry.h"
 #include "px4lite_topics.h"
 
+/** @brief 常驻资源采集入口，打印开关不参与门控。 */
+void App_RuntimeStatsStep(uint32_t now_ms) { Px4Lite_RuntimeStep(now_ms); }
+/** @brief 复制汇总，调用方依据measured_ms显示年龄。 */
+Px4Lite_Result_t App_CopyRuntimeStats(App_RuntimeSnapshot_t *out, uint32_t now_ms)
+{ (void)now_ms; return Px4Lite_RuntimeCopy(out); }
+/** @brief 复制一个任务水位，不触发栈扫描。 */
+Px4Lite_Result_t App_CopyTaskRuntime(uint8_t index, App_TaskRuntime_t *out, uint32_t now_ms)
+{ (void)now_ms; return Px4Lite_RuntimeCopyTask(index, out); }
+/** @brief 仅显示任务提交其LVGL及耗时事实。 */
+void App_ReportDisplayRuntime(const App_DisplayRuntime_t *sample) { Px4Lite_RuntimeReportDisplay(sample); }
+/** @brief 微秒时基；无符号减法处理约71分钟回绕。 */
+uint32_t App_RuntimeGetUs(void) { return Px4Lite_PlatformGetUs(); }
+
 /*
  * Display 聚合视图只由 biz_display 周期任务调用。以下 scratch 使用静态存储，
  * 避免把 System/Alarm 等较大快照压到任务栈上。

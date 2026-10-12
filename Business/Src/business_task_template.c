@@ -60,6 +60,7 @@ void Business_SystemTask(void *argument)
     uint32_t now_ms = Business_PlatformGetMs();
 
     Business_RegistryPoll(now_ms);
+    App_RuntimeStatsStep(now_ms);
     Business_StatusHeartbeat(BUSINESS_COMPONENT_SYSTEM);
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BUSINESS_SYSTEM_PERIOD_MS));
   }
@@ -124,6 +125,7 @@ void Business_DisplayServiceTask(void *argument)
   for (;;) {
     Business_ServiceResult_t result;
     uint32_t now_ms = Business_PlatformGetMs();
+    uint32_t service_started_us = App_RuntimeGetUs();
 
     /*
      * Input is always serviced first. Display refresh cannot suppress
@@ -149,7 +151,12 @@ void Business_DisplayServiceTask(void *argument)
     /* lv_timer_handler(触摸读取 + 脏区增量渲染)必须每个 10ms 节拍都推进：否则触摸只在
        200ms 数据节拍时被采样，滑块/按键严重不跟手(约 5Hz)。静止无脏区时开销极小，切页整页
        重绘与预算化多步渲染同样逐拍完成;刷新结果保持原 200ms 节拍上报，出错即时上报。 */
-    result = Business_DisplayRefreshStep(now_ms, BUSINESS_DISPLAY_REFRESH_BUDGET_US);
+    {
+      uint32_t preparation_us = App_RuntimeGetUs() - service_started_us;
+      uint32_t remaining_us = (preparation_us < BUSINESS_DISPLAY_REFRESH_BUDGET_US) ?
+        BUSINESS_DISPLAY_REFRESH_BUDGET_US - preparation_us : 0U;
+      result = Business_DisplayRefreshStep(now_ms, remaining_us);
+    }
     if (result != BUSINESS_SERVICE_BUSY) {
       if ((report_due != 0U) || (result != BUSINESS_SERVICE_OK)) {
         Business_DisplayReportResult(result, now_ms);
@@ -157,6 +164,15 @@ void Business_DisplayServiceTask(void *argument)
       }
     }
 
+    {
+      App_RuntimeSnapshot_t runtime;
+      (void)App_CopyRuntimeStats(&runtime, now_ms);
+      runtime.display.measured_ms = now_ms;
+      runtime.display.service_us = App_RuntimeGetUs() - service_started_us;
+      if (runtime.display.service_us > runtime.display.service_max_us) { runtime.display.service_max_us = runtime.display.service_us; }
+      if (runtime.display.service_us > BUSINESS_DISPLAY_REFRESH_BUDGET_US) { runtime.display.overruns++; }
+      App_ReportDisplayRuntime(&runtime.display);
+    }
     Business_StatusHeartbeat(BUSINESS_COMPONENT_DISPLAY);
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BUSINESS_DISPLAY_SERVICE_PERIOD_MS));
   }
