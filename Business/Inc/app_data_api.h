@@ -55,6 +55,13 @@ Px4Lite_Result_t App_CopyAttitudeStatus(App_AttitudeStatus_t *out);
 #define APP_DISPLAY_MOTOR_COUNT    4U    /**< Display 视图固定显示的电机数量。 */
 #define APP_DISPLAY_ALARM_MAX      16U   /**< Display 视图固定导出的告警记录容量。 */
 
+typedef Px4Lite_SensorImu_t App_ImuSnapshot_t; /**< 非消费型IMU最新副本；mg/mdps/cdegC。 */
+typedef Px4Lite_SensorGnss_t App_GnssDetails_t; /**< GNSS逐域测量，消费valid_mask及逐域ms。 */
+/** @brief 复制最近IMU；过期返回STALE，保留测量时间但header.valid清零。 */
+Px4Lite_Result_t App_CopyImuLatest(App_ImuSnapshot_t *out, uint32_t now_ms);
+/** @brief 复制GNSS详情；新鲜位逐域裁剪，链路活动不冒充新位置。 */
+Px4Lite_Result_t App_CopyGnssDetails(App_GnssDetails_t *out, uint32_t now_ms);
+
 /**
  * @brief 应用层显示状态灯语义。
  */
@@ -77,6 +84,7 @@ typedef enum {
 typedef struct {
   Px4Lite_TopicHeader_t header; /**< 快照头，包含序号、采样时间、发布时间和有效标志。 */
   uint32_t valid_mask;          /**< 导航字段有效位，使用 `PX4LITE_NAV_VALID_*`。 */
+  uint32_t attitude_measurement_ms; /**< 姿态源测量时间，ms；不采用融合头时间判新。 */
   uint32_t gnss_utc_sec;        /**< GNSS UTC 当日秒数，单位：s；无效时为 0。 */
   uint32_t gnss_utc_date;       /**< RMC 日期，压缩格式 yymmdd；无有效日期时为 0。 */
   int32_t latitude_e7;          /**< 纬度，单位：degree * 1e7。 */
@@ -176,6 +184,9 @@ typedef struct {
 typedef struct {
   Px4Lite_TopicHeader_t header; /**< 快照头，包含环境数据发布时间。 */
   uint32_t valid_mask;          /**< 新鲜字段位，使用 APP_ENV_VALID_*；未置位字段清零。 */
+  uint32_t environment_measurement_ms; /**< 环境源测量时间，ms。 */
+  uint32_t power1_measurement_ms; /**< 主控电源源测量时间，ms。 */
+  uint32_t power2_measurement_ms; /**< 动力电源源测量时间，ms。 */
   float pressure_pa;            /**< 气压，单位：Pa。 */
   float temperature_c;          /**< 温度，单位：摄氏度。 */
   float relative_humidity_pct;  /**< 相对湿度，单位：%。 */

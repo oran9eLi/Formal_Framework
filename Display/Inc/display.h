@@ -47,6 +47,7 @@ typedef enum {
   DISPLAY_HMI_PAGE_HIDDEN,     /* 通信工作区；保留历史 ID，可由头部入口或 KEY0 打开。 */
   DISPLAY_HMI_PAGE_DIAGNOSTICS, /**< 自检二级诊断：模块、故障与运行状态。 */
   DISPLAY_HMI_PAGE_EVENT_HISTORY, /**< 本机二级事件历史；不改变活动告警。 */
+  DISPLAY_HMI_PAGE_DETAILS, /**< 二级测量详情和有界逐路步进。 */
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 

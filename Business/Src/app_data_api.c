@@ -38,6 +38,29 @@ void App_ReportDisplayRuntime(const App_DisplayRuntime_t *sample) { Px4Lite_Runt
 /** @brief 微秒时基；无符号减法处理约71分钟回绕。 */
 uint32_t App_RuntimeGetUs(void) { return Px4Lite_PlatformGetUs(); }
 
+/** @brief IMU观察不抢占估计器；合法零值与无测量由valid明确区分。 */
+Px4Lite_Result_t App_CopyImuLatest(App_ImuSnapshot_t *out, uint32_t now_ms)
+{
+  if (!out) { return PX4LITE_INVALID_PARAM; }
+  memset(out, 0, sizeof(*out));
+  if (Px4Lite_CopyImuLatest(out) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (!out->header.valid) { return PX4LITE_NOT_READY; }
+  if (now_ms - out->header.sample_time_ms > PX4LITE_IMU_MAX_AGE_MS) { out->header.valid = 0U; return PX4LITE_STALE; }
+  return PX4LITE_OK;
+}
+/** @brief GNSS逐域有效性取真实源时间，不用NMEA链路活动续期位置。 */
+Px4Lite_Result_t App_CopyGnssDetails(App_GnssDetails_t *out, uint32_t now_ms)
+{
+  if (!out) { return PX4LITE_INVALID_PARAM; }
+  memset(out, 0, sizeof(*out));
+  if (Px4Lite_CopyGnss(out) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  if (now_ms - out->position_update_ms > PX4LITE_GNSS_MAX_AGE_MS) { out->valid_mask &= ~PX4LITE_GNSS_VALID_POSITION; }
+  if (now_ms - out->velocity_update_ms > PX4LITE_GNSS_MAX_AGE_MS) { out->valid_mask &= ~PX4LITE_GNSS_VALID_VELOCITY; }
+  if (now_ms - out->time_update_ms > PX4LITE_GNSS_MAX_AGE_MS) { out->valid_mask &= ~PX4LITE_GNSS_VALID_TIME; }
+  if (now_ms - out->altitude_update_ms > PX4LITE_GNSS_MAX_AGE_MS) { out->valid_mask &= ~PX4LITE_GNSS_VALID_ALTITUDE; }
+  return now_ms - out->last_rx_ms <= PX4LITE_GNSS_MAX_AGE_MS ? PX4LITE_OK : PX4LITE_STALE;
+}
+
 /*
  * Display 聚合视图只由 biz_display 周期任务调用。以下 scratch 使用静态存储，
  * 避免把 System/Alarm 等较大快照压到任务栈上。
@@ -185,6 +208,7 @@ Px4Lite_Result_t App_CopyNavigation(App_NavigationSnapshot_t *out, uint32_t now_
 
   out->header             = source.header;
   out->valid_mask         = source.valid_mask;
+  out->attitude_measurement_ms = source.attitude_update_ms;
   out->gnss_utc_sec       = source.gnss_utc_sec;
   out->gnss_utc_date      = source.gnss_utc_date;
   out->latitude_e7        = source.latitude_e7;
@@ -296,6 +320,7 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
   memset(out, 0, sizeof(*out));
   if ((Px4Lite_CopyBaro(&baro) == PX4LITE_OK) && (Px4Lite_IsFresh(&baro.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
     out->header                = baro.header;
+    out->environment_measurement_ms = baro.header.sample_time_ms;
     out->pressure_pa           = baro.pressure_pa;
     out->temperature_c         = baro.temperature_c;
     out->relative_humidity_pct = baro.relative_humidity_pct;
@@ -306,6 +331,7 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
   if ((Px4Lite_CopyBattery(&battery) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
     if (copied == 0U) { out->header = battery.header; }
     out->voltage_mv      = battery.voltage_mv;
+    out->power1_measurement_ms = battery.header.sample_time_ms;
     out->current_ma      = (battery.current_valid != 0U) ? battery.current_ma : 0;
     out->battery_percent = battery.percent;
     out->low_voltage     = battery.low_voltage;
@@ -317,6 +343,7 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
   if ((Px4Lite_CopyBattery2(&battery2) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery2.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
     if (copied == 0U) { out->header = battery2.header; }
     out->voltage2_mv      = battery2.voltage_mv;
+    out->power2_measurement_ms = battery2.header.sample_time_ms;
     out->current2_ma      = (battery2.current_valid != 0U) ? battery2.current_ma : 0;
     out->battery2_percent = battery2.percent;
     out->low_voltage2     = battery2.low_voltage;

@@ -31,6 +31,8 @@ typedef struct {
 } Px4Lite_ImuFifo_t;
 
 static Px4Lite_ImuFifo_t s_imu_fifo;
+static Px4Lite_SensorImu_t s_imu_latest;
+static uint8_t s_imu_latest_ready;
 static QueueHandle_t s_alarm_queue;
 static QueueHandle_t s_command_queue;
 static QueueHandle_t s_command_ack_queue;
@@ -66,6 +68,7 @@ DEFINE_LATEST_ACCESSORS(Px4Lite_SystemHealth_t, Health, health)
 Px4Lite_Result_t Px4Lite_TopicsInit(void)
 {
   memset(&s_imu_fifo, 0, sizeof(s_imu_fifo));
+  s_imu_latest_ready = 0U;
   s_gnss_ready        = 0U;
   s_baro_ready        = 0U;
   s_battery_ready     = 0U;
@@ -102,6 +105,8 @@ Px4Lite_Result_t Px4Lite_PushImu(const Px4Lite_SensorImu_t *data)
 
   taskENTER_CRITICAL();
 
+  s_imu_latest = *data;
+  s_imu_latest_ready = 1U;
   if (s_imu_fifo.count >= PX4LITE_IMU_FIFO_CAPACITY) {
     s_imu_fifo.tail = (uint16_t)((s_imu_fifo.tail + 1U) % PX4LITE_IMU_FIFO_CAPACITY);
     s_imu_fifo.count--;
@@ -119,6 +124,15 @@ Px4Lite_Result_t Px4Lite_PushImu(const Px4Lite_SensorImu_t *data)
 
   taskEXIT_CRITICAL();
   return result;
+}
+
+/** @brief 原子复制最近发布副本；生产FIFO的head/tail/count均不改变。 */
+Px4Lite_Result_t Px4Lite_CopyImuLatest(Px4Lite_SensorImu_t *out)
+{
+  uint8_t ready;
+  if (!out) { return PX4LITE_INVALID_PARAM; }
+  taskENTER_CRITICAL(); ready = s_imu_latest_ready; if (ready) { *out = s_imu_latest; } taskEXIT_CRITICAL();
+  return ready ? PX4LITE_OK : PX4LITE_NOT_READY;
 }
 
 /**

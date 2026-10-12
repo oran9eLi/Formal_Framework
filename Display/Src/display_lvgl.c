@@ -56,7 +56,8 @@ typedef enum {
   UI_ACTION_DIAG_NEXT, UI_ACTION_REMOTE_NEXT, UI_ACTION_REMOTE_SELECT,
   UI_ACTION_MOTOR_MODE, UI_ACTION_RAMP, UI_ACTION_ESTOP, UI_ACTION_DOWN,
   UI_ACTION_ATTITUDE, UI_ACTION_COMM_VIEW, UI_ACTION_LAB_DATA, UI_ACTION_LAB_INTERVAL,
-  UI_ACTION_LAB_COMMAND, UI_ACTION_CHANNEL, UI_ACTION_COMM_FREEZE
+  UI_ACTION_LAB_COMMAND, UI_ACTION_CHANNEL, UI_ACTION_COMM_FREEZE,
+  UI_ACTION_DETAILS_NEXT, UI_ACTION_MOTOR_CHANNEL, UI_ACTION_MOTOR_STEP
 } UiAction_t;
 /** @brief 固定按钮描述；参数仅由显示任务修改。 */
 typedef struct {
@@ -129,6 +130,9 @@ static uint32_t s_alarm_packed[UI_ALARM_CAP];
 static App_AlarmSnapshot_t s_alarm_details;
 static uint8_t s_alarm_offset, s_diag_offset, s_remote_offset;
 static uint8_t s_diag_view;
+static uint8_t s_details_kind, s_motor_selected;
+static uint32_t s_details_due_ms;
+static char s_control_feedback[24] = "local";
 
 
 static uint8_t s_history_offset, s_history_filter;
@@ -158,6 +162,14 @@ static uint32_t s_last_tick_ms, s_next_status_ms, s_next_remote_ms;
 
 static void Display_LvglLayout(void);
 static void Display_LvglApplyValue(Display_HmiVariableId_t id);
+static void Display_LvglUpdateDetails(void);
+
+/** @brief 请求结果只表达接受/拒绝；执行事实仍读取操作状态和PWM快照。 */
+static void UiControlFeedback(Display_Result_t result)
+{
+  (void)snprintf(s_control_feedback, sizeof(s_control_feedback), "%s",
+    result == DISPLAY_OK ? "Accepted" : (result == DISPLAY_NOT_READY ? "Not ready / busy" : "Rejected"));
+}
 static void Display_LvglUpdateLogs(void);
 static void Display_LvglUpdateAlarms(void);
 static void Display_LvglUpdateModules(void);
@@ -185,9 +197,9 @@ static const char *Display_LvglGnssFixText(uint32_t value)
   switch (value) {
     case 0U:
     case 1U:
-      return "\xE6""\x97""\xA0""\xE5""\xAE""\x9A""\xE4""\xBD""\x8D"; /* 无定位 */
+      return "No fix"; /* 无定位 */
     case 2U:
-      return "2D\xE5""\xAE""\x9A""\xE4""\xBD""\x8D"; /* 2D定位 */
+      return "2D fix"; /* 2D定位 */
     case 4U:
       return "DGPS"; /* 差分(字库缺"\xE5""\xB7""\xAE""") */
     case 5U:
@@ -196,7 +208,7 @@ static const char *Display_LvglGnssFixText(uint32_t value)
       return "RTK-X"; /* RTK 固定 */
     case 3U:
     default:
-      return "3D\xE5""\xAE""\x9A""\xE4""\xBD""\x8D"; /* 3D定位 */
+      return "3D fix"; /* 3D定位 */
   }
 }
 
@@ -240,32 +252,32 @@ static void Display_LvglFormatAttitudePhase(char *text, uint32_t phase)
   uint32_t progress = s_values[DISPLAY_HMI_VAR_ATTITUDE_PROGRESS];
 
   if (phase == 255U) {
-    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xBF\x9C\xE7\xAB\xAF\xE5\x8F\xAA\xE8\xAF\xBB"); /* 远端只读 */
+    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Read only"); /* 远端只读 */
   } else if (phase == PX4LITE_ATTITUDE_REQUESTED) {
-    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xAF\xB7\xE6\xB1\x82\xE5\xB7\xB2\xE6\x8E\xA5\xE5\x8F\x97"); /* 请求已接受 */
+    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Accepted"); /* 请求已接受 */
   } else if (phase == PX4LITE_ATTITUDE_WAIT_STILL) {
-    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xAF\xB7\xE6\x94\xBE\xE7\xA8\xB3\xE8\xAE\xBE\xE5\xA4\x87"); /* 请放稳设备 */
+    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Wait still"); /* 请放稳设备 */
   } else if (phase == PX4LITE_ATTITUDE_COLLECTING) {
-    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE9\x87\x87\xE9\x9B\x86\xE4\xB8\xAD %lu%%", (unsigned long)progress); /* 采集中 */
+    (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Collecting %lu%%", (unsigned long)progress); /* 采集中 */
   } else if (phase == PX4LITE_ATTITUDE_SUCCEEDED) {
     if (action == PX4LITE_ATTITUDE_ACTION_BIAS) {
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE9\x9B\xB6\xE5\x81\x8F\xE6\xA0\xA1\xE5\x87\x86\xE6\x88\x90\xE5\x8A\x9F"); /* 零偏校准成功 */
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "BIAS complete"); /* 零偏校准成功 */
     } else if (action == PX4LITE_ATTITUDE_ACTION_ZERO) {
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\xB7\xB2\xE8\xAE\xBE\xE7\x9B\xB8\xE5\xAF\xB9\xE9\x9B\xB6\xE4\xBD\x8D"); /* 已设相对零位 */
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "ZERO complete"); /* 已设相对零位 */
     } else {
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\xB7\xB2\xE6\x81\xA2\xE5\xA4\x8D\xE5\x8E\x9F\xE5\x9F\xBA\xE5\x87\x86"); /* 已恢复原基准 */
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "RESTORE complete"); /* 已恢复原基准 */
     }
   } else if (phase == PX4LITE_ATTITUDE_FAILED) {
     if (reason == PX4LITE_ATTITUDE_REASON_NO_DATA) {
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\xA4\xB1\xE8\xB4\xA5: \xE6\x97\xA0\xE5\xA7\xBF\xE6\x80\x81\xE6\x95\xB0\xE6\x8D\xAE"); /* 失败：无姿态数据 */
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Failed: no attitude"); /* 失败：无姿态数据 */
     } else {
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\xA4\xB1\xE8\xB4\xA5: \xE8\xAE\xBE\xE5\xA4\x87\xE6\x9C\xAA\xE6\x94\xBE\xE7\xA8\xB3"); /* 失败：设备未放稳 */
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Failed: not still"); /* 失败：设备未放稳 */
     }
   } else {
     (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s",
                    (s_values[DISPLAY_HMI_VAR_ATTITUDE_REFERENCE] != 0U) ?
-                   "\xE7\x9B\xB8\xE5\xAF\xB9\xE9\x9B\xB6\xE4\xBD\x8D\xE5\xB7\xB2\xE5\x90\xAF\xE7\x94\xA8" : /* 相对零位已启用 */
-                   "\xE5\xBE\x85\xE6\x93\x8D\xE4\xBD\x9C"); /* 待操作 */
+                   "Reference active" : /* 相对零位已启用 */
+                   "Idle"); /* 待操作 */
   }
 }
 
@@ -333,28 +345,28 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
     case DISPLAY_HMI_VAR_MOTOR_TARGET_3:
     case DISPLAY_HMI_VAR_MOTOR_TARGET_4:
 
-        (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE8\xAE\xBE%lu%%", (unsigned long)value); /* 设 */
+        (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Set %lu%%", (unsigned long)value); /* 设 */
       break;
     case DISPLAY_HMI_VAR_MOTOR_PWM_1:
     case DISPLAY_HMI_VAR_MOTOR_PWM_2:
     case DISPLAY_HMI_VAR_MOTOR_PWM_3:
     case DISPLAY_HMI_VAR_MOTOR_PWM_4:
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\x87\xBA%lu%%", (unsigned long)value); /* 出 */
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Out %lu%%", (unsigned long)value); /* 出 */
       break;
     case DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE:
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s",
-                     (value == PX4LITE_CONTROL_MODE_DIRECT) ? "\xE7\x9B\xB4\xE6\x8E\xA7" :
-                     ((value == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) ? "\xE5\xA7\xBF\xE6\x80\x81\xE8\xBE\x85\xE5\x8A\xA9" :
+                     (value == PX4LITE_CONTROL_MODE_DIRECT) ? "Direct" :
+                     ((value == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) ? "Assist" :
                       "N/A")); /* 直控/姿态辅助/未知 */
       break;
     case DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE:
       switch (value) {
-        case PX4LITE_MOTOR_OP_STOPPED: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\x81\x9C\xE6\xAD\xA2"); break;
-        case PX4LITE_MOTOR_OP_ESC_PREPARING: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "ESC\xE5\x87\x86\xE5\xA4\x87\xE4\xB8\xAD"); break;
-        case PX4LITE_MOTOR_OP_MANUAL_RUNNING: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE6\x89\x8B\xE5\x8A\xA8\xE8\xBF\x90\xE8\xA1\x8C"); break;
-        case PX4LITE_MOTOR_OP_SYNC_RAMP_UP: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE5\x90\x8C\xE6\xAD\xA5\xE5\x8D\x87\xE9\x80\x9F"); break;
-        case PX4LITE_MOTOR_OP_RAMP_DOWN: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE7\xBC\x93\xE9\x99\x8D\xE5\x81\x9C\xE6\x9C\xBA"); break;
-        case PX4LITE_MOTOR_OP_INHIBITED: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "\xE7\x94\xB5\xE6\xBA\x90\xE9\x97\xAD\xE9\x94\x81"); break;
+        case PX4LITE_MOTOR_OP_STOPPED: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Stopped"); break;
+        case PX4LITE_MOTOR_OP_ESC_PREPARING: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "ESC preparing"); break;
+        case PX4LITE_MOTOR_OP_MANUAL_RUNNING: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Running"); break;
+        case PX4LITE_MOTOR_OP_SYNC_RAMP_UP: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Ramp up"); break;
+        case PX4LITE_MOTOR_OP_RAMP_DOWN: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Ramp down"); break;
+        case PX4LITE_MOTOR_OP_INHIBITED: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Inhibited"); break;
         default: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "N/A"); break;
       }
       break;
@@ -408,10 +420,10 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
     case DISPLAY_HMI_VAR_ROLL:
     case DISPLAY_HMI_VAR_PITCH:
     case DISPLAY_HMI_VAR_YAW:
-      Display_LvglFormatSignedFixed1(text, (int16_t)value, "\xE5""\xBA""\xA6");
+      Display_LvglFormatSignedFixed1(text, (int16_t)value, "deg");
       break;
     case DISPLAY_HMI_VAR_TEMPERATURE:
-      Display_LvglFormatSignedFixed1(text, (int16_t)value, "\xE5""\xBA""\xA6");
+      Display_LvglFormatSignedFixed1(text, (int16_t)value, "C");
       break;
     case DISPLAY_HMI_VAR_HUMIDITY:
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu.%lu%%", (unsigned long)(value / 10U), (unsigned long)(value % 10U));
@@ -508,13 +520,17 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
     value = (int32_t)s_motor_touch_value[motor_index];
   }
 
-  if (Display_RequestMotorThrottle(id, (uint16_t)value) != DISPLAY_OK) {
+  {
+    Display_Result_t result = Display_RequestMotorThrottle(id, (uint16_t)value);
+    UiControlFeedback(result);
+    if (result != DISPLAY_OK) {
     if ((target_id < DISPLAY_HMI_VAR_COUNT) && (s_value_valid[target_id] != 0U)) {
       s_control_update_active = 1U;
       lv_slider_set_value(slider, Display_LvglClampPercent(s_values[target_id]), LV_ANIM_OFF);
       s_control_update_active = 0U;
     }
     return;
+    }
   }
 
   /* 请求已进入所属控制服务，实际目标以随后发布的快照为准。 */
@@ -893,7 +909,7 @@ static void UiButtonEvent(lv_event_t *event)
   lv_event_code_t code = lv_event_get_code(event);
   if (button == 0) { return; }
   if (button->action == UI_ACTION_ESTOP) {
-    if (code == LV_EVENT_PRESSED) { (void)Display_RequestMotorEmergencyStop(); }
+    if (code == LV_EVENT_PRESSED) { UiControlFeedback(Display_RequestMotorEmergencyStop()); }
     return;
   }
   if (code != LV_EVENT_CLICKED) { return; }
@@ -958,14 +974,29 @@ static void UiButtonEvent(lv_event_t *event)
       s_layout_requested=1U; break;
     case UI_ACTION_LAB_COMMAND: UiLabRequest((Px4Lite_LabOperation_t)button->argument); Display_LvglUpdateRemote(); break;
     case UI_ACTION_COMM_FREEZE: s_comm_frozen=(uint8_t)!s_comm_frozen; s_layout_requested=1U; break;
-    case UI_ACTION_MOTOR_MODE:
-      if (s_value_valid[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE]) {
-        (void)Display_RequestMotorControlMode((s_values[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE] == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) ? PX4LITE_CONTROL_MODE_DIRECT : PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
+    case UI_ACTION_DETAILS_NEXT:
+      s_details_kind = (uint8_t)((s_details_kind + 1U) % 4U); s_layout_requested = 1U; break;
+    case UI_ACTION_MOTOR_CHANNEL:
+      s_motor_selected = (uint8_t)((s_motor_selected + 1U) % 4U); Display_LvglUpdateDetails(); break;
+    case UI_ACTION_MOTOR_STEP:
+      {
+        App_MotorSnapshot_t motor;
+        if (App_CopyMotor(&motor, s_last_tick_ms) == PX4LITE_OK) {
+          int32_t target = (int32_t)motor.base_percent[s_motor_selected] + (button->argument ? 1 : -1);
+          if (target < 0) { target = 0; } if (target > 100) { target = 100; }
+          UiControlFeedback(Display_RequestMotorThrottle((Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_TARGET_1 + s_motor_selected), (uint16_t)target));
+        } else { UiControlFeedback(DISPLAY_NOT_READY); }
+        Display_LvglUpdateDetails();
       }
       break;
-    case UI_ACTION_RAMP: (void)Display_RequestMotorAutoTakeoff(); break;
-    case UI_ACTION_DOWN: (void)Display_RequestMotorAutoLanding(); break;
-    case UI_ACTION_ATTITUDE: (void)Display_RequestAttitudeAction((Px4Lite_AttitudeAction_t)button->argument); break;
+    case UI_ACTION_MOTOR_MODE:
+      if (s_value_valid[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE]) {
+        UiControlFeedback(Display_RequestMotorControlMode((s_values[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE] == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) ? PX4LITE_CONTROL_MODE_DIRECT : PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST));
+      }
+      break;
+    case UI_ACTION_RAMP: UiControlFeedback(Display_RequestMotorAutoTakeoff()); break;
+    case UI_ACTION_DOWN: UiControlFeedback(Display_RequestMotorAutoLanding()); break;
+    case UI_ACTION_ATTITUDE: UiControlFeedback(Display_RequestAttitudeAction((Px4Lite_AttitudeAction_t)button->argument)); break;
     default: break;
   }
 }
@@ -1110,6 +1141,7 @@ static void Display_LvglLayoutChrome(void)
   if (s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) { title = "Comm"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DIAGNOSTICS) { title = "Diagnostics"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_EVENT_HISTORY) { title = "Event history"; }
+  else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DETAILS) { title = "Details"; }
   else { title = s_main_titles[s_current_lvgl_page - DISPLAY_HMI_PAGE_SELF_CHECK]; }
   (void)UiLabel(title, 12, 9, 160, &display_lvgl_font_zh_16, UI_COLOR_TEXT);
   UiValue(DISPLAY_HMI_VAR_VIEW_NODE_ID, 180, 8, 110);
@@ -1176,15 +1208,16 @@ static void Display_LvglLayoutSelfCheck(void)
 static void Display_LvglLayoutFlight(void)
 {
   UiPanel(0U, 8, 62, 784, 272);
-  UiValueRow(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, "\xE4""\xB8""\xBB""\xE6""\x8E""\xA7""\xE7""\x94""\xB5""\xE5""\x8E""\x8B""", 28, 86, 140);
-  UiValueRow(DISPLAY_HMI_VAR_BATTERY_CURRENT, "\xE4""\xB8""\xBB""\xE6""\x8E""\xA7""\xE7""\x94""\xB5""\xE6""\xB5""\x81""", 28, 130, 140);
-  UiValueRow(DISPLAY_HMI_VAR_BATTERY_PERCENT, "\xE4""\xB8""\xBB""\xE6""\x8E""\xA7""\xE7""\x94""\xB5""\xE9""\x87""\x8F""", 28, 174, 140);
-  UiValueRow(DISPLAY_HMI_VAR_TEMPERATURE, "\xE6""\xB8""\xA9""\xE5""\xBA""\xA6""", 28, 218, 140);
-  UiValueRow(DISPLAY_HMI_VAR_HUMIDITY, "\xE6""\xB9""\xBF""\xE5""\xBA""\xA6""", 28, 262, 140);
-  UiValueRow(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE5""\x8E""\x8B""", 414, 86, 140);
-  UiValueRow(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE6""\xB5""\x81""", 414, 130, 140);
-  UiValueRow(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE7""\x94""\xB5""\xE9""\x87""\x8F""", 414, 174, 140);
-  UiValueRow(DISPLAY_HMI_VAR_PRESSURE, "\xE6""\xB0""\x94""\xE5""\x8E""\x8B""", 414, 218, 140);
+  UiValueRow(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, "Main V", 28, 86, 140);
+  UiValueRow(DISPLAY_HMI_VAR_BATTERY_CURRENT, "Main A", 28, 130, 140);
+  UiValueRow(DISPLAY_HMI_VAR_BATTERY_PERCENT, "Main SOC", 28, 174, 140);
+  UiValueRow(DISPLAY_HMI_VAR_TEMPERATURE, "Temp", 28, 218, 140);
+  UiValueRow(DISPLAY_HMI_VAR_HUMIDITY, "Humidity", 28, 262, 140);
+  UiValueRow(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, "Motor V", 414, 86, 140);
+  UiValueRow(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, "Motor A", 414, 130, 140);
+  UiValueRow(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, "Motor SOC", 414, 174, 140);
+  UiValueRow(DISPLAY_HMI_VAR_PRESSURE, "Pressure", 414, 218, 140);
+  (void)UiButton("Details >", 614, 285, 162, 40, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DETAILS, 0x173749);
 }
 
 /** @brief 姿态仪与操作各用独立区域，校准状态不随观察冻结。 */
@@ -1195,28 +1228,29 @@ static void Display_LvglLayoutAttitude(void)
   if (s_value_valid[DISPLAY_HMI_VAR_ROLL] && s_value_valid[DISPLAY_HMI_VAR_PITCH] && s_value_valid[DISPLAY_HMI_VAR_YAW]) {
     lv_obj_clear_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN);
   }
-  (void)UiLabel("local attitude", 312, 78, 200, &lv_font_montserrat_14, UI_COLOR_MUTED);
-  UiValueRow(DISPLAY_HMI_VAR_ROLL, "\xE6""\xA8""\xAA""\xE6""\xBB""\x9A""", 314, 116, 118);
-  UiValueRow(DISPLAY_HMI_VAR_PITCH, "\xE4""\xBF""\xAF""\xE4""\xBB""\xB0""", 314, 152, 118);
-  UiValueRow(DISPLAY_HMI_VAR_YAW, "\xE7""\x9B""\xB8""\xE5""\xAF""\xB9""\xE5""\x81""\x8F""\xE8""\x88""\xAA""", 314, 188, 118);
+  (void)UiButton("IMU >", 630, 68, 145, 38, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DETAILS, 0x173749);
+  UiValueRow(DISPLAY_HMI_VAR_ROLL, "Roll", 314, 116, 118);
+  UiValueRow(DISPLAY_HMI_VAR_PITCH, "Pitch", 314, 152, 118);
+  UiValueRow(DISPLAY_HMI_VAR_YAW, "Relative yaw", 314, 188, 118);
   UiValue(DISPLAY_HMI_VAR_ATTITUDE_PHASE, 314, 234, 460);
-  (void)UiButton("\xE9""\x9B""\xB6""\xE5""\x81""\x8F""\xE6""\xA0""\xA1""\xE5""\x87""\x86""", 310, 275, 145, 48, UI_ACTION_ATTITUDE, PX4LITE_ATTITUDE_ACTION_BIAS, 0x173749);
-  (void)UiButton("\xE7""\x9B""\xB8""\xE5""\xAF""\xB9""\xE9""\x9B""\xB6""\xE4""\xBD""\x8D""", 470, 275, 145, 48, UI_ACTION_ATTITUDE, PX4LITE_ATTITUDE_ACTION_ZERO, 0x173749);
-  (void)UiButton("\xE6""\x81""\xA2""\xE5""\xA4""\x8D""\xE5""\x9F""\xBA""\xE5""\x87""\x86""", 630, 275, 145, 48, UI_ACTION_ATTITUDE, PX4LITE_ATTITUDE_ACTION_RESTORE, 0x173749);
+  (void)UiButton("BIAS", 310, 275, 145, 48, UI_ACTION_ATTITUDE, PX4LITE_ATTITUDE_ACTION_BIAS, 0x173749);
+  (void)UiButton("ZERO", 470, 275, 145, 48, UI_ACTION_ATTITUDE, PX4LITE_ATTITUDE_ACTION_ZERO, 0x173749);
+  (void)UiButton("RESTORE", 630, 275, 145, 48, UI_ACTION_ATTITUDE, PX4LITE_ATTITUDE_ACTION_RESTORE, 0x173749);
 }
 
 /** @brief 定位数据保留单位、解算等级与未知状态。 */
 static void Display_LvglLayoutGnss(void)
 {
   UiPanel(0U, 8, 62, 784, 272);
-  UiValueRow(DISPLAY_HMI_VAR_GNSS_FIX, "\xE5""\xAE""\x9A""\xE4""\xBD""\x8D""\xE7""\x8A""\xB6""\xE6""\x80""\x81""", 28, 84, 132);
-  UiValueRow(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, "\xE5""\x8D""\xAB""\xE6""\x98""\x9F""\xE6""\x95""\xB0""", 28, 132, 132);
+  UiValueRow(DISPLAY_HMI_VAR_GNSS_FIX, "Fix", 28, 84, 132);
+  UiValueRow(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, "Satellites", 28, 132, 132);
   UiValueRow(DISPLAY_HMI_VAR_GNSS_HDOP, "HDOP", 28, 180, 132);
-  UiValueRow(DISPLAY_HMI_VAR_GNSS_SPEED, "\xE9""\x80""\x9F""\xE5""\xBA""\xA6""", 28, 228, 132);
-  UiValueRow(DISPLAY_HMI_VAR_LATITUDE, "\xE7""\xBA""\xAC""\xE5""\xBA""\xA6""", 414, 84, 108);
-  UiValueRow(DISPLAY_HMI_VAR_LONGITUDE, "\xE7""\xBB""\x8F""\xE5""\xBA""\xA6""", 414, 132, 108);
-  UiValueRow(DISPLAY_HMI_VAR_ALTITUDE, "\xE9""\xAB""\x98""\xE5""\xBA""\xA6""", 414, 180, 108);
-  UiValueRow(DISPLAY_HMI_VAR_GNSS_TIME, "\xE6""\x97""\xB6""\xE9""\x97""\xB4""", 414, 228, 108);
+  UiValueRow(DISPLAY_HMI_VAR_GNSS_SPEED, "Speed", 28, 228, 132);
+  UiValueRow(DISPLAY_HMI_VAR_LATITUDE, "Latitude", 414, 84, 108);
+  UiValueRow(DISPLAY_HMI_VAR_LONGITUDE, "Longitude", 414, 132, 108);
+  UiValueRow(DISPLAY_HMI_VAR_ALTITUDE, "Altitude", 414, 180, 108);
+  UiValueRow(DISPLAY_HMI_VAR_GNSS_TIME, "UTC", 414, 228, 108);
+  (void)UiButton("Details >", 614, 285, 162, 40, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DETAILS, 0x173749);
 }
 
 /** @brief 四路滑块宽度 30、高度 128 像素；实际输出和急停永远为本机实时值。 */
@@ -1224,9 +1258,10 @@ static void Display_LvglLayoutMotor(void)
 {
   uint8_t i;
   UiButton_t *mode;
-  static const char * const names[4] = {"\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xB8""\x80""", "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xBA""\x8C""", "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE4""\xB8""\x89""", "\xE7""\x94""\xB5""\xE6""\x9C""\xBA""\xE5""\x9B""\x9B"""};
+  static const char * const names[4] = {"Motor 1", "Motor 2", "Motor 3", "Motor 4"};
   UiPanel(0U, 8, 62, 784, 272);
-  mode = UiButton("", 548, 76, 228, 42, UI_ACTION_MOTOR_MODE, 0, 0x173749);
+  mode = UiButton("", 548, 76, 108, 42, UI_ACTION_MOTOR_MODE, 0, 0x173749);
+  (void)UiButton("Details >", 666, 76, 110, 42, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DETAILS, 0x173749);
   s_value_slots[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE].label = mode->label;
   Display_LvglFormatValue(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, s_values[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE]);
   UiText(mode->label, s_value_slots[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE].text);
@@ -1247,9 +1282,82 @@ static void Display_LvglLayoutMotor(void)
     UiValue((Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_PWM_1 + i), x - 12, 278, 112);
     s_motor_pulse_labels[i] = UiLabel(s_motor_pulse_valid[i] ? s_motor_pulse_text[i] : "N/A", x - 12, 304, 112, &lv_font_montserrat_14, UI_COLOR_MUTED);
   }
-  (void)UiButton("\xE5""\x90""\x8C""\xE6""\xAD""\xA5""\xE5""\x8D""\x87""\xE9""\x80""\x9F""", 548, 154, 228, 48, UI_ACTION_RAMP, 0, 0x173749);
-  (void)UiButton("\xE6""\x9C""\xAC""\xE6""\x9C""\xBA""\xE6""\x80""\xA5""\xE5""\x81""\x9C""", 548, 211, 228, 56, UI_ACTION_ESTOP, 0, 0x782538);
-  (void)UiButton("\xE7""\xBC""\x93""\xE9""\x99""\x8D""\xE5""\x81""\x9C""\xE6""\x9C""\xBA""", 548, 276, 228, 48, UI_ACTION_DOWN, 0, 0x214C36);
+  (void)UiButton("Ramp up", 548, 154, 228, 48, UI_ACTION_RAMP, 0, 0x173749);
+  (void)UiButton("E-Stop", 548, 211, 228, 56, UI_ACTION_ESTOP, 0, 0x782538);
+  (void)UiButton("Ramp down", 548, 276, 228, 48, UI_ACTION_DOWN, 0, 0x214C36);
+}
+
+/** @brief 二级数据详情共用标签池；逐路步进保留0..100%和Control保护。 */
+static void Display_LvglLayoutDetails(void)
+{
+  uint8_t i;
+  UiPanel(0U, 8, 62, 784, 272);
+  s_page_info = UiLabel("", 24, 73, 590, &lv_font_montserrat_14, UI_COLOR_ACCENT);
+  (void)UiButton("Next data", 648, 67, 132, 38, UI_ACTION_DETAILS_NEXT, 0, 0x173749);
+  for (i = 0U; i < 6U; i++) { s_row_labels[i] = UiLabel("", 26, (lv_coord_t)(113 + i * 31), 748, &lv_font_montserrat_14, UI_COLOR_TEXT); }
+  if (s_details_kind == 3U) {
+    (void)UiButton("Next motor", 24, 293, 150, 33, UI_ACTION_MOTOR_CHANNEL, 0, 0x173749);
+    (void)UiButton("-1%", 190, 293, 110, 33, UI_ACTION_MOTOR_STEP, 0, 0x173749);
+    (void)UiButton("+1%", 316, 293, 110, 33, UI_ACTION_MOTOR_STEP, 1, 0x173749);
+    (void)UiButton("E-Stop", 638, 293, 140, 33, UI_ACTION_ESTOP, 0, 0x782538);
+  }
+  Display_LvglUpdateDetails();
+}
+
+/** @brief 格式化本机真实测量；逐域无效显示N/A，不把旧缓存和零占位当测量。 */
+static void Display_LvglUpdateDetails(void)
+{
+  uint8_t i;
+  uint32_t now = s_last_tick_ms;
+  union { App_ImuSnapshot_t imu; App_GnssDetails_t gnss; App_EnvironmentSnapshot_t env; App_MotorSnapshot_t motor; } data;
+  static const char * const names[4] = {"IMU / raw body axes", "GNSS / measurement domains", "Power / Environment", "Motor / commanded PWM"};
+  (void)snprintf(s_page_info_text, sizeof(s_page_info_text), "%s", names[s_details_kind]); UiText(s_page_info, s_page_info_text);
+  for (i = 0U; i < 6U; i++) { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "N/A"); }
+  if (s_details_kind == 0U) {
+    Px4Lite_Result_t result = App_CopyImuLatest(&data.imu, now);
+    if (result == PX4LITE_NOT_READY) { (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "IMU waiting for sample"); }
+    else { (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "Sample #%lu / age %lums / %s", (unsigned long)data.imu.header.sequence,
+      (unsigned long)(now - data.imu.header.sample_time_ms), result == PX4LITE_OK ? "valid" : "STALE"); }
+    if (result == PX4LITE_OK) {
+      (void)snprintf(s_row_text[1], UI_ROW_TEXT_LEN, "Accel mg: X %ld / Y %ld / Z %ld", (long)data.imu.accel_mg[0], (long)data.imu.accel_mg[1], (long)data.imu.accel_mg[2]);
+      (void)snprintf(s_row_text[2], UI_ROW_TEXT_LEN, "Gyro mdps: X %ld / Y %ld / Z %ld", (long)data.imu.gyro_mdps[0], (long)data.imu.gyro_mdps[1], (long)data.imu.gyro_mdps[2]);
+      (void)snprintf(s_row_text[3], UI_ROW_TEXT_LEN, "IMU temperature %.2f C / interval %uus", (double)data.imu.temperature_cdeg / 100.0, (unsigned int)data.imu.sample_period_us);
+    }
+    { App_AttitudeStatus_t status; (void)App_CopyAttitudeStatus(&status);
+      (void)snprintf(s_row_text[4], UI_ROW_TEXT_LEN, "Action %u / phase %u / progress %u%% / reason %u", (unsigned int)status.action, (unsigned int)status.phase, (unsigned int)status.progress, (unsigned int)status.reason);
+      (void)snprintf(s_row_text[5], UI_ROW_TEXT_LEN, "Bias %s / display reference %s / %s", status.bias_valid ? "set" : "none", status.reference_active ? "set" : "none", s_control_feedback); }
+  } else if (s_details_kind == 1U) {
+    Px4Lite_Result_t result = App_CopyGnssDetails(&data.gnss, now);
+    if (result == PX4LITE_NOT_READY) {
+      (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "GNSS waiting for sentence");
+      for (i = 0U; i < 6U; i++) { UiText(s_row_labels[i], s_row_text[i]); }
+      return;
+    }
+    (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "Link %s / RX age %lums / fix %u / dimension %u", result == PX4LITE_OK ? "active" : "N/A", (unsigned long)(now-data.gnss.last_rx_ms), (unsigned int)data.gnss.fix_type, (unsigned int)data.gnss.fix_dimension);
+    (void)snprintf(s_row_text[1], UI_ROW_TEXT_LEN, "GPS visible %u used %u / BDS visible %u used %u / antenna %u", (unsigned int)data.gnss.gps_visible, (unsigned int)data.gnss.gps_used, (unsigned int)data.gnss.bds_visible, (unsigned int)data.gnss.bds_used, (unsigned int)data.gnss.antenna_state);
+    (void)snprintf(s_row_text[2], UI_ROW_TEXT_LEN, "Position %s / age %lums / HDOP %.2f", data.gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION ? "valid" : "N/A", (unsigned long)(now-data.gnss.position_update_ms), (double)data.gnss.hdop_x100/100.0);
+    if (data.gnss.valid_mask & PX4LITE_GNSS_VALID_VELOCITY) { (void)snprintf(s_row_text[3], UI_ROW_TEXT_LEN, "Ground speed %.2fm/s / course %.2fdeg / age %lums", (double)data.gnss.ground_speed_cms/100.0, (double)data.gnss.heading_deg100/100.0, (unsigned long)(now-data.gnss.velocity_update_ms)); }
+    (void)snprintf(s_row_text[4], UI_ROW_TEXT_LEN, "Altitude %s / age %lums", data.gnss.valid_mask & PX4LITE_GNSS_VALID_ALTITUDE ? "valid" : "N/A", (unsigned long)(now-data.gnss.altitude_update_ms));
+    (void)snprintf(s_row_text[5], UI_ROW_TEXT_LEN, "UTC %s / age %lums / mask 0x%02lX", data.gnss.valid_mask & PX4LITE_GNSS_VALID_TIME ? "valid" : "N/A", (unsigned long)(now-data.gnss.time_update_ms), (unsigned long)data.gnss.valid_mask);
+  } else if (s_details_kind == 2U) {
+    (void)App_CopyEnvironment(&data.env, now);
+    if ((data.env.valid_mask & APP_ENV_VALID_PRESSURE_TEMPERATURE) != 0U) { (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "Pressure %.1fPa / temperature %.2fC / age %lums", (double)data.env.pressure_pa, (double)data.env.temperature_c, (unsigned long)(now-data.env.environment_measurement_ms)); }
+    if ((data.env.valid_mask & APP_ENV_VALID_HUMIDITY) != 0U) { (void)snprintf(s_row_text[1], UI_ROW_TEXT_LEN, "Humidity %.1f%%", (double)data.env.relative_humidity_pct); }
+    for (i = 0U; i < 2U; i++) {
+      uint32_t mask = i ? APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_CURRENT2 : APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_CURRENT1;
+      uint32_t mv = i ? data.env.voltage2_mv : data.env.voltage_mv;
+      int32_t ma = i ? data.env.current2_ma : data.env.current_ma;
+      if (data.env.valid_mask & (i ? APP_ENV_VALID_VOLTAGE2 : APP_ENV_VALID_VOLTAGE1)) { (void)snprintf(s_row_text[2U+i*2U], UI_ROW_TEXT_LEN, "%s %.3fV / age %lums", i ? "Motor supply" : "Main supply", (double)mv/1000.0, (unsigned long)(now-(i ? data.env.power2_measurement_ms : data.env.power1_measurement_ms))); }
+      if ((data.env.valid_mask & mask) == mask) { (void)snprintf(s_row_text[3U+i*2U], UI_ROW_TEXT_LEN, "Current %.3fA / power %.3fW", (double)ma/1000.0, (double)mv*(double)ma/1000000.0); }
+    }
+  } else {
+    if (App_CopyMotor(&data.motor, now) == PX4LITE_OK) {
+      (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "Selected motor %u / %s / state %u", (unsigned int)s_motor_selected+1U, data.motor.control_mode ? "Assist" : "Direct", (unsigned int)data.motor.operation_state);
+      for (i = 0U; i < 4U; i++) { (void)snprintf(s_row_text[1U+i], UI_ROW_TEXT_LEN, "Motor %u / Target %u%% / Output %u%% / PWM %uus", (unsigned int)i+1U, (unsigned int)data.motor.base_percent[i], (unsigned int)data.motor.duty_percent[i], (unsigned int)data.motor.pulse_us[i]); }
+      (void)snprintf(s_row_text[5], UI_ROW_TEXT_LEN, "Command age %lums / %s", (unsigned long)(now-data.motor.header.sample_time_ms), s_control_feedback);
+    }
+  }
+  for (i = 0U; i < 6U; i++) { UiText(s_row_labels[i], s_row_text[i]); }
 }
 
 /** @brief 活动告警分页，全部 16 项可读；无数据与无活动告警独立表达。 */
@@ -1646,6 +1754,7 @@ static void Display_LvglLayout(void)
     case DISPLAY_HMI_PAGE_ALARM: Display_LvglLayoutAlarms(); break;
     case DISPLAY_HMI_PAGE_DIAGNOSTICS: Display_LvglLayoutDiagnostics(); break;
     case DISPLAY_HMI_PAGE_EVENT_HISTORY: Display_LvglLayoutHistory(); break;
+    case DISPLAY_HMI_PAGE_DETAILS: Display_LvglLayoutDetails(); break;
     case DISPLAY_HMI_PAGE_HIDDEN: Display_LvglLayoutComm(); break;
     default: break;
   }
@@ -1724,9 +1833,11 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
   if (s_layout_requested) { s_layout_requested = 0U; s_layout_stage = 1U; }
   if (App_RuntimeGetUs() - started_us < budget_us) {
     if (s_layout_stage) { Display_LvglLayout(); }
+    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DETAILS && (int32_t)(now_ms-s_details_due_ms) >= 0) { Display_LvglUpdateDetails(); s_details_due_ms = now_ms+200U; }
     else if ((int32_t)(now_ms - s_next_status_ms) >= 0) { Display_LvglUpdateModules(); s_next_status_ms = now_ms + 1000U; }
     else if (s_log_version != Display_PagesGetLogVersion()) { Display_LvglUpdateLogs(); }
   }
+  if (s_current_lvgl_page == DISPLAY_HMI_PAGE_MOTOR || s_current_lvgl_page == DISPLAY_HMI_PAGE_DETAILS) { UiText(s_freeze_label, s_control_feedback); }
   if (!s_layout_stage) {
     uint16_t scanned = 0U;
     while (scanned++ < DISPLAY_HMI_VAR_COUNT && App_RuntimeGetUs() - started_us < budget_us) {
@@ -1843,6 +1954,9 @@ Display_Result_t Display_LvglSetPage(Display_HmiPage_t page)
   if (page == DISPLAY_HMI_PAGE_LOGO) { page = DISPLAY_HMI_PAGE_SELF_CHECK; }
   if (page >= DISPLAY_HMI_PAGE_COUNT) { return DISPLAY_ERROR; }
   if (page <= DISPLAY_HMI_PAGE_ALARM) { s_primary_page = page; }
+  if (page == DISPLAY_HMI_PAGE_DETAILS) {
+    s_details_kind = s_primary_page == DISPLAY_HMI_PAGE_FLIGHT ? 2U : (s_primary_page == DISPLAY_HMI_PAGE_DATA ? 1U : (s_primary_page == DISPLAY_HMI_PAGE_MOTOR ? 3U : 0U));
+  }
   s_current_lvgl_page = page;
   s_layout_requested = 1U;
   return DISPLAY_OK;

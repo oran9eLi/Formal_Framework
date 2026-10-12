@@ -87,6 +87,8 @@ Px4Lite_Result_t Px4Lite_PopImu(Px4Lite_SensorImu_t *data);
  * @param[out] stats 输出缓冲区，不能为 NULL。
  */
 void Px4Lite_GetImuStats(Px4Lite_FifoStats_t *stats);
+/** @brief 复制最近发布IMU；不消费估计器FIFO。 */
+Px4Lite_Result_t Px4Lite_CopyImuLatest(Px4Lite_SensorImu_t *out);
 
 /**
  * @brief 原子发布一份完整气压计测量快照。
