@@ -7,8 +7,8 @@
 | 芯片 | STM32F407ZGTx |
 | 编译器 / Pack | ARMCC5.06 update5 build528 / Keil.STM32F4xx_DFP.2.17.0 |
 | 构建 | Rebuild All，退出码0，0 Error(s), 0 Warning(s)，35 s |
-| 源码身份 | M4实现提交f3039004193026debaf7c39dc8e1665bc16ef5a4；合并推送结果见M4验证记录 |
-| 发布性质 | M4开发候选；没有M4标签，不是稳定版或发布rc |
+| 源码身份 | M4实现f3039004193026debaf7c39dc8e1665bc16ef5a4；实现与文档96b99656b74802457e7588e9e2a18c8929e3d95f已合入并推送develop，远端SHA已核对 |
+| 发布性质 | 已推送源码的M4开发候选；固件附件仅本地归档，没有M4标签，不是稳定版或发布rc |
 | Code / RO / RW / ZI | 309408 / 105828 / 1728 / 119488 B |
 | 主SRAM用量 / 余量 | 121216 / 9856 B；heap_4固定40 KiB已在其中，运行峰值待测 |
 | CCM | LVGL固定40 KiB |
