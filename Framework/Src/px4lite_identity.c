@@ -1,6 +1,7 @@
 /**
  * @file px4lite_identity.c
- * @brief Unified identity handling for school labels, MAVLink routing and RemoteID.
+ * @brief Framework 层共享本次启动地址与 UID 派生长期身份。
+ * @details 依赖平台 UID，不读写 Flash；保存地址由配置服务在任何链路启动前加载。
  */
 
 #include "px4lite_identity.h"
@@ -252,21 +253,22 @@ uint32_t Px4Lite_IdentityGetUidHash(void)
   return s_cached_hash;
 }
 
-uint8_t Px4Lite_IdentityGetNumericId(void)
+static uint8_t s_startup_node_id;
+/** @brief UID 压缩所得默认地址，未读取 UID 时回退 1。 */
+uint8_t Px4Lite_IdentityGetDefaultNodeId(void)
 {
-  static uint8_t s_cached_id = 0U;
-  uint32_t hash;
-
-  if (s_cached_id != 0U) { return s_cached_id; }
-
-  hash = Px4Lite_IdentityGetUidHash();
-  if (hash == 0U) {
-    s_cached_id = 1U;
-  } else {
-    s_cached_id = (uint8_t)(1U + (hash % 250U));
-  }
-  return s_cached_id;
+  uint32_t hash=Px4Lite_IdentityGetUidHash();
+  return (hash==0U)?1U:(uint8_t)(1U+(hash%250U));
 }
+/** @brief 地址在启动阶段固定一次，所有链路共享且运行期不切换。 */
+uint8_t Px4Lite_IdentitySetStartupNodeId(uint8_t node_id)
+{
+  if(node_id==0U || node_id>250U || s_startup_node_id!=0U) { return 0U; }
+  s_startup_node_id=node_id; return 1U;
+}
+/** @brief 返回本次启动地址，保存配置不改变当前会话身份。 */
+uint8_t Px4Lite_IdentityGetNumericId(void)
+{ return (s_startup_node_id!=0U)?s_startup_node_id:Px4Lite_IdentityGetDefaultNodeId(); }
 
 uint8_t Px4Lite_IdentityGetNodeId(void)
 {

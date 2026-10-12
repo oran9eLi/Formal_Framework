@@ -1,6 +1,6 @@
 /**
  * @file px4lite_identity.h
- * @brief Framework identity helper for RemoteID, LoRa node id and MAVLink system id.
+ * @brief Framework 层 LoRa/RPi/RemoteID 启动地址与长期身份接口。
  *
  * @details
  * This module keeps the UID-derived school-visible DCDW-XXX label separate
@@ -19,6 +19,10 @@
 #define PX4LITE_IDENTITY_VENDOR_ID_MAX_LEN 21U
 
 const char *Px4Lite_IdentityGetDeviceName(void);
+/** @brief UID 默认地址，范围 1..250，不受保存设置影响。 */
+uint8_t Px4Lite_IdentityGetDefaultNodeId(void);
+/** @brief 仅启动阶段设置本次地址；运行期拒绝重复变更。 */
+uint8_t Px4Lite_IdentitySetStartupNodeId(uint8_t node_id);
 uint8_t Px4Lite_IdentityGetNumericId(void);
 uint8_t Px4Lite_IdentityGetNodeId(void);
 uint8_t Px4Lite_IdentityGetMavlinkSystemId(void);

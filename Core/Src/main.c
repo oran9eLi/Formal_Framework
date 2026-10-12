@@ -16,6 +16,7 @@
 #include "business_task_registry.h"
 #include "debug_console.h"
 #include "px4lite_app.h"
+#include "px4lite_comm_config.h"
 #include "px4lite_platform.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -50,6 +51,8 @@ int main(void)
     DBG_BOOT_PRINT("boot failed: Px4Lite_PlatformInit");
     Error_Handler();
   }
+  BSP_Watchdog_BootProgress();
+  Px4Lite_CommConfigInit();
   BSP_Watchdog_BootProgress();
   if (Px4Lite_AppInit() != pdPASS) {
     DBG_BOOT_PRINT("boot failed: Px4Lite_AppInit");

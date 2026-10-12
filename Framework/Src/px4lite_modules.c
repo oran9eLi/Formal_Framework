@@ -19,6 +19,7 @@
 #include "px4lite_topics.h"
 #include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
+#include "px4lite_lora_lab.h"
 #include "px4lite_remote_telemetry.h"
 #include "px4lite_remoteid_tx.h"
 #include "FreeRTOS.h"
@@ -1048,7 +1049,9 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
   uint8_t lora_unavailable;
 
   result = Px4Lite_LoRaService(now_ms);
+  Px4Lite_LoraLabRun(now_ms);
   rx_result = Px4Lite_MavlinkRxRun(now_ms);
+  Px4Lite_RemoteDiscoveryRun(now_ms);
   if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY)) { result = rx_result; }
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
     /* LoRa 半双工服务返回 BUSY 属于常态，发送器内部会再检查 DMA 是否空闲。

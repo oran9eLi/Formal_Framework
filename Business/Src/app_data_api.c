@@ -8,6 +8,8 @@
  */
 
 #include "app_data_api.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #include <string.h>
 #include "px4lite_alarm.h"
@@ -687,7 +689,7 @@ uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
   return out->any_valid;
 }
 
-uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
+static uint8_t App_CopyRemoteDisplaySnapshotImpl(App_DisplaySnapshot_t *out, uint32_t now_ms)
 {
   Px4Lite_CommDebugInfo_t comm;
   uint8_t module_loaded;
@@ -846,36 +848,11 @@ uint16_t App_CopyLocalMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity,
   return Px4Lite_LocalMsgLogCopy(entries, capacity, version, last_seq);
 }
 
-uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries, uint16_t capacity, uint16_t *last_seq, uint32_t now_ms)
-{
-  uint16_t count;
-  uint16_t i;
-
-  (void)now_ms;
-  if (last_seq != 0) { *last_seq = 0U; }
-  if ((entries == 0) || (capacity == 0U)) { return 0U; }
-  if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
-  Px4Lite_RemoteTelemetryRefreshFreshness(&s_display_remote_scratch, now_ms);
-  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) { return 0U; }
-
-  count = s_display_remote_scratch.remote_log_count;
-  if (count > capacity) { count = capacity; }
-  for (i = 0U; i < count; i++) {
-    uint16_t src_index = (uint16_t)(s_display_remote_scratch.remote_log_count - count + i);
-    entries[i] = s_display_remote_scratch.remote_log_entries[src_index];
-  }
-  if (last_seq != 0) { *last_seq = s_display_remote_scratch.remote_log_latest_seq; }
-  return count;
-}
-
-uint32_t App_GetRemoteMessageLogVersion(uint32_t now_ms)
-{
-  (void)now_ms;
-  if (Px4Lite_CopyRemoteTelemetry(&s_display_remote_scratch) != PX4LITE_OK) { return 0U; }
-  Px4Lite_RemoteTelemetryRefreshFreshness(&s_display_remote_scratch, now_ms);
-  if ((s_display_remote_scratch.valid_mask & PX4LITE_REMOTE_VALID_LOG) == 0U) { return 0U; }
-  return ((uint32_t)s_display_remote_scratch.remote_log_latest_seq << 1U) ^ s_display_remote_scratch.log_update_ms;
-}
+/** @brief LoRa 日志同步退出，兼容消费者明确得到空记录。 */
+uint16_t App_CopyRemoteMessageLog(Px4Lite_LogEntry_t *entries,uint16_t capacity,uint16_t *last_seq,uint32_t now_ms)
+{ (void)entries; (void)capacity; (void)now_ms; if(last_seq) { *last_seq=0U; } return 0U; }
+/** @brief 没有远端日志缓存或历史版本。 */
+uint32_t App_GetRemoteMessageLogVersion(uint32_t now_ms) { (void)now_ms; return 0U; }
 
 /** @brief 旧全局远端模式的兼容入口；启用请求明确拒绝，不改变发送调度。 */
 uint8_t App_SetRemoteViewEnabled(uint8_t enabled, uint32_t now_ms)
@@ -925,7 +902,7 @@ static App_RemoteNodeState_t App_MapRemoteNodeState(Px4Lite_RemoteNodeState_t st
   return APP_REMOTE_NODE_EMPTY;
 }
 
-Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t capacity, uint8_t *count, uint32_t now_ms)
+static Px4Lite_Result_t App_CopyRemoteNodeStatusesImpl(App_RemoteNodeView_t *out, uint8_t capacity, uint8_t *count, uint32_t now_ms)
 {
   uint8_t raw_count = 0U;
   uint8_t i;
@@ -939,7 +916,7 @@ Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t c
   if ((result != PX4LITE_OK) && (result != PX4LITE_NOT_READY)) { return result; }
 
   for (i = 0U; (i < raw_count) && (written < capacity); i++) {
-    if (s_remote_node_status_scratch[i].node_id == Px4Lite_IdentityGetNodeId()) { continue; }
+
     out[written].node_id = s_remote_node_status_scratch[i].node_id;
     out[written].system_id = s_remote_node_status_scratch[i].system_id;
     out[written].heartbeat_type = s_remote_node_status_scratch[i].heartbeat_type;
@@ -951,6 +928,10 @@ Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out, uint8_t c
     out[written].rx_sequence_lost_count = s_remote_node_status_scratch[i].rx_sequence_lost_count;
     out[written].rx_loss_rate_x10 = s_remote_node_status_scratch[i].rx_loss_rate_x10;
     out[written].reserved = 0U;
+    out[written].identity_known=s_remote_node_status_scratch[i].identity_known;
+    out[written].heartbeat_known=s_remote_node_status_scratch[i].heartbeat_known;
+    out[written].id_conflict=s_remote_node_status_scratch[i].id_conflict;
+    memcpy(out[written].product_id,s_remote_node_status_scratch[i].product_id,21U);
     written++;
   }
 
@@ -1167,3 +1148,74 @@ Px4Lite_RemoteMode_t App_GetRemoteDisplayMode(void)
 {
   return PX4LITE_REMOTE_MODE_LOCAL;
 }
+
+/** @brief UI 异步请求必须通过应用边界。 */
+Px4Lite_Result_t App_RequestLoraLab(const Px4Lite_LabRequest_t *request) { return Px4Lite_LoraLabRequest(request); }
+/** @brief 应用只复制已发布事实。 */
+void App_CopyLoraLab(Px4Lite_LabSnapshot_t *out) { Px4Lite_LoraLabCopy(out); }
+/** @brief 通过应用边界取得本机长期身份；长度由调用方指定。 */
+void App_FormatLocalProductId(char *out,uint8_t capacity) { Px4Lite_IdentityFormatVendorProductId(out,capacity); }
+/** @brief 单对端数据与发现身份分开读取，身份失败时不展示旧负载。 */
+static void App_CopyRemoteLabViewImpl(App_RemoteLabView_t *out,uint32_t now_ms)
+{
+  Px4Lite_RemoteNodeStatus_t selected;
+  uint32_t mask;
+  Px4Lite_RemoteTelemetry_t *r=&s_display_remote_scratch;
+  if(!out) { return; } memset(out,0,sizeof(*out));
+  out->heartbeat_age_ms=UINT32_MAX; out->data_age_ms=UINT32_MAX;
+  out->gnss_age_ms=UINT32_MAX; out->attitude_age_ms=UINT32_MAX;
+  out->power1_age_ms=UINT32_MAX; out->power2_age_ms=UINT32_MAX;
+  out->environment_age_ms=UINT32_MAX; out->humidity_age_ms=UINT32_MAX;
+  (void)Px4Lite_GetSelectedRemoteNode(&out->node_id);
+  if(Px4Lite_CopySelectedRemoteStatus(&selected,now_ms)==PX4LITE_OK) {
+    out->identity_known=selected.identity_known; out->id_conflict=selected.id_conflict;
+    memcpy(out->product_id,selected.product_id,21U);
+    if(selected.heartbeat_known) { out->heartbeat_age_ms=Px4Lite_ElapsedMs(now_ms,selected.last_heartbeat_ms); }
+  }
+  if(Px4Lite_CopyRemoteTelemetry(r)!=PX4LITE_OK || r->system_id!=out->node_id || out->id_conflict || !out->identity_known) { return; }
+  out->available=1U;
+  out->rx_frames=r->rx_frame_count; out->loss_rate_x10=r->rx_loss_rate_x10;
+  mask=r->navigation_valid_mask&~r->navigation_stale_mask;
+  if(mask&PX4LITE_NAV_VALID_POSITION) { out->valid_bits|=APP_LAB_POSITION; out->latitude_e7=r->latitude_e7; out->longitude_e7=r->longitude_e7; out->gnss_fix_type=r->gnss_fix_type; out->satellites_used=r->satellites_used; }
+  if(mask&PX4LITE_NAV_VALID_ALTITUDE) { out->valid_bits|=APP_LAB_ALTITUDE; out->altitude_mm=r->altitude_mm; }
+  if(mask&PX4LITE_NAV_VALID_VELOCITY) { out->valid_bits|=APP_LAB_VELOCITY; out->velocity_north_cms=r->velocity_north_cms; out->velocity_east_cms=r->velocity_east_cms; }
+  if((r->valid_mask&PX4LITE_REMOTE_VALID_ATTITUDE) && !(r->stale_mask&PX4LITE_REMOTE_VALID_ATTITUDE)) {
+    out->valid_bits|=APP_LAB_ATTITUDE; out->roll_deg100=r->roll_deg100; out->pitch_deg100=r->pitch_deg100; out->yaw_deg100=r->yaw_deg100;
+    out->roll_rate_dps100=r->roll_rate_dps100; out->pitch_rate_dps100=r->pitch_rate_dps100; out->yaw_rate_dps100=r->yaw_rate_dps100;
+  }
+  mask=r->battery_valid_mask&~r->battery_stale_mask;
+  if(mask&PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE1) { out->valid_bits|=APP_LAB_VOLTAGE1; out->voltage_mv=r->voltage_mv; }
+  if(mask&PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE2) { out->valid_bits|=APP_LAB_VOLTAGE2; out->voltage2_mv=r->voltage2_mv; }
+  if(mask&PX4LITE_REMOTE_BATTERY_VALID_CURRENT1) { out->valid_bits|=APP_LAB_CURRENT1; out->current_ma=r->current_ma; }
+  if(mask&PX4LITE_REMOTE_BATTERY_VALID_CURRENT2) { out->valid_bits|=APP_LAB_CURRENT2; out->current2_ma=r->current2_ma; }
+  if(mask&PX4LITE_REMOTE_BATTERY_VALID_PERCENT1) { out->valid_bits|=APP_LAB_PERCENT1; out->battery_percent=r->battery_percent; }
+  if(mask&PX4LITE_REMOTE_BATTERY_VALID_PERCENT2) { out->valid_bits|=APP_LAB_PERCENT2; out->battery2_percent=r->battery2_percent; }
+  mask=r->environment_valid_mask&~r->environment_stale_mask;
+  if(mask&PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE) { out->valid_bits|=APP_LAB_ENVIRONMENT; out->pressure_pa=(uint32_t)r->pressure_pa; out->temperature_deg100=(int32_t)(r->temperature_c*100.0f); }
+  if(mask&PX4LITE_REMOTE_ENV_VALID_HUMIDITY) { out->valid_bits|=APP_LAB_HUMIDITY; out->humidity_pct100=(uint32_t)(r->relative_humidity_pct*100.0f); }
+  if(r->navigation_valid_mask&PX4LITE_NAV_VALID_POSITION) { out->gnss_age_ms=Px4Lite_ElapsedMs(now_ms,r->position_update_ms); }
+  if(r->valid_mask&PX4LITE_REMOTE_VALID_ATTITUDE) { out->attitude_age_ms=Px4Lite_ElapsedMs(now_ms,r->attitude_update_ms); }
+  if(r->battery_valid_mask&PX4LITE_REMOTE_BATTERY_VALID_PRIMARY) { out->power1_age_ms=Px4Lite_ElapsedMs(now_ms,r->battery1_update_ms); }
+  if(r->battery_valid_mask&PX4LITE_REMOTE_BATTERY_VALID_SECONDARY) { out->power2_age_ms=Px4Lite_ElapsedMs(now_ms,r->battery2_update_ms); }
+  if(r->environment_valid_mask&PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE) { out->environment_age_ms=Px4Lite_ElapsedMs(now_ms,r->pressure_temperature_update_ms); }
+  if(r->environment_valid_mask&PX4LITE_REMOTE_ENV_VALID_HUMIDITY) { out->humidity_age_ms=Px4Lite_ElapsedMs(now_ms,r->humidity_update_ms); }
+  /* 数据年龄来自真实实验域，心跳不能刷新主数据年龄。 */
+  if(r->navigation_valid_mask&PX4LITE_NAV_VALID_POSITION) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->position_update_ms); }
+  if((r->valid_mask&PX4LITE_REMOTE_VALID_ATTITUDE) && Px4Lite_ElapsedMs(now_ms,r->attitude_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->attitude_update_ms); }
+  if((r->battery_valid_mask&PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE1) && Px4Lite_ElapsedMs(now_ms,r->battery1_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->battery1_update_ms); }
+  if((r->battery_valid_mask&PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE2) && Px4Lite_ElapsedMs(now_ms,r->battery2_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->battery2_update_ms); }
+  if((r->environment_valid_mask&PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE) && Px4Lite_ElapsedMs(now_ms,r->pressure_temperature_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->pressure_temperature_update_ms); }
+  if((r->environment_valid_mask&PX4LITE_REMOTE_ENV_VALID_HUMIDITY) && Px4Lite_ElapsedMs(now_ms,r->humidity_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->humidity_update_ms); }
+}
+
+/** @brief 任务之间串行使用静态转换 scratch；计算不关闭中断，不含阻塞 I/O。 */
+uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out,uint32_t now_ms)
+{ uint8_t result; vTaskSuspendAll(); result=App_CopyRemoteDisplaySnapshotImpl(out,now_ms); (void)xTaskResumeAll(); return result; }
+
+/** @brief 任务之间串行使用静态转换 scratch；计算不关闭中断，不含阻塞 I/O。 */
+Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out,uint8_t capacity,uint8_t *count,uint32_t now_ms)
+{ Px4Lite_Result_t result; vTaskSuspendAll(); result=App_CopyRemoteNodeStatusesImpl(out,capacity,count,now_ms); (void)xTaskResumeAll(); return result; }
+
+/** @brief 任务之间串行使用静态转换 scratch；计算不关闭中断，不含阻塞 I/O。 */
+void App_CopyRemoteLabView(App_RemoteLabView_t *out,uint32_t now_ms)
+{ vTaskSuspendAll(); App_CopyRemoteLabViewImpl(out,now_ms); (void)xTaskResumeAll(); }

@@ -195,6 +195,19 @@ static const LocalMsgLog_CatalogEntry_t s_catalog[PX4LITE_LOGMSG_COUNT] = {
   {"Alarm raised", 1U}, /* ALARM_RAISED */
   {"Alarm cleared", 0U}, /* ALARM_CLEARED */
   {"Alarm severity changed", 1U}, /* ALARM_UPDATED */
+  {"LoRa experiment started", 0U}, /* LAB_START */
+  {"LoRa experiment stopped", 0U}, /* LAB_STOP */
+  {"LoRa send requested", 0U}, /* LAB_SEND */
+  {"Node ID saved", 0U}, /* NODE_SAVED */
+  {"Node ID save failed", 1U}, /* NODE_SAVE_FAILED */
+  {"Channel verified", 0U}, /* CHANNEL_APPLIED */
+  {"Channel apply failed", 1U}, /* CHANNEL_FAILED */
+  {"Node ID conflict", 1U}, /* ID_CONFLICT */
+  {"LoRa send: no fresh data", 1U}, /* LAB_NO_DATA */
+  {"LoRa experiment interrupted", 1U}, /* LAB_ABORTED */
+  {"Remote node discovered", 0U}, /* REMOTE_DISCOVERED */
+  {"Remote heartbeat stale", 1U}, /* REMOTE_STALE */
+  {"Remote node seen again", 0U}, /* REMOTE_RESTORED */
 };
 /** @brief 返回只读事件短文案；未知消息保持显式未知。 */
 const char *Px4Lite_LogMessageText(uint16_t message_id)

@@ -114,4 +114,10 @@ void BSP_LoRa_UartErrorIrqHandler(uint32_t sr_snapshot);
  */
 uint8_t BSP_LoRa_ConsumeRecoverRxRequest(void);
 
+/** @brief USART3 TX 完成回调累计数，Abort 不增加。 */
+uint32_t BSP_LoRa_GetTxCompleteCount(void);
+/** @brief UART 错误中断累计数，用于配置事务异常退出。 */
+uint32_t BSP_LoRa_GetUartErrorCount(void);
+/** @brief 丢弃当前未读字节；只同步 DMA 边界，不解析协议。 */
+void BSP_LoRa_ResetRxBoundary(void);
 #endif

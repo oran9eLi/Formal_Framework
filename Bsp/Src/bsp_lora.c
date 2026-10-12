@@ -31,6 +31,7 @@ static volatile uint32_t s_uart_last_error_sr;
 
 static uint8_t s_tx_buf[BSP_LORA_TX_BUF_SIZE];
 static volatile uint8_t s_tx_busy;
+static volatile uint32_t s_tx_complete_count;
 
 /**
  * @brief 将当前循环 DMA 写入位置同步到软件环形缓冲。
@@ -372,7 +373,7 @@ void BSP_LoRa_TxDmaIrqHandler(void)
  */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == BSP_LORA_UART) { s_tx_busy = 0U; }
+  if (huart->Instance == BSP_LORA_UART) { s_tx_complete_count++; s_tx_busy = 0U; }
   BSP_RemoteId_TxCompleteCallback(huart);
 }
 
@@ -475,4 +476,15 @@ void BSP_LoRa_RecoverRx(void)
   __HAL_DMA_DISABLE_IT(&hdma_lora_rx, DMA_IT_HT);
   __HAL_UART_ENABLE_IT(&s_lora_uart, UART_IT_ERR);
   __HAL_UART_ENABLE_IT(&s_lora_uart, UART_IT_IDLE);
+}
+
+/** @brief 只读 UART TC 累计事实。 */
+uint32_t BSP_LoRa_GetTxCompleteCount(void) { return s_tx_complete_count; }
+/** @brief 只读 UART 错误累计事实。 */
+uint32_t BSP_LoRa_GetUartErrorCount(void) { return s_uart_error_count; }
+/** @brief 在短临界区同步 DMA 接收位置，配置字节不进入生产解析器。 */
+void BSP_LoRa_ResetRxBoundary(void)
+{
+  uint32_t key=__get_PRIMASK(); __disable_irq(); BSP_LoRa_UpdateRxPosition(); s_rx_tail=s_rx_head;
+  if(key==0U) { __enable_irq(); }
 }

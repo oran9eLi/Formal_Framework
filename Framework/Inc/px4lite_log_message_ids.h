@@ -186,7 +186,21 @@ typedef enum {
   PX4LITE_LOGMSG_ALARM_RAISED = 172, /**< 单源告警触发；严重度取告警事实，active=1。 */
   PX4LITE_LOGMSG_ALARM_CLEARED = 173, /**< 单源故障清除；严重度 0，active=0。 */
   PX4LITE_LOGMSG_ALARM_UPDATED = 174, /**< 单源告警严重度变化；严重度取新事实，active=1。 */
+  PX4LITE_LOGMSG_LAB_START, /**< LoRa experiment started；严重度 0。 */
+  PX4LITE_LOGMSG_LAB_STOP, /**< LoRa experiment stopped；严重度 0。 */
+  PX4LITE_LOGMSG_LAB_SEND, /**< LoRa send requested；严重度 0。 */
+  PX4LITE_LOGMSG_NODE_SAVED, /**< Node ID saved: reboot required；严重度 0。 */
+  PX4LITE_LOGMSG_NODE_SAVE_FAILED, /**< Node ID save failed；严重度 1。 */
+  PX4LITE_LOGMSG_CHANNEL_APPLIED, /**< Channel verified；严重度 0。 */
+  PX4LITE_LOGMSG_CHANNEL_FAILED, /**< Channel apply failed；严重度 1。 */
+  PX4LITE_LOGMSG_ID_CONFLICT, /**< Node ID conflict；严重度 1。 */
+  PX4LITE_LOGMSG_LAB_NO_DATA, /**< LoRa send: no fresh data；严重度 1。 */
+  PX4LITE_LOGMSG_LAB_ABORTED, /**< LoRa experiment interrupted；严重度 1。 */
+  PX4LITE_LOGMSG_REMOTE_DISCOVERED, /**< Remote node discovered；严重度 0。 */
+  PX4LITE_LOGMSG_REMOTE_STALE, /**< Remote heartbeat stale；严重度 1。 */
+  PX4LITE_LOGMSG_REMOTE_RESTORED, /**< Remote node seen again；严重度 0。 */
   PX4LITE_LOGMSG_COUNT
+/* COUNT 之前只允许追加新编号，RPi 日志表已有编号保持。 */
 } Px4Lite_LogMessageId_t;
 /** @brief 查询短英文事实；非法编号返回 "Unknown event"。 */
 const char *Px4Lite_LogMessageText(uint16_t message_id);

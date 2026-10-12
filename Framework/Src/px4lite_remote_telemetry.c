@@ -1,296 +1,220 @@
 /**
  * @file px4lite_remote_telemetry.c
- * @brief Framework层远程显示模式、远端节点表和远程遥测快照管理实现。
- *
- * @details
- * 本文件只保存 MAVLink RX 解码后的远端只读快照，不解析 MAVLink 字节流，也不直接发送
- * COMMAND_LONG。Comm task 是写入者，Business/Display 是读取者；临界区内只复制固定大小
- * 快照和更新序号，不执行阻塞 I/O。
+ * @brief Framework 层八项发现摘要和唯一活动对端快照。
+ * @details CommTask 观察身份并发布活动数据，UI 人工选择；没有控制、租约或自动选择。
+ * 调度互斥保护发现/选择的计算，中断保持可用；固定容量，无运行期分配。
  */
-
 #include "px4lite_remote_telemetry.h"
-
-#include <string.h>
-
-#include "FreeRTOS.h"
-#include "task.h"
-#include "px4lite_config.h"
 #include "px4lite_identity.h"
 #include "px4lite_platform.h"
-
-static Px4Lite_RemoteMode_t s_mode;
-static Px4Lite_RemoteTelemetry_t s_remote[PX4LITE_REMOTE_NODE_MAX];
-static uint32_t s_remote_sequence[PX4LITE_REMOTE_NODE_MAX];
-static uint8_t s_slot_node[PX4LITE_REMOTE_NODE_MAX]; /* 每槽绑定的对端 node_id(=sysid,1..250)，0=空闲 */
-static uint8_t s_selected_remote_node_id;
-static uint32_t s_mode_changed_ms;
-
-/**
- * @brief 在调用者已持有临界区时按节点身份查找固定槽。
- * node_id(对端 sysid) 范围 1..250，无法直接索引 NODE_MAX 个槽的小表，
- * 改为动态槽位分配：本函数仅查找已绑定该 node_id 的槽(读取/选择用，不分配)，找不到返回 0。
- */
-static uint8_t RemoteTelemetry_NodeIdToIndex(uint8_t node_id, uint8_t *index)
+#include "px4lite_local_msglog.h"
+#include "px4lite_log_message_ids.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include <string.h>
+#define IDENTITY_MAX_AGE_MS PX4LITE_LORA_LAB_IDENTITY_MAX_AGE_MS
+/** @brief 同地址的不同长期身份各占一个小槽。 */
+typedef struct {
+  Px4Lite_RemoteNodeStatus_t view; /**< 轻量摘要，不含完整遥测。 */
+  uint32_t seen_ms; /**< 最近帧时间，单位 ms。 */
+  uint32_t identity_ms; /**< 最近 BASIC_ID 时间，单位 ms。 */
+  uint32_t conflict_ms; /**< 满表冲突时间，单位 ms。 */
+  uint8_t overflow_conflict; /**< 无空槽仍保留冲突闭锁。 */
+  uint8_t sequence_seen; /**< 是否有序号基准。 */
+  uint8_t sequence; /**< 最近序号 0..255。 */
+  uint8_t heartbeat_seen; /**< 时间 0 与从未收到心跳区分。 */
+  uint8_t link_stale; /**< 后台连接事件过期状态。 */
+} RemoteDiscovery_t;
+static RemoteDiscovery_t s_discovery[PX4LITE_REMOTE_NODE_MAX];
+static Px4Lite_RemoteTelemetry_t s_active;
+static uint32_t s_epoch,s_publish_sequence;
+static uint8_t s_selected;
+static char s_local_product[21];
+/** @brief 清缓存并变更世代，选择前的 RX scratch 不得回填。 */
+static void Remote_ClearActive(void) { memset(&s_active,0,sizeof(s_active)); s_epoch++; }
+/** @brief 调度互斥内只比较固定八项身份。 */
+static uint8_t Remote_Conflict(uint8_t node,uint32_t now)
 {
-  uint8_t i;
-
-  if ((index == 0) || (node_id == 0U)) { return 0U; }
-  for (i = 0U; i < PX4LITE_REMOTE_NODE_MAX; i++) {
-    if (s_slot_node[i] == node_id) { *index = i; return 1U; }
+  uint8_t i,j;
+  for(i=0U;i<PX4LITE_REMOTE_NODE_MAX;i++) {
+    const RemoteDiscovery_t *a=&s_discovery[i];
+    if(a->view.node_id!=node) { continue; }
+    if(a->overflow_conflict && Px4Lite_ElapsedMs(now,a->conflict_ms)<=IDENTITY_MAX_AGE_MS) { return 1U; }
+    if(!a->view.identity_known || Px4Lite_ElapsedMs(now,a->identity_ms)>IDENTITY_MAX_AGE_MS) { continue; }
+    if(node==Px4Lite_IdentityGetNodeId()) { return 1U; }
+    for(j=(uint8_t)(i+1U);j<PX4LITE_REMOTE_NODE_MAX;j++) {
+      const RemoteDiscovery_t *b=&s_discovery[j];
+      if(b->view.node_id==node && b->view.identity_known && Px4Lite_ElapsedMs(now,b->identity_ms)<=IDENTITY_MAX_AGE_MS && memcmp(a->view.product_id,b->view.product_id,20U)!=0) { return 1U; }
+    }
   }
   return 0U;
 }
-
-/**
- * @brief 写者持有临界区时分配槽，按相对 now_ms 的年龄淘汰最旧槽。
- * 收帧写入用：查找已绑定槽；无则分配空槽；表满则淘汰 last_rx_ms 最旧的槽。
- * 分配/淘汰时清空该槽的旧遥测与序号，避免残留脏数据。
- */
-static uint8_t RemoteTelemetry_AllocSlot(uint8_t node_id, uint8_t *index, uint32_t now_ms)
+/** @brief 在调度互斥内解析唯一新鲜身份；冲突/未知返回容量哨兵。 */
+static uint8_t Remote_IdentityIndex(uint8_t node,uint32_t now)
 {
   uint8_t i;
-  uint8_t oldest = 0U;
-  uint32_t oldest_age = 0U;
-  uint32_t age;
-
-  if ((index == 0) || (node_id == 0U)) { return 0U; }
-  if (RemoteTelemetry_NodeIdToIndex(node_id, index) != 0U) { return 1U; }
-
-  for (i = 0U; i < PX4LITE_REMOTE_NODE_MAX; i++) {
-    if (s_slot_node[i] == 0U) {
-      s_slot_node[i] = node_id;
-      memset(&s_remote[i], 0, sizeof(s_remote[i]));
-      s_remote_sequence[i] = 0U;
-      *index = i;
-      return 1U;
-    }
+  if(!node || Remote_Conflict(node,now)) { return PX4LITE_REMOTE_NODE_MAX; }
+  for(i=0U;i<PX4LITE_REMOTE_NODE_MAX;i++) {
+    if(s_discovery[i].view.node_id==node && s_discovery[i].view.identity_known && Px4Lite_ElapsedMs(now,s_discovery[i].identity_ms)<=IDENTITY_MAX_AGE_MS) { return i; }
   }
-
-  for (i = 0U; i < PX4LITE_REMOTE_NODE_MAX; i++) {
-    age = Px4Lite_ElapsedMs(now_ms, s_remote[i].last_rx_ms);
-    if (age > oldest_age) { oldest_age = age; oldest = i; }
-  }
-  s_slot_node[oldest] = node_id;
-  memset(&s_remote[oldest], 0, sizeof(s_remote[oldest]));
-  s_remote_sequence[oldest] = 0U;
-  *index = oldest;
-  return 1U;
+  return PX4LITE_REMOTE_NODE_MAX;
 }
-
-/** @brief 初始化为未选中任何节点。 */
-static uint8_t RemoteTelemetry_DefaultNode(void)
-{
-  return 0U; /* 0 = 无选中 */
-}
-
-/** @brief 只比较已经收到的数据域，以无符号年龄选择最近一次真实数据时刻。 */
-static uint32_t RemoteTelemetry_LastDataMs(const Px4Lite_RemoteTelemetry_t *remote, uint32_t now_ms)
-{
-  uint32_t last_data_ms = 0U;
-  uint32_t best_age = UINT32_MAX;
-  uint32_t age;
-  uint32_t i;
-  uint32_t times[8];
-  static const uint32_t bits[8] = {PX4LITE_REMOTE_VALID_NAVIGATION, PX4LITE_REMOTE_VALID_ATTITUDE,
-    PX4LITE_REMOTE_VALID_ENVIRONMENT, PX4LITE_REMOTE_VALID_BATTERY, PX4LITE_REMOTE_VALID_MODULES,
-    PX4LITE_REMOTE_VALID_ALARM, PX4LITE_REMOTE_VALID_MOTOR, PX4LITE_REMOTE_VALID_LOG};
-  times[0] = remote->navigation_update_ms; times[1] = remote->attitude_update_ms;
-  times[2] = remote->environment_update_ms; times[3] = remote->battery_update_ms;
-  times[4] = remote->modules_update_ms; times[5] = remote->alarm_update_ms;
-  times[6] = remote->motor_update_ms; times[7] = remote->log_update_ms;
-  for (i = 0U; i < 8U; i++) {
-    age = Px4Lite_ElapsedMs(now_ms, times[i]);
-    if (((remote->valid_mask & bits[i]) != 0U) && (age < best_age)) { best_age = age; last_data_ms = times[i]; }
-  }
-  return last_data_ms;
-}
-
-/** @brief 初始化八槽遥测缓存与本机模式，所有共享状态同区复位。 */
+/** @brief 必须选中且身份解析成功；接收、状态和显示共用同一规则。 */
+static uint8_t Remote_Accept(uint8_t node,uint32_t now)
+{ return (node==s_selected && Remote_IdentityIndex(node,now)<PX4LITE_REMOTE_NODE_MAX)?1U:0U; }
+/** @brief 初始化本机长期身份与未选中状态。 */
 void Px4Lite_RemoteTelemetryInit(uint32_t now_ms)
-{
-  taskENTER_CRITICAL();
-  memset(s_remote, 0, sizeof(s_remote));
-  memset(s_remote_sequence, 0, sizeof(s_remote_sequence));
-  memset(s_slot_node, 0, sizeof(s_slot_node));
-  s_mode = PX4LITE_REMOTE_MODE_LOCAL;
-  s_selected_remote_node_id = RemoteTelemetry_DefaultNode();
-  s_mode_changed_ms = now_ms;
-  taskEXIT_CRITICAL();
-}
-
-/** @brief 链路复位撤销节点绑定、缓存和选择状态。 */
+{ Px4Lite_IdentityFormatVendorProductId(s_local_product,sizeof(s_local_product)); Px4Lite_RemoteTelemetryResetLink(now_ms); }
+/** @brief 本机硬件断开清表和选择；其他页面继续展示 local。 */
 void Px4Lite_RemoteTelemetryResetLink(uint32_t now_ms)
+{ (void)now_ms; vTaskSuspendAll(); memset(s_discovery,0,sizeof(s_discovery)); s_selected=0U; Remote_ClearActive(); (void)xTaskResumeAll(); }
+/** @brief 旧全局 remote 模式退出，只接受 LOCAL。 */
+Px4Lite_Result_t Px4Lite_RemoteTelemetrySetMode(Px4Lite_RemoteMode_t mode,uint32_t now_ms)
+{ (void)now_ms; return (mode==PX4LITE_REMOTE_MODE_LOCAL)?PX4LITE_OK:PX4LITE_NOT_READY; }
+/** @brief 一级页面数据源固定 local。 */
+Px4Lite_RemoteMode_t Px4Lite_RemoteTelemetryGetMode(void) { return PX4LITE_REMOTE_MODE_LOCAL; }
+/** @brief 只维护发现摘要；同地址不同长期身份不能覆盖已有身份。 */
+void Px4Lite_RemoteObserve(uint8_t node,uint8_t component,uint8_t sequence,uint32_t msg,const char *identity,uint32_t now)
 {
-  taskENTER_CRITICAL();
-  memset(s_remote, 0, sizeof(s_remote));
-  memset(s_remote_sequence, 0, sizeof(s_remote_sequence));
-  memset(s_slot_node, 0, sizeof(s_slot_node));
-  s_mode = PX4LITE_REMOTE_MODE_LOCAL;
-  s_selected_remote_node_id = RemoteTelemetry_DefaultNode();
-  s_mode_changed_ms = now_ms;
-  taskEXIT_CRITICAL();
-}
-
-/** @brief 设置合法显示模式并记录真实毫秒变更时刻。 */
-Px4Lite_Result_t Px4Lite_RemoteTelemetrySetMode(Px4Lite_RemoteMode_t mode, uint32_t now_ms)
-{
-  if ((mode != PX4LITE_REMOTE_MODE_LOCAL) && (mode != PX4LITE_REMOTE_MODE_REMOTE)) { return PX4LITE_INVALID_PARAM; }
-
-  taskENTER_CRITICAL();
-  if (s_mode != mode) {
-    s_mode = mode;
-    s_mode_changed_ms = now_ms;
+  uint8_t i,index=PX4LITE_REMOTE_NODE_MAX,empty=PX4LITE_REMOTE_NODE_MAX,oldest=PX4LITE_REMOTE_NODE_MAX,conflict,old_conflict,changed=0U,discovered=0U,restored=0U;
+  uint32_t age,max_age=0U;
+  RemoteDiscovery_t *entry;
+  if(!node || node>250U || (identity && memcmp(identity,s_local_product,20U)==0)) { return; }
+  vTaskSuspendAll(); old_conflict=Remote_Conflict(node,now);
+  if(!identity) {
+    /* 无产品身份的负载不能归属到冲突中的任一设备；冲突消退后归属当前新鲜槽。 */
+    if(old_conflict) { (void)xTaskResumeAll(); return; }
+    index=Remote_IdentityIndex(node,now);
   }
-  taskEXIT_CRITICAL();
-  return PX4LITE_OK;
-}
-
-/** @brief 复制当前显示模式。 */
-Px4Lite_RemoteMode_t Px4Lite_RemoteTelemetryGetMode(void)
-{
-  Px4Lite_RemoteMode_t mode;
-
-  taskENTER_CRITICAL();
-  mode = s_mode;
-  taskEXIT_CRITICAL();
-  return mode;
-}
-
-/** @brief 同一临界区内完成身份查找、核验与复制，未绑定节点返回空快照。 */
-Px4Lite_Result_t Px4Lite_RemoteTelemetryCopyNode(uint8_t node_id, Px4Lite_RemoteTelemetry_t *out)
-{
-  uint8_t index;
-
-  if (out == 0) { return PX4LITE_INVALID_PARAM; }
-  /* 未知 node_id(尚无绑定槽) 返回 NOT_READY 而非 INVALID_PARAM：
-     收帧首帧走此路径时，RxRun 需据 NOT_READY 清零后继续 decode+CommitNode 才能首次分配槽。
-     若返回 INVALID_PARAM，RxRun 会提前 return，新节点永远建不了槽、进不了表。 */
-  taskENTER_CRITICAL();
-  if (RemoteTelemetry_NodeIdToIndex(node_id, &index) == 0U) {
-    taskEXIT_CRITICAL();
-    memset(out, 0, sizeof(*out));
-    return PX4LITE_NOT_READY;
+  for(i=0U;i<PX4LITE_REMOTE_NODE_MAX;i++) {
+    entry=&s_discovery[i];
+    if(index==PX4LITE_REMOTE_NODE_MAX && entry->view.node_id==node &&
+       (!identity || !entry->view.identity_known || memcmp(entry->view.product_id,identity,20U)==0)) { index=i; break; }
+    if(!entry->view.node_id) { empty=i; }
+    age=Px4Lite_ElapsedMs(now,entry->seen_ms);
+    if(entry->view.node_id!=s_selected && (oldest==PX4LITE_REMOTE_NODE_MAX || age>max_age)) { oldest=i; max_age=age; }
   }
-
-  if ((s_remote[index].header.valid == 0U) || (s_remote[index].system_id != node_id)) {
-    taskEXIT_CRITICAL();
-    memset(out, 0, sizeof(*out));
-    return PX4LITE_NOT_READY;
+  if(index==PX4LITE_REMOTE_NODE_MAX) {
+    index=(empty<PX4LITE_REMOTE_NODE_MAX)?empty:oldest;
+    if(index==PX4LITE_REMOTE_NODE_MAX) {
+      if(identity) { for(i=0U;i<PX4LITE_REMOTE_NODE_MAX;i++) { if(s_discovery[i].view.node_id==node) { s_discovery[i].overflow_conflict=1U; s_discovery[i].conflict_ms=now; } } }
+      Remote_ClearActive(); (void)xTaskResumeAll(); return;
+    }
+    memset(&s_discovery[index],0,sizeof(s_discovery[index])); s_discovery[index].view.node_id=node;
+    discovered=1U;
   }
-  *out = s_remote[index];
-  taskEXIT_CRITICAL();
-  return PX4LITE_OK;
+  entry=&s_discovery[index]; entry->seen_ms=now; entry->view.system_id=node; entry->view.component_id=component;
+  if(entry->link_stale && (entry->heartbeat_seen?(msg==0U):1U)) { entry->link_stale=0U; restored=1U; }
+  if(identity) {
+    if(Px4Lite_ElapsedMs(now,entry->identity_ms)>IDENTITY_MAX_AGE_MS) { changed=1U; }
+    if(!entry->view.identity_known) { memcpy(entry->view.product_id,identity,20U); entry->view.product_id[20]='\0'; entry->view.identity_known=1U; changed=1U; }
+    entry->identity_ms=now;
+  }
+  if(entry->sequence_seen) {
+    uint8_t delta=(uint8_t)(sequence-entry->sequence);
+    if(delta>1U && delta<=64U) { entry->view.rx_sequence_lost_count+=(uint32_t)(delta-1U); }
+  }
+  entry->sequence_seen=1U; entry->sequence=sequence; entry->view.rx_frame_count++;
+  if(msg==0U) { entry->heartbeat_seen=1U; entry->view.heartbeat_known=1U; entry->view.last_heartbeat_ms=now; }
+  else if(msg!=12900U) { entry->view.last_data_ms=now; }
+  conflict=Remote_Conflict(node,now);
+  if(node==s_selected && (conflict || changed || !Remote_Accept(node,now))) { Remote_ClearActive(); }
+  (void)xTaskResumeAll();
+  if(discovered) { Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_REMOTE_DISCOVERED,now,0U,PX4LITE_MODULE_LORA,1U); }
+  if(restored) { Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_REMOTE_RESTORED,now,0U,PX4LITE_MODULE_LORA,0U); }
+  if(conflict && !old_conflict) { Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_ID_CONFLICT,now,0U,PX4LITE_MODULE_LORA,1U); }
 }
-
-/** @brief Comm 单写者提交快照；槽位分配、重绑定与发布不可被读者拆开观察。 */
-Px4Lite_Result_t Px4Lite_RemoteTelemetryCommitNode(uint8_t node_id, const Px4Lite_RemoteTelemetry_t *snapshot, uint32_t now_ms)
+/** @brief 定期产生失联事实；正常心跳间隔不会重复写日志，计算期间不关闭中断。 */
+void Px4Lite_RemoteDiscoveryRun(uint32_t now)
 {
-  Px4Lite_RemoteTelemetry_t local;
-  uint8_t index;
-
-  if ((snapshot == 0) || (node_id == 0U) || (node_id > 250U) || (snapshot->system_id != node_id)) { return PX4LITE_INVALID_PARAM; }
-  if (node_id == (uint8_t)Px4Lite_IdentityGetNodeId()) { return PX4LITE_INVALID_PARAM; }
-
-  local = *snapshot;
-  Px4Lite_RemoteTelemetryRefreshFreshness(&local, now_ms);
-  local.header.sample_time_ms = (local.header.sample_time_ms != 0U) ? local.header.sample_time_ms : local.last_rx_ms;
-  local.header.publish_time_ms = now_ms;
-  local.header.flags = PX4LITE_DATA_VALID;
-  local.header.valid = 1U;
-  local.header.quality = 100U;
-
-  taskENTER_CRITICAL();
-  if (RemoteTelemetry_AllocSlot(node_id, &index, now_ms) == 0U) { taskEXIT_CRITICAL(); return PX4LITE_INVALID_PARAM; }
-  local.header.sequence = ++s_remote_sequence[index];
-  s_remote[index] = local;
-  taskEXIT_CRITICAL();
-  return PX4LITE_OK;
+  uint8_t i,stale,events=0U;
+  vTaskSuspendAll();
+  for(i=0U;i<PX4LITE_REMOTE_NODE_MAX;i++) {
+    RemoteDiscovery_t *entry=&s_discovery[i];
+    if(!entry->view.node_id) { continue; }
+    stale=(entry->heartbeat_seen)?(Px4Lite_ElapsedMs(now,entry->view.last_heartbeat_ms)>PX4LITE_REMOTE_HEARTBEAT_STALE_MS):(Px4Lite_ElapsedMs(now,entry->seen_ms)>IDENTITY_MAX_AGE_MS);
+    if(stale && !entry->link_stale) { entry->link_stale=1U; events++; }
+  }
+  (void)xTaskResumeAll();
+  while(events) { Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_REMOTE_STALE,now,0U,PX4LITE_MODULE_LORA,1U); events--; }
 }
-
-/** @brief 复制选中节点，并按调用时真实毫秒重新判断所有字段年龄。 */
+/** @brief RX 解码准入，提交时必须再次核验。 */
+uint8_t Px4Lite_RemoteCanAccept(uint8_t node,uint32_t now)
+{ uint8_t result; vTaskSuspendAll(); result=Remote_Accept(node,now); (void)xTaskResumeAll(); return result; }
+/** @brief 选中身份明确时复制唯一缓存及世代；尚无数据也返回 OK。 */
+Px4Lite_Result_t Px4Lite_RemoteTelemetryCopyNode(uint8_t node,Px4Lite_RemoteTelemetry_t *out)
+{
+  uint8_t accept; uint32_t now=Px4Lite_PlatformGetMs();
+  if(!out) { return PX4LITE_INVALID_PARAM; }
+  vTaskSuspendAll(); accept=Remote_Accept(node,now);
+  if(accept) { *out=s_active; out->observation_generation=s_epoch; } else { memset(out,0,sizeof(*out)); }
+  (void)xTaskResumeAll(); return accept?PX4LITE_OK:PX4LITE_NOT_READY;
+}
+/** @brief 防止选择交错或发现冲突后旧 scratch 污染活动对象。 */
+Px4Lite_Result_t Px4Lite_RemoteTelemetryCommitNode(uint8_t node,const Px4Lite_RemoteTelemetry_t *snapshot,uint32_t now)
+{
+  if(!snapshot || snapshot->system_id!=node) { return PX4LITE_INVALID_PARAM; }
+  vTaskSuspendAll();
+  if(!Remote_Accept(node,now) || snapshot->observation_generation!=s_epoch) { (void)xTaskResumeAll(); return PX4LITE_NOT_READY; }
+  s_active=*snapshot; s_active.header.sequence=++s_publish_sequence; (void)xTaskResumeAll(); return PX4LITE_OK;
+}
+/** @brief 应用仅复制有效活动数据，再按真实时刻标记字段过期。 */
 Px4Lite_Result_t Px4Lite_CopyRemoteTelemetry(Px4Lite_RemoteTelemetry_t *out)
 {
-  uint8_t node_id;
-  Px4Lite_Result_t result;
-
-  if (out == 0) { return PX4LITE_INVALID_PARAM; }
-
-  taskENTER_CRITICAL();
-  node_id = s_selected_remote_node_id;
-  taskEXIT_CRITICAL();
-
-  result = Px4Lite_RemoteTelemetryCopyNode(node_id, out);
-  if (result == PX4LITE_OK) { Px4Lite_RemoteTelemetryRefreshFreshness(out, Px4Lite_PlatformGetMs()); }
-  return result;
+  uint8_t valid; uint32_t now=Px4Lite_PlatformGetMs();
+  if(!out) { return PX4LITE_INVALID_PARAM; }
+  vTaskSuspendAll(); valid=(Remote_Accept(s_selected,now) && s_active.header.valid)?1U:0U;
+  if(valid) { *out=s_active; } else { memset(out,0,sizeof(*out)); }
+  (void)xTaskResumeAll(); if(valid) { Px4Lite_RemoteTelemetryRefreshFreshness(out,now); } return valid?PX4LITE_OK:PX4LITE_NOT_READY;
 }
-
-/** @brief 在槽身份确认后原子更新所选节点。 */
-Px4Lite_Result_t Px4Lite_SelectRemoteNode(uint8_t node_id)
+/** @brief 人工选择清空数据，等待选择之后的新帧；未知身份可选但不组装完整负载。 */
+Px4Lite_Result_t Px4Lite_SelectRemoteNode(uint8_t node)
 {
-  uint8_t index;
-
-  if (node_id == (uint8_t)Px4Lite_IdentityGetNodeId()) { return PX4LITE_INVALID_PARAM; }
-  taskENTER_CRITICAL();
-  if (RemoteTelemetry_NodeIdToIndex(node_id, &index) == 0U) { taskEXIT_CRITICAL(); return PX4LITE_INVALID_PARAM; }
-  (void)index;
-  s_selected_remote_node_id = node_id;
-  taskEXIT_CRITICAL();
-  return PX4LITE_OK;
+  uint8_t i,found=0U; uint32_t now=Px4Lite_PlatformGetMs();
+  vTaskSuspendAll();
+  for(i=0U;i<PX4LITE_REMOTE_NODE_MAX;i++) { if(s_discovery[i].view.node_id==node && node) { found=1U; } }
+  if(!found || Remote_Conflict(node,now)) { (void)xTaskResumeAll(); return PX4LITE_NOT_READY; }
+  s_selected=node; Remote_ClearActive(); (void)xTaskResumeAll(); return PX4LITE_OK;
 }
-
-/** @brief 原子复制选中节点身份。 */
-Px4Lite_Result_t Px4Lite_GetSelectedRemoteNode(uint8_t *node_id)
+/** @brief 短临界区复制当前观察对象。 */
+Px4Lite_Result_t Px4Lite_GetSelectedRemoteNode(uint8_t *node)
+{ if(!node) { return PX4LITE_INVALID_PARAM; } taskENTER_CRITICAL(); *node=s_selected; taskEXIT_CRITICAL(); return PX4LITE_OK; }
+/** @brief 用于发现列表与活动观察的统一状态转换；调用方已持有调度互斥。 */
+static void Remote_FillStatus(RemoteDiscovery_t *entry,Px4Lite_RemoteNodeStatus_t *out,uint32_t now)
 {
-  if (node_id == 0) { return PX4LITE_INVALID_PARAM; }
-
-  taskENTER_CRITICAL();
-  *node_id = s_selected_remote_node_id;
-  taskEXIT_CRITICAL();
-  return PX4LITE_OK;
+  uint32_t total;
+  *out=entry->view;
+  out->identity_known=(entry->view.identity_known && Px4Lite_ElapsedMs(now,entry->identity_ms)<=IDENTITY_MAX_AGE_MS)?1U:0U;
+  out->id_conflict=Remote_Conflict(entry->view.node_id,now);
+  total=out->rx_frame_count+out->rx_sequence_lost_count;
+  out->rx_loss_rate_x10=total?(uint16_t)(((uint64_t)out->rx_sequence_lost_count*1000U)/total):0U;
+  out->state=((entry->heartbeat_seen && Px4Lite_ElapsedMs(now,out->last_heartbeat_ms)>PX4LITE_REMOTE_HEARTBEAT_STALE_MS) ||
+    (!entry->heartbeat_seen && Px4Lite_ElapsedMs(now,entry->seen_ms)>IDENTITY_MAX_AGE_MS))?PX4LITE_REMOTE_NODE_STALE:PX4LITE_REMOTE_NODE_DISCOVERED;
+  if(entry->view.node_id==s_selected && s_active.header.valid && out->identity_known &&
+     !out->id_conflict && Px4Lite_ElapsedMs(now,out->last_data_ms)<=PX4LITE_REMOTE_DATA_STALE_MS) { out->state=PX4LITE_REMOTE_NODE_ACTIVE; }
 }
-
-/** @brief 每个槽的身份与负载同区复制，时间比较支持 uint32_t 回绕。 */
-Px4Lite_Result_t Px4Lite_CopyRemoteNodeStatuses(Px4Lite_RemoteNodeStatus_t *out, uint8_t capacity, uint8_t *count, uint32_t now_ms)
+/** @brief 活动观察取得唯一有效身份；无有效身份时仍传递冲突/未知事实。 */
+Px4Lite_Result_t Px4Lite_CopySelectedRemoteStatus(Px4Lite_RemoteNodeStatus_t *out,uint32_t now)
 {
-  Px4Lite_RemoteTelemetry_t local;
-  uint8_t i;
-  uint8_t written = 0U;
-  uint8_t node_id;
-
-  if ((out == 0) || (count == 0)) { return PX4LITE_INVALID_PARAM; }
-  *count = 0U;
-
-  for (i = 0U; (i < PX4LITE_REMOTE_NODE_MAX) && (written < capacity); i++) {
-    taskENTER_CRITICAL();
-    local = s_remote[i];
-    node_id = s_slot_node[i];
-    taskEXIT_CRITICAL();
-
-    if ((local.header.valid == 0U) || (local.system_id != node_id)) { continue; }
-    Px4Lite_RemoteTelemetryRefreshFreshness(&local, now_ms);
-
-    memset(&out[written], 0, sizeof(out[written]));
-    out[written].node_id = node_id; /* 对外用绑定的 node_id(sysid)，非内部槽索引 */
-    out[written].system_id = local.system_id;
-    out[written].component_id = local.component_id;
-    out[written].heartbeat_type = local.heartbeat_type;
-    out[written].heartbeat_system_status = local.heartbeat_system_status;
-    out[written].last_heartbeat_ms = local.heartbeat_update_ms;
-    out[written].last_data_ms = RemoteTelemetry_LastDataMs(&local, now_ms);
-    out[written].rx_frame_count = local.rx_frame_count;
-    out[written].rx_sequence_lost_count = local.rx_sequence_lost_count;
-    out[written].rx_loss_rate_x10 = local.rx_loss_rate_x10;
-    if (Px4Lite_ElapsedMs(now_ms, local.heartbeat_update_ms) > PX4LITE_REMOTE_HEARTBEAT_STALE_MS) {
-      out[written].state = PX4LITE_REMOTE_NODE_STALE;
-    } else if (((local.valid_mask & ~PX4LITE_REMOTE_VALID_HEARTBEAT) != 0U) && (Px4Lite_ElapsedMs(now_ms, out[written].last_data_ms) <= PX4LITE_REMOTE_DATA_STALE_MS)) {
-      out[written].state = PX4LITE_REMOTE_NODE_ACTIVE;
-    } else {
-      out[written].state = PX4LITE_REMOTE_NODE_DISCOVERED;
-    }
-    written++;
+  uint8_t i,index;
+  if(!out) { return PX4LITE_INVALID_PARAM; }
+  vTaskSuspendAll(); memset(out,0,sizeof(*out)); index=Remote_IdentityIndex(s_selected,now);
+  if(index==PX4LITE_REMOTE_NODE_MAX) {
+    for(i=0U;i<PX4LITE_REMOTE_NODE_MAX;i++) { if(s_selected && s_discovery[i].view.node_id==s_selected) { index=i; break; } }
   }
-
-  (void)s_mode_changed_ms;
-  *count = written;
-  return (written != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
+  if(index<PX4LITE_REMOTE_NODE_MAX) { Remote_FillStatus(&s_discovery[index],out,now); }
+  (void)xTaskResumeAll(); return (index<PX4LITE_REMOTE_NODE_MAX)?PX4LITE_OK:PX4LITE_NOT_READY;
+}
+/** @brief 固定八项摘要计算，保持中断可用；身份未知/冲突/过期显式传递。 */
+Px4Lite_Result_t Px4Lite_CopyRemoteNodeStatuses(Px4Lite_RemoteNodeStatus_t *out,uint8_t capacity,uint8_t *count,uint32_t now)
+{
+  uint8_t i,n=0U;
+  if(!out || !count) { return PX4LITE_INVALID_PARAM; }
+  vTaskSuspendAll();
+  for(i=0U;i<PX4LITE_REMOTE_NODE_MAX && n<capacity;i++) {
+    RemoteDiscovery_t *entry=&s_discovery[i]; if(!entry->view.node_id) { continue; }
+    Remote_FillStatus(entry,&out[n],now);
+    n++;
+  }
+  (void)xTaskResumeAll(); *count=n; return n?PX4LITE_OK:PX4LITE_NOT_READY;
 }

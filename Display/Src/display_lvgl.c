@@ -55,7 +55,8 @@ typedef enum {
   UI_ACTION_HISTORY_CLEAR, UI_ACTION_HISTORY_ALL, UI_ACTION_ALARM_NEXT,
   UI_ACTION_DIAG_NEXT, UI_ACTION_REMOTE_NEXT, UI_ACTION_REMOTE_SELECT,
   UI_ACTION_MOTOR_MODE, UI_ACTION_RAMP, UI_ACTION_ESTOP, UI_ACTION_DOWN,
-  UI_ACTION_ATTITUDE
+  UI_ACTION_ATTITUDE, UI_ACTION_COMM_VIEW, UI_ACTION_LAB_DATA, UI_ACTION_LAB_INTERVAL,
+  UI_ACTION_LAB_COMMAND, UI_ACTION_CHANNEL, UI_ACTION_COMM_FREEZE
 } UiAction_t;
 /** @brief 固定按钮描述；参数仅由显示任务修改。 */
 typedef struct {
@@ -123,8 +124,8 @@ static uint16_t s_alarm_count;
 static uint32_t s_alarm_packed[UI_ALARM_CAP];
 static App_AlarmSnapshot_t s_alarm_details;
 static uint8_t s_alarm_offset, s_diag_offset, s_remote_offset;
-static uint8_t s_remote_selected;
-static uint8_t s_remote_selection_valid;
+
+
 static uint8_t s_history_offset, s_history_filter;
 static uint8_t s_history_cleared;
 static uint32_t s_history_clear_version; /**< 清视图对应生产环追加版本，非 16 位事件序号。 */
@@ -134,6 +135,17 @@ static uint16_t s_log_count;
 static uint32_t s_log_version = 0xFFFFFFFFUL;
 static App_RemoteNodeView_t s_remote_views[UI_REMOTE_CAP];
 static uint8_t s_remote_count;
+static uint8_t s_comm_view,s_comm_draft_ready,s_comm_interval_index=1U,s_comm_channel_index,s_comm_frozen;
+static uint8_t s_comm_node=1U;
+static Px4Lite_LabData_t s_comm_data=PX4LITE_LAB_ATTITUDE;
+static Px4Lite_LabSnapshot_t s_comm_state;
+static App_RemoteLabView_t s_remote_lab,s_remote_lab_live;
+static const uint32_t s_comm_intervals[4]={1000U,2000U,5000U,10000U};
+static const uint8_t s_comm_channels[4]={23U,26U,29U,32U};
+static uint32_t s_next_comm_ms;
+static uint32_t s_comm_feedback_until_ms,s_remote_lab_capture_ms;
+static char s_local_product_id[21];
+static const char * const s_comm_data_names[4]={"GNSS","Attitude","Power","Environment"};
 static Display_HmiPage_t s_current_lvgl_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static Display_HmiPage_t s_requested_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static Display_HmiPage_t s_primary_page = DISPLAY_HMI_PAGE_SELF_CHECK;
@@ -144,6 +156,16 @@ static void Display_LvglUpdateLogs(void);
 static void Display_LvglUpdateAlarms(void);
 static void Display_LvglUpdateModules(void);
 static void Display_LvglUpdateRemote(void);
+/** @brief UI 请求只提交应用队列，不直接操作 UART 或 Flash。 */
+static void UiLabRequest(Px4Lite_LabOperation_t operation)
+{
+  Px4Lite_LabRequest_t request;
+  memset(&request,0,sizeof(request)); request.operation=operation; request.data=s_comm_data;
+  request.interval_ms=s_comm_intervals[s_comm_interval_index]; request.node_id=s_comm_node;
+  request.channel=s_comm_channels[s_comm_channel_index];
+  if(App_RequestLoraLab(&request)!=PX4LITE_OK) { s_comm_feedback_until_ms=s_last_tick_ms+1500U; }
+  else { s_comm_feedback_until_ms=0U; }
+}
 
 /** @brief 将原 HMI 状态编码保留为可区分的短状态。 */
 static const char *Display_LvglStatusText(uint32_t value)
@@ -440,6 +462,14 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
   target_id = (Display_HmiVariableId_t)((uint16_t)DISPLAY_HMI_VAR_MOTOR_TARGET_1 + motor_index);
 
 
+  if(s_current_lvgl_page==DISPLAY_HMI_PAGE_HIDDEN && s_comm_view==1U && motor_index==0U) {
+    if(code==LV_EVENT_VALUE_CHANGED && !s_control_update_active) {
+      value=lv_slider_get_value(slider); s_comm_node=(uint8_t)value;
+      if(s_comm_state.running || s_comm_state.pending) { UiLabRequest(PX4LITE_LAB_STOP); }
+      Display_LvglUpdateRemote();
+    }
+    return;
+  }
   if (s_current_lvgl_page != DISPLAY_HMI_PAGE_MOTOR) { return; }
   if (s_value_valid[target_id] == 0U) {
     s_motor_slider_dragging[motor_index] = 0U;
@@ -893,12 +923,26 @@ static void UiButtonEvent(lv_event_t *event)
       s_diag_offset = ((uint16_t)s_diag_offset + 6U < PX4LITE_MODULE_COUNT) ? (uint8_t)(s_diag_offset + 6U) : 0U;
       Display_LvglUpdateModules(); break;
     case UI_ACTION_REMOTE_NEXT:
-      s_remote_offset = ((uint16_t)s_remote_offset + 4U < s_remote_count) ? (uint8_t)(s_remote_offset + 4U) : 0U;
+      s_remote_offset = ((uint16_t)s_remote_offset + 3U < s_remote_count) ? (uint8_t)(s_remote_offset + 3U) : 0U;
       s_layout_requested = 1U; break;
     case UI_ACTION_REMOTE_SELECT:
-      s_remote_selected = (uint8_t)button->argument;
-      s_remote_selection_valid = 1U;
+      if(App_SelectRemoteNode((uint8_t)button->argument,s_last_tick_ms)) {
+        s_comm_frozen=0U;
+        memset(&s_remote_lab,0,sizeof(s_remote_lab));
+      }
       Display_LvglUpdateRemote(); break;
+    case UI_ACTION_COMM_VIEW:
+      s_comm_view=(uint8_t)((s_comm_view+1U)%3U); s_layout_requested=1U; break;
+    case UI_ACTION_LAB_DATA:
+      s_comm_data=(Px4Lite_LabData_t)(((uint8_t)s_comm_data+1U)%4U); UiLabRequest(PX4LITE_LAB_EDIT); s_layout_requested=1U; break;
+    case UI_ACTION_LAB_INTERVAL:
+      s_comm_interval_index=(uint8_t)((s_comm_interval_index+1U)%4U); UiLabRequest(PX4LITE_LAB_EDIT); s_layout_requested=1U; break;
+    case UI_ACTION_CHANNEL:
+      s_comm_channel_index=(uint8_t)((s_comm_channel_index+1U)%4U);
+      if(s_comm_state.running || s_comm_state.pending) { UiLabRequest(PX4LITE_LAB_STOP); }
+      s_layout_requested=1U; break;
+    case UI_ACTION_LAB_COMMAND: UiLabRequest((Px4Lite_LabOperation_t)button->argument); Display_LvglUpdateRemote(); break;
+    case UI_ACTION_COMM_FREEZE: s_comm_frozen=(uint8_t)!s_comm_frozen; s_layout_requested=1U; break;
     case UI_ACTION_MOTOR_MODE:
       if (s_value_valid[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE]) {
         (void)Display_RequestMotorControlMode((s_values[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE] == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) ? PX4LITE_CONTROL_MODE_DIRECT : PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
@@ -1176,6 +1220,7 @@ static void Display_LvglLayoutMotor(void)
     lv_coord_t x = (lv_coord_t)(46 + i * 126);
     Display_HmiVariableId_t target = (Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_TARGET_1 + i);
     (void)UiLabel(names[i], x - 12, 75, 112, &display_lvgl_font_zh_16, UI_COLOR_TEXT);
+    lv_slider_set_range(s_motor_pwm_bars[i],0,100);
     lv_obj_set_pos(s_motor_pwm_bars[i], x + 14, 108); lv_obj_set_size(s_motor_pwm_bars[i], 30, 128);
     if (s_value_valid[target]) {
       s_control_update_active = 1U;
@@ -1239,22 +1284,51 @@ static void Display_LvglLayoutHistory(void)
 }
 
 /** @brief 通信列表保留真实 RX/估算丢帧，节点选择只保存在本页。 */
+/** @brief 三个二级视图共用既有 48 标签、16 按钮和 4 滑条；不新增对象。 */
 static void Display_LvglLayoutComm(void)
 {
   uint8_t i;
-  UiPanel(0U, 8, 62, 784, 272);
-  UiValueRow(DISPLAY_HMI_VAR_LORA_TX_COUNT, "TX done", 22, 73, 86);
-  UiValueRow(DISPLAY_HMI_VAR_LORA_RX_COUNT, "RX", 284, 73, 48);
-  UiValueRow(DISPLAY_HMI_VAR_LORA_LOSS_RATE, "Loss est.", 526, 73, 100);
-  s_page_info = UiLabel("Remote nodes", 24, 106, 622, &lv_font_montserrat_14, UI_COLOR_ACCENT);
-  (void)UiButton("Next", 678, 101, 98, 36, UI_ACTION_REMOTE_NEXT, 0, 0x173749);
-  for (i = 0U; i < 4U; i++) {
-    uint8_t index = (uint8_t)(s_remote_offset + i);
-    s_row_labels[i] = UiLabel("", 28, (lv_coord_t)(150 + i * 43), 596, &lv_font_montserrat_14, UI_COLOR_TEXT);
-    lv_obj_set_height(s_row_labels[i], 40); lv_label_set_long_mode(s_row_labels[i], LV_LABEL_LONG_WRAP);
-    if (index < s_remote_count) {
-      (void)UiButton("Select", 660, (lv_coord_t)(144 + i * 43), 116, 38,
-                     UI_ACTION_REMOTE_SELECT, s_remote_views[index].node_id, 0x173749);
+  static const char * const next_view[3]={"Config >","Remote >","Experiment >"};
+  UiPanel(0U,8,62,784,272);
+  s_page_info=UiLabel("",24,71,480,&lv_font_montserrat_14,UI_COLOR_ACCENT);
+  (void)UiButton(next_view[s_comm_view],634,65,146,42,UI_ACTION_COMM_VIEW,0,0x173749);
+  if(!s_comm_draft_ready) { s_comm_node=App_GetLocalNodeId(); App_FormatLocalProductId(s_local_product_id,sizeof(s_local_product_id)); s_comm_draft_ready=1U; }
+  if(s_comm_view==0U) {
+    (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"Data: %s",s_comm_data_names[s_comm_data]);
+    (void)UiButton(s_row_text[0],26,112,242,48,UI_ACTION_LAB_DATA,0,0x173749);
+    (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"Interval: %lus",(unsigned long)(s_comm_intervals[s_comm_interval_index]/1000U));
+    (void)UiButton(s_row_text[1],286,112,234,48,UI_ACTION_LAB_INTERVAL,0,0x173749);
+    s_row_labels[2]=UiLabel("",28,176,744,&lv_font_montserrat_14,UI_COLOR_TEXT);
+    s_row_labels[3]=UiLabel("",28,205,744,&lv_font_montserrat_14,UI_COLOR_TEXT);
+    (void)UiButton("Send",26,258,224,52,UI_ACTION_LAB_COMMAND,PX4LITE_LAB_SEND,0x173749);
+    (void)UiButton("Start",280,258,224,52,UI_ACTION_LAB_COMMAND,PX4LITE_LAB_START,0x214C36);
+    (void)UiButton("Stop",534,258,244,52,UI_ACTION_LAB_COMMAND,PX4LITE_LAB_STOP,0x782538);
+  } else if(s_comm_view==1U) {
+    s_row_labels[0]=UiLabel("",28,116,744,&lv_font_montserrat_14,UI_COLOR_TEXT);
+    s_row_labels[1]=UiLabel("",28,147,344,&lv_font_montserrat_14,UI_COLOR_TEXT);
+    s_control_update_active=1U; lv_slider_set_range(s_motor_pwm_bars[0],1,250);
+    lv_slider_set_value(s_motor_pwm_bars[0],s_comm_node,LV_ANIM_OFF); s_control_update_active=0U;
+    lv_obj_set_pos(s_motor_pwm_bars[0],42,194); lv_obj_set_size(s_motor_pwm_bars[0],324,24);
+    lv_obj_clear_flag(s_motor_pwm_bars[0],LV_OBJ_FLAG_HIDDEN);
+    (void)snprintf(s_row_text[2],UI_ROW_TEXT_LEN,"Channel: %u",(unsigned int)s_comm_channels[s_comm_channel_index]);
+    (void)UiButton(s_row_text[2],416,147,350,44,UI_ACTION_CHANNEL,0,0x173749);
+    s_row_labels[3]=UiLabel("",416,205,354,&lv_font_montserrat_14,UI_COLOR_TEXT);
+    (void)UiLabel(s_local_product_id,28,234,740,&lv_font_montserrat_12,UI_COLOR_MUTED);
+    (void)UiButton("Save Node",26,263,224,48,UI_ACTION_LAB_COMMAND,PX4LITE_LAB_SAVE_NODE,0x173749);
+    (void)UiButton("Apply CH",280,263,224,48,UI_ACTION_LAB_COMMAND,PX4LITE_LAB_APPLY_CHANNEL,0x173749);
+    (void)UiButton("Restore",534,263,244,48,UI_ACTION_LAB_COMMAND,PX4LITE_LAB_RESTORE,0x173749);
+  } else {
+    (void)UiButton("Next",24,108,108,38,UI_ACTION_REMOTE_NEXT,0,0x173749);
+    (void)UiButton(s_comm_frozen?"Resume":"Freeze",146,108,130,38,UI_ACTION_COMM_FREEZE,0,0x173749);
+    for(i=0U;i<3U;i++) {
+      uint8_t index=(uint8_t)(s_remote_offset+i);
+      s_row_labels[i]=UiLabel("",24,(lv_coord_t)(155+i*55),260,&lv_font_montserrat_14,UI_COLOR_TEXT);
+      lv_obj_set_height(s_row_labels[i],50); lv_label_set_long_mode(s_row_labels[i],LV_LABEL_LONG_WRAP);
+      if(index<s_remote_count) { (void)UiButton("Select",294,(lv_coord_t)(158+i*55),102,42,UI_ACTION_REMOTE_SELECT,s_remote_views[index].node_id,0x173749); }
+    }
+    for(i=3U;i<9U;i++) {
+      s_row_labels[i]=UiLabel("",418,(lv_coord_t)(113+(i-3U)*35),358,&lv_font_montserrat_12,UI_COLOR_TEXT);
+      if(s_row_labels[i]) { lv_obj_set_height(s_row_labels[i],34); lv_label_set_long_mode(s_row_labels[i],LV_LABEL_LONG_WRAP); }
     }
   }
 }
@@ -1404,29 +1478,95 @@ static void Display_LvglUpdateModules(void)
   }
 }
 
-/** @brief 原位更新远端列表，只读身份和链路事实，不启用全局 remote 模式。 */
+/** @brief 接收年龄按秒显示；冻结值的年龄继续增加，不被新帧刷新。 */
+static void UiLabAge(char *out,uint16_t capacity,uint32_t age_ms,uint32_t frozen_delta)
+{
+  if(age_ms==UINT32_MAX) { (void)snprintf(out,capacity,"N/A"); }
+  else { (void)snprintf(out,capacity,"%lus",(unsigned long)(((uint64_t)age_ms+frozen_delta)/1000U)); }
+}
+/** @brief 只格式化有效字段，0 值保留为测量值。 */
+static void UiLabNumber(char *out,uint16_t capacity,uint32_t valid,double value,const char *unit)
+{ if(valid) { (void)snprintf(out,capacity,"%.2f%s",value,unit); } else { (void)snprintf(out,capacity,"N/A"); } }
+
+
+/** @brief 低频原位更新状态；Freeze 只冻结观察数据，日志、配置及操作仍运行。 */
 static void Display_LvglUpdateRemote(void)
 {
   uint8_t i;
-  if (s_current_lvgl_page != DISPLAY_HMI_PAGE_HIDDEN) { return; }
-  if (s_remote_selection_valid) {
-    (void)snprintf(s_page_info_text, sizeof(s_page_info_text), "remote Node %02u selected / link statistics", (unsigned int)s_remote_selected);
-  } else { (void)snprintf(s_page_info_text, sizeof(s_page_info_text), "Remote nodes / select to inspect link statistics"); }
-  UiText(s_page_info, s_page_info_text);
-  for (i = 0U; i < 4U; i++) {
-    uint8_t index = (uint8_t)(s_remote_offset + i);
-    if (index < s_remote_count) {
-      App_RemoteNodeView_t *node = &s_remote_views[index];
-      const char *state = (node->state == APP_REMOTE_NODE_STALE) ? "STALE" :
-                          ((node->state == APP_REMOTE_NODE_ACTIVE) ? "ACTIVE" : "HEARTBEAT");
-      (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%sNode %02u  %s  HB age %lus\nRX %lu  Loss est. %u.%u%%",
-        (s_remote_selection_valid && node->node_id == s_remote_selected) ? "> " : "",
-        (unsigned int)node->node_id, state, (unsigned long)((s_last_tick_ms - node->last_heartbeat_ms) / 1000U),
-        (unsigned long)node->rx_frame_count, (unsigned int)(node->rx_loss_rate_x10 / 10U),
-        (unsigned int)(node->rx_loss_rate_x10 % 10U));
-    } else { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%s", (i == 0U) ? "No remote heartbeat" : ""); }
-    UiText(s_row_labels[i], s_row_text[i]);
+  static const char * const results[]={"STOPPED","RUNNING","Queued","No data","Rate limit","Unavailable","Config busy","Profile mismatch","Error"};
+  static const char * const address[]={"Idle","Writing","Saved","Full","Power gate","Error"};
+  static const char * const radio[]={"Unknown","Busy","Ready","Profile mismatch","Timeout","I/O error","Verify failed"};
+  if(s_current_lvgl_page!=DISPLAY_HMI_PAGE_HIDDEN) { return; }
+  App_CopyLoraLab(&s_comm_state);
+  if(s_comm_view==0U) {
+    (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"Experiment / %s / %s",s_comm_state.running?"RUNNING":"STOPPED",results[s_comm_state.result]);
+    (void)snprintf(s_row_text[2],UI_ROW_TEXT_LEN,"Queued(lab) %lu   UART(all) %lu   Module idle(all) %lu",(unsigned long)s_comm_state.queued_frames,(unsigned long)s_comm_state.radio.uart_done,(unsigned long)s_comm_state.radio.module_idle);
+    (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"RX(session) %lu   CRC %lu   Drop %lu   Loss est. %.1f%%",(unsigned long)s_comm_state.rx_frames,(unsigned long)s_comm_state.crc_errors,(unsigned long)s_comm_state.rx_drops,s_comm_state.loss_rate_x10/10.0);
+    UiText(s_row_labels[2],s_row_text[2]); UiText(s_row_labels[3],s_row_text[3]);
+  } else if(s_comm_view==1U) {
+    (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"Config%s / Node: %s / CH: %s",
+      (s_comm_state.radio.busy || s_comm_state.address.busy)?" Working":
+      ((s_comm_state.result==PX4LITE_LAB_ERROR)?" Rejected":""),
+      address[s_comm_state.address.result],radio[s_comm_state.radio.result]);
+    (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"Current Node %u   Saved %u   %s",(unsigned int)s_comm_state.address.current_node_id,(unsigned int)s_comm_state.address.saved_node_id,s_comm_state.address.reboot_pending?"Reboot required":"");
+    (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"Node ID: %u",(unsigned int)s_comm_node);
+    if(s_comm_state.radio.channel_known) { (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"Actual CH %u / %s",(unsigned int)s_comm_state.radio.channel,radio[s_comm_state.radio.result]); }
+    else { (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"Actual CH N/A / %s",radio[s_comm_state.radio.result]); }
+    UiText(s_row_labels[0],s_row_text[0]); UiText(s_row_labels[1],s_row_text[1]); UiText(s_row_labels[3],s_row_text[3]);
+  } else {
+    App_CopyRemoteLabView(&s_remote_lab_live,s_last_tick_ms);
+    if(!s_comm_frozen || s_remote_lab_live.node_id!=s_remote_lab.node_id || !s_remote_lab_live.available || s_remote_lab_live.id_conflict) { s_remote_lab=s_remote_lab_live; s_remote_lab_capture_ms=s_last_tick_ms; }
+    (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"Remote / Node %u / %s",(unsigned int)s_remote_lab_live.node_id,s_remote_lab_live.id_conflict?"ID CONFLICT":(s_comm_frozen?"FROZEN":(s_remote_lab_live.available?"receiving":"waiting")));
+    for(i=0U;i<3U;i++) {
+      uint8_t index=(uint8_t)(s_remote_offset+i);
+      if(index<s_remote_count) {
+        App_RemoteNodeView_t *v=&s_remote_views[index];
+        (void)snprintf(s_row_text[i],UI_ROW_TEXT_LEN,"Node %u %s\nRX %lu  %s",(unsigned int)v->node_id,v->id_conflict?"ID CONFLICT":(v->identity_known?"ID known":"ID unknown"),(unsigned long)v->rx_frame_count,(v->state==APP_REMOTE_NODE_STALE)?"STALE":"HB");
+      } else { (void)snprintf(s_row_text[i],UI_ROW_TEXT_LEN,"%s",i?"":"No remote nodes"); }
+      UiText(s_row_labels[i],s_row_text[i]);
+    }
+    {
+      char alt[18],velocity[30],gnss_age[14],att_age[14],p1_age[14],p2_age[14],env_age[14],rh_age[14];
+      char v1[18],v2[18],c1[18],c2[18],b1[14],b2[14],hb[14],data_age[14],humidity[14];
+      uint32_t frozen_delta=s_comm_frozen?(s_last_tick_ms-s_remote_lab_capture_ms):0U;
+      UiLabAge(gnss_age,sizeof(gnss_age),s_remote_lab.gnss_age_ms,frozen_delta);
+      UiLabAge(att_age,sizeof(att_age),s_remote_lab.attitude_age_ms,frozen_delta);
+      UiLabAge(p1_age,sizeof(p1_age),s_remote_lab.power1_age_ms,frozen_delta);
+      UiLabAge(p2_age,sizeof(p2_age),s_remote_lab.power2_age_ms,frozen_delta);
+      UiLabAge(env_age,sizeof(env_age),s_remote_lab.environment_age_ms,frozen_delta);
+      UiLabAge(rh_age,sizeof(rh_age),s_remote_lab.humidity_age_ms,frozen_delta);
+      UiLabAge(hb,sizeof(hb),s_remote_lab_live.heartbeat_age_ms,0U);
+      UiLabAge(data_age,sizeof(data_age),s_remote_lab.data_age_ms,frozen_delta);
+      if(s_remote_lab.valid_bits&APP_LAB_POSITION) {
+        (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"%s\nFix %u  Sat %u  GPS age %s",s_remote_lab_live.identity_known?s_remote_lab_live.product_id:"Identity N/A",(unsigned int)s_remote_lab.gnss_fix_type,(unsigned int)s_remote_lab.satellites_used,gnss_age);
+      } else {
+        (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"%s\nFix / Sat N/A  GPS age %s",s_remote_lab_live.identity_known?s_remote_lab_live.product_id:"Identity N/A",gnss_age);
+      }
+      if(s_remote_lab.valid_bits&APP_LAB_ALTITUDE) { (void)snprintf(alt,sizeof(alt),"%.1fm",s_remote_lab.altitude_mm/1000.0); } else { (void)snprintf(alt,sizeof(alt),"N/A"); }
+      if(s_remote_lab.valid_bits&APP_LAB_VELOCITY) { (void)snprintf(velocity,sizeof(velocity),"%.1f/%.1fm/s",s_remote_lab.velocity_north_cms/100.0,s_remote_lab.velocity_east_cms/100.0); } else { (void)snprintf(velocity,sizeof(velocity),"N/A"); }
+      if(s_remote_lab.valid_bits&APP_LAB_POSITION) { (void)snprintf(s_row_text[4],UI_ROW_TEXT_LEN,"Lat %.5f  Lon %.5f\nH %s  V N/E %s",(double)s_remote_lab.latitude_e7/1e7,(double)s_remote_lab.longitude_e7/1e7,alt,velocity); }
+      else { (void)snprintf(s_row_text[4],UI_ROW_TEXT_LEN,"Position N/A / stale\nH %s  V N/E %s",alt,velocity); }
+      if(s_remote_lab.valid_bits&APP_LAB_ATTITUDE) { (void)snprintf(s_row_text[5],UI_ROW_TEXT_LEN,"R/P/Y %.1f/%.1f/%.1f deg\nRate %.1f/%.1f/%.1f d/s age %s",s_remote_lab.roll_deg100/100.0,s_remote_lab.pitch_deg100/100.0,s_remote_lab.yaw_deg100/100.0,s_remote_lab.roll_rate_dps100/100.0,s_remote_lab.pitch_rate_dps100/100.0,s_remote_lab.yaw_rate_dps100/100.0,att_age); }
+      else { (void)snprintf(s_row_text[5],UI_ROW_TEXT_LEN,"Attitude / Rate N/A / stale\nage %s",att_age); }
+      UiLabNumber(v1,sizeof(v1),s_remote_lab.valid_bits&APP_LAB_VOLTAGE1,s_remote_lab.voltage_mv/1000.0,"V");
+      UiLabNumber(v2,sizeof(v2),s_remote_lab.valid_bits&APP_LAB_VOLTAGE2,s_remote_lab.voltage2_mv/1000.0,"V");
+      UiLabNumber(c1,sizeof(c1),s_remote_lab.valid_bits&APP_LAB_CURRENT1,s_remote_lab.current_ma/1000.0,"A");
+      UiLabNumber(c2,sizeof(c2),s_remote_lab.valid_bits&APP_LAB_CURRENT2,s_remote_lab.current2_ma/1000.0,"A");
+      if(s_remote_lab.valid_bits&APP_LAB_PERCENT1) { (void)snprintf(b1,sizeof(b1),"%u%%",(unsigned int)s_remote_lab.battery_percent); } else { (void)snprintf(b1,sizeof(b1),"N/A"); }
+      if(s_remote_lab.valid_bits&APP_LAB_PERCENT2) { (void)snprintf(b2,sizeof(b2),"%u%%",(unsigned int)s_remote_lab.battery2_percent); } else { (void)snprintf(b2,sizeof(b2),"N/A"); }
+      (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"P1 %s %s %s age %s\nP2 %s %s %s age %s",v1,c1,b1,p1_age,v2,c2,b2,p2_age);
+      if(s_remote_lab.valid_bits&APP_LAB_HUMIDITY) { (void)snprintf(humidity,sizeof(humidity),"%.1f%%",s_remote_lab.humidity_pct100/100.0); } else { (void)snprintf(humidity,sizeof(humidity),"N/A"); }
+      if(s_remote_lab.valid_bits&APP_LAB_ENVIRONMENT) { (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"T %.1fC P %luPa age %s\nRH %s age %s",s_remote_lab.temperature_deg100/100.0,(unsigned long)s_remote_lab.pressure_pa,env_age,humidity,rh_age); }
+      else { (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"T/P N/A / stale age %s\nRH %s age %s",env_age,humidity,rh_age); }
+      (void)snprintf(s_row_text[8],UI_ROW_TEXT_LEN,"HB age %s data age %s\nRX %lu  seq loss %.1f%%",hb,data_age,(unsigned long)s_remote_lab_live.rx_frames,s_remote_lab_live.loss_rate_x10/10.0);
+    }
+    for(i=3U;i<9U;i++) { UiText(s_row_labels[i],s_row_text[i]); }
   }
+  if(s_comm_feedback_until_ms && (int32_t)(s_comm_feedback_until_ms-s_last_tick_ms)>0) {
+    size_t used=strlen(s_page_info_text);
+    (void)snprintf(s_page_info_text+used,sizeof(s_page_info_text)-used," / Busy");
+  }
+  UiText(s_page_info,s_page_info_text);
 }
 
 /** @brief 重排唯一工作区，既不分配控件也不发控制命令。 */
@@ -1517,6 +1657,7 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
     s_next_remote_ms = now_ms + 1000U;
     Display_LvglUpdateRemote();
   }
+  if(s_current_lvgl_page==DISPLAY_HMI_PAGE_HIDDEN && (int32_t)(now_ms-s_next_comm_ms)>=0) { Display_LvglUpdateRemote(); s_next_comm_ms=now_ms+200U; }
   if (s_layout_requested) { s_layout_requested = 0U; Display_LvglLayout(); }
   if ((int32_t)(now_ms - s_next_status_ms) >= 0) { Display_LvglUpdateModules(); s_next_status_ms = now_ms + 200U; }
   if (s_log_version != Display_PagesGetLogVersion()) { Display_LvglUpdateLogs(); }

@@ -9,6 +9,8 @@
  */
 
 #include "px4lite_platform.h"
+#include "bsp_config_store.h"
+#include "lora_e22_config.h"
 #include "px4lite_heartbeat_policy.h"
 #include "px4lite_config.h"
 #include "px4lite_imu_axis_map.h"
@@ -945,4 +947,36 @@ Px4Lite_Result_t Px4Lite_LoRaCopyRxFrame(Px4Lite_CommRxFrame_t *out)
   if (out->payload_len > 0U) { memcpy(out->payload, frame.data, out->payload_len); }
 
   return PX4LITE_OK;
+}
+
+/** @brief 将 BSP 原始编程结果转换为平台结果。 */
+static Px4Lite_Result_t ConfigStore_Result(int32_t result)
+{ return (result==0)?PX4LITE_OK:((result==1)?PX4LITE_BUSY:PX4LITE_IO_ERROR); }
+/** @brief 配置服务的原始读取适配，不解析记录。 */
+Px4Lite_Result_t Px4Lite_ConfigStoreRead(uint32_t offset,uint8_t *out,uint16_t length)
+{ return ConfigStore_Result(BSP_ConfigStore_Read(offset,out,length)); }
+/** @brief 配置服务的单字追加适配，不擦除。 */
+Px4Lite_Result_t Px4Lite_ConfigStoreProgramWord(uint32_t offset,uint32_t value)
+{ return ConfigStore_Result(BSP_ConfigStore_ProgramWord(offset,value)); }
+/** @brief 收取已启动操作，维护锁仍由 Framework 持有。 */
+Px4Lite_Result_t Px4Lite_ConfigStoreFinishWord(void)
+{ return ConfigStore_Result(BSP_ConfigStore_FinishWord()); }
+
+/** @brief 逐字段转换驱动事实，不把 Driver 类型暴露给 Business。 */
+void Px4Lite_LoRaCopyConfig(Px4Lite_LoRaConfig_t *out)
+{
+  Lora_ConfigSnapshot_t value;
+  if(!out) { return; } Lora_E22_CopyConfig(&value);
+  out->generation=value.generation; out->busy=value.busy; out->ready=value.ready;
+  out->request_id=value.request_id; out->completed_request_id=value.completed_request_id;
+  out->completed_result=(uint8_t)value.completed_result; out->completed_write=value.completed_write;
+  out->completed_channel=value.completed_channel;
+  out->channel_known=value.channel_known; out->channel=value.channel; out->result=(uint8_t)value.result;
+  Lora_E22_CopyTxFacts(&out->uart_done,&out->module_idle);
+}
+/** @brief 仅 CommTask 调用，配置请求与正常传输在驱动内串行。 */
+Px4Lite_Result_t Px4Lite_LoRaApplyChannel(uint8_t channel,uint32_t now_ms)
+{
+  int32_t result=Lora_E22_ConfigRequest(channel,now_ms);
+  return (result==0)?PX4LITE_OK:((result==1)?PX4LITE_BUSY:PX4LITE_NOT_READY);
 }

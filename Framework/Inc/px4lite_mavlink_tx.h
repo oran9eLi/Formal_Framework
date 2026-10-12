@@ -121,4 +121,8 @@ struct __mavlink_message;
  */
 Px4Lite_Result_t Px4Lite_MavlinkTxMirrorToRpi(struct __mavlink_message *msg);
 
+/** @brief 取消尚未提交的实验组，已入驱动的单帧仍完成收尾。 */
+void Px4Lite_MavlinkCancelLabGroup(void);
+/** @brief CommTask 在 Start/Send 准入时核对当前新鲜数据，不编码或发送。 */
+Px4Lite_Result_t Px4Lite_MavlinkLabDataReady(uint8_t data,uint32_t now_ms);
 #endif

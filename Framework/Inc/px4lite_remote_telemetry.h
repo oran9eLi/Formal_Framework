@@ -33,6 +33,12 @@ typedef enum {
  * @param[in] now_ms 当前系统时间，单位：ms。
  */
 void Px4Lite_RemoteTelemetryInit(uint32_t now_ms);
+/** @brief CommTask 观察轻量帧事实；identity 为 20 字节长期身份或 NULL。自回环忽略。 */
+void Px4Lite_RemoteObserve(uint8_t node_id,uint8_t component_id,uint8_t sequence,uint32_t msg_id,const char *identity,uint32_t now_ms);
+/** @brief 已选择、身份已确认且无冲突时允许解码完整快照。 */
+uint8_t Px4Lite_RemoteCanAccept(uint8_t node_id,uint32_t now_ms);
+/** @brief CommTask 后台刷新发现/失联/恢复事件，不依赖当前页面。 */
+void Px4Lite_RemoteDiscoveryRun(uint32_t now_ms);
 
 /**
  * @brief LoRa 链路断开时清空远端节点和遥测缓存。
@@ -91,6 +97,8 @@ static inline void Px4Lite_RemoteTelemetryRefreshFreshness(Px4Lite_RemoteTelemet
  * @return 设置结果。
  */
 Px4Lite_Result_t Px4Lite_RemoteTelemetrySetMode(Px4Lite_RemoteMode_t mode, uint32_t now_ms);
+/** @brief 复制所选地址的当前有效身份事实，与接收准入使用同一解析规则。 */
+Px4Lite_Result_t Px4Lite_CopySelectedRemoteStatus(Px4Lite_RemoteNodeStatus_t *out,uint32_t now_ms);
 
 /**
  * @brief 获取当前显示模式。

@@ -465,6 +465,10 @@ typedef struct {
   uint32_t rx_sequence_lost_count;
   uint16_t rx_loss_rate_x10;
   uint8_t heartbeat_system_status;
+  uint8_t identity_known; /**< 长身份经 BASIC_ID 校验且未过期。 */
+  uint8_t heartbeat_known; /**< 已收到真实 HEARTBEAT，时间 0 也有效。 */
+  uint8_t id_conflict; /**< 同地址不同长身份，禁止完整数据混合。 */
+  char product_id[21]; /**< 长身份 20 ASCII 字符和终止符；未知为空。 */
 } Px4Lite_RemoteNodeStatus_t;
 
 /**
@@ -475,6 +479,7 @@ typedef struct {
  */
 typedef struct {
   Px4Lite_TopicHeader_t header;                       /**< topic 公共头。 */
+  uint32_t observation_generation; /**< 选择世代，阻止切换过程中旧 RX scratch 回填。 */
   uint32_t valid_mask;                                /**< 远端数据有效位，使用 `PX4LITE_REMOTE_VALID_*`。 */
   uint32_t stale_mask;                                /**< 远端数据过期位，使用 `PX4LITE_REMOTE_VALID_*`。 */
   uint32_t last_rx_ms;                                /**< 最近收到远端合法 MAVLink 帧时间，单位：ms。 */
@@ -556,9 +561,6 @@ typedef struct {
   uint16_t motor_pulse_us[PX4LITE_MOTOR_COUNT];       /**< 远端 Control 实际输出的四路 PWM 高电平脉宽，单位：us。 */
   uint8_t motor_run_state;                            /**< 远端电机运行状态，1 表示允许输出目标油门。 */
   uint8_t motor_speed_level;                          /**< 远端四路目标油门最大值，范围 0 到 100。 */
-  uint8_t remote_log_count;                           /**< 远端消息日志缓存条目数量。 */
-  uint16_t remote_log_latest_seq;                     /**< 远端消息日志最新序号。 */
-  Px4Lite_LogEntry_t remote_log_entries[PX4LITE_REMOTE_LOG_CAP]; /**< 远端消息日志固定环形显示缓存。 */
   uint8_t system_id;                                  /**< 远端 MAVLink system id。 */
   uint8_t component_id;                               /**< 远端 MAVLink component id。 */
 } Px4Lite_RemoteTelemetry_t;

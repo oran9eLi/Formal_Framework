@@ -15,6 +15,10 @@ Release/Latest/*.axf
 Release/Latest/*.hex
 Release/Latest/*.map
 Release/Latest/*.log
+Release/Archive/**/*.axf
+Release/Archive/**/*.hex
+Release/Archive/**/*.map
+Release/Archive/**/*.log
 
 # Local editor / assistant state
 .claude/settings.local.json

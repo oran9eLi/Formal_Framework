@@ -414,4 +414,30 @@ void Px4Lite_BatteryRequestReinit(void);
  */
 void Px4Lite_LoRaRequestReinit(void);
 
+/** @brief E22 配置事实；数值结果与驱动协议结果隔离在适配层。 */
+typedef struct {
+  uint32_t generation; /**< 事务完成序号。 */
+  uint32_t request_id; /**< 当前寄存器事务号。 */
+  uint32_t completed_request_id; /**< 最近结束事务号，包括中止。 */
+  uint8_t completed_result; /**< 完成结果，与 result 使用相同取值。 */
+  uint8_t completed_write; /**< 最近完成的是显式 CH 写请求。 */
+  uint8_t completed_channel; /**< 最近完成写请求的目标 CH。 */
+  uint32_t uart_done; /**< 本次上电 UART TC 次数，包括基础/实验/配置命令。 */
+  uint32_t module_idle; /**< 本机 AUX 空闲帧数。 */
+  uint8_t busy; /**< 配置忙标志。 */
+  uint8_t ready; /**< 课堂参数和正常模式已确认。 */
+  uint8_t channel_known; /**< 信道读回有效标志。 */
+  uint8_t channel; /**< 实际 CH，0..83。 */
+  uint8_t result; /**< 0 未知、1 忙、2 就绪、3 配置不匹配、4 超时、5 I/O、6 验证失败。 */
+} Px4Lite_LoRaConfig_t;
+/** @brief 只复制已发布配置与传输事实。 */
+void Px4Lite_LoRaCopyConfig(Px4Lite_LoRaConfig_t *out);
+/** @brief CommTask 请求仅修改信道。 */
+Px4Lite_Result_t Px4Lite_LoRaApplyChannel(uint8_t channel,uint32_t now_ms);
+/** @brief 配置区原始读取；只供 Framework 配置服务使用。 */
+Px4Lite_Result_t Px4Lite_ConfigStoreRead(uint32_t offset, uint8_t *out, uint16_t length);
+/** @brief 单字追加编程，BUSY 表示硬件操作已发起。 */
+Px4Lite_Result_t Px4Lite_ConfigStoreProgramWord(uint32_t offset, uint32_t value);
+/** @brief 收取编程结果并锁定 Flash 控制器。 */
+Px4Lite_Result_t Px4Lite_ConfigStoreFinishWord(void);
 #endif

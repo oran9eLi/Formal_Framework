@@ -18,7 +18,7 @@
           <Vendor>STMicroelectronics</Vendor>
           <PackID>Keil.STM32F4xx_DFP.2.17.0</PackID>
           <PackURL>https://www.keil.com/pack/</PackURL>
-          <Cpu>IRAM(0x20000000,0x00020000) IRAM2(0x10000000,0x00010000) IROM(0x08000000,0x00100000) CPUTYPE("Cortex-M4") FPU2 CLOCK(12000000) ELITTLE</Cpu>
+          <Cpu>IRAM(0x20000000,0x00020000) IRAM2(0x10000000,0x00010000) IROM(0x08000000,0x000E0000) CPUTYPE("Cortex-M4") FPU2 CLOCK(12000000) ELITTLE</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
           <StartupFile></StartupFile>
           <FlashDriverDll>UL2CM3(-S0 -C0 -P0 -FD20000000 -FC1000 -FN1 -FF0STM32F4xx_1024 -FS08000000 -FL0100000 -FP0($$Device:STM32F407ZGTx$CMSIS\Flash\STM32F4xx_1024.FLM))</FlashDriverDll>
@@ -249,7 +249,7 @@
               <IROM>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x100000</Size>
+                <Size>0xe0000</Size>
               </IROM>
               <XRAM>
                 <Type>0</Type>
@@ -274,7 +274,7 @@
               <OCR_RVCT4>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x100000</Size>
+                <Size>0xe0000</Size>
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
@@ -516,6 +516,16 @@
               <FilePath>..\Framework\Src\px4lite_identity.c</FilePath>
             </File>
             <File>
+              <FileName>px4lite_lora_lab.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_lora_lab.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_comm_config.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_comm_config.c</FilePath>
+            </File>
+            <File>
               <FileName>px4lite_command.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Framework\Src\px4lite_command.c</FilePath>
@@ -576,6 +586,11 @@
               <FilePath>..\Sensor\Src\sensor_gnss.c</FilePath>
             </File>
             <File>
+              <FileName>lora_e22_config.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Sensor\Src\lora_e22_config.c</FilePath>
+            </File>
+            <File>
               <FileName>lora_e22.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Sensor\Src\lora_e22.c</FilePath>
@@ -629,6 +644,11 @@
               <FileName>bsp_rtc.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\bsp_rtc.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_config_store.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_config_store.c</FilePath>
             </File>
             <File>
               <FileName>bsp_lora.c</FileName>

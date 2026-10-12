@@ -160,4 +160,12 @@ void Lora_E22_GetDebugInfo(Lora_DebugInfo_t *info);
  */
 void Lora_E22_RequestReinit(void);
 
+/** @brief 配置 DRAIN 使用的正常传输空闲事实，不受配置准入门控。 */
+uint8_t Lora_E22_IsTransportIdle(void);
+/** @brief 配置边界清空生产解析与未消费帧，累计统计保留。 */
+void Lora_E22_ResetReceiveBoundary(void);
+/** @brief 复制正常帧的 UART TC 和 AUX 空闲两个独立累计数。 */
+void Lora_E22_CopyTxFacts(uint32_t *uart_done,uint32_t *module_idle);
+/** @brief 只读硬件会话初始化事实；未初始化时不接受寄存器事务。 */
+uint8_t Lora_E22_HasInitializedSession(void);
 #endif

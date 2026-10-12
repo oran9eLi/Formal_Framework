@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include "px4lite_time.h"
 #include "px4lite_types.h"
+#include "px4lite_lora_lab.h"
 #include "px4lite_attitude.h"
 #include "px4lite_control.h"
 typedef Px4Lite_AttitudeStatus_t App_AttitudeStatus_t; /**< 姿态操作只读快照。 */
@@ -329,6 +330,10 @@ typedef struct {
   uint32_t rx_sequence_lost_count;                       /**< 当前节点按 MAVLink seq 估算的丢帧数。 */
   uint16_t rx_loss_rate_x10;                             /**< 当前节点接收侧丢包率，单位 0.1%。 */
   uint16_t reserved;                                     /**< 保留字段，保持结构体对齐。 */
+  uint8_t identity_known; /**< 长期身份已确认且新鲜。 */
+  uint8_t heartbeat_known; /**< 已收到真实心跳，不把 BASIC_ID 当心跳。 */
+  uint8_t id_conflict; /**< 同地址不同身份，禁止混合完整数据。 */
+  char product_id[21]; /**< 长期身份，未知为空。 */
 } App_RemoteNodeView_t;
 
 /**
@@ -576,11 +581,55 @@ uint8_t App_RemoteViewExpired(uint32_t now_ms);
 uint8_t App_GetSelectedRemoteNode(uint8_t *node_id);
 
 /**
- * @brief 返回本机 node_id(=MAVLink sysid，由 STM32 UID 哈希派生)，用于本地视图身份显示。
+ * @brief 返回本次启动固定的 node_id(=MAVLink sysid)，来源为保存值或 UID 默认值。
  *
  * @return 本机 node_id，范围 [1,250]。
  */
 uint8_t App_GetLocalNodeId(void);
+/** @brief 实验观察字段有效且新鲜的显示位；缺测和过期均不置位。 */
+enum {
+  APP_LAB_POSITION=1UL<<0, APP_LAB_ATTITUDE=1UL<<1,
+  APP_LAB_VOLTAGE1=1UL<<2, APP_LAB_VOLTAGE2=1UL<<3,
+  APP_LAB_ENVIRONMENT=1UL<<4, APP_LAB_HUMIDITY=1UL<<5,
+  APP_LAB_ALTITUDE=1UL<<6, APP_LAB_VELOCITY=1UL<<7,
+  APP_LAB_CURRENT1=1UL<<8, APP_LAB_CURRENT2=1UL<<9,
+  APP_LAB_PERCENT1=1UL<<10, APP_LAB_PERCENT2=1UL<<11
+};
+/** @brief 单对端实验观察视图，所有年龄均为本机接收年龄，不表示链路时延。 */
+typedef struct {
+  uint32_t valid_bits; /**< 各组有效且新鲜的显示位。 */
+  uint32_t heartbeat_age_ms; /**< 心跳年龄，单位 ms；UINT32_MAX 未收到。 */
+  uint32_t data_age_ms; /**< 最近主数据年龄，单位 ms；UINT32_MAX 未收到。 */
+  uint32_t gnss_age_ms,attitude_age_ms; /**< 定位/姿态域接收年龄，ms；UINT32_MAX 未收到。 */
+  uint32_t power1_age_ms,power2_age_ms; /**< 两路电源域接收年龄，ms；UINT32_MAX 未收到。 */
+  uint32_t environment_age_ms,humidity_age_ms; /**< 温压/湿度接收年龄，ms；UINT32_MAX 未收到。 */
+  uint32_t rx_frames; /**< 本次活动快照累计接收帧数。 */
+  uint16_t loss_rate_x10; /**< 序号估算丢帧率，百分比 * 10；不是射频丢包实测值。 */
+  int32_t latitude_e7,longitude_e7; /**< 经纬度，degree * 1e7。 */
+  int32_t altitude_mm; /**< GNSS 高度，mm；仅 ALTITUDE 位有效。 */
+  int32_t velocity_north_cms,velocity_east_cms; /**< 北/东速度，cm/s；仅 VELOCITY 位有效。 */
+  int32_t roll_deg100,pitch_deg100,yaw_deg100; /**< 姿态，degree * 100。 */
+  int32_t roll_rate_dps100,pitch_rate_dps100,yaw_rate_dps100; /**< 三轴角速度，degree/s * 100。 */
+  uint32_t voltage_mv,voltage2_mv; /**< 两路电压，单位 mV。 */
+  uint32_t current_ma,current2_ma; /**< 两路电流，mA；按独立有效位显示。 */
+  uint8_t battery_percent,battery2_percent; /**< 两路电量，0..100%；0 也是合法测量值。 */
+  uint8_t gnss_fix_type,satellites_used; /**< Fix 等级和卫星数；仅位置有效时解释。 */
+  int32_t temperature_deg100; /**< 温度，摄氏度 * 100。 */
+  uint32_t pressure_pa,humidity_pct100; /**< 气压 Pa、湿度 % * 100。 */
+  uint8_t node_id; /**< 所选 node，0 表示未选。 */
+  uint8_t available; /**< 已有选择后的完整快照。 */
+  uint8_t identity_known; /**< 身份明确。 */
+  uint8_t id_conflict; /**< 地址冲突。 */
+  char product_id[21]; /**< UID 派生的长期身份，20 字符加终止符。 */
+} App_RemoteLabView_t;
+/** @brief 格式化本机长期产品身份；只读身份，不进行硬件 I/O。 */
+void App_FormatLocalProductId(char *out,uint8_t capacity);
+/** @brief 教学发送请求入口；不会在显示任务中访问 UART/Flash。 */
+Px4Lite_Result_t App_RequestLoraLab(const Px4Lite_LabRequest_t *request);
+/** @brief 复制教学实验与配置事实。 */
+void App_CopyLoraLab(Px4Lite_LabSnapshot_t *out);
+/** @brief 复制单对端显示视图，过期字段不会标为有效。 */
+void App_CopyRemoteLabView(App_RemoteLabView_t *out,uint32_t now_ms);
 
 /**
  * @brief 复制 LVGL 通信页使用的远端节点列表。
