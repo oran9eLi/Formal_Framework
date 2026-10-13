@@ -27,7 +27,7 @@ python Tools/lora_peer.py --port COM7 --mode send --message catalog --count 13 -
 
 箱子进入 Comm → Inspect，选 LoRa RX，按 Start。目录包含 HEARTBEAT、SYS_STATUS、GPS_RAW_INT、ATTITUDE、GLOBAL_POSITION_INT、SCALED_PRESSURE、BATTERY_STATUS、SERVO_OUTPUT_RAW、NAMED_VALUE_INT、TUNNEL、COMMAND_LONG、COMMAND_ACK、OPEN_DRONE_ID_BASIC_ID。
 
-Messages 的计数/Avg Hz/Age按本捕获会话更新。Next选汇总行，Select复制该键最近帧，再看 Raw/Decoded。固定4槽可能覆盖其他键的最近帧，此时显示 unavailable；重新发该消息再Select。选帧字节不会被后续覆盖，TX槽仍在时阶段可更新，已覆盖会标注。Clear会暂停并换会话，不清生产数据。
+Messages 的计数/Avg Hz/Age按本捕获会话更新。Next选汇总行，Select复制该键最近帧，再看 Raw/Decoded。固定4槽可能覆盖其他键的最近帧，此时显示 unavailable；重新发该消息再Select。选帧字节不会被后续覆盖，TX槽仍在时阶段可更新，已覆盖会标注。Start新建会话并清旧统计，Clear会暂停并换会话，不清生产数据。TX Count为接口已接受帧；Attempt/Timeout/Error独立，失败Raw可选，不能用Count证明远端收到。
 
 消息是用于观察的样例数据；COMMAND_LONG使用未支持的命令65535，没有电机控制动作。目录中协议字段按仓库内MAVLink元数据编码，浮点值、合法零和unknown哨兵均保留。CSV/实际传感器结果不能用这些样例替代。
 
@@ -73,4 +73,3 @@ python Tools/lora_peer.py --mode generate --message catalog --count 13 --interva
 | frames.hex | generate模式生成的HEX |
 
 提交验收时记录箱子HEX SHA、板号、双方E22型号/读回参数、Node ID、Channel、接线、时长与电脑证据目录。串口write成功只证明PC端接受字节，不能证明射频发送或箱子接收。脚本离线生成/语法检查不等于实测；M5 C03—C06及M4无线必需项仍待实板。
-
