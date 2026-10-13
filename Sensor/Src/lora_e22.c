@@ -39,6 +39,16 @@ static volatile uint16_t s_rx_q_count;
 
 static mavlink_status_t s_parse_status;
 static mavlink_message_t s_parse_msg;
+static uint8_t s_diagnostic_raw[LORA_E22_TX_BUF_SIZE];
+static uint16_t s_diagnostic_length;
+static Lora_DiagnosticRx_t s_diagnostic_rx;
+static Lora_DiagnosticTx_t s_diagnostic_tx;
+/** @brief 注册只读任务钩子，关闭捕获不改变解析和UART流程。 */
+void Lora_E22_SetDiagnosticCallbacks(Lora_DiagnosticRx_t rx, Lora_DiagnosticTx_t tx)
+{ s_diagnostic_rx = rx; s_diagnostic_tx = tx; }
+/** @brief 报告已发生的本机事务阶段，不进行业务解析。 */
+static void Lora_E22_ReportTx(uint8_t stage)
+{ if (s_diagnostic_tx) { s_diagnostic_tx(stage); } }
 
 static uint32_t s_last_rx_ms;
 static uint32_t s_rx_frame_count;
@@ -299,6 +309,7 @@ static void Lora_E22_ResetParser(void)
   memset(&s_parse_status, 0, sizeof(s_parse_status));
   memset(&s_parse_msg, 0, sizeof(s_parse_msg));
   s_parse_last_byte_ms = 0U;
+  s_diagnostic_length = 0U;
 }
 
 /**
@@ -311,6 +322,8 @@ static void Lora_E22_ResetSession(uint32_t now_ms, uint8_t local_failed)
 {
   uint32_t primask;
   uint8_t ready = ((local_failed == 0U) && (BSP_LoRa_IsReady() != 0U)) ? 1U : 0U;
+
+  if (s_tx_state != LORA_TX_IDLE) { Lora_E22_ReportTx(4U); }
 
   BSP_LoRa_AbortTx();
 
@@ -362,6 +375,8 @@ static void Lora_E22_ResetSession(uint32_t now_ms, uint8_t local_failed)
 Lora_Result_t Lora_E22_Init(void)
 {
   uint32_t now_ms;
+
+  if (s_tx_state != LORA_TX_IDLE) { Lora_E22_ReportTx(4U); }
 
   s_initialized = 0U;
   BSP_LoRa_SetMode(0U); /* normal mode M0=0 M1=0 */
@@ -519,6 +534,14 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
       }
       s_parse_last_byte_ms = now_ms;
 
+      /* 原字节窗遵循生产解析器的帧状态；payload里的FD/FE不会重置。 */
+      if (mavlink_get_channel_status(MAVLINK_COMM_0)->parse_state <= MAVLINK_PARSE_STATE_IDLE) {
+        s_diagnostic_length = 0U;
+        if (temp[i] == 0xFD || temp[i] == 0xFE) { s_diagnostic_raw[s_diagnostic_length++] = temp[i]; }
+      } else if (s_diagnostic_length < sizeof(s_diagnostic_raw) && s_diagnostic_length) {
+        s_diagnostic_raw[s_diagnostic_length++] = temp[i];
+      }
+
       framing = mavlink_frame_char(MAVLINK_COMM_0, temp[i], &s_parse_msg, &s_parse_status);
       /* 库输出的 drop 字段是本字节解析错误数，非累计丢帧数；CRC 由 framing 独立报告。 */
       s_parse_error_count += s_parse_status.packet_rx_drop_count;
@@ -528,10 +551,13 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
 
         s_parse_error_count++;
         if (framing == MAVLINK_FRAMING_BAD_CRC) { s_crc_error_count++; }
+        if (s_diagnostic_rx) { s_diagnostic_rx(0, 0U, now_ms, 0U); }
+        s_diagnostic_length = 0U;
         parser->msg_received = MAVLINK_FRAMING_INCOMPLETE;
         parser->parse_state = MAVLINK_PARSE_STATE_IDLE;
         /* 与库 parse_char 一致：失败帧的末字节可能已是下一帧 STX。 */
         if (temp[i] == MAVLINK_STX) {
+          s_diagnostic_raw[0] = temp[i]; s_diagnostic_length = 1U;
           parser->parse_state = MAVLINK_PARSE_STATE_GOT_STX;
           message->len = 0U;
           mavlink_start_checksum(message);
@@ -539,6 +565,8 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
       }
 
       if (framing == MAVLINK_FRAMING_OK) {
+        if (s_diagnostic_rx && s_diagnostic_length) { s_diagnostic_rx(s_diagnostic_raw, s_diagnostic_length, now_ms, 1U); }
+        s_diagnostic_length = 0U;
         /* --- complete MAVLink frame received --- */
         uint32_t primask;
         Lora_RxFrame_t *slot;
@@ -655,6 +683,7 @@ static void Lora_E22_TxStep(uint32_t now_ms)
         } else if (r < 0) {
           s_send_error_count++;
           s_tx_state = LORA_TX_IDLE;
+          Lora_E22_ReportTx(4U);
         }
         /* r == 1: DMA still busy, stay and retry (bounded below). */
       }
@@ -662,17 +691,20 @@ static void Lora_E22_TxStep(uint32_t now_ms)
       if ((s_tx_state == LORA_TX_WAIT_AUX) && ((uint32_t)(now_ms - s_tx_state_ms) > timeout_ms)) {
         s_tx_busy_count++;
         s_tx_state = LORA_TX_IDLE;
+        Lora_E22_ReportTx(4U);
       }
       break;
 
     case LORA_TX_SENDING:
       if(!s_uart_done_seen && BSP_LoRa_GetTxCompleteCount()!=s_tx_tc_baseline) {
         s_uart_done_seen=1U; s_uart_done_ms=now_ms; s_uart_done_count++;
+        Lora_E22_ReportTx(2U);
       }
       if(s_uart_done_seen && BSP_LoRa_IsReady() && (uint32_t)(now_ms-s_uart_done_ms)>=20U) {
         uint32_t air_ms;
         uint32_t bps=LORA_E22_VERIFIED_AIR_BPS;
         s_tx_frame_count++; s_module_idle_count++; s_last_tx_ms=now_ms; s_tx_state=LORA_TX_IDLE;
+        Lora_E22_ReportTx(3U);
         if(bps) {
           air_ms=(((uint32_t)s_tx_pending_len*LORA_E22_BITS_PER_BYTE*1000U)+bps-1U)/bps;
           s_tx_gap_until_ms=now_ms+air_ms*(100U-LORA_E22_TX_DUTY_LIMIT_PCT)/LORA_E22_TX_DUTY_LIMIT_PCT;
@@ -680,6 +712,7 @@ static void Lora_E22_TxStep(uint32_t now_ms)
       } else if((!s_uart_done_seen && !BSP_LoRa_IsTxBusy()) ||
                 (uint32_t)(now_ms-s_tx_state_ms)>Lora_E22_GetUartDmaTimeoutMs(s_tx_pending_len)+Lora_E22_GetAuxWaitTimeoutMs()) {
         BSP_LoRa_AbortTx(); s_send_error_count++; s_tx_state=LORA_TX_IDLE;
+        Lora_E22_ReportTx(4U);
       }
       break;
 
@@ -721,6 +754,7 @@ Lora_Result_t Lora_E22_Send(const uint8_t *data, uint16_t len)
   s_tx_pending_len = len;
   s_tx_state       = LORA_TX_WAIT_AUX;
   s_tx_state_ms    = BSP_Time_GetTickMs();
+  Lora_E22_ReportTx(1U);
 
   /* Start immediately if the module is already idle; otherwise the state
      machine in Lora_E22_Service() carries it forward without ever blocking

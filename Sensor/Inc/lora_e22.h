@@ -14,6 +14,12 @@
 
 #define LORA_E22_RX_PAYLOAD_MAX 255U /**< MAVLink 最大 payload 长度，单位：byte。 */
 #define LORA_E22_TX_BUF_SIZE    280U /**< MAVLink2 帧含签名的发送缓冲长度，单位：byte。 */
+/** @brief 任务上下文原字节观察钩子，valid=1为生产解析通过，0为拒绝计数。 */
+typedef void (*Lora_DiagnosticRx_t)(const uint8_t *bytes, uint16_t length, uint32_t now_ms, uint8_t valid);
+/** @brief 原硬件事务事实，1 Queued/2 UART DMA TC/3 AUX idle/4 Error；不在ISR调用。 */
+typedef void (*Lora_DiagnosticTx_t)(uint8_t stage);
+/** @brief 启动期注册可选只读钩子；Driver不依赖Framework类型。 */
+void Lora_E22_SetDiagnosticCallbacks(Lora_DiagnosticRx_t rx, Lora_DiagnosticTx_t tx);
 
 /**
  * @brief LoRa 驱动返回值。

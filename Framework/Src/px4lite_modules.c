@@ -18,6 +18,7 @@
 #include "px4lite_time.h"
 #include "px4lite_topics.h"
 #include "px4lite_runtime_stats.h"
+#include "px4lite_diagnostic_capture.h"
 #include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
 #include "px4lite_lora_lab.h"
@@ -1035,6 +1036,7 @@ static Px4Lite_Result_t Px4Lite_RemoteIdRunReinitIfRequested(uint32_t now_ms)
 void Px4Lite_CommWorkRun(uint32_t now_ms)
 {
   Px4Lite_RuntimeReportComm(now_ms);
+  Px4Lite_CaptureWorkRun();
 #if PX4LITE_ENABLE_RPI_MAVLINK
   (void)Px4Lite_RpiMavlinkService(now_ms);
   (void)Px4Lite_MavlinkRxRunRpi(now_ms);

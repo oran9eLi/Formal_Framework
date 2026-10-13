@@ -48,6 +48,7 @@ typedef enum {
   DISPLAY_HMI_PAGE_DIAGNOSTICS, /**< 自检二级诊断：模块、故障与运行状态。 */
   DISPLAY_HMI_PAGE_EVENT_HISTORY, /**< 本机二级事件历史；不改变活动告警。 */
   DISPLAY_HMI_PAGE_DETAILS, /**< 二级测量详情和有界逐路步进。 */
+  DISPLAY_HMI_PAGE_INSPECTOR, /**< 通信二级观察；Messages/Raw/Decoded同级。 */
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 

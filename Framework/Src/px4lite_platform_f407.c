@@ -13,6 +13,7 @@
 #include "lora_e22_config.h"
 #include "px4lite_heartbeat_policy.h"
 #include "px4lite_config.h"
+#include "px4lite_diagnostic_capture.h"
 #include "px4lite_imu_axis_map.h"
 #include "bsp_gnss.h"
 #include "bsp_lora.h"
@@ -72,7 +73,23 @@ static mavlink_message_t s_rpi_parse_msg;
 static uint32_t s_rpi_pending_rx_ms;
 static uint32_t s_rpi_last_byte_ms; /**< 最近消费字节时刻；解析状态单独表示半帧存在。 */
 static uint8_t s_rpi_pending_frame;
+static uint8_t s_rpi_diagnostic_raw[PX4LITE_CAPTURE_FRAME_BYTES];
+static uint16_t s_rpi_diagnostic_length;
 #endif
+
+/** @brief Driver原字节事实经Adapter转换，捕获不接触生产队列。 */
+static void PlatformCaptureLoRaRx(const uint8_t *bytes, uint16_t length, uint32_t now, uint8_t valid)
+{ if (valid) { Px4Lite_CaptureRx(PX4LITE_CAPTURE_LORA_RX, bytes, length, now); } else { Px4Lite_CaptureReject(PX4LITE_CAPTURE_LORA_RX); } }
+/** @brief Driver阶段与Framework阶段明确逐项转换，无ISR解析。 */
+static void PlatformCaptureLoRaTx(uint8_t stage)
+{
+  switch (stage) {
+    case 1U: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_QUEUED); break;
+    case 2U: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_UART_DONE); break;
+    case 3U: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_MODULE_IDLE); break;
+    default: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_ERROR); break;
+  }
+}
 
 /**
  * @brief 将 float 按四舍五入方式转换为 int32。
@@ -155,6 +172,8 @@ static int32_t Px4Lite_BaroUpdateVerticalSpeed(int32_t altitude_mm, uint32_t sam
  */
 Px4Lite_Result_t Px4Lite_PlatformInit(void)
 {
+  Px4Lite_CaptureInit();
+  Lora_E22_SetDiagnosticCallbacks(PlatformCaptureLoRaRx, PlatformCaptureLoRaTx);
   memset(s_heartbeat_ms, 0, sizeof(s_heartbeat_ms));
   s_heartbeat_seen_mask = 0U;
   s_heartbeat_required_mask = 0U;
@@ -689,14 +708,16 @@ Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms)
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len)
 {
   Lora_Result_t result;
+  uint32_t token = 0U;
+  Px4Lite_Result_t mapped;
 
   if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
 
+  if (Lora_E22_IsTransportIdle()) { token = Px4Lite_CaptureTxBegin(data, len, Px4Lite_PlatformGetMs()); }
   result = Lora_E22_Send(data, len);
-  if (result == LORA_RESULT_OK) return PX4LITE_OK;
-  if (result == LORA_RESULT_BUSY) return PX4LITE_BUSY;
-  if (result == LORA_RESULT_INVALID_PARAM) return PX4LITE_INVALID_PARAM;
-  return PX4LITE_IO_ERROR;
+  mapped = result == LORA_RESULT_OK ? PX4LITE_OK : (result == LORA_RESULT_BUSY ? PX4LITE_BUSY : (result == LORA_RESULT_INVALID_PARAM ? PX4LITE_INVALID_PARAM : PX4LITE_IO_ERROR));
+  Px4Lite_CaptureTxSubmit(token, mapped);
+  return mapped;
 }
 
 uint8_t Px4Lite_LoRaIsTxIdle(void)
@@ -742,6 +763,7 @@ static void Px4Lite_RpiMavlinkResetRxState(void)
   s_rpi_pending_rx_ms = 0U;
   s_rpi_pending_frame = 0U;
   s_rpi_last_byte_ms = 0U;
+  s_rpi_diagnostic_length = 0U;
 }
 #endif
 
@@ -764,6 +786,7 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
   if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
 
   status = BSP_RpiUART_Send(data, len, PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS);
+  Px4Lite_CaptureRpiTx(data, len, Px4Lite_PlatformGetMs(), status == BSP_STATUS_OK ? PX4LITE_OK : PX4LITE_IO_ERROR);
   if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
   if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
   return PX4LITE_IO_ERROR;
@@ -827,6 +850,7 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms)
   if (s_rpi_pending_frame != 0U) { return PX4LITE_BUSY; }
 
   for (i = 0U; i < PX4LITE_RPI_RX_SERVICE_BYTE_BUDGET; ++i) {
+    uint8_t framing;
     if (BSP_RpiUART_Read(&byte, 1U) == 0U) { return (i == 0U) ? PX4LITE_IDLE : PX4LITE_OK; }
 
     if ((mavlink_get_channel_status(MAVLINK_COMM_0)->parse_state != MAVLINK_PARSE_STATE_IDLE) &&
@@ -834,7 +858,23 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms)
       Px4Lite_RpiMavlinkResetRxState();
     }
     s_rpi_last_byte_ms = now_ms;
-    if (mavlink_parse_char(MAVLINK_COMM_0, byte, &s_rpi_parse_msg, &s_rpi_parse_status) != 0) {
+    if (mavlink_get_channel_status(MAVLINK_COMM_0)->parse_state <= MAVLINK_PARSE_STATE_IDLE) {
+      s_rpi_diagnostic_length = 0U;
+      if (byte == 0xFD || byte == 0xFE) { s_rpi_diagnostic_raw[s_rpi_diagnostic_length++] = byte; }
+    } else if (s_rpi_diagnostic_length && s_rpi_diagnostic_length < sizeof(s_rpi_diagnostic_raw)) {
+      s_rpi_diagnostic_raw[s_rpi_diagnostic_length++] = byte;
+    }
+    framing = mavlink_frame_char(MAVLINK_COMM_0, byte, &s_rpi_parse_msg, &s_rpi_parse_status);
+    if (framing == MAVLINK_FRAMING_BAD_CRC || framing == MAVLINK_FRAMING_BAD_SIGNATURE) {
+      mavlink_status_t *parser = mavlink_get_channel_status(MAVLINK_COMM_0);
+      mavlink_message_t *message = mavlink_get_channel_buffer(MAVLINK_COMM_0);
+      Px4Lite_CaptureReject(PX4LITE_CAPTURE_RPI_RX);
+      s_rpi_diagnostic_length = 0U; parser->msg_received = MAVLINK_FRAMING_INCOMPLETE; parser->parse_state = MAVLINK_PARSE_STATE_IDLE;
+      if (byte == MAVLINK_STX) { parser->parse_state = MAVLINK_PARSE_STATE_GOT_STX; message->len = 0U; mavlink_start_checksum(message); s_rpi_diagnostic_raw[0] = byte; s_rpi_diagnostic_length = 1U; }
+    }
+    if (framing == MAVLINK_FRAMING_OK) {
+      Px4Lite_CaptureRx(PX4LITE_CAPTURE_RPI_RX, s_rpi_diagnostic_raw, s_rpi_diagnostic_length, now_ms);
+      s_rpi_diagnostic_length = 0U;
       s_rpi_pending_rx_ms = now_ms;
       s_rpi_pending_frame = 1U;
       return PX4LITE_OK;

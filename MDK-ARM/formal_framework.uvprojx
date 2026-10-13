@@ -415,6 +415,8 @@
         <Group>
           <GroupName>Framework</GroupName>
           <Files>
+            <File><FileName>px4lite_diagnostic_capture.c</FileName><FileType>1</FileType><FilePath>..\Framework\Src\px4lite_diagnostic_capture.c</FilePath></File>
+            <File><FileName>px4lite_mavlink_decode.c</FileName><FileType>1</FileType><FilePath>..\Framework\Src\px4lite_mavlink_decode.c</FilePath></File>
             <File>
               <FileName>px4lite_app.c</FileName>
               <FileType>1</FileType>

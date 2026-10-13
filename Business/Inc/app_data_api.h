@@ -16,6 +16,28 @@
 #include "px4lite_time.h"
 #include "px4lite_types.h"
 #include "px4lite_runtime_stats.h"
+#include "px4lite_diagnostic_capture.h"
+#include "px4lite_mavlink_decode.h"
+typedef Px4Lite_DecodedPage_t App_DecodedPage_t; /**< 固定八行解码工作区。 */
+typedef Px4Lite_CaptureRequest_t App_CaptureRequest_t; /**< 有界捕获动作请求。 */
+typedef Px4Lite_CaptureStatus_t App_CaptureStatus_t; /**< 独立诊断状态。 */
+typedef Px4Lite_CaptureSummary_t App_CaptureSummary_t; /**< 消息汇总行。 */
+typedef Px4Lite_CaptureFrame_t App_CaptureFrame_t; /**< 稳定完整原字节帧。 */
+/** @brief 对稳定原始帧只读解码，不执行命令或修改协议状态。 */
+Px4Lite_Result_t App_DecodeCapturedFrame(const App_CaptureFrame_t *frame, uint8_t page, App_DecodedPage_t *out);
+typedef Px4Lite_NmeaSentence_t App_NmeaSentence_t; /**< 稳定完整NMEA原字节。 */
+/** @brief 排队捕获动作，OK仅接受，结果查看Status。 */
+Px4Lite_Result_t App_RequestCapture(const App_CaptureRequest_t *request);
+/** @brief 复制捕获状态，不修改生产。 */
+Px4Lite_Result_t App_CopyCaptureStatus(App_CaptureStatus_t *out);
+/** @brief 复制当前会话汇总行。 */
+Px4Lite_Result_t App_CopyCaptureSummaryRow(uint32_t session_id, uint8_t index, App_CaptureSummary_t *out);
+/** @brief 按代数复制完整帧，覆盖后NOT_READY。 */
+Px4Lite_Result_t App_CopyCapturedFrame(uint32_t session_id, uint32_t token, App_CaptureFrame_t *out);
+/** @brief 同槽实时阶段，覆盖后返回NOT_READY。 */
+Px4Lite_Result_t App_CopyCapturedStage(uint32_t session_id, uint32_t token, uint8_t *stage);
+/** @brief 按代数复制完整NMEA句。 */
+Px4Lite_Result_t App_CopyNmeaSentence(uint32_t session_id, uint32_t token, App_NmeaSentence_t *out);
 typedef Px4Lite_RuntimeSnapshot_t App_RuntimeSnapshot_t; /**< 常驻资源只读摘要。 */
 typedef Px4Lite_TaskRuntime_t App_TaskRuntime_t; /**< 任务栈只读行。 */
 typedef Px4Lite_DisplayRuntime_t App_DisplayRuntime_t; /**< 显示所有者测量摘要。 */

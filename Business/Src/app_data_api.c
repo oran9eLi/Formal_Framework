@@ -37,6 +37,21 @@ Px4Lite_Result_t App_CopyTaskRuntime(uint8_t index, App_TaskRuntime_t *out, uint
 void App_ReportDisplayRuntime(const App_DisplayRuntime_t *sample) { Px4Lite_RuntimeReportDisplay(sample); }
 /** @brief 微秒时基；无符号减法处理约71分钟回绕。 */
 uint32_t App_RuntimeGetUs(void) { return Px4Lite_PlatformGetUs(); }
+/** @brief 课程字段解码仅访问调用方的稳定原字节副本。 */
+Px4Lite_Result_t App_DecodeCapturedFrame(const App_CaptureFrame_t *frame, uint8_t page, App_DecodedPage_t *out)
+{ return Px4Lite_DecodeFrame(frame, page, out); }
+/** @brief 应用捕获请求边界，不从UI读取生产队列。 */
+Px4Lite_Result_t App_RequestCapture(const App_CaptureRequest_t *request) { return Px4Lite_CaptureRequest(request); }
+/** @brief 捕获状态复制边界。 */
+Px4Lite_Result_t App_CopyCaptureStatus(App_CaptureStatus_t *out) { return Px4Lite_CaptureCopyStatus(out); }
+/** @brief 汇总行复制边界。 */
+Px4Lite_Result_t App_CopyCaptureSummaryRow(uint32_t session, uint8_t index, App_CaptureSummary_t *out) { return Px4Lite_CaptureCopySummary(session, index, out); }
+/** @brief 稳定原始帧复制边界。 */
+Px4Lite_Result_t App_CopyCapturedFrame(uint32_t session, uint32_t token, App_CaptureFrame_t *out) { return Px4Lite_CaptureCopyFrame(session, token, out); }
+/** @brief 同槽阶段更新，保留Raw选帧字节。 */
+Px4Lite_Result_t App_CopyCapturedStage(uint32_t session, uint32_t token, uint8_t *stage) { return Px4Lite_CaptureCopyStage(session, token, stage); }
+/** @brief 稳定NMEA句复制边界。 */
+Px4Lite_Result_t App_CopyNmeaSentence(uint32_t session, uint32_t token, App_NmeaSentence_t *out) { return Px4Lite_CaptureCopyNmea(session, token, out); }
 
 /** @brief IMU观察不抢占估计器；合法零值与无测量由valid明确区分。 */
 Px4Lite_Result_t App_CopyImuLatest(App_ImuSnapshot_t *out, uint32_t now_ms)
