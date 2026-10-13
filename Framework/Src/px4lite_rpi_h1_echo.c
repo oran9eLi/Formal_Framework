@@ -133,6 +133,7 @@ Px4Lite_Result_t Px4Lite_RpiH1EchoHandleTunnel(uint8_t source_system,
 
   s_stats.current_baud_bps = baud_bps;
   s_stats.handled_request_count++;
+  s_stats.request_ms=Px4Lite_PlatformGetMs(); memcpy(s_stats.nonce,&payload[2],8U); s_stats.pending=1U;
   return PX4LITE_OK;
 }
 
@@ -153,6 +154,7 @@ void Px4Lite_RpiH1EchoResponseSent(void)
   if (s_response.valid == 0U) { return; }
   memset(&s_response, 0, sizeof(s_response));
   s_stats.response_sent_count++;
+  s_stats.pending=0U;
 }
 
 void Px4Lite_RpiH1EchoGetStats(Px4Lite_RpiH1EchoStats_t *out)

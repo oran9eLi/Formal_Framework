@@ -26,6 +26,9 @@ typedef Px4Lite_CaptureFrame_t App_CaptureFrame_t; /**< 稳定完整原字节帧
 /** @brief 对稳定原始帧只读解码，不执行命令或修改协议状态。 */
 Px4Lite_Result_t App_DecodeCapturedFrame(const App_CaptureFrame_t *frame, uint8_t page, App_DecodedPage_t *out);
 typedef Px4Lite_NmeaSentence_t App_NmeaSentence_t; /**< 稳定完整NMEA原字节。 */
+typedef Px4Lite_SerialExperiment_t App_SerialExperiment_t; /**< 串口实验本机事实。 */
+/** @brief 复制串口实验快照，不访问UART。 */
+Px4Lite_Result_t App_CopySerialExperiment(App_SerialExperiment_t *out);
 /** @brief 排队捕获动作，OK仅接受，结果查看Status。 */
 Px4Lite_Result_t App_RequestCapture(const App_CaptureRequest_t *request);
 /** @brief 复制捕获状态，不修改生产。 */

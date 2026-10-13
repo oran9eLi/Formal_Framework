@@ -137,4 +137,8 @@ Gnss_Result_t Sensor_GNSS_GetStatus(Gnss_Status_t *out);
  */
 void Sensor_GNSS_RequestReinit(void);
 
+/** @brief 完整原始句的只读诊断回调；type为0其他/1GGA/2RMC/3GSA/4GSV，不能阻塞。 */
+typedef void (*Gnss_DiagnosticSentence_t)(const uint8_t *bytes, uint16_t length, uint8_t type, uint8_t checksum_valid, uint32_t now_ms);
+/** @brief 调度前由Adapter登记；Driver不依赖Framework。 */
+void Gnss_SetDiagnosticCallback(Gnss_DiagnosticSentence_t callback);
 #endif

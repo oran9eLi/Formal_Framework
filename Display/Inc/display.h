@@ -49,6 +49,8 @@ typedef enum {
   DISPLAY_HMI_PAGE_EVENT_HISTORY, /**< 本机二级事件历史；不改变活动告警。 */
   DISPLAY_HMI_PAGE_DETAILS, /**< 二级测量详情和有界逐路步进。 */
   DISPLAY_HMI_PAGE_INSPECTOR, /**< 通信二级观察；Messages/Raw/Decoded同级。 */
+  DISPLAY_HMI_PAGE_NMEA, /**< 与MAVLink互斥的原始定位观察。 */
+  DISPLAY_HMI_PAGE_SERIAL, /**< H1/B1本机响应事实。 */
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 

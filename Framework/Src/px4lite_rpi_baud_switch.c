@@ -161,6 +161,7 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchHandleTunnel(uint8_t source_system,
   s_stats.current_baud_bps = current_baud_bps;
   s_stats.state = PX4LITE_RPI_BAUD_STATE_PENDING_TX;
   s_stats.accepted_count++;
+  s_stats.request_ms=Px4Lite_PlatformGetMs(); memcpy(s_stats.nonce,&payload[2],8U);
   return PX4LITE_OK;
 }
 

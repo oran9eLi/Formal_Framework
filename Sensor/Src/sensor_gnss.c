@@ -18,7 +18,10 @@
 #define GNSS_RECOVER_RETRY_MS 100U
 
 static Gnss_Snapshot_t s_snapshot;
-static uint8_t s_line_buf[NMEA_SENTENCE_MAX_LEN];
+static uint8_t s_line_buf[NMEA_SENTENCE_MAX_LEN + 1U];
+static Gnss_DiagnosticSentence_t s_diagnostic_sentence;
+/** @brief 只登记轻量副本入口，无额外采集者。 */
+void Gnss_SetDiagnosticCallback(Gnss_DiagnosticSentence_t callback) { s_diagnostic_sentence=callback; }
 static uint16_t s_line_pos;
 
 static uint8_t s_recover_rx_pending;
@@ -405,7 +408,7 @@ static void Gnss_FeedAndParse(uint32_t now)
       if (ch == '$') {
         s_line_pos               = 0U;
         s_line_buf[s_line_pos++] = ch;
-      } else if ((s_line_pos > 0U) && (s_line_pos < (NMEA_SENTENCE_MAX_LEN - 1U))) {
+      } else if ((s_line_pos > 0U) && (s_line_pos < NMEA_SENTENCE_MAX_LEN)) {
         s_line_buf[s_line_pos++] = ch;
 
         if (ch == '\n') {
@@ -413,8 +416,19 @@ static void Gnss_FeedAndParse(uint32_t now)
           uint16_t cursor = 0U;
 
           s_line_buf[s_line_pos] = '\0';
-
-          if ((Nmea_ExtractSentence(s_line_buf, s_line_pos, &cursor, &sentence) != 0U) && (sentence.checksum_ok != 0U)) {
+          memset(&sentence,0,sizeof(sentence));
+          (void)Nmea_ExtractSentence(s_line_buf,s_line_pos,&cursor,&sentence);
+          if (s_diagnostic_sentence) {
+            uint8_t type=0U;
+            if (s_line_pos>=6U) {
+              if (!memcmp(&s_line_buf[3],"GGA",3U)) { type=1U; }
+              else if (!memcmp(&s_line_buf[3],"RMC",3U)) { type=2U; }
+              else if (!memcmp(&s_line_buf[3],"GSA",3U)) { type=3U; }
+              else if (!memcmp(&s_line_buf[3],"GSV",3U)) { type=4U; }
+            }
+            s_diagnostic_sentence(s_line_buf,s_line_pos,type,sentence.checksum_ok,now);
+          }
+          if (sentence.raw_len && sentence.checksum_ok) {
             Gnss_RecordValidSentence(now);
 
             switch (sentence.type) {

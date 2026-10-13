@@ -7,6 +7,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
+#include "px4lite_platform.h"
+static Px4Lite_SerialExperiment_t s_serial;
 /** @brief 固定互斥区；切类型必须换会话且暂停。 */
 typedef union {
   Px4Lite_CaptureFrame_t mav[PX4LITE_CAPTURE_CAPACITY]; /**< MAVLink完整帧。 */
@@ -38,6 +40,7 @@ Px4Lite_Result_t Px4Lite_CaptureRequest(const Px4Lite_CaptureRequest_t *request)
 /** @brief 换会话时只清固定元数据；旧union字节不会被旧token授权读取。 */
 void Px4Lite_CaptureWorkRun(void)
 {
+  Px4Lite_SerialExperiment_t serial;
   taskENTER_CRITICAL();
   if (s_status.pending) {
     uint8_t reset = (uint8_t)(s_request.operation == PX4LITE_CAPTURE_CLEAR || s_request.operation == PX4LITE_CAPTURE_SELECT || s_request.source != s_status.source);
@@ -53,7 +56,13 @@ void Px4Lite_CaptureWorkRun(void)
     s_status.completed_request_id = s_status.request_id; s_status.result = PX4LITE_OK; s_status.pending = 0U;
   }
   taskEXIT_CRITICAL();
+  Px4Lite_RpiH1EchoGetStats(&serial.h1); Px4Lite_RpiBaudSwitchGetStats(&serial.b1);
+  serial.measured_ms=Px4Lite_PlatformGetMs();
+  taskENTER_CRITICAL(); s_serial=serial; taskEXIT_CRITICAL();
 }
+/** @brief 只复制Comm已发布状态，不让消费者访问外设。 */
+Px4Lite_Result_t Px4Lite_CopySerialExperiment(Px4Lite_SerialExperiment_t *out)
+{ if(!out) { return PX4LITE_INVALID_PARAM; } taskENTER_CRITICAL(); *out=s_serial; taskEXIT_CRITICAL(); return PX4LITE_OK; }
 /** @brief 复制摘要。 */
 Px4Lite_Result_t Px4Lite_CaptureCopyStatus(Px4Lite_CaptureStatus_t *out)
 { if (!out) { return PX4LITE_INVALID_PARAM; } taskENTER_CRITICAL(); *out = s_status; taskEXIT_CRITICAL(); return PX4LITE_OK; }

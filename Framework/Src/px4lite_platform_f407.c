@@ -174,6 +174,7 @@ Px4Lite_Result_t Px4Lite_PlatformInit(void)
 {
   Px4Lite_CaptureInit();
   Lora_E22_SetDiagnosticCallbacks(PlatformCaptureLoRaRx, PlatformCaptureLoRaTx);
+  Gnss_SetDiagnosticCallback(Px4Lite_CaptureNmea);
   memset(s_heartbeat_ms, 0, sizeof(s_heartbeat_ms));
   s_heartbeat_seen_mask = 0U;
   s_heartbeat_required_mask = 0U;

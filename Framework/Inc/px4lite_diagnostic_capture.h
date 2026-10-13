@@ -6,6 +6,16 @@
 #ifndef PX4LITE_DIAGNOSTIC_CAPTURE_H
 #define PX4LITE_DIAGNOSTIC_CAPTURE_H
 #include "px4lite_types.h"
+#include "px4lite_rpi_h1_echo.h"
+#include "px4lite_rpi_baud_switch.h"
+/** @brief Comm单写串口实验快照；本机阶段不推断Server结果。 */
+typedef struct {
+  Px4Lite_RpiH1EchoStats_t h1; /**< H1本机处理/响应事实。 */
+  Px4Lite_RpiBaudSwitchStats_t b1; /**< B1旧速率回包与重配置事实。 */
+  uint32_t measured_ms; /**< 快照更新毫秒。 */
+} Px4Lite_SerialExperiment_t;
+/** @brief 不访问UART的串口实验副本。 */
+Px4Lite_Result_t Px4Lite_CopySerialExperiment(Px4Lite_SerialExperiment_t *out);
 #define PX4LITE_CAPTURE_CAPACITY 4U /**< 完整帧槽数量。 */
 #define PX4LITE_CAPTURE_SUMMARIES 16U /**< 汇总键容量。 */
 #define PX4LITE_CAPTURE_FRAME_BYTES 280U /**< MAVLink2含签名的最大帧字节数。 */

@@ -50,6 +50,8 @@ typedef struct {
   uint32_t apply_failure_count; /**< UART6 重配置失败数。 */
   uint32_t current_baud_bps; /**< 最近读取的已应用波特率，单位 bit/s；0 表示不可读。 */
   Px4Lite_RpiBaudSwitchState_t state; /**< 当前切换状态。 */
+  uint32_t request_ms; /**< 最近接受请求的毫秒时间。 */
+  uint8_t nonce[8]; /**< 最近接受请求的原始nonce，发送后保留。 */
 } Px4Lite_RpiBaudSwitchStats_t;
 
 /** @brief 清空本次启动的切换状态，并确认当前 UART6 处于 B0。 */

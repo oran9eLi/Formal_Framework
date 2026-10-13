@@ -41,6 +41,10 @@ typedef struct {
   uint32_t busy_count;             /**< 响应槽被其他请求占用次数。 */
   uint32_t response_sent_count;    /**< UART6 阻塞发送成功后的响应数。 */
   uint32_t current_baud_bps;       /**< 最近一次成功读取的已应用配置；0 表示当前不可读。 */
+  uint32_t request_ms; /**< 最近接受请求的毫秒时间。 */
+  uint8_t nonce[8]; /**< 最近接受请求的原始nonce。 */
+  uint8_t pending; /**< 1响应待发，0已发送或无请求。 */
+  uint8_t reserved[3]; /**< 对齐。 */
 } Px4Lite_RpiH1EchoStats_t;
 
 /** @brief 清空 H1 静态状态并核验 UART6 已应用波特率可读。 */

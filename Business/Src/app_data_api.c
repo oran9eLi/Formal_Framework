@@ -52,6 +52,8 @@ Px4Lite_Result_t App_CopyCapturedFrame(uint32_t session, uint32_t token, App_Cap
 Px4Lite_Result_t App_CopyCapturedStage(uint32_t session, uint32_t token, uint8_t *stage) { return Px4Lite_CaptureCopyStage(session, token, stage); }
 /** @brief 稳定NMEA句复制边界。 */
 Px4Lite_Result_t App_CopyNmeaSentence(uint32_t session, uint32_t token, App_NmeaSentence_t *out) { return Px4Lite_CaptureCopyNmea(session, token, out); }
+/** @brief 串口实验只读边界。 */
+Px4Lite_Result_t App_CopySerialExperiment(App_SerialExperiment_t *out) { return Px4Lite_CopySerialExperiment(out); }
 
 /** @brief IMU观察不抢占估计器；合法零值与无测量由valid明确区分。 */
 Px4Lite_Result_t App_CopyImuLatest(App_ImuSnapshot_t *out, uint32_t now_ms)
