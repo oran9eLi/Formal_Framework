@@ -691,7 +691,7 @@ static void Lora_E22_TxStep(uint32_t now_ms)
       if ((s_tx_state == LORA_TX_WAIT_AUX) && ((uint32_t)(now_ms - s_tx_state_ms) > timeout_ms)) {
         s_tx_busy_count++;
         s_tx_state = LORA_TX_IDLE;
-        Lora_E22_ReportTx(4U);
+        Lora_E22_ReportTx(5U);
       }
       break;
 
@@ -711,8 +711,9 @@ static void Lora_E22_TxStep(uint32_t now_ms)
         }
       } else if((!s_uart_done_seen && !BSP_LoRa_IsTxBusy()) ||
                 (uint32_t)(now_ms-s_tx_state_ms)>Lora_E22_GetUartDmaTimeoutMs(s_tx_pending_len)+Lora_E22_GetAuxWaitTimeoutMs()) {
+        uint8_t timed_out=(uint8_t)((uint32_t)(now_ms-s_tx_state_ms)>Lora_E22_GetUartDmaTimeoutMs(s_tx_pending_len)+Lora_E22_GetAuxWaitTimeoutMs());
         BSP_LoRa_AbortTx(); s_send_error_count++; s_tx_state=LORA_TX_IDLE;
-        Lora_E22_ReportTx(4U);
+        Lora_E22_ReportTx(timed_out?5U:4U);
       }
       break;
 

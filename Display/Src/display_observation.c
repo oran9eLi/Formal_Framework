@@ -43,7 +43,18 @@ void Display_ObservationDraw(lv_obj_t *object,lv_draw_ctx_t *dc)
  lv_area_t co;lv_draw_line_dsc_t line;lv_point_t a,b;uint8_t ch;uint16_t i;
  lv_obj_get_coords(object,&co);lv_draw_line_dsc_init(&line);line.width=1;line.color=lv_color_hex(0x294052);
  a.x=co.x1+6;a.y=co.y1+102;b.x=co.x1+354;b.y=a.y;lv_draw_line(dc,&line,&a,&b);
- for(ch=0U;ch<2U;ch++) { line.color=lv_color_hex(ch?0xF2C14E:0x28BDCD);line.width=2;
-  for(i=1U;i<s_count;i++) { if(ObservationBit(s_valid[ch],i)&&ObservationBit(s_valid[ch],i-1U)&&!ObservationBit(s_segment[ch],i)) { a.x=co.x1+s_coords[ch][i-1U].x;a.y=co.y1+s_coords[ch][i-1U].y;b.x=co.x1+s_coords[ch][i].x;b.y=co.y1+s_coords[ch][i].y;lv_draw_line(dc,&line,&a,&b); } }
+ for(ch=0U;ch<2U;ch++) {
+  line.color=lv_color_hex(ch?0xF2C14E:0x28BDCD);line.width=2;
+  for(i=0U;i<s_count;i++) {
+   if(!ObservationBit(s_valid[ch],i)) { continue; }
+   /* 慢速源的相邻槽可能缺测，仍绘制每个真实样本；缺口不连线。 */
+   a.x=co.x1+s_coords[ch][i].x-1;a.y=co.y1+s_coords[ch][i].y;
+   b.x=a.x+2;b.y=a.y;lv_draw_line(dc,&line,&a,&b);
+   if(i && ObservationBit(s_valid[ch],i-1U) && !ObservationBit(s_segment[ch],i)) {
+    a.x=co.x1+s_coords[ch][i-1U].x;a.y=co.y1+s_coords[ch][i-1U].y;
+    b.x=co.x1+s_coords[ch][i].x;b.y=co.y1+s_coords[ch][i].y;
+    lv_draw_line(dc,&line,&a,&b);
+   }
+  }
  }
 }

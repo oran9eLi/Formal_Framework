@@ -17,7 +17,7 @@ typedef struct {
   uint16_t offset; /**< payload内字节偏移。 */
   uint8_t kind; /**< DecodeKind。 */
   uint8_t count; /**< 0标量，非零数组长度。 */
-  uint8_t unknown; /**< 0无哨兵/1 uint16max/2 signed-1/3 int16max。 */
+  uint8_t unknown; /**< 0无/1 uint16max/2 signed-1/3 int16max/4 uint8max/5零未提供/6 GPS yaw双哨兵/7零不支持。 */
 } DecodeField_t;
 /** @brief 课程消息目录，其他合法消息保留Raw并显示Unsupported。 */
 typedef struct {
@@ -63,17 +63,17 @@ static const DecodeField_t s_fields_gps_raw_int[] = {
   {"lat", "degE7", 8U, DQ_I32, 0U, 0U},
   {"lon", "degE7", 12U, DQ_I32, 0U, 0U},
   {"alt", "mm", 16U, DQ_I32, 0U, 0U},
-  {"eph", "cm", 20U, DQ_U16, 0U, 1U},
-  {"epv", "cm", 22U, DQ_U16, 0U, 1U},
+  {"eph", "DOPx100", 20U, DQ_U16, 0U, 1U},
+  {"epv", "DOPx100", 22U, DQ_U16, 0U, 1U},
   {"vel", "cm/s", 24U, DQ_U16, 0U, 1U},
   {"cog", "cdeg", 26U, DQ_U16, 0U, 1U},
-  {"satellites_visible", "", 29U, DQ_U8, 0U, 0U},
-  {"alt_ellipsoid", "", 30U, DQ_I32, 0U, 0U},
+  {"satellites_visible", "", 29U, DQ_U8, 0U, 4U},
+  {"alt_ellipsoid", "mm", 30U, DQ_I32, 0U, 0U},
   {"h_acc", "mm", 34U, DQ_U32, 0U, 0U},
   {"v_acc", "mm", 38U, DQ_U32, 0U, 0U},
   {"vel_acc", "mm/s", 42U, DQ_U32, 0U, 0U},
   {"hdg_acc", "degE5", 46U, DQ_U32, 0U, 0U},
-  {"yaw", "rad", 50U, DQ_U16, 0U, 0U},
+  {"yaw", "cdeg", 50U, DQ_U16, 0U, 6U},
 };
 
 /** @brief ATTITUDE字段，offset为线上payload字节偏移。 */
@@ -106,7 +106,7 @@ static const DecodeField_t s_fields_scaled_pressure[] = {
   {"press_abs", "hPa", 4U, DQ_FLOAT, 0U, 0U},
   {"press_diff", "hPa", 8U, DQ_FLOAT, 0U, 0U},
   {"temperature", "cdegC", 12U, DQ_I16, 0U, 0U},
-  {"temperature_press_diff", "cdegC", 14U, DQ_I16, 0U, 0U},
+  {"temperature_press_diff", "cdegC", 14U, DQ_I16, 0U, 5U},
 };
 
 /** @brief BATTERY_STATUS字段，offset为线上payload字节偏移。 */
@@ -120,9 +120,9 @@ static const DecodeField_t s_fields_battery_status[] = {
   {"current_consumed", "mAh", 0U, DQ_I32, 0U, 2U},
   {"energy_consumed", "hJ", 4U, DQ_I32, 0U, 2U},
   {"battery_remaining", "%", 35U, DQ_I8, 0U, 2U},
-  {"time_remaining", "s", 36U, DQ_I32, 0U, 0U},
+  {"time_remaining", "s", 36U, DQ_I32, 0U, 5U},
   {"charge_state", "", 40U, DQ_U8, 0U, 0U},
-  {"voltages_ext", "mV", 41U, DQ_U16, 4U, 0U},
+  {"voltages_ext", "mV", 41U, DQ_U16, 4U, 7U},
   {"mode", "", 49U, DQ_U8, 0U, 0U},
   {"fault_bitmask", "bits", 50U, DQ_U32, 0U, 0U},
 };
@@ -184,7 +184,7 @@ static const DecodeField_t s_fields_command_long[] = {
 static const DecodeField_t s_fields_command_ack[] = {
   {"command", "", 0U, DQ_U16, 0U, 0U},
   {"result", "", 2U, DQ_U8, 0U, 0U},
-  {"progress", "", 3U, DQ_U8, 0U, 0U},
+  {"progress", "%", 3U, DQ_U8, 0U, 4U},
   {"result_param2", "", 4U, DQ_I32, 0U, 0U},
   {"target_system", "", 8U, DQ_U8, 0U, 0U},
   {"target_component", "", 9U, DQ_U8, 0U, 0U},
@@ -236,8 +236,12 @@ static void DecodeScalar(char *out, const DecodeField_t *field, uint8_t index, c
   char value[32];
   if (field->count) { (void)snprintf(label, sizeof(label), "%s[%u]", field->name, (unsigned int)index); }
   else { (void)snprintf(label, sizeof(label), "%s", field->name); }
-  if ((field->unknown == 1U && raw == UINT16_MAX) || (field->unknown == 2U && signed_value == -1) || (field->unknown == 3U && raw == INT16_MAX)) {
+  if (((field->unknown == 1U || field->unknown == 6U) && raw == UINT16_MAX) || (field->unknown == 2U && signed_value == -1) || (field->unknown == 3U && raw == INT16_MAX) || (field->unknown == 4U && raw == UINT8_MAX)) {
     (void)snprintf(value, sizeof(value), "unknown");
+  } else if ((field->unknown == 5U || field->unknown == 6U) && raw == 0U) {
+    (void)snprintf(value, sizeof(value), "not provided");
+  } else if (field->unknown == 7U && raw == 0U) {
+    (void)snprintf(value, sizeof(value), "unsupported");
   } else if (field->kind == DQ_FLOAT) {
     float f;
     uint32_t bits = (uint32_t)raw;
@@ -288,10 +292,16 @@ static void DecodeTunnel(const uint8_t *p, uint16_t length, Px4Lite_DecodedPage_
   if (type<=2U) {
     char text[41];
     uint8_t text_n=(uint8_t)DecodeRead(p,length,15U,1U);
-    if (n<11U || text_n>117U || (uint16_t)(11U+text_n)>n) { (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"Malformed text length"); return; }
+    uint16_t expected=(uint16_t)(11U+text_n+(type==2U?4U:0U));
+    if (!text_n || text_n>48U || n!=expected) {
+      (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"Malformed H1 length / N must be 1..48"); return;
+    }
     for(i=0U;i<text_n && i<40U;i++) { uint8_t c=(uint8_t)DecodeRead(p,length,(uint16_t)(16U+i),1U); text[i]=(c>=32U && c<=126U)?(char)c:'.'; } text[i]='\0';
-    (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"text[%u]: %s",(unsigned int)text_n,text);
-    if (text_n>40U) { (void)snprintf(out->rows[7],PX4LITE_DECODE_TEXT,"Remaining text: see Raw"); out->row_count=8U; }
+    (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"text[%u]: %s%s",(unsigned int)text_n,text,text_n>40U?"...":"");
+    if (type==2U) {
+      (void)snprintf(out->rows[7],PX4LITE_DECODE_TEXT,"baud: %lu bit/s",(unsigned long)DecodeRead(p,length,(uint16_t)(16U+text_n),4U));
+      out->row_count=8U;
+    } else if (text_n>40U) { (void)snprintf(out->rows[7],PX4LITE_DECODE_TEXT,"Remaining text: see Raw"); out->row_count=8U; }
   } else {
     if (n!=14U) { (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"Malformed baud payload length"); return; }
     (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"baud: %lu bit/s",(unsigned long)DecodeRead(p,length,15U,4U));

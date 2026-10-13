@@ -15,8 +15,21 @@ UNITS = dict(time_boot_ms="ms", time_usec="us", lat="degE7", lon="degE7", alt="m
              voltages="mV", voltages_ext="mV", current_consumed="mAh", energy_consumed="hJ",
              press_abs="hPa", press_diff="hPa", load="0.1%", drop_rate_comm="0.01%", time_remaining="s",
              temperature_press_diff="cdegC", h_acc="mm", v_acc="mm", vel_acc="mm/s", hdg_acc="degE5", yaw_accuracy="cdeg")
-UNKNOWN = {"eph": 1, "epv": 1, "vel": 1, "cog": 1, "hdg": 1, "voltage_battery": 1, "voltages": 1,
-           "current_battery": 2, "battery_remaining": 2, "current_consumed": 2, "energy_consumed": 2, "temperature": 3}
+# 同名字段不保证同一单位/哨兵；以消息和字段为键，依据本仓库协议注释。
+UNIT_OVERRIDES = {("GPS_RAW_INT", "eph"): "DOPx100", ("GPS_RAW_INT", "epv"): "DOPx100",
+                  ("GPS_RAW_INT", "yaw"): "cdeg", ("GPS_RAW_INT", "alt_ellipsoid"): "mm",
+                  ("COMMAND_ACK", "progress"): "%"}
+UNKNOWN = {
+    **{("GPS_RAW_INT", f): 1 for f in ("eph", "epv", "vel", "cog")},
+    ("GPS_RAW_INT", "satellites_visible"): 4, ("GPS_RAW_INT", "yaw"): 6,
+    ("GLOBAL_POSITION_INT", "hdg"): 1,
+    ("SYS_STATUS", "voltage_battery"): 1, ("SYS_STATUS", "current_battery"): 2,
+    ("SYS_STATUS", "battery_remaining"): 2,
+    **{("BATTERY_STATUS", f): 2 for f in ("current_battery", "battery_remaining", "current_consumed", "energy_consumed")},
+    ("BATTERY_STATUS", "temperature"): 3, ("BATTERY_STATUS", "voltages"): 1,
+    ("BATTERY_STATUS", "voltages_ext"): 7, ("BATTERY_STATUS", "time_remaining"): 5,
+    ("SCALED_PRESSURE", "temperature_press_diff"): 5, ("COMMAND_ACK", "progress"): 4,
+}
 
 
 def main():
@@ -37,10 +50,10 @@ def main():
         for field, (kind, count, offset) in fields.items():
             dtype = "DQ_BYTES" if kind == "UINT8_T" and count else KINDS[kind]
             unit = "us" if field.startswith("servo") and field.endswith("_raw") else UNITS.get(field, "")
+            unit = UNIT_OVERRIDES.get((name, field), unit)
             if field.startswith("onboard_control_sensors_") or field.endswith("bitmask"):
                 unit = "bits"
-            unknown = UNKNOWN.get(field, 0)
-            if field == "temperature" and name != "BATTERY_STATUS": unknown = 0
+            unknown = UNKNOWN.get((name, field), 0)
             lines.append(f'  {{"{field}", "{unit}", {offset}U, {dtype}, {count}U, {unknown}U}},')
         chunks.append(f'/** @brief {name}字段，offset为线上payload字节偏移。 */\nstatic const DecodeField_t s_fields_{name.lower()}[] = {{\n'+"\n".join(lines)+"\n};\n")
         catalog.append(f'  {{{msgid}U, "{name}", s_fields_{name.lower()}, {len(fields)}U}},')

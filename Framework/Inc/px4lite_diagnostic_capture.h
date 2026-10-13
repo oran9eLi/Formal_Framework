@@ -23,12 +23,13 @@ Px4Lite_Result_t Px4Lite_CopySerialExperiment(Px4Lite_SerialExperiment_t *out);
 /** @brief 一次仅捕获一个入口/方向；NMEA与MAVLink互斥。 */
 typedef enum { PX4LITE_CAPTURE_LORA_RX=0, PX4LITE_CAPTURE_LORA_TX, PX4LITE_CAPTURE_RPI_RX,
   PX4LITE_CAPTURE_RPI_TX, PX4LITE_CAPTURE_NMEA } Px4Lite_CaptureSource_t;
-/** @brief 学生显式动作；Clear暂停并换会话，不改生产。 */
+/** @brief 学生显式动作；Start新建会话，Clear暂停并换会话，不改生产。 */
 typedef enum { PX4LITE_CAPTURE_START=0, PX4LITE_CAPTURE_PAUSE, PX4LITE_CAPTURE_CLEAR,
   PX4LITE_CAPTURE_SELECT } Px4Lite_CaptureOperation_t;
 /** @brief 硬件事实阶段，均不证明对端接收。 */
 typedef enum { PX4LITE_CAPTURE_SUBMITTING=0, PX4LITE_CAPTURE_QUEUED, PX4LITE_CAPTURE_UART_DONE,
-  PX4LITE_CAPTURE_MODULE_IDLE, PX4LITE_CAPTURE_ERROR, PX4LITE_CAPTURE_RX_VALID } Px4Lite_CaptureStage_t;
+  PX4LITE_CAPTURE_MODULE_IDLE, PX4LITE_CAPTURE_ERROR, PX4LITE_CAPTURE_RX_VALID,
+  PX4LITE_CAPTURE_TIMEOUT } Px4Lite_CaptureStage_t;
 /** @brief 非阻塞固定请求槽；filter为0 All/1 GGA/2 RMC/3 GSA/4 GSV。 */
 typedef struct {
   uint8_t operation; /**< CaptureOperation。 */
@@ -48,7 +49,7 @@ typedef struct {
   uint8_t sequence; /**< MAVLink线上序号。 */
   uint8_t source; /**< CaptureSource。 */
   uint8_t stage; /**< CaptureStage。 */
-  uint8_t flags; /**< bit0签名字节存在；不表示认证通过。 */
+  uint8_t flags; /**< bit0签名字节存在；bit1已接受帧已计数；不表示对端收到。 */
   uint8_t bytes[PX4LITE_CAPTURE_FRAME_BYTES]; /**< 原始STX/header/payload/CRC/signature。 */
 } Px4Lite_CaptureFrame_t;
 /** @brief NMEA稳定副本，原始CR/LF计入length，不额外添加分隔符。 */
@@ -66,8 +67,8 @@ typedef struct {
   uint32_t msg_id; /**< 消息号；NMEA使用type。 */
   uint32_t first_ms; /**< 本会话首帧时间，ms。 */
   uint32_t last_ms; /**< 最近帧时间，ms。 */
-  uint32_t count; /**< 本键捕获次数。 */
-  uint32_t latest_token; /**< 最近帧代数；槽覆盖后可能不可再复制。 */
+  uint32_t count; /**< RX有效帧/TX接口已接受帧次数；失败尝试不计入。 */
+  uint32_t latest_token; /**< 最近原始帧代数，含失败尝试；槽覆盖后可能不可复制。 */
   uint8_t system_id; /**< 来源系统。 */
   uint8_t component_id; /**< 来源组件。 */
   uint8_t source; /**< 来源入口。 */
@@ -78,7 +79,10 @@ typedef struct {
   uint32_t session_id; /**< 当前会话。 */
   uint32_t request_id; /**< 最近接受请求ID。 */
   uint32_t completed_request_id; /**< 已执行请求ID。 */
-  uint32_t count; /**< 本会话已捕获条数。 */
+  uint32_t count; /**< 本会话RX有效帧/TX已接受帧/NMEA原始句条数。 */
+  uint32_t tx_attempts; /**< 选中TX入口的原始提交尝试条数，含失败。 */
+  uint32_t tx_timeouts; /**< 本会话TX超时终态次数，可能有部分字节出线。 */
+  uint32_t tx_errors; /**< 本会话TX非超时错误/中止次数。 */
   uint32_t overwritten; /**< 满环覆盖旧槽次数。 */
   uint32_t capture_drops; /**< 无法存入诊断记录次数。 */
   uint32_t summary_drops; /**< 汇总表满，帧仍可入环。 */
@@ -119,8 +123,8 @@ uint32_t Px4Lite_CaptureTxBegin(const uint8_t *bytes, uint16_t length, uint32_t 
 void Px4Lite_CaptureTxSubmit(uint32_t token, Px4Lite_Result_t result);
 /** @brief Driver任务上下文阶段事实，迟到结果按独立pending会话/token核对。 */
 void Px4Lite_CaptureTxStage(uint8_t stage);
-/** @brief RPi阻塞UART发送返回后捕获最终线上字节及发送结果。 */
-void Px4Lite_CaptureRpiTx(const uint8_t *bytes, uint16_t length, uint32_t now_ms, Px4Lite_Result_t result);
+/** @brief RPi阻塞发送返回后捕获原始提交字节及UART_DONE/ERROR/TIMEOUT事实。 */
+void Px4Lite_CaptureRpiTx(const uint8_t *bytes, uint16_t length, uint32_t now_ms, uint8_t stage);
 /** @brief sensor提交完整原始NMEA；提交前/临界区内再次核对会话门禁。 */
 void Px4Lite_CaptureNmea(const uint8_t *bytes, uint16_t length, uint8_t type, uint8_t checksum_valid, uint32_t now_ms);
 #endif

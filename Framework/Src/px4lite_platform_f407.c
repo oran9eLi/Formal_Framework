@@ -87,6 +87,7 @@ static void PlatformCaptureLoRaTx(uint8_t stage)
     case 1U: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_QUEUED); break;
     case 2U: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_UART_DONE); break;
     case 3U: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_MODULE_IDLE); break;
+    case 5U: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_TIMEOUT); break;
     default: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_ERROR); break;
   }
 }
@@ -787,7 +788,7 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
   if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
 
   status = BSP_RpiUART_Send(data, len, PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS);
-  Px4Lite_CaptureRpiTx(data, len, Px4Lite_PlatformGetMs(), status == BSP_STATUS_OK ? PX4LITE_OK : PX4LITE_IO_ERROR);
+  Px4Lite_CaptureRpiTx(data, len, Px4Lite_PlatformGetMs(), status == BSP_STATUS_OK ? PX4LITE_CAPTURE_UART_DONE : (status == BSP_STATUS_TIMEOUT ? PX4LITE_CAPTURE_TIMEOUT : PX4LITE_CAPTURE_ERROR));
   if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
   if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
   return PX4LITE_IO_ERROR;

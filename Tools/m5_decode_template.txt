@@ -17,7 +17,7 @@ typedef struct {
   uint16_t offset; /**< payload内字节偏移。 */
   uint8_t kind; /**< DecodeKind。 */
   uint8_t count; /**< 0标量，非零数组长度。 */
-  uint8_t unknown; /**< 0无哨兵/1 uint16max/2 signed-1/3 int16max。 */
+  uint8_t unknown; /**< 0无/1 uint16max/2 signed-1/3 int16max/4 uint8max/5零未提供/6 GPS yaw双哨兵/7零不支持。 */
 } DecodeField_t;
 /** @brief 课程消息目录，其他合法消息保留Raw并显示Unsupported。 */
 typedef struct {
@@ -51,8 +51,12 @@ static void DecodeScalar(char *out, const DecodeField_t *field, uint8_t index, c
   char value[32];
   if (field->count) { (void)snprintf(label, sizeof(label), "%s[%u]", field->name, (unsigned int)index); }
   else { (void)snprintf(label, sizeof(label), "%s", field->name); }
-  if ((field->unknown == 1U && raw == UINT16_MAX) || (field->unknown == 2U && signed_value == -1) || (field->unknown == 3U && raw == INT16_MAX)) {
+  if (((field->unknown == 1U || field->unknown == 6U) && raw == UINT16_MAX) || (field->unknown == 2U && signed_value == -1) || (field->unknown == 3U && raw == INT16_MAX) || (field->unknown == 4U && raw == UINT8_MAX)) {
     (void)snprintf(value, sizeof(value), "unknown");
+  } else if ((field->unknown == 5U || field->unknown == 6U) && raw == 0U) {
+    (void)snprintf(value, sizeof(value), "not provided");
+  } else if (field->unknown == 7U && raw == 0U) {
+    (void)snprintf(value, sizeof(value), "unsupported");
   } else if (field->kind == DQ_FLOAT) {
     float f;
     uint32_t bits = (uint32_t)raw;
@@ -103,10 +107,16 @@ static void DecodeTunnel(const uint8_t *p, uint16_t length, Px4Lite_DecodedPage_
   if (type<=2U) {
     char text[41];
     uint8_t text_n=(uint8_t)DecodeRead(p,length,15U,1U);
-    if (n<11U || text_n>117U || (uint16_t)(11U+text_n)>n) { (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"Malformed text length"); return; }
+    uint16_t expected=(uint16_t)(11U+text_n+(type==2U?4U:0U));
+    if (!text_n || text_n>48U || n!=expected) {
+      (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"Malformed H1 length / N must be 1..48"); return;
+    }
     for(i=0U;i<text_n && i<40U;i++) { uint8_t c=(uint8_t)DecodeRead(p,length,(uint16_t)(16U+i),1U); text[i]=(c>=32U && c<=126U)?(char)c:'.'; } text[i]='\0';
-    (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"text[%u]: %s",(unsigned int)text_n,text);
-    if (text_n>40U) { (void)snprintf(out->rows[7],PX4LITE_DECODE_TEXT,"Remaining text: see Raw"); out->row_count=8U; }
+    (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"text[%u]: %s%s",(unsigned int)text_n,text,text_n>40U?"...":"");
+    if (type==2U) {
+      (void)snprintf(out->rows[7],PX4LITE_DECODE_TEXT,"baud: %lu bit/s",(unsigned long)DecodeRead(p,length,(uint16_t)(16U+text_n),4U));
+      out->row_count=8U;
+    } else if (text_n>40U) { (void)snprintf(out->rows[7],PX4LITE_DECODE_TEXT,"Remaining text: see Raw"); out->row_count=8U; }
   } else {
     if (n!=14U) { (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"Malformed baud payload length"); return; }
     (void)snprintf(out->rows[6],PX4LITE_DECODE_TEXT,"baud: %lu bit/s",(unsigned long)DecodeRead(p,length,15U,4U));

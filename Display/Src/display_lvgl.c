@@ -884,6 +884,7 @@ static UiButton_t *UiButton(const char *title, lv_coord_t x, lv_coord_t y, lv_co
   button = &s_buttons[s_button_used++];
   button->action = action;
   button->argument = argument;
+  lv_obj_clear_state(button->obj, LV_STATE_DISABLED);
   lv_obj_set_pos(button->obj, x, y);
   lv_obj_set_size(button->obj, w, h);
   lv_obj_set_style_bg_color(button->obj, lv_color_hex(color), 0);
@@ -1560,6 +1561,14 @@ static void Display_LvglUpdateRecording(void)
 {
   App_RecordingStatus_t st;uint8_t i;static const char * const states[6]={"Stopped","Recording","Stopping / wait sync","Saved","Partial","Error"};
   static const uint16_t intervals[4]={1000U,2000U,5000U,10000U};(void)App_CopyRecording(&st,s_last_tick_ms);
+  /* 请求由storage异步完成，按钮也必须跟随已发布状态。 */
+  for(i=0U;i<s_button_used;i++) {
+    if(s_buttons[i].action==UI_ACTION_RECORD_RUN) {
+      UiText(s_buttons[i].label,st.state==PX4LITE_RECORD_RECORDING?"Stop":(st.state==PX4LITE_RECORD_STOPPING?"Wait":"Start"));
+      if(st.pending || st.state==PX4LITE_RECORD_STOPPING) { lv_obj_add_state(s_buttons[i].obj,LV_STATE_DISABLED); }
+      else { lv_obj_clear_state(s_buttons[i].obj,LV_STATE_DISABLED); }
+    }
+  }
   (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"%s / session %lu / %u ms",states[st.state<6U?st.state:5U],(unsigned long)st.session_id,(unsigned int)intervals[st.interval]);
   (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"Action #%lu / done #%lu / %s / result %d",(unsigned long)st.request_id,(unsigned long)st.completed_request_id,st.pending?"Request queued":"Handled",(int)st.result);
   (void)snprintf(s_row_text[2],UI_ROW_TEXT_LEN,"Accepted %lu / Queued %lu / outstanding %lu",(unsigned long)st.accepted_count,(unsigned long)st.queued_count,(unsigned long)st.outstanding);
@@ -1590,8 +1599,19 @@ static void Display_LvglLayoutObservation(void)
 /** @brief 数据最多5Hz，统计继续；Freeze不改变控制或CSV状态。 */
 static void Display_LvglUpdateObservation(void)
 {
-  App_ObservationStatus_t st;uint8_t ch;static const uint16_t intervals[3]={200U,500U,1000U};
+  App_ObservationStatus_t st;uint8_t ch,i;static const uint16_t intervals[3]={200U,500U,1000U};
   (void)App_CopyObservation(&st,s_last_tick_ms);
+  /* 复用固定池，不重建布局；Field A在Drift组绑定Set ref。 */
+  for(i=0U;i<s_button_used;i++) {
+    UiButton_t *button=&s_buttons[i];
+    if(button->action==UI_ACTION_OBSERVE_RUN) { UiText(button->label,st.running?"Stop":"Start"); }
+    else if(button->action==UI_ACTION_OBSERVE_FREEZE) { UiText(button->label,st.running?(st.frozen?"Resume":"Freeze"):"Reset"); }
+    else if(button->action==UI_ACTION_OBSERVE_REF || (button->action==UI_ACTION_OBSERVE_FIELD && button->argument==0U)) {
+      uint8_t reference=(uint8_t)(App_ObservationFieldInfo(st.field[0])->group==6U);
+      button->action=reference?UI_ACTION_OBSERVE_REF:UI_ACTION_OBSERVE_FIELD;
+      UiText(button->label,reference?"Set ref":"Field A >");
+    }
+  }
   (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"%s / %s / %u ms / s%lu / %s",st.running?"Running":"Stopped",st.frozen?"Plot frozen":"Live plot",(unsigned int)intervals[st.interval],(unsigned long)st.session_id,st.pending?"Request queued":(st.result==PX4LITE_OK?"Accepted":(st.result==PX4LITE_BUSY?"Stop before edit":"Not ready")));UiText(s_page_info,s_page_info_text);
   for(ch=0U;ch<2U;ch++) {
     const App_ObservationFieldInfo_t *info=App_ObservationFieldInfo(st.field[ch]);App_ObservationStats_t *stat=&st.stats[ch];uint8_t row=(uint8_t)(ch*3U);
@@ -1655,7 +1675,7 @@ static void Display_LvglUpdateInspector(void)
   uint8_t i;
   static const char * const sources[5]={"LoRa RX","LoRa TX","RPi RX","RPi TX","NMEA"};
   static const char * const views[3]={"Messages","Raw","Decoded"};
-  static const char * const stages[6]={"Submitting","Queued","UART done","Module idle","Error/timeout","RX valid"};
+  static const char * const stages[7]={"Submitting","Queued","UART done","Module idle","Error","RX valid","Timeout"};
   (void)App_CopyCaptureStatus(&status);
   if(s_selected_session!=status.session_id) { s_selected_ready=0U;s_inspector_page=0U;s_inspector_row=0U;s_selected_session=status.session_id; }
   (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"%s / %s / %s / s%lu",views[s_inspector_mode],sources[status.source],status.pending?"Request queued":(status.running?"Capturing":"Paused"),(unsigned long)status.session_id);UiText(s_page_info,s_page_info_text);
@@ -1663,17 +1683,21 @@ static void Display_LvglUpdateInspector(void)
   if(s_inspector_mode==0U) {
     uint8_t first=(uint8_t)((s_inspector_row/4U)*4U);
     if(s_inspector_row>=status.summary_count) { s_inspector_row=0U;first=0U; }
-    (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"Capture %lu / stored %u / overwrite %lu / drop %lu / summary drop %lu",(unsigned long)status.count,(unsigned int)status.stored_count,(unsigned long)status.overwritten,(unsigned long)status.capture_drops,(unsigned long)status.summary_drops);
+    (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"Count %lu / stored %u / overwrite %lu / drop %lu / summary drop %lu",(unsigned long)status.count,(unsigned int)status.stored_count,(unsigned long)status.overwritten,(unsigned long)status.capture_drops,(unsigned long)status.summary_drops);
     (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"Reject %lu / %u keys / %s",(unsigned long)status.rejected,(unsigned int)status.summary_count,s_control_feedback);
     for(i=0U;i<4U;i++) {
       App_CaptureSummary_t row;
       if(App_CopyCaptureSummaryRow(status.session_id,(uint8_t)(first+i),&row)==PX4LITE_OK) {
         uint32_t span=row.last_ms-row.first_ms;
         if(span && row.count>1U) { (void)snprintf(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n%lu avg %.2fHz age%lums",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id,(unsigned long)row.count,(double)(row.count-1U)*1000.0/(double)span,(unsigned long)(s_last_tick_ms-row.last_ms)); }
-        else { (void)snprintf(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n%lu avg N/A age%lums",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id,(unsigned long)row.count,(unsigned long)(s_last_tick_ms-row.last_ms)); }
+        else if(row.count) { (void)snprintf(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n%lu avg N/A age%lums",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id,(unsigned long)row.count,(unsigned long)(s_last_tick_ms-row.last_ms)); }
+        else { (void)snprintf(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n0 avg/age N/A / attempt Raw",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id); }
       }
     }
     (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"%s",s_control_feedback);
+    if(status.source==PX4LITE_CAPTURE_LORA_TX || status.source==PX4LITE_CAPTURE_RPI_TX) {
+      (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"TX Attempt %lu / Timeout %lu / Error %lu",(unsigned long)status.tx_attempts,(unsigned long)status.tx_timeouts,(unsigned long)status.tx_errors);
+    }
     { Px4Lite_CommDebugInfo_t comm; App_GetCommStats(&comm); (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"LoRa CRC %lu / queue drop %lu / DMA overflow %lu",(unsigned long)comm.crc_error_count,(unsigned long)comm.rx_drop_count,(unsigned long)comm.rx_overflow_count); }
   } else if(!s_selected_ready) { (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"No selected frame / use Messages then Select"); }
   else if(status.source==PX4LITE_CAPTURE_NMEA) {
@@ -1701,14 +1725,14 @@ static void Display_LvglUpdateInspector(void)
     uint16_t first=(uint16_t)((s_inspector_page%pages)*64U);
     (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"#%lu msg%lu sys%u comp%u seq%u / %uB / MAV%u",(unsigned long)frame->token,(unsigned long)frame->msg_id,(unsigned int)frame->system_id,(unsigned int)frame->component_id,(unsigned int)frame->sequence,(unsigned int)frame->length,frame->bytes[0]==0xFD?2U:1U);
     frame->stage=stage;
-    (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"%s%s / age%lums / bytes %u..%u / page%u/%u",stages[stage<6U?stage:4U],in_ring?"":" (slot overwritten)",(unsigned long)(s_last_tick_ms-frame->time_ms),(unsigned int)first,(unsigned int)((first+64U<frame->length)?first+63U:frame->length-1U),(unsigned int)(s_inspector_page%pages)+1U,(unsigned int)pages);
+    (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"%s%s / age%lums / bytes %u..%u / page%u/%u",stages[stage<7U?stage:4U],in_ring?"":" (slot overwritten)",(unsigned long)(s_last_tick_ms-frame->time_ms),(unsigned int)first,(unsigned int)((first+64U<frame->length)?first+63U:frame->length-1U),(unsigned int)(s_inspector_page%pages)+1U,(unsigned int)pages);
     for(i=0U;i<4U;i++) {
       uint8_t j; uint16_t at=(uint16_t)(first+i*16U); uint16_t used;
       if(at>=frame->length) { break; }
       used=(uint16_t)snprintf(s_row_text[2U+i],UI_ROW_TEXT_LEN,"%03u:",(unsigned int)at);
       for(j=0U;j<16U && at+j<frame->length;j++) { used+=(uint16_t)snprintf(&s_row_text[2U+i][used],UI_ROW_TEXT_LEN-used," %02X",(unsigned int)frame->bytes[at+j]); }
     }
-    (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"Signature %s / verification not performed",frame->flags?"present":"absent");
+    (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"Signature %s / verification not performed",(frame->flags&1U)?"present":"absent");
     (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"%s / local TX stage does not confirm peer RX",s_control_feedback);
   } else {
     App_DecodedPage_t decoded;
