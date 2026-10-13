@@ -208,6 +208,9 @@ static const LocalMsgLog_CatalogEntry_t s_catalog[PX4LITE_LOGMSG_COUNT] = {
   {"Remote node discovered", 0U}, /* REMOTE_DISCOVERED */
   {"Remote heartbeat stale", 1U}, /* REMOTE_STALE */
   {"Remote node seen again", 0U}, /* REMOTE_RESTORED */
+  {"Observation started",0U}, {"Observation stopped",0U}, {"Observation reset",0U},
+  {"CSV recording started",0U}, {"CSV recording stopping",0U}, {"CSV recording saved",0U},
+  {"CSV recording partial",1U}, {"CSV recording failed",2U},
 };
 /** @brief 返回只读事件短文案；未知消息保持显式未知。 */
 const char *Px4Lite_LogMessageText(uint16_t message_id)

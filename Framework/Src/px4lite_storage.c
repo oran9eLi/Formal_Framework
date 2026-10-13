@@ -26,15 +26,67 @@
 #include "storage_queue.h"
 #include "storage_sd.h"
 #include "storage_time.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "px4lite_local_msglog.h"
+#include "px4lite_log_message_ids.h"
 
 #if PX4LITE_ENABLE_STORAGE
 
 static volatile uint8_t s_remount_request;
 static uint32_t s_last_data_ms;
 static uint32_t s_last_sync_ms;
+static Px4Lite_RecordingStatus_t s_record,s_record_public;
+static Px4Lite_RecordingRequest_t s_record_request;
+static const uint16_t s_record_intervals[4]={1000U,2000U,5000U,10000U};
 static Storage_Record_t s_work_record;
 static Storage_Record_t s_pop_record;
 static Px4Lite_ModuleStatus_t s_module_status[PX4LITE_MODULE_COUNT];
+
+/** @brief 请求只复制，不在显示或Health任务执行FatFs。 */
+Px4Lite_Result_t Px4Lite_RequestRecording(const Px4Lite_RecordingRequest_t *r)
+{
+ if(!r||r->operation>2U||r->interval>3U) { return PX4LITE_INVALID_PARAM; }
+ taskENTER_CRITICAL();if(s_record.pending) { taskEXIT_CRITICAL();return PX4LITE_BUSY; }
+ s_record_request=*r;s_record.request_id++;s_record.pending=1U;
+ s_record_public.request_id=s_record.request_id;s_record_public.pending=1U;
+ taskEXIT_CRITICAL();return PX4LITE_OK;
+}
+/** @brief 读取一致发布副本，不碰存储硬件。 */
+Px4Lite_Result_t Px4Lite_CopyRecording(Px4Lite_RecordingStatus_t *out)
+{ if(!out) { return PX4LITE_INVALID_PARAM; }taskENTER_CRITICAL();*out=s_record_public;taskEXIT_CRITICAL();return PX4LITE_OK; }
+/** @brief 首次硬错误结束数据会话，不因重挂载自动恢复。 */
+static void Storage_RecordFail(uint32_t now,Px4Lite_Result_t reason)
+{
+ if(s_record.state==PX4LITE_RECORD_RECORDING||s_record.state==PX4LITE_RECORD_STOPPING) {
+  s_record.state=PX4LITE_RECORD_ERROR;s_record.reason=reason;s_record.finished_ms=now;
+  Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_RECORD_ERROR,now,PX4LITE_FAULT_STORAGE_WRITE,PX4LITE_MODULE_STORAGE,1U);
+ }
+}
+/** @brief storage唯一处理动作；新Start需旧数据处理完成，不等共享事件队列清空。 */
+static void Storage_RecordRequestRun(uint32_t now)
+{
+ Px4Lite_RecordingRequest_t r;uint8_t pending;Px4Lite_Result_t result=PX4LITE_OK;
+ taskENTER_CRITICAL();pending=s_record.pending;r=s_record_request;taskEXIT_CRITICAL();
+ if(!pending) { return; }
+ if(r.operation==0U) {
+  if(s_record.state==PX4LITE_RECORD_RECORDING||s_record.state==PX4LITE_RECORD_STOPPING||s_record.outstanding) { result=PX4LITE_BUSY; }
+  else if(!Storage_SD_IsReady()) { result=PX4LITE_NOT_READY; }
+  else {
+   s_record.session_id++;if(!s_record.session_id) { s_record.session_id=1U; }
+   s_record.accepted_count=0U;s_record.queued_count=0U;s_record.written_count=0U;s_record.synced_count=0U;
+   s_record.queue_drop=0U;s_record.write_drop=0U;s_record.started_ms=now;s_record.finished_ms=0U;s_record.reason=PX4LITE_OK;
+   s_record.interval=r.interval;s_record.state=PX4LITE_RECORD_RECORDING;s_last_data_ms=now-s_record_intervals[r.interval];
+   Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_RECORD_START,now,0U,PX4LITE_MODULE_STORAGE,0U);
+  }
+ }else if(r.operation==1U) {
+  if(s_record.state==PX4LITE_RECORD_RECORDING) { s_record.state=PX4LITE_RECORD_STOPPING;Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_RECORD_STOP,now,0U,PX4LITE_MODULE_STORAGE,0U); }
+  else { result=PX4LITE_BUSY; }
+ }else {
+  if(s_record.state==PX4LITE_RECORD_RECORDING||s_record.state==PX4LITE_RECORD_STOPPING||s_record.outstanding) { result=PX4LITE_BUSY; }else { s_record.interval=r.interval; }
+ }
+ taskENTER_CRITICAL();s_record.result=result;s_record.completed_request_id=s_record.request_id;s_record.pending=0U;taskEXIT_CRITICAL();
+}
 
 /**
  * @brief 将浮点值按四舍五入转换为 int32。
@@ -298,15 +350,17 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
 
   memset(&s_work_record, 0, sizeof(s_work_record));
   s_work_record.type            = STORAGE_RECORD_DATA;
+  s_work_record.session_id=s_record.session_id;s_record.accepted_count++;
   s_work_record.enqueue_time_ms = now_ms;
   s_work_record.target_date_ymd = data.local_date_ymd;
   s_work_record.target_time_hhmmss = data.local_time_hhmmss;
   if (StorageCsv_FormatDataLine(&data, s_work_record.line, sizeof(s_work_record.line)) != PX4LITE_OK) {
+    s_record.write_drop++;if(s_record.reason==PX4LITE_OK) { s_record.reason=PX4LITE_OVERFLOW; }
     Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_WRITE, 0U, "csv_line_truncated");
     return;
   }
 
-  if (StorageQueue_Push(&s_work_record) != PX4LITE_OK) { Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_FULL, StorageQueue_DropCount(), "storage_queue_full"); }
+  if (StorageQueue_Push(&s_work_record) != PX4LITE_OK) { s_record.queue_drop++;if(s_record.reason==PX4LITE_OK) { s_record.reason=PX4LITE_OVERFLOW; }Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_FULL, StorageQueue_DropCount(), "storage_queue_full"); }else { s_record.queued_count++;s_record.outstanding++; }
 }
 /**
  * @brief 从队列取出一条记录并写入 SD 卡。
@@ -320,8 +374,13 @@ static void Storage_ConsumeOne(uint32_t now_ms)
   if (Storage_SD_IsReady() == 0U) { return; }
   if (StorageQueue_Pop(&s_pop_record) != PX4LITE_OK) { return; }
 
+  if(s_pop_record.type==STORAGE_RECORD_DATA && s_pop_record.session_id==s_record.session_id && s_record.state==PX4LITE_RECORD_ERROR) { if(s_record.outstanding) { s_record.outstanding--; }s_record.write_drop++;return; }
   result = (s_pop_record.type == STORAGE_RECORD_EVENT) ? Storage_SD_WriteEventLine(s_pop_record.line, s_pop_record.target_date_ymd, now_ms) : Storage_SD_WriteDataLine(s_pop_record.line, s_pop_record.target_date_ymd, now_ms);
-  if (result != PX4LITE_OK) { Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_WRITE, (uint32_t)result, "sd_write_failed"); }
+  if(s_pop_record.type==STORAGE_RECORD_DATA && s_pop_record.session_id==s_record.session_id) {
+    if(s_record.outstanding) { s_record.outstanding--; }
+    if(result==PX4LITE_OK) { s_record.written_count++; }else { s_record.write_drop++;Storage_RecordFail(now_ms,result); }
+  }
+  if (result != PX4LITE_OK) { Storage_RecordFail(now_ms,result);Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_WRITE, (uint32_t)result, "sd_write_failed"); }
 }
 
 /**
@@ -343,6 +402,7 @@ Px4Lite_Result_t Px4Lite_StorageModuleInit(void)
   s_remount_request = 0U;
   s_last_data_ms    = 0U;
   s_last_sync_ms    = 0U;
+  memset(&s_record,0,sizeof(s_record));memset(&s_record_public,0,sizeof(s_record_public));
   Storage_TimeInit();
   StorageDropEvent_Init();
   StorageEventTracker_Init();
@@ -365,6 +425,7 @@ void Px4Lite_StorageWorkRun(uint32_t now_ms)
   if (s_remount_request != 0U) {
     s_remount_request = 0U;
     /* 由资源所有者释放句柄；保留累计统计、首因及已有 2 秒退避。 */
+    Storage_RecordFail(now_ms,PX4LITE_NOT_READY);
     Storage_SD_Recover(now_ms);
     /* 文件关闭和卸载可能阻塞；本拍后续操作不能继续使用清理前的旧时刻。 */
     now_ms = Px4Lite_PlatformGetMs();
@@ -377,9 +438,11 @@ void Px4Lite_StorageWorkRun(uint32_t now_ms)
   }
 
   Storage_SD_Service(now_ms);
+  Storage_RecordRequestRun(now_ms);
+  if(!Storage_SD_IsReady()) { Storage_RecordFail(now_ms,PX4LITE_NOT_READY); }
   Storage_CheckModuleStatusEvents(now_ms);
 
-  if ((s_last_data_ms == 0U) || ((uint32_t)(now_ms - s_last_data_ms) >= STORAGE_DATA_PERIOD_MS)) {
+  if (s_record.state==PX4LITE_RECORD_RECORDING && (uint32_t)(now_ms-s_last_data_ms)>=s_record_intervals[s_record.interval]) {
     Storage_ProduceDataRecord(now_ms);
     s_last_data_ms = now_ms;
   }
@@ -387,12 +450,27 @@ void Px4Lite_StorageWorkRun(uint32_t now_ms)
   Storage_ConsumeOne(now_ms);
   Storage_CheckQueueDropEvent(now_ms);
 
-  if ((s_last_sync_ms == 0U) || ((uint32_t)(now_ms - s_last_sync_ms) >= STORAGE_SYNC_PERIOD_MS)) {
-    if (Storage_SD_Sync(now_ms) == PX4LITE_IO_ERROR) { Storage_EnqueueError(now_ms, "STORAGE", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_STORAGE_WRITE, 0U, "sd_sync_failed"); }
-    s_last_sync_ms = now_ms;
+  if ((s_record.state==PX4LITE_RECORD_STOPPING && !s_record.outstanding) || !s_last_sync_ms || (uint32_t)(now_ms-s_last_sync_ms)>=STORAGE_SYNC_PERIOD_MS) {
+    Px4Lite_Result_t result=Storage_SD_Sync(now_ms);
+    if(result==PX4LITE_OK) {
+      s_record.synced_count=s_record.written_count;
+      if(s_record.state==PX4LITE_RECORD_STOPPING && !s_record.outstanding) {
+        s_record.state=(s_record.queue_drop||s_record.write_drop)?PX4LITE_RECORD_PARTIAL:PX4LITE_RECORD_SAVED;s_record.finished_ms=now_ms;
+        Px4Lite_LocalMsgLogEvent(s_record.state==PX4LITE_RECORD_SAVED?PX4LITE_LOGMSG_RECORD_SAVED:PX4LITE_LOGMSG_RECORD_PARTIAL,now_ms,0U,PX4LITE_MODULE_STORAGE,0U);
+      }
+    }else { Storage_RecordFail(now_ms,result);if(result==PX4LITE_IO_ERROR) { Storage_EnqueueError(now_ms,"STORAGE",PX4LITE_STATE_DEGRADED,PX4LITE_FAULT_STORAGE_WRITE,0U,"sd_sync_failed"); } }
+    s_last_sync_ms=now_ms;
   }
 
+  if(!Storage_SD_IsReady()) { Storage_RecordFail(now_ms,PX4LITE_NOT_READY); }
+  { Storage_SdStatus_t sd;Storage_SD_CopyStatus(&sd);s_record.sd_state=(uint8_t)sd.state;s_record.card_type=sd.card_type;s_record.open_phase=sd.open_phase;s_record.fatfs_result=sd.open_result; }
+  taskENTER_CRITICAL();s_record_public=s_record;taskEXIT_CRITICAL();
   Storage_PublishState(now_ms);
 }
 
+#else
+/** @brief 禁用存储时明确拒绝记录。 */
+Px4Lite_Result_t Px4Lite_RequestRecording(const Px4Lite_RecordingRequest_t *request) { (void)request;return PX4LITE_NOT_READY; }
+/** @brief 禁用存储返回Stopped副本，不假装可用。 */
+Px4Lite_Result_t Px4Lite_CopyRecording(Px4Lite_RecordingStatus_t *out) { if(!out) { return PX4LITE_INVALID_PARAM; }memset(out,0,sizeof(*out));out->reason=PX4LITE_NOT_READY;return PX4LITE_NOT_READY; }
 #endif /* PX4LITE_ENABLE_STORAGE */

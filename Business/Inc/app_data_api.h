@@ -14,6 +14,13 @@
 
 #include <stdint.h>
 #include "app_experiment.h"
+#include "px4lite_storage.h"
+typedef Px4Lite_RecordingRequest_t App_RecordingRequest_t; /**< 有界手动记录动作。 */
+typedef Px4Lite_RecordingStatus_t App_RecordingStatus_t; /**< 独立数据会话计数。 */
+/** @brief 手动Start/Stop/改间隔，OK只表示入请求槽。 */
+Px4Lite_Result_t App_RequestRecording(const App_RecordingRequest_t *request);
+/** @brief 数据记录会话副本，不读SD或队列。 */
+Px4Lite_Result_t App_CopyRecording(App_RecordingStatus_t *out,uint32_t now_ms);
 #include "px4lite_time.h"
 #include "px4lite_types.h"
 #include "px4lite_runtime_stats.h"

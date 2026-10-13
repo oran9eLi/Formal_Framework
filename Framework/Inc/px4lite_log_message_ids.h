@@ -199,6 +199,14 @@ typedef enum {
   PX4LITE_LOGMSG_REMOTE_DISCOVERED, /**< Remote node discovered；严重度 0。 */
   PX4LITE_LOGMSG_REMOTE_STALE, /**< Remote heartbeat stale；严重度 1。 */
   PX4LITE_LOGMSG_REMOTE_RESTORED, /**< Remote node seen again；严重度 0。 */
+  PX4LITE_LOGMSG_OBSERVE_START, /**< Observation started；INFO。 */
+  PX4LITE_LOGMSG_OBSERVE_STOP, /**< Observation stopped；INFO。 */
+  PX4LITE_LOGMSG_OBSERVE_RESET, /**< Observation reset；INFO。 */
+  PX4LITE_LOGMSG_RECORD_START, /**< CSV recording started；INFO。 */
+  PX4LITE_LOGMSG_RECORD_STOP, /**< CSV recording stopping；INFO。 */
+  PX4LITE_LOGMSG_RECORD_SAVED, /**< CSV recording saved；INFO。 */
+  PX4LITE_LOGMSG_RECORD_PARTIAL, /**< CSV recording partial；WARN。 */
+  PX4LITE_LOGMSG_RECORD_ERROR, /**< CSV recording failed；ERROR。 */
   PX4LITE_LOGMSG_COUNT
 /* COUNT 之前只允许追加新编号，RPi 日志表已有编号保持。 */
 } Px4Lite_LogMessageId_t;

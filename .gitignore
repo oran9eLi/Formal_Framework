@@ -32,3 +32,6 @@ Release/Archive/**/*.log
 # OS generated files
 Thumbs.db
 Desktop.ini
+
+# Python tools output
+Tools/__pycache__/

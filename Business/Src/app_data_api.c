@@ -8,6 +8,10 @@
  */
 
 #include "app_data_api.h"
+/** @brief 手动记录命令边界。 */
+Px4Lite_Result_t App_RequestRecording(const App_RecordingRequest_t *request) { return Px4Lite_RequestRecording(request); }
+/** @brief 只复制storage已发布数据会话。 */
+Px4Lite_Result_t App_CopyRecording(App_RecordingStatus_t *out,uint32_t now_ms) { (void)now_ms;return Px4Lite_CopyRecording(out); }
 #include "FreeRTOS.h"
 #include "task.h"
 

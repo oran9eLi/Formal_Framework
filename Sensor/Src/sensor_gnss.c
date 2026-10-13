@@ -455,6 +455,13 @@ static void Gnss_FeedAndParse(uint32_t now)
           s_line_pos = 0U;
         }
       } else {
+        if(s_line_pos>=NMEA_SENTENCE_MAX_LEN && s_diagnostic_sentence) {
+          uint8_t type=0U;
+          if(!memcmp(&s_line_buf[3],"GGA",3U)) { type=1U; }else if(!memcmp(&s_line_buf[3],"RMC",3U)) { type=2U; }
+          else if(!memcmp(&s_line_buf[3],"GSA",3U)) { type=3U; }else if(!memcmp(&s_line_buf[3],"GSV",3U)) { type=4U; }
+          /* NULL/0为超容量事件；不提交截断句或伪造分隔符。 */
+          s_diagnostic_sentence(0,0U,type,0U,now);
+        }
         s_line_pos = 0U;
       }
     }

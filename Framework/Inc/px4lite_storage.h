@@ -12,6 +12,27 @@
 #define PX4LITE_STORAGE_H
 
 #include "px4lite_types.h"
+/** @brief 手动数据CSV状态；事件CSV独立继续。 */
+typedef enum { PX4LITE_RECORD_STOPPED=0,PX4LITE_RECORD_RECORDING,PX4LITE_RECORD_STOPPING,
+ PX4LITE_RECORD_SAVED,PX4LITE_RECORD_PARTIAL,PX4LITE_RECORD_ERROR } Px4Lite_RecordingState_t;
+/** @brief 单槽请求，操作0Start/1Stop/2Edit，间隔0=1/1=2/2=5/3=10秒。 */
+typedef struct { uint8_t operation; /**< 有界操作。 */uint8_t interval; /**< 间隔编号0..3。 */uint16_t reserved; /**< 对齐。 */ } Px4Lite_RecordingRequest_t;
+/** @brief 数据会话计数，单位均为本会话记录条数，不能混用SD总written。 */
+typedef struct {
+ uint32_t request_id; /**< 动作递增身份。 */uint32_t completed_request_id; /**< 已处理动作。 */
+ uint32_t session_id; /**< 非零数据会话，事件使用0。 */uint32_t accepted_count; /**< 实际采样/格式化尝试条数。 */
+ uint32_t queued_count; /**< 成功入队条数。 */uint32_t written_count; /**< 同会话完整写入条数。 */
+ uint32_t synced_count; /**< 最后成功fsync覆盖的written条数。 */uint32_t outstanding; /**< 同会话未处理条数。 */
+ uint32_t queue_drop; /**< 本会话队满丢条数。 */uint32_t write_drop; /**< 格式化/出队写错/终止丢条数。 */
+ uint32_t started_ms; /**< 开始毫秒。 */uint32_t finished_ms; /**< Saved/Partial/Error时毫秒。 */
+ Px4Lite_Result_t result; /**< 最后动作结果。 */Px4Lite_Result_t reason; /**< 错误首因，OK无错误。 */
+ uint8_t state; /**< RecordingState。 */uint8_t interval; /**< 间隔编号。 */uint8_t pending; /**< 动作待处理。 */uint8_t reserved; /**< 对齐。 */
+ uint8_t sd_state; /**< 本机SD服务状态。 */uint8_t card_type; /**< 卡类型。 */uint8_t open_phase; /**< 最近SD错误阶段。 */uint8_t fatfs_result; /**< 最近真实FatFs错误码。 */
+} Px4Lite_RecordingStatus_t;
+/** @brief 固定请求槽，仅由storage执行。 */
+Px4Lite_Result_t Px4Lite_RequestRecording(const Px4Lite_RecordingRequest_t *request);
+/** @brief 原子复制已发布会话，不访问SD。 */
+Px4Lite_Result_t Px4Lite_CopyRecording(Px4Lite_RecordingStatus_t *out);
 
 /**
  * @brief 模块初始化回调：复位记录队列和 SD 服务状态。

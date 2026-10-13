@@ -5,6 +5,7 @@
  */
 #include "app_experiment.h"
 #include "app_data_api.h"
+#include "app_message_log.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <math.h>
@@ -95,12 +96,12 @@ void App_ObservationWorkRun(uint32_t now)
   Px4Lite_Result_t result=PX4LITE_OK;
   switch(r.operation) {
    case APP_OBSERVE_EDIT:if(s_state.running) { result=PX4LITE_BUSY; }else { s_state.field[0]=r.field[0];s_state.field[1]=r.field[1];s_state.interval=r.interval;ObservationReset(); }break;
-   case APP_OBSERVE_START:if(s_state.running) { result=PX4LITE_BUSY; }else { ObservationReset();s_state.running=1U;s_due_ms=now; }break;
-   case APP_OBSERVE_STOP:s_state.running=0U;break;
-   case APP_OBSERVE_RESET:if(s_state.running) { result=PX4LITE_BUSY; }else { ObservationReset();s_state.reference_valid=0U;s_state.drift_state=0U; }break;
+   case APP_OBSERVE_START:if(s_state.running) { result=PX4LITE_BUSY; }else { ObservationReset();s_state.running=1U;s_due_ms=now;App_MessageLogObservation(0U,now); }break;
+   case APP_OBSERVE_STOP:if(s_state.running) { s_state.running=0U;App_MessageLogObservation(1U,now); }break;
+   case APP_OBSERVE_RESET:if(s_state.running) { result=PX4LITE_BUSY; }else { ObservationReset();s_state.reference_valid=0U;s_state.drift_state=0U;App_MessageLogObservation(2U,now); }break;
    case APP_OBSERVE_FREEZE:s_state.frozen=1U;break;
    case APP_OBSERVE_RESUME:s_state.frozen=0U;break;
-   case APP_OBSERVE_SET_REF:{ App_GnssDetails_t g;(void)App_CopyGnssDetails(&g,now);if(g.valid_mask&PX4LITE_GNSS_VALID_POSITION) { s_ref_lat=g.latitude_e7;s_ref_lon=g.longitude_e7;s_state.reference_valid=1U;memset(s_source,0,sizeof(s_source));memset(s_state.stats,0,sizeof(s_state.stats)); }else { result=PX4LITE_NOT_READY; } }break;
+   case APP_OBSERVE_SET_REF:{ App_GnssDetails_t g;(void)App_CopyGnssDetails(&g,now);if(s_state.running) { result=PX4LITE_BUSY; }else if(g.valid_mask&PX4LITE_GNSS_VALID_POSITION) { s_ref_lat=g.latitude_e7;s_ref_lon=g.longitude_e7;s_state.reference_valid=1U;ObservationReset(); }else { result=PX4LITE_NOT_READY; } }break;
    default:result=PX4LITE_INVALID_PARAM;break;
   }
   taskENTER_CRITICAL();s_state.result=result;s_state.completed_request_id=s_state.request_id;s_state.pending=0U;taskEXIT_CRITICAL();
@@ -115,7 +116,7 @@ void App_ObservationWorkRun(uint32_t now)
    if(valid && (!src->seen||src->time_ms!=ms||src->seq!=seq) && value==value && value<3.4e38f && value> -3.4e38f) {
     uint8_t angle=s_fields[s_state.field[i]].angle;
     if(!src->seen||src->gap) { point.segment_mask|=(uint8_t)(1U<<i);if(angle) { st->segment_count=0U; } }
-    else if(angle) { float delta=value-src->angle;while(delta>180.0f) { delta-=360.0f; }while(delta< -180.0f) { delta+=360.0f; }value=src->angle+delta; }
+    else if(angle) { float delta=fmodf(value-src->angle,360.0f);if(delta>180.0f) { delta-=360.0f; }if(delta< -180.0f) { delta+=360.0f; }value=src->angle+delta; }
     src->time_ms=ms;src->seq=seq;src->seen=1U;src->gap=0U;src->angle=value;
     st->count++;st->last_ms=ms;
     if(!st->segment_count) { st->minimum=value;st->maximum=value;st->mean=value; }else { if(value<st->minimum) { st->minimum=value; }if(value>st->maximum) { st->maximum=value; }st->mean+=(value-st->mean)/(float)(st->segment_count+1U); }

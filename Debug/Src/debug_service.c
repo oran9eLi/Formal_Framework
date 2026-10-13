@@ -167,56 +167,17 @@ static void DebugService_ReportPower(uint32_t now_ms)
 #endif
 
 #if DEBUG_LORA_MONITOR_ENABLE
-static uint32_t DebugService_RatePermille(uint32_t error_count, uint32_t valid_count)
-{
-  uint64_t total = (uint64_t)error_count + (uint64_t)valid_count;
-
-  if (total == 0ULL) { return 0U; }
-
-  return (uint32_t)(((uint64_t)error_count * 1000ULL) / total);
-}
-
-/**
- * @brief Print visualized local LoRa/MAVLink link statistics.
- *
- * The RX loss percentage is a local bad-frame/drop indication derived from
- * parser errors, CRC errors, MAVLink drops, and UART overflow. True air-link
- * packet loss needs peer sequence or ACK telemetry and is intentionally not
- * inferred from one side only.
- */
+/** @brief 只打印当前目录有效事实；不以旧分消息零值推断未发送。 */
 static void DebugService_ReportLoRa(uint32_t now_ms)
 {
-  Px4Lite_CommDebugInfo_t info;
-  Px4Lite_ModuleStatus_t status;
-  uint32_t rx_error_total;
-  uint32_t tx_error_total;
-  uint32_t rx_loss_permille;
-  uint32_t tx_fail_permille;
-  uint32_t report_ms;
-
+  Px4Lite_CommDebugInfo_t info;Px4Lite_ModuleStatus_t status;Px4Lite_LabSnapshot_t lab;
   (void)now_ms;
-
-  Px4Lite_GetCommDebugInfo(&info);
-  if (Px4Lite_GetModuleStatus(PX4LITE_MODULE_LORA, &status) != PX4LITE_OK) {
-    DBG_PRINT("LORA: status unavailable");
-    return;
-  }
-
-  rx_error_total   = info.crc_error_count + info.parse_error_count + info.rx_drop_count + info.rx_overflow_count;
-  tx_error_total   = info.tx_busy_count + info.send_error_count + info.mav_error_count;
-  rx_loss_permille = DebugService_RatePermille(rx_error_total, info.rx_frame_count);
-  tx_fail_permille = DebugService_RatePermille(tx_error_total, info.tx_frame_count);
-
-  report_ms = Px4Lite_PlatformGetMs();
-  DBG_PRINT("LORA: state=%u rx=%lu tx=%lu rx_loss=%lu.%lu%% "
-            "tx_fail=%lu.%lu%% busy=%lu crc=%lu parse=%lu "
-            "drop=%lu ovf=%lu mav(hb/gps/gnss/att/sys/bat/baro/txt)="
-            "%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu "
-            "stale=%lu nodata=%lu "
-            "age_rx=%lu age_tx=%lu msg=%lu",
-            (unsigned int)status.state, (unsigned long)info.rx_frame_count, (unsigned long)info.tx_frame_count, (unsigned long)(rx_loss_permille / 10U), (unsigned long)(rx_loss_permille % 10U), (unsigned long)(tx_fail_permille / 10U), (unsigned long)(tx_fail_permille % 10U), (unsigned long)info.tx_busy_count, (unsigned long)info.crc_error_count, (unsigned long)info.parse_error_count, (unsigned long)info.rx_drop_count, (unsigned long)info.rx_overflow_count, (unsigned long)info.mav_heartbeat_count, (unsigned long)info.mav_gps_raw_count, (unsigned long)info.mav_gnss_detail_count, (unsigned long)info.mav_attitude_count, (unsigned long)info.mav_sys_status_count, (unsigned long)info.mav_battery_status_count, (unsigned long)info.mav_scaled_pressure_count, (unsigned long)info.mav_statustext_count, (unsigned long)info.mav_stale_count, (unsigned long)info.mav_no_data_count, (unsigned long)Px4Lite_ElapsedMs(report_ms, info.last_rx_ms), (unsigned long)Px4Lite_ElapsedMs(report_ms, info.last_tx_ms),
-            (unsigned long)info.last_msg_id);
-
+  Px4Lite_GetCommDebugInfo(&info);Px4Lite_LoraLabCopy(&lab);
+  if(Px4Lite_GetModuleStatus(PX4LITE_MODULE_LORA,&status)!=PX4LITE_OK) { DBG_PRINT("LORA: status unavailable");return; }
+  DBG_PRINT("LORA: state=%u queued_session=%lu uart_TC_total=%lu module_idle=%lu rx=%lu busy=%lu crc=%lu parse=%lu queue_drop=%lu dma_overflow=%lu",
+    (unsigned int)status.state,(unsigned long)lab.queued_frames,(unsigned long)lab.radio.uart_done,(unsigned long)lab.radio.module_idle,
+    (unsigned long)info.rx_frame_count,(unsigned long)info.tx_busy_count,(unsigned long)info.crc_error_count,(unsigned long)info.parse_error_count,
+    (unsigned long)info.rx_drop_count,(unsigned long)info.rx_overflow_count);
   /* 关键诊断：rx_byte=DMA收到的原始字节数，rx_frame=解析出的完整MAVLink帧数。
      rx_byte=0        -> E22 根本没收到任何RF字节(RF不通:天线/E22参数/接线/供电/对端没发)
      rx_byte>0,rx=0   -> 收到字节但解析不出帧(空口速率/波特率致数据损坏, 或帧格式) */

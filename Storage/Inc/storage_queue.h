@@ -28,6 +28,7 @@ typedef enum {
  */
 typedef struct {
   Storage_RecordType_t type;       /**< 记录类型，决定写入哪个 CSV 文件。 */
+  uint32_t session_id;             /**< 数据会话；事件为0，迟到记录不得归新会话。 */
   uint32_t enqueue_time_ms;        /**< 入队时间，单位：ms。 */
   uint32_t target_date_ymd;        /**< 目标日志文件日期，编码：YYYYMMDD。 */
   uint32_t target_time_hhmmss;     /**< 记录产生时的本地时间，编码：HHMMSS。 */

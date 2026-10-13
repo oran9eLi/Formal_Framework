@@ -296,6 +296,9 @@ void App_MessageLogUpdate(uint32_t now_ms)
 }
 /** @brief 兼容历史业务接口；新生产路径仅由对应 Framework 状态机调用。 */
 void App_MessageLogPushTakeoffSensorFail(uint32_t now_ms) { Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_TAKEOFF_SENSOR_FAIL, now_ms, 0U, PX4LITE_MODULE_CONTROL, 1U); }
+/** @brief 观察操作事实事件，不以UI请求猜测完成。 */
+void App_MessageLogObservation(uint8_t operation,uint32_t now_ms)
+{ static const uint16_t ids[3]={PX4LITE_LOGMSG_OBSERVE_START,PX4LITE_LOGMSG_OBSERVE_STOP,PX4LITE_LOGMSG_OBSERVE_RESET};if(operation<3U) { Px4Lite_LocalMsgLogEvent(ids[operation],now_ms,0U,0U,0U); } }
 /** @brief 兼容历史接口，记录动力准入拒绝。 */
 void App_MessageLogPushTakeoffPowerFail(uint32_t now_ms) { Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_TAKEOFF_POWER_FAIL, now_ms, 0U, PX4LITE_MODULE_CONTROL, 1U); }
 /** @brief 兼容历史接口，记录油门准入拒绝。 */

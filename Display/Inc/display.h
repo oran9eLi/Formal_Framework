@@ -52,6 +52,7 @@ typedef enum {
   DISPLAY_HMI_PAGE_NMEA, /**< 与MAVLink互斥的原始定位观察。 */
   DISPLAY_HMI_PAGE_SERIAL, /**< H1/B1本机响应事实。 */
   DISPLAY_HMI_PAGE_OBSERVE, /**< 两路共享观察/统计和局部定位漂移。 */
+  DISPLAY_HMI_PAGE_RECORD, /**< 手动CSV及本次写入/同步结果。 */
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 

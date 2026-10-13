@@ -181,7 +181,9 @@ void Px4Lite_CaptureNmea(const uint8_t *bytes, uint16_t length, uint8_t type, ui
   if (!s_status.running || s_status.source != PX4LITE_CAPTURE_NMEA) { return; }
   session = s_status.session_id;
   if (s_status.filter && s_status.filter != type) { return; }
-  if (!bytes || !length || length > PX4LITE_CAPTURE_NMEA_BYTES) { Px4Lite_CaptureReject(PX4LITE_CAPTURE_NMEA); return; }
+  if (!bytes || !length || length > PX4LITE_CAPTURE_NMEA_BYTES) {
+    taskENTER_CRITICAL();if(s_status.running && s_status.source==PX4LITE_CAPTURE_NMEA && s_status.session_id==session) { s_status.capture_drops++; }taskEXIT_CRITICAL();return;
+  }
   sentence.session_id = session; sentence.time_ms = now; sentence.length = length; sentence.type = type; sentence.checksum_valid = valid;
   memset(sentence.bytes, 0, sizeof(sentence.bytes)); memcpy(sentence.bytes, bytes, length);
   taskENTER_CRITICAL();

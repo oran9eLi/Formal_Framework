@@ -69,6 +69,8 @@ void App_MessageLogInit(uint32_t now_ms);
 
 /** @brief 采集任务每200ms读取本机模块/环境/告警；持续1500ms确认并保存首次观察Uptime。 */
 void App_MessageLogUpdate(uint32_t now_ms);
+/** @brief 仅观察服务实际Start/Stop/Reset状态变化追加事件，operation为0/1/2。 */
+void App_MessageLogObservation(uint8_t operation,uint32_t now_ms);
 
 /** @brief 追加同步升速因姿态/环境传感器未在线而失败的事件日志。 */
 void App_MessageLogPushTakeoffSensorFail(uint32_t now_ms);
