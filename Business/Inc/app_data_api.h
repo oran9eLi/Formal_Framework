@@ -13,6 +13,7 @@
 #define APP_DATA_API_H
 
 #include <stdint.h>
+#include "app_experiment.h"
 #include "px4lite_time.h"
 #include "px4lite_types.h"
 #include "px4lite_runtime_stats.h"

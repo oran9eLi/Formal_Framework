@@ -542,6 +542,7 @@
         <Group>
           <GroupName>Business</GroupName>
           <Files>
+            <File><FileName>app_experiment.c</FileName><FileType>1</FileType><FilePath>..\Business\Src\app_experiment.c</FilePath></File>
             <File>
               <FileName>business_event_bus.c</FileName>
               <FileType>1</FileType>
@@ -727,6 +728,7 @@
         <Group>
           <GroupName>Display</GroupName>
           <Files>
+            <File><FileName>display_observation.c</FileName><FileType>1</FileType><FilePath>..\Display\Src\display_observation.c</FilePath></File>
             <File>
               <FileName>display.c</FileName>
               <FileType>1</FileType>

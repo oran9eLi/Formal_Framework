@@ -5,6 +5,7 @@
  * 启动一次性创建控件和样式。切页只复用平铺控件，禁止清屏销毁/重建和隐式控制操作。
  */
 #include "display_lvgl.h"
+#include "display_observation.h"
 #include "app_data_api.h"
 #include "display_lvgl_font_zh.h"
 #include "display_pages.h"
@@ -59,7 +60,9 @@ typedef enum {
   UI_ACTION_LAB_COMMAND, UI_ACTION_CHANNEL, UI_ACTION_COMM_FREEZE,
   UI_ACTION_DETAILS_NEXT, UI_ACTION_MOTOR_CHANNEL, UI_ACTION_MOTOR_STEP,
   UI_ACTION_CAPTURE_SOURCE, UI_ACTION_CAPTURE_RUN, UI_ACTION_CAPTURE_CLEAR,
-  UI_ACTION_CAPTURE_MODE, UI_ACTION_CAPTURE_NEXT, UI_ACTION_CAPTURE_SELECT, UI_ACTION_SERIAL_CLEAR
+  UI_ACTION_CAPTURE_MODE, UI_ACTION_CAPTURE_NEXT, UI_ACTION_CAPTURE_SELECT, UI_ACTION_SERIAL_CLEAR,
+  UI_ACTION_OBSERVE_GROUP, UI_ACTION_OBSERVE_FIELD, UI_ACTION_OBSERVE_INTERVAL,
+  UI_ACTION_OBSERVE_RUN, UI_ACTION_OBSERVE_FREEZE, UI_ACTION_OBSERVE_REF
 } UiAction_t;
 /** @brief 固定按钮描述；参数仅由显示任务修改。 */
 typedef struct {
@@ -173,6 +176,8 @@ static void Display_LvglUpdateDetails(void);
 static void Display_LvglUpdateInspector(void);
 static void Display_LvglUpdateSerial(void);
 static uint32_t s_serial_h1_base, s_serial_b1_base;
+static void Display_LvglUpdateObservation(void);
+static uint32_t s_observe_due_ms;
 /** @brief UI只排队诊断动作，错误不更改生产通信。 */
 static void UiCaptureRequest(uint8_t operation, uint8_t source, uint8_t filter)
 {
@@ -594,6 +599,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     return;
   }
 
+  if(s_current_lvgl_page==DISPLAY_HMI_PAGE_OBSERVE) { Display_ObservationDraw(obj,dc);return; }
   lv_obj_get_coords(obj, &co);
   w = lv_area_get_width(&co);
   h = lv_area_get_height(&co);
@@ -1035,6 +1041,21 @@ static void UiButtonEvent(lv_event_t *event)
       break;
     case UI_ACTION_SERIAL_CLEAR:
       { App_SerialExperiment_t serial;(void)App_CopySerialExperiment(&serial);s_serial_h1_base=serial.h1.handled_request_count;s_serial_b1_base=serial.b1.accepted_count;Display_LvglUpdateSerial(); } break;
+    case UI_ACTION_OBSERVE_GROUP: case UI_ACTION_OBSERVE_FIELD: case UI_ACTION_OBSERVE_INTERVAL:
+    case UI_ACTION_OBSERVE_RUN: case UI_ACTION_OBSERVE_FREEZE: case UI_ACTION_OBSERVE_REF:
+      {
+        App_ObservationStatus_t st;App_ObservationRequest_t r;uint8_t i,group;
+        (void)App_CopyObservation(&st,s_last_tick_ms);r.field[0]=st.field[0];r.field[1]=st.field[1];r.interval=st.interval;r.operation=APP_OBSERVE_EDIT;
+        group=App_ObservationFieldInfo(st.field[0])->group;
+        if(button->action==UI_ACTION_OBSERVE_GROUP) { group=(uint8_t)((group+1U)%7U);for(i=0U;i<APP_OBSERVATION_FIELDS;i++) { if(App_ObservationFieldInfo(i)->group==group) { r.field[0]=i;r.field[1]=(uint8_t)(i+1U);break; } } }
+        else if(button->action==UI_ACTION_OBSERVE_FIELD) { uint8_t ch=(uint8_t)button->argument;for(i=1U;i<=APP_OBSERVATION_FIELDS;i++) { uint8_t field=(uint8_t)((st.field[ch]+i)%APP_OBSERVATION_FIELDS);if(App_ObservationFieldInfo(field)->group==group) { r.field[ch]=field;break; } } }
+        else if(button->action==UI_ACTION_OBSERVE_INTERVAL) { r.interval=(uint8_t)((r.interval+1U)%3U); }
+        else if(button->action==UI_ACTION_OBSERVE_RUN) { r.operation=st.running?APP_OBSERVE_STOP:APP_OBSERVE_START; }
+        else if(button->action==UI_ACTION_OBSERVE_REF) { r.operation=APP_OBSERVE_SET_REF; }
+        else { r.operation=st.running?(st.frozen?APP_OBSERVE_RESUME:APP_OBSERVE_FREEZE):APP_OBSERVE_RESET; }
+        { Px4Lite_Result_t result=App_RequestObservation(&r);(void)snprintf(s_control_feedback,sizeof(s_control_feedback),"%s",result==PX4LITE_OK?"Request queued":(result==PX4LITE_BUSY?"Busy":"Rejected")); }
+        Display_LvglUpdateObservation();s_layout_requested=1U;
+      } break;
     case UI_ACTION_MOTOR_MODE:
       if (s_value_valid[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE]) {
         UiControlFeedback(Display_RequestMotorControlMode((s_values[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE] == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) ? PX4LITE_CONTROL_MODE_DIRECT : PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST));
@@ -1190,6 +1211,7 @@ static void Display_LvglLayoutChrome(void)
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DETAILS) { title = "Details"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_NMEA) { title = "NMEA"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_SERIAL) { title = "Serial"; }
+  else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_OBSERVE) { title = "Observe"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_INSPECTOR) { title = "Inspector"; }
   else { title = s_main_titles[s_current_lvgl_page - DISPLAY_HMI_PAGE_SELF_CHECK]; }
   (void)UiLabel(title, 12, 9, 160, &display_lvgl_font_zh_16, UI_COLOR_TEXT);
@@ -1200,7 +1222,7 @@ static void Display_LvglLayoutChrome(void)
     ((s_current_lvgl_page == DISPLAY_HMI_PAGE_FLIGHT) || (s_current_lvgl_page == DISPLAY_HMI_PAGE_AIRCRAFT) ||
      (s_current_lvgl_page == DISPLAY_HMI_PAGE_DATA))) ? "FROZEN" : "local", 180, 33, 115, &lv_font_montserrat_14, UI_COLOR_ACCENT);
   s_alarm_header = UiLabel("Alarms N/A", 300, 33, 185, &lv_font_montserrat_14, UI_COLOR_WARN);
-  (void)UiButton("\xE5""\x91""\x8A""\xE8""\xAD""\xA6""", 500, 5, 76, 48, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_ALARM, 0x4B2634);
+  (void)UiButton(s_current_lvgl_page==DISPLAY_HMI_PAGE_OBSERVE?"E-Stop":"\xE5""\x91""\x8A""\xE8""\xAD""\xA6""", 500, 5, 76, 48, s_current_lvgl_page==DISPLAY_HMI_PAGE_OBSERVE?UI_ACTION_ESTOP:UI_ACTION_PAGE, DISPLAY_HMI_PAGE_ALARM, 0x4B2634);
   (void)UiButton(s_current_lvgl_page==DISPLAY_HMI_PAGE_HIDDEN?"Inspect":"Comm", 584, 5, 82, 48, UI_ACTION_PAGE,
     s_current_lvgl_page==DISPLAY_HMI_PAGE_HIDDEN?DISPLAY_HMI_PAGE_INSPECTOR:DISPLAY_HMI_PAGE_HIDDEN, 0x173749);
   if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_FLIGHT) || (s_current_lvgl_page == DISPLAY_HMI_PAGE_AIRCRAFT) ||
@@ -1251,7 +1273,7 @@ static void Display_LvglLayoutSelfCheck(void)
     lv_obj_set_height(s_row_labels[i], 40);
     lv_label_set_long_mode(s_row_labels[i], LV_LABEL_LONG_WRAP);
   }
-  (void)UiButton("\xE5""\x91""\x8A""\xE8""\xAD""\xA6""", 670, 290, 106, 38, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_ALARM, 0x4B2634);
+  (void)UiButton("\xE5""\x91""\x8A""\xE8""\xAD""\xA6""", 670, 290, 106, 38, s_current_lvgl_page==DISPLAY_HMI_PAGE_OBSERVE?UI_ACTION_ESTOP:UI_ACTION_PAGE, DISPLAY_HMI_PAGE_ALARM, 0x4B2634);
 }
 
 /** @brief 电源与环境按两列展开。 */
@@ -1343,9 +1365,9 @@ static void Display_LvglLayoutDetails(void)
 {
   uint8_t i;
   UiPanel(0U, 8, 62, 784, 272);
-  s_page_info = UiLabel("", 24, 73, 590, &lv_font_montserrat_14, UI_COLOR_ACCENT);
+  s_page_info = UiLabel("", 24, 73, 472, &lv_font_montserrat_14, UI_COLOR_ACCENT);
   (void)UiButton("Next data", 648, 67, 132, 38, UI_ACTION_DETAILS_NEXT, 0, 0x173749);
-  if(s_details_kind!=3U) { (void)UiButton("Serial >",504,67,132,38,UI_ACTION_PAGE,DISPLAY_HMI_PAGE_SERIAL,0x173749); }
+  if(s_details_kind!=3U) { (void)UiButton("Serial >",504,67,132,38,UI_ACTION_PAGE,DISPLAY_HMI_PAGE_SERIAL,0x173749);(void)UiButton("Observe >",504,293,132,33,UI_ACTION_PAGE,DISPLAY_HMI_PAGE_OBSERVE,0x173749); }
   for (i = 0U; i < 6U; i++) { s_row_labels[i] = UiLabel("", 26, (lv_coord_t)(113 + i * 31), 748, &lv_font_montserrat_14, UI_COLOR_TEXT); }
   if (s_details_kind == 3U) {
     (void)UiButton("Next motor", 24, 293, 150, 33, UI_ACTION_MOTOR_CHANNEL, 0, 0x173749);
@@ -1510,6 +1532,43 @@ static void Display_LvglLayoutComm(void)
 
 /** @brief 八行和六按钮仍复用唯一池；不增加第三层导航。 */
 /** @brief H1/B1响应端视图；Clear仅清计数基线，不取消事务。 */
+/** @brief 两路自定义曲线及统计仍用唯一固定池，E-Stop位于公共页头。 */
+static void Display_LvglLayoutObservation(void)
+{
+  App_ObservationStatus_t st;uint8_t i;
+  (void)App_CopyObservation(&st,s_last_tick_ms);
+  UiPanel(0U,8,62,784,272);
+  s_page_info=UiLabel("",24,70,752,&lv_font_montserrat_14,UI_COLOR_ACCENT);
+  (void)UiButton("Group >",24,100,120,34,UI_ACTION_OBSERVE_GROUP,0,0x173749);
+  (void)UiButton(App_ObservationFieldInfo(st.field[0])->group==6U?"Set ref":"Field A >",154,100,120,34,App_ObservationFieldInfo(st.field[0])->group==6U?UI_ACTION_OBSERVE_REF:UI_ACTION_OBSERVE_FIELD,0,0x173749);
+  (void)UiButton("Field B >",284,100,120,34,UI_ACTION_OBSERVE_FIELD,1,0x173749);
+  (void)UiButton("Interval >",414,100,120,34,UI_ACTION_OBSERVE_INTERVAL,0,0x173749);
+  (void)UiButton(st.running?"Stop":"Start",544,100,110,34,UI_ACTION_OBSERVE_RUN,0,0x214C36);
+  (void)UiButton(st.running?(st.frozen?"Resume":"Freeze"):"Reset",664,100,116,34,UI_ACTION_OBSERVE_FREEZE,0,0x173749);
+  lv_obj_set_pos(s_attitude_obj,20,136);lv_obj_set_size(s_attitude_obj,362,196);lv_obj_clear_flag(s_attitude_obj,LV_OBJ_FLAG_HIDDEN);
+  for(i=0U;i<8U;i++) { s_row_labels[i]=UiLabel("",398,(lv_coord_t)(139+i*24),382,&lv_font_montserrat_12,UI_COLOR_TEXT); }
+  Display_LvglUpdateObservation();
+}
+/** @brief 数据最多5Hz，统计继续；Freeze不改变控制或CSV状态。 */
+static void Display_LvglUpdateObservation(void)
+{
+  App_ObservationStatus_t st;uint8_t ch;static const uint16_t intervals[3]={200U,500U,1000U};
+  (void)App_CopyObservation(&st,s_last_tick_ms);
+  (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"%s / %s / %u ms / s%lu / %s",st.running?"Running":"Stopped",st.frozen?"Plot frozen":"Live plot",(unsigned int)intervals[st.interval],(unsigned long)st.session_id,st.pending?"Request queued":(st.result==PX4LITE_OK?"Accepted":(st.result==PX4LITE_BUSY?"Stop before edit":"Not ready")));UiText(s_page_info,s_page_info_text);
+  for(ch=0U;ch<2U;ch++) {
+    const App_ObservationFieldInfo_t *info=App_ObservationFieldInfo(st.field[ch]);App_ObservationStats_t *stat=&st.stats[ch];uint8_t row=(uint8_t)(ch*3U);
+    (void)snprintf(s_row_text[row],UI_ROW_TEXT_LEN,"%c: %s [%s] / count %lu",ch?'B':'A',info->name,info->unit,(unsigned long)stat->count);
+    if(stat->segment_count) { (void)snprintf(s_row_text[row+1U],UI_ROW_TEXT_LEN,"Min %.2f / Max %.2f / Mean %.2f",(double)stat->minimum,(double)stat->maximum,(double)stat->mean); }
+    else { (void)snprintf(s_row_text[row+1U],UI_ROW_TEXT_LEN,"Min / Max / Mean N/A"); }
+    if(stat->count) { (void)snprintf(s_row_text[row+2U],UI_ROW_TEXT_LEN,"%s n%lu / missing %lu / age %lu ms",info->angle?"Segment":"Valid",(unsigned long)stat->segment_count,(unsigned long)stat->missing,(unsigned long)(s_last_tick_ms-stat->last_ms)); }
+    else { (void)snprintf(s_row_text[row+2U],UI_ROW_TEXT_LEN,"Missing %lu / age N/A",(unsigned long)stat->missing); }
+  }
+  if(st.drift_state==1U) { (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"Drift N %.2f m / E %.2f m",(double)st.north_m,(double)st.east_m); }
+  else { (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"Drift %s",st.drift_state==3U?"Out of range":(st.reference_valid?"N/A":"Set ref required")); }
+  (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"%u/64 slots / separate A/B scales",(unsigned int)st.point_count);
+  for(ch=0U;ch<8U;ch++) { UiText(s_row_labels[ch],s_row_text[ch]); }
+  Display_ObservationUpdate(&st,s_attitude_obj);
+}
 static void Display_LvglLayoutSerial(void)
 {
   uint8_t i;UiPanel(0U,8,62,784,272);
@@ -1924,6 +1983,7 @@ static void Display_LvglLayout(void)
     case DISPLAY_HMI_PAGE_DETAILS: Display_LvglLayoutDetails(); break;
     case DISPLAY_HMI_PAGE_INSPECTOR: case DISPLAY_HMI_PAGE_NMEA: Display_LvglLayoutInspector(); break;
     case DISPLAY_HMI_PAGE_SERIAL: Display_LvglLayoutSerial(); break;
+    case DISPLAY_HMI_PAGE_OBSERVE: Display_LvglLayoutObservation(); break;
     case DISPLAY_HMI_PAGE_HIDDEN: Display_LvglLayoutComm(); break;
     default: break;
   }
@@ -2002,6 +2062,7 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
   if (s_layout_requested) { s_layout_requested = 0U; s_layout_stage = 1U; }
   if (App_RuntimeGetUs() - started_us < budget_us) {
     if (s_layout_stage) { Display_LvglLayout(); }
+    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_OBSERVE && (int32_t)(now_ms-s_observe_due_ms)>=0) { Display_LvglUpdateObservation();s_observe_due_ms=now_ms+200U; }
     else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_SERIAL && (int32_t)(now_ms-s_inspector_due_ms)>=0) { Display_LvglUpdateSerial();s_inspector_due_ms=now_ms+200U; }
     else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DETAILS && (int32_t)(now_ms-s_details_due_ms) >= 0) { Display_LvglUpdateDetails(); s_details_due_ms = now_ms+200U; }
     else if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_INSPECTOR || s_current_lvgl_page == DISPLAY_HMI_PAGE_NMEA) && (int32_t)(now_ms-s_inspector_due_ms) >= 0) { Display_LvglUpdateInspector(); s_inspector_due_ms=now_ms+(s_inspector_mode?200U:1000U); }
@@ -2083,7 +2144,7 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id)
     s_attitude_yaw_deg10 = (int16_t)s_values[DISPLAY_HMI_VAR_YAW];
     if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_AIRCRAFT) && s_value_valid[DISPLAY_HMI_VAR_ROLL] && s_value_valid[DISPLAY_HMI_VAR_PITCH] && s_value_valid[DISPLAY_HMI_VAR_YAW]) {
       lv_obj_clear_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); lv_obj_invalidate(s_attitude_obj);
-    } else { lv_obj_add_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); }
+    } else if(s_current_lvgl_page!=DISPLAY_HMI_PAGE_OBSERVE) { lv_obj_add_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); }
   }
 }
 

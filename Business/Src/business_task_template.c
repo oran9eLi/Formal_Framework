@@ -11,6 +11,7 @@
 
 #include "business_template_config.h"
 #include "app_message_log.h"
+#include "app_data_api.h"
 #include "FreeRTOS.h"
 #include "px4lite_registry.h"
 #include "task.h"
@@ -85,6 +86,7 @@ void Business_AcquisitionTask(void *argument)
     uint32_t now_ms = Business_PlatformGetMs();
 
     App_MessageLogUpdate(now_ms);
+    App_ObservationWorkRun(now_ms);
     (void)Business_AcquisitionRunOnce(now_ms);
     Business_StatusHeartbeat(BUSINESS_COMPONENT_ACQUISITION);
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BUSINESS_ACQUISITION_PERIOD_MS));
