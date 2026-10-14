@@ -2,7 +2,7 @@
 
 ## 当前发布计划
 
-- [V1-M5实施计划](V1.0_M5_实施计划.md)、[验证记录](V1.0_M5_验证记录.md)与[最新候选身份](Latest/MANIFEST.md)：六步软件及审查修正完成，主SRAM余4616 B；Details/Inspector/NMEA/Serial/Observe/Drift/Record和电脑LoRa工具已交付。2026-10-14重新Keil全量0/0、41 s，M5分支/tag/四个固件附件已推送并回下载一致，见[GitHub归档记录](V1.0_M5_GitHub归档记录.md)。M5与C01—C16待联合验收，未合入develop；[课堂说明](../Development_Guide/2026-10-13_M5教学观察与记录说明.md)、[PC LoRa说明](../Tools/LoRa测试工具说明.md)。
+- [V1-M5实施计划](V1.0_M5_实施计划.md)、[验证记录](V1.0_M5_验证记录.md)与[最新候选身份](Latest/MANIFEST.md)：六步软件及审查修正完成，主SRAM余4616 B；Details/Inspector/NMEA/Serial/Observe/Drift/Record和电脑LoRa工具已交付。2026-10-14重新Keil全量0/0、41 s，M5标签/四个固件附件已推送并回下载一致，见[GitHub归档记录](V1.0_M5_GitHub归档记录.md)。M5已合入develop，已合并分支已清理，交互/显示首轮观察良好，见[合入记录](V1.0_M5_合入记录.md)；功能完整性与数据正确性等C01—C16待联合验收，问题单开修复分支。[课堂说明](../Development_Guide/2026-10-13_M5教学观察与记录说明.md)、[PC LoRa说明](../Tools/LoRa测试工具说明.md)。
 
 - [M6准备方案](V1.0_M6_准备与联合验收方案.md)、[M5/M6联合矩阵](V1.0_M5_M6_联合验收矩阵.md)：按用户安排同候选联合验收，108点具体操作/预期行为覆盖页面、数据、通信、记录、保护、资源和课堂；现有硬件组装完整一台，正式Word后续交由文档输出代理，M7保留至少24小时长稳。
 

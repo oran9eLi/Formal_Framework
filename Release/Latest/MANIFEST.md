@@ -2,9 +2,9 @@
 
 | 项目 | 记录 |
 |---|---|
-| 生产提交 / 分支 | c4d3eeec139a154e847a254f43e053f63e3b52f1 / codex/v1-m5；后续文档提交不改变固件身份 |
+| 生产提交 / 构建来源分支 | c4d3eeec139a154e847a254f43e053f63e3b52f1 / 原codex/v1-m5；已合入develop，后续文档提交不改变固件身份 |
 | 标签源码 / GitHub | a99e35a68fc2fd4843e0ae9ade81f8af275a176e；[v1.0.0-pre.m5.20261014](https://github.com/oran9eLi/Formal_Framework/releases/tag/v1.0.0-pre.m5.20261014)，分支/注释标签及四附件已推送并回下载一致 |
-| 性质 | M5预发布，待M5/M6联合验收；未合入develop，不是稳定版或M6 rc |
+| 性质 | M5预发布，代码已合入develop；待M5/M6联合验收，不是稳定版或M6 rc，见[合入记录](../V1.0_M5_合入记录.md) |
 | 构建 | 2026-10-14 13:58:58—13:59:47（UTC+8），Rebuild All；退出码0，0 Error(s), 0 Warning(s)，Keil日志41 s |
 | 工程 / Target | MDK-ARM/formal_framework.uvprojx / Target 1 |
 | 芯片 / 编译器 / Pack | STM32F407ZGTx / ARMCC5.06 update5 build528 / Keil.STM32F4xx_DFP.2.17.0 |
