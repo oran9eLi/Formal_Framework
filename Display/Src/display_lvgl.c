@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file display_lvgl.c
  * @brief Display 层固定容量 LVGL 工作区、两层本机导航及事件观察视图。
  * @details 数据经 display.h / app_data_api.h 输入；不读取 BSP、驱动私有数据或 topic。
@@ -17,6 +17,7 @@
 #include "px4lite_local_msglog.h"
 #include "lvgl.h"
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <math.h>
 
@@ -35,7 +36,8 @@
 #define UI_LOG_CAP 32U
 #define UI_HISTORY_ROWS 6U
 #define UI_ALARM_CAP 16U
-#define UI_REMOTE_CAP 16U
+#define UI_REMOTE_CAP APP_REMOTE_NODE_CAPACITY
+#define UI_TEXT_SLOT_COUNT (UI_LABEL_COUNT + UI_BUTTON_COUNT)
 #define UI_TEXT_ROWS 12U
 #define UI_ROW_TEXT_LEN 128U
 #define UI_COLOR_TEXT 0xDCE8F2U
@@ -113,6 +115,11 @@ static lv_obj_t *s_state_labels[UI_STATUS_COUNT];
 static char s_state_text[UI_STATUS_COUNT][20];
 static lv_obj_t *s_row_labels[UI_TEXT_ROWS];
 static char s_row_text[UI_TEXT_ROWS][UI_ROW_TEXT_LEN];
+/** @brief 显示任务独占的格式化暂存；不为每个标签复制历史文本。 */
+static char s_text_work[UI_ROW_TEXT_LEN];
+static uint8_t s_text_pending[(UI_TEXT_SLOT_COUNT + 7U) / 8U]; /**< 固定标签槽待重算位。 */
+static uint16_t s_row_written; /**< 本轮详情/原始报文实际填充行，每位对应一行。 */
+static uint8_t s_content_pending; /**< 按钮动作引起的页面内容刷新请求。 */
 static lv_obj_t *s_alarm_header;
 static char s_alarm_header_text[24];
 static lv_obj_t *s_page_info;
@@ -171,6 +178,46 @@ static Display_HmiPage_t s_requested_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static Display_HmiPage_t s_primary_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static uint32_t s_last_tick_ms, s_next_status_ms, s_next_remote_ms;
 
+/** @brief 在覆盖静态文本前标记全部绑定标签；仅显示任务调用。 */
+static void UiMarkTextChanged(const char *text)
+{
+  uint16_t i;
+  for (i = 0U; i < UI_TEXT_SLOT_COUNT; i++) {
+    lv_obj_t *obj = (i < UI_LABEL_COUNT) ? s_labels[i] : s_buttons[i - UI_LABEL_COUNT].label;
+    if (obj && lv_label_get_text(obj) == text) {
+      s_text_pending[i / 8U] |= (uint8_t)(1U << (i % 8U));
+    }
+  }
+}
+
+/**
+ * @brief 格式化并比较旧文本，变化时才覆盖并标记；返回值同 snprintf。
+ * @param[out] text 静态目标缓冲；其生命周期必须覆盖绑定标签。
+ * @param[in] capacity 容量，单位 B，范围 1..UI_ROW_TEXT_LEN，包含结束符。
+ * @param[in] format 格式字符串；实参可引用目标旧内容。
+ * @note 唯一显示任务使用共用暂存，禁止重入或从 ISR 调用。
+ */
+static int UiFormat(char *text, size_t capacity, const char *format, ...)
+{
+  va_list args;
+  int length;
+  uint16_t i;
+  if (!text || !format || !capacity || capacity > sizeof(s_text_work)) { return -1; }
+  va_start(args, format);
+  length = vsnprintf(s_text_work, capacity, format, args);
+  va_end(args);
+  if (length < 0) { return length; }
+  s_text_work[capacity - 1U] = '\0';
+  for (i = 0U; i < UI_TEXT_ROWS; i++) {
+    if (text == s_row_text[i]) { s_row_written |= (uint16_t)(1U << i); break; }
+  }
+  if (strcmp(text, s_text_work) != 0) {
+    UiMarkTextChanged(text);
+    memcpy(text, s_text_work, strlen(s_text_work) + 1U);
+  }
+  return length;
+}
+
 static void Display_LvglLayout(void);
 static void Display_LvglApplyValue(Display_HmiVariableId_t id);
 static void Display_LvglUpdateDetails(void);
@@ -185,13 +232,13 @@ static void UiCaptureRequest(uint8_t operation, uint8_t source, uint8_t filter)
 {
   App_CaptureRequest_t request;
   request.operation=operation; request.source=source; request.filter=filter; request.reserved=0U;
-  (void)snprintf(s_control_feedback,sizeof(s_control_feedback),"%s",App_RequestCapture(&request)==PX4LITE_OK?"Request queued":"Capture busy");
+  (void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"%s",App_RequestCapture(&request)==PX4LITE_OK?"Request queued":"Capture busy");
 }
 
 /** @brief 请求结果只表达接受/拒绝；执行事实仍读取操作状态和PWM快照。 */
 static void UiControlFeedback(Display_Result_t result)
 {
-  (void)snprintf(s_control_feedback, sizeof(s_control_feedback), "%s",
+  (void)UiFormat(s_control_feedback, sizeof(s_control_feedback), "%s",
     result == DISPLAY_OK ? "Accepted" : (result == DISPLAY_NOT_READY ? "Not ready / busy" : "Rejected"));
 }
 static void Display_LvglUpdateLogs(void);
@@ -508,7 +555,7 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
     if(code==LV_EVENT_VALUE_CHANGED && !s_control_update_active) {
       value=lv_slider_get_value(slider); s_comm_node=(uint8_t)value;
       if(s_comm_state.running || s_comm_state.pending) { UiLabRequest(PX4LITE_LAB_STOP); }
-      Display_LvglUpdateRemote();
+      s_content_pending = 1U;
     }
     return;
   }
@@ -831,10 +878,64 @@ static void UiInitGeometry(lv_obj_t *obj)
   lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
 }
 
-/** @brief 固定标签写入；静态缓冲相同时也允许显式重算尺寸。 */
+/** @brief 强制重新绑定文字；已判新数值、直接编码文本及布局复用可调用。 */
+static void UiTextForce(lv_obj_t *obj, const char *text)
+{
+  if (obj) {
+    uintptr_t slot = (uintptr_t)lv_obj_get_user_data(obj);
+    lv_label_set_text_static(obj, text);
+    if (slot && slot <= UI_TEXT_SLOT_COUNT) {
+      slot--;
+      s_text_pending[slot / 8U] &= (uint8_t)~(1U << (slot % 8U));
+    }
+  }
+}
+
+/** @brief 固定标签仅在重新绑定或内容标脏时重算；可变缓冲须经 UiFormat 写入。 */
 static void UiText(lv_obj_t *obj, const char *text)
 {
-  if (obj != 0) { lv_label_set_text_static(obj, text); }
+  uintptr_t slot;
+  if (!obj) { return; }
+  slot = (uintptr_t)lv_obj_get_user_data(obj);
+  if (slot && slot <= UI_TEXT_SLOT_COUNT && lv_label_get_text(obj) == text &&
+      !(s_text_pending[(slot - 1U) / 8U] & (1U << ((slot - 1U) % 8U)))) { return; }
+  UiTextForce(obj, text);
+}
+
+/** @brief 补齐本轮未填行并提交；fallback 保持页面原有空白或 N/A 语义。 */
+static void UiRowsFinish(uint8_t count, const char *fallback)
+{
+  uint8_t i;
+  for (i = 0U; i < count && i < UI_TEXT_ROWS; i++) {
+    if (!(s_row_written & (1U << i))) { (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "%s", fallback); }
+    UiText(s_row_labels[i], s_row_text[i]);
+  }
+}
+
+/** @brief 将最多16个原始字节转为一行静态文本，不提前覆盖旧标签内容。 */
+static void UiRawLine(uint8_t row, uint16_t offset, const uint8_t *bytes, uint16_t length, uint8_t ascii)
+{
+  char text[64];
+  uint16_t used = 0U;
+  uint8_t i;
+  if (row >= UI_TEXT_ROWS) { return; }
+  if (!ascii) { used = (uint16_t)snprintf(text, sizeof(text), "%03u:", (unsigned int)offset); }
+  for (i = 0U; i < 16U && offset + i < length; i++) {
+    uint8_t ch = bytes[offset + i];
+    if (!ascii) { used += (uint16_t)snprintf(text + used, sizeof(text) - used, " %02X", (unsigned int)ch); }
+    else if (ch == '\r' || ch == '\n') { text[used++] = '\\'; text[used++] = ch == '\r' ? 'r' : 'n'; }
+    else { text[used++] = (char)((ch >= 32U && ch < 127U) ? ch : '.'); }
+  }
+  text[used] = '\0';
+  (void)UiFormat(s_row_text[row], UI_ROW_TEXT_LEN, "%s", text);
+}
+
+/** @brief 空队列只检查位图，不逐个访问72个数值及微秒时钟。 */
+static uint8_t UiValuesPending(void)
+{
+  uint16_t i;
+  for (i = 0U; i < sizeof(s_value_pending); i++) { if (s_value_pending[i]) { return 1U; } }
+  return 0U;
 }
 
 /** @brief 从启动池取标签；全部标签平铺于同一父对象，不重建父子关系。 */
@@ -988,7 +1089,7 @@ static void UiButtonEvent(lv_event_t *event)
         s_comm_frozen=0U;
         memset(&s_remote_lab,0,sizeof(s_remote_lab));
       }
-      Display_LvglUpdateRemote(); break;
+      s_content_pending = 1U; break;
     case UI_ACTION_COMM_VIEW:
       s_comm_view=(uint8_t)((s_comm_view+1U)%3U); s_layout_requested=1U; break;
     case UI_ACTION_LAB_DATA:
@@ -999,12 +1100,12 @@ static void UiButtonEvent(lv_event_t *event)
       s_comm_channel_index=(uint8_t)((s_comm_channel_index+1U)%4U);
       if(s_comm_state.running || s_comm_state.pending) { UiLabRequest(PX4LITE_LAB_STOP); }
       s_layout_requested=1U; break;
-    case UI_ACTION_LAB_COMMAND: UiLabRequest((Px4Lite_LabOperation_t)button->argument); Display_LvglUpdateRemote(); break;
+    case UI_ACTION_LAB_COMMAND: UiLabRequest((Px4Lite_LabOperation_t)button->argument); s_content_pending = 1U; break;
     case UI_ACTION_COMM_FREEZE: s_comm_frozen=(uint8_t)!s_comm_frozen; s_layout_requested=1U; break;
     case UI_ACTION_DETAILS_NEXT:
       s_details_kind = (uint8_t)((s_details_kind + 1U) % 4U); s_layout_requested = 1U; break;
     case UI_ACTION_MOTOR_CHANNEL:
-      s_motor_selected = (uint8_t)((s_motor_selected + 1U) % 4U); Display_LvglUpdateDetails(); break;
+      s_motor_selected = (uint8_t)((s_motor_selected + 1U) % 4U); s_content_pending = 1U; break;
     case UI_ACTION_MOTOR_STEP:
       {
         App_MotorSnapshot_t motor;
@@ -1013,7 +1114,7 @@ static void UiButtonEvent(lv_event_t *event)
           if (target < 0) { target = 0; } if (target > 100) { target = 100; }
           UiControlFeedback(Display_RequestMotorThrottle((Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_TARGET_1 + s_motor_selected), (uint16_t)target));
         } else { UiControlFeedback(DISPLAY_NOT_READY); }
-        Display_LvglUpdateDetails();
+        s_content_pending = 1U;
       }
       break;
     case UI_ACTION_CAPTURE_SOURCE:
@@ -1024,27 +1125,27 @@ static void UiButtonEvent(lv_event_t *event)
         (void)App_CopyCaptureStatus(&status);
         if (button->action==UI_ACTION_CAPTURE_SOURCE) { UiCaptureRequest(PX4LITE_CAPTURE_SELECT,s_current_lvgl_page==DISPLAY_HMI_PAGE_NMEA?PX4LITE_CAPTURE_NMEA:(uint8_t)((status.source+1U)%4U),s_current_lvgl_page==DISPLAY_HMI_PAGE_NMEA?(uint8_t)((status.filter+1U)%5U):0U); }
         else { UiCaptureRequest(button->action==UI_ACTION_CAPTURE_CLEAR?PX4LITE_CAPTURE_CLEAR:(status.running?PX4LITE_CAPTURE_PAUSE:PX4LITE_CAPTURE_START),status.source,status.filter); }
-        Display_LvglUpdateInspector();
+        s_content_pending = 1U;
       }
       break;
     case UI_ACTION_CAPTURE_MODE:
-      s_inspector_mode=(uint8_t)((s_inspector_mode+1U)%(s_current_lvgl_page==DISPLAY_HMI_PAGE_NMEA?2U:3U));s_inspector_page=0U;Display_LvglUpdateInspector();break;
+      s_inspector_mode=(uint8_t)((s_inspector_mode+1U)%(s_current_lvgl_page==DISPLAY_HMI_PAGE_NMEA?2U:3U));s_inspector_page=0U;s_content_pending = 1U;break;
     case UI_ACTION_CAPTURE_NEXT:
       if(s_inspector_mode==0U) { s_inspector_row=(uint8_t)((s_inspector_row+1U)%PX4LITE_CAPTURE_SUMMARIES); }
-      else { s_inspector_page++; } Display_LvglUpdateInspector();break;
+      else { s_inspector_page++; } s_content_pending = 1U;break;
     case UI_ACTION_CAPTURE_SELECT:
       {
         App_CaptureStatus_t status; App_CaptureSummary_t row;
         (void)App_CopyCaptureStatus(&status);
         if(App_CopyCaptureSummaryRow(status.session_id,s_inspector_row,&row)==PX4LITE_OK && (status.source==PX4LITE_CAPTURE_NMEA?App_CopyNmeaSentence(status.session_id,row.latest_token,&s_selected_capture.nmea):App_CopyCapturedFrame(status.session_id,row.latest_token,&s_selected_capture.mav))==PX4LITE_OK) {
           s_selected_ready=1U;s_selected_session=status.session_id;s_inspector_mode=1U;s_inspector_page=0U;
-          (void)snprintf(s_control_feedback,sizeof(s_control_feedback),"Selected #%lu",(unsigned long)row.latest_token);
-        } else { (void)snprintf(s_control_feedback,sizeof(s_control_feedback),"Frame unavailable"); }
-        Display_LvglUpdateInspector();
+          (void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"Selected #%lu",(unsigned long)row.latest_token);
+        } else { (void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"Frame unavailable"); }
+        s_content_pending = 1U;
       }
       break;
     case UI_ACTION_SERIAL_CLEAR:
-      { App_SerialExperiment_t serial;(void)App_CopySerialExperiment(&serial);s_serial_h1_base=serial.h1.handled_request_count;s_serial_b1_base=serial.b1.accepted_count;Display_LvglUpdateSerial(); } break;
+      { App_SerialExperiment_t serial;(void)App_CopySerialExperiment(&serial);s_serial_h1_base=serial.h1.handled_request_count;s_serial_b1_base=serial.b1.accepted_count;s_content_pending = 1U; } break;
     case UI_ACTION_OBSERVE_GROUP: case UI_ACTION_OBSERVE_FIELD: case UI_ACTION_OBSERVE_INTERVAL:
     case UI_ACTION_OBSERVE_RUN: case UI_ACTION_OBSERVE_FREEZE: case UI_ACTION_OBSERVE_REF:
       {
@@ -1057,16 +1158,16 @@ static void UiButtonEvent(lv_event_t *event)
         else if(button->action==UI_ACTION_OBSERVE_RUN) { r.operation=st.running?APP_OBSERVE_STOP:APP_OBSERVE_START; }
         else if(button->action==UI_ACTION_OBSERVE_REF) { r.operation=APP_OBSERVE_SET_REF; }
         else { r.operation=st.running?(st.frozen?APP_OBSERVE_RESUME:APP_OBSERVE_FREEZE):APP_OBSERVE_RESET; }
-        { Px4Lite_Result_t result=App_RequestObservation(&r);(void)snprintf(s_control_feedback,sizeof(s_control_feedback),"%s",result==PX4LITE_OK?"Request queued":(result==PX4LITE_BUSY?"Busy":"Rejected")); }
-        Display_LvglUpdateObservation();s_layout_requested=1U;
+        { Px4Lite_Result_t result=App_RequestObservation(&r);(void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"%s",result==PX4LITE_OK?"Request queued":(result==PX4LITE_BUSY?"Busy":"Rejected")); }
+        s_content_pending = 1U;s_layout_requested=1U;
       } break;
     case UI_ACTION_RECORD_RUN: case UI_ACTION_RECORD_INTERVAL:
       { App_RecordingStatus_t st;App_RecordingRequest_t r;Px4Lite_Result_t result;
         (void)App_CopyRecording(&st,s_last_tick_ms);r.reserved=0U;r.interval=st.interval;
         r.operation=button->action==UI_ACTION_RECORD_INTERVAL?2U:(st.state==PX4LITE_RECORD_RECORDING?1U:0U);
         if(r.operation==2U) { r.interval=(uint8_t)((r.interval+1U)%4U); }
-        result=App_RequestRecording(&r);(void)snprintf(s_control_feedback,sizeof(s_control_feedback),"%s",result==PX4LITE_OK?"Request queued":(result==PX4LITE_BUSY?"Busy":"Not ready"));
-        Display_LvglUpdateRecording();s_layout_requested=1U;
+        result=App_RequestRecording(&r);(void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"%s",result==PX4LITE_OK?"Request queued":(result==PX4LITE_BUSY?"Busy":"Not ready"));
+        s_content_pending = 1U;s_layout_requested=1U;
       }break;
     case UI_ACTION_MOTOR_MODE:
       if (s_value_valid[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE]) {
@@ -1121,6 +1222,7 @@ static void Display_LvglInitWorkspace(void)
   }
   for (i = 0U; i < UI_LABEL_COUNT; i++) {
     s_labels[i] = lv_label_create(s_screen);
+    lv_obj_set_user_data(s_labels[i], (void *)(uintptr_t)(i + 1U));
     lv_obj_remove_style_all(s_labels[i]);
     lv_obj_add_style(s_labels[i], &s_base_style, 0);
     lv_obj_add_style(s_labels[i], &s_label_style, 0);
@@ -1142,6 +1244,7 @@ static void Display_LvglInitWorkspace(void)
     lv_obj_add_flag(button->obj, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(button->obj, UiButtonEvent, LV_EVENT_ALL, button);
     button->label = lv_label_create(button->obj);
+    lv_obj_set_user_data(button->label, (void *)(uintptr_t)(UI_LABEL_COUNT + i + 1U));
     lv_obj_remove_style_all(button->label);
     lv_obj_add_style(button->label, &s_label_style, 0);
     lv_label_set_long_mode(button->label, LV_LABEL_LONG_CLIP);
@@ -1190,6 +1293,8 @@ static void Display_LvglInitWorkspace(void)
 static void Display_LvglResetWorkspace(void)
 {
   uint16_t i;
+  memset(s_text_pending, 0xFF, sizeof(s_text_pending));
+  s_content_pending = 0U;
   for (i = 0U; i < UI_LABEL_COUNT; i++) { lv_obj_add_flag(s_labels[i], LV_OBJ_FLAG_HIDDEN); }
   for (i = 0U; i < UI_BUTTON_COUNT; i++) {
     s_buttons[i].action = UI_ACTION_NONE;
@@ -1398,53 +1503,55 @@ static void Display_LvglUpdateDetails(void)
   uint32_t now = s_last_tick_ms;
   union { App_ImuSnapshot_t imu; App_GnssDetails_t gnss; App_EnvironmentSnapshot_t env; App_MotorSnapshot_t motor; } data;
   static const char * const names[4] = {"IMU / raw body axes", "GNSS / measurement domains", "Power / Environment", "Motor / commanded PWM"};
-  (void)snprintf(s_page_info_text, sizeof(s_page_info_text), "%s", names[s_details_kind]); UiText(s_page_info, s_page_info_text);
-  for (i = 0U; i < 6U; i++) { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "N/A"); }
+  s_content_pending = 0U;
+  s_details_due_ms = s_last_tick_ms + 200U;
+  (void)UiFormat(s_page_info_text, sizeof(s_page_info_text), "%s", names[s_details_kind]); UiText(s_page_info, s_page_info_text);
+  s_row_written = 0U;
   if (s_details_kind == 0U) {
     Px4Lite_Result_t result = App_CopyImuLatest(&data.imu, now);
-    if (result == PX4LITE_NOT_READY) { (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "IMU waiting for sample"); }
-    else { (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "Sample #%lu / age %lums / %s", (unsigned long)data.imu.header.sequence,
+    if (result == PX4LITE_NOT_READY) { (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "IMU waiting for sample"); }
+    else { (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Sample #%lu / age %lums / %s", (unsigned long)data.imu.header.sequence,
       (unsigned long)(now - data.imu.header.sample_time_ms), result == PX4LITE_OK ? "valid" : "STALE"); }
     if (result == PX4LITE_OK) {
-      (void)snprintf(s_row_text[1], UI_ROW_TEXT_LEN, "Accel mg: X %ld / Y %ld / Z %ld", (long)data.imu.accel_mg[0], (long)data.imu.accel_mg[1], (long)data.imu.accel_mg[2]);
-      (void)snprintf(s_row_text[2], UI_ROW_TEXT_LEN, "Gyro mdps: X %ld / Y %ld / Z %ld", (long)data.imu.gyro_mdps[0], (long)data.imu.gyro_mdps[1], (long)data.imu.gyro_mdps[2]);
-      (void)snprintf(s_row_text[3], UI_ROW_TEXT_LEN, "IMU temperature %.2f C / interval %uus", (double)data.imu.temperature_cdeg / 100.0, (unsigned int)data.imu.sample_period_us);
+      (void)UiFormat(s_row_text[1], UI_ROW_TEXT_LEN, "Accel mg: X %ld / Y %ld / Z %ld", (long)data.imu.accel_mg[0], (long)data.imu.accel_mg[1], (long)data.imu.accel_mg[2]);
+      (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "Gyro mdps: X %ld / Y %ld / Z %ld", (long)data.imu.gyro_mdps[0], (long)data.imu.gyro_mdps[1], (long)data.imu.gyro_mdps[2]);
+      (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "IMU temperature %.2f C / interval %uus", (double)data.imu.temperature_cdeg / 100.0, (unsigned int)data.imu.sample_period_us);
     }
     { App_AttitudeStatus_t status; (void)App_CopyAttitudeStatus(&status);
-      (void)snprintf(s_row_text[4], UI_ROW_TEXT_LEN, "Action %u / phase %u / progress %u%% / reason %u", (unsigned int)status.action, (unsigned int)status.phase, (unsigned int)status.progress, (unsigned int)status.reason);
-      (void)snprintf(s_row_text[5], UI_ROW_TEXT_LEN, "Bias %s / display reference %s / %s", status.bias_valid ? "set" : "none", status.reference_active ? "set" : "none", s_control_feedback); }
+      (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "Action %u / phase %u / progress %u%% / reason %u", (unsigned int)status.action, (unsigned int)status.phase, (unsigned int)status.progress, (unsigned int)status.reason);
+      (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "Bias %s / display reference %s / %s", status.bias_valid ? "set" : "none", status.reference_active ? "set" : "none", s_control_feedback); }
   } else if (s_details_kind == 1U) {
     Px4Lite_Result_t result = App_CopyGnssDetails(&data.gnss, now);
     if (result == PX4LITE_NOT_READY) {
-      (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "GNSS waiting for sentence");
-      for (i = 0U; i < 6U; i++) { UiText(s_row_labels[i], s_row_text[i]); }
+      (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "GNSS waiting for sentence");
+      UiRowsFinish(6U, "N/A");
       return;
     }
-    (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "Link %s / RX age %lums / fix %u / dimension %u", result == PX4LITE_OK ? "active" : "N/A", (unsigned long)(now-data.gnss.last_rx_ms), (unsigned int)data.gnss.fix_type, (unsigned int)data.gnss.fix_dimension);
-    (void)snprintf(s_row_text[1], UI_ROW_TEXT_LEN, "GPS visible %u used %u / BDS visible %u used %u / antenna %u", (unsigned int)data.gnss.gps_visible, (unsigned int)data.gnss.gps_used, (unsigned int)data.gnss.bds_visible, (unsigned int)data.gnss.bds_used, (unsigned int)data.gnss.antenna_state);
-    (void)snprintf(s_row_text[2], UI_ROW_TEXT_LEN, "Position %s / age %lums / HDOP %.2f", data.gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION ? "valid" : "N/A", (unsigned long)(now-data.gnss.position_update_ms), (double)data.gnss.hdop_x100/100.0);
-    if (data.gnss.valid_mask & PX4LITE_GNSS_VALID_VELOCITY) { (void)snprintf(s_row_text[3], UI_ROW_TEXT_LEN, "Ground speed %.2fm/s / course %.2fdeg / age %lums", (double)data.gnss.ground_speed_cms/100.0, (double)data.gnss.heading_deg100/100.0, (unsigned long)(now-data.gnss.velocity_update_ms)); }
-    (void)snprintf(s_row_text[4], UI_ROW_TEXT_LEN, "Altitude %s / age %lums", data.gnss.valid_mask & PX4LITE_GNSS_VALID_ALTITUDE ? "valid" : "N/A", (unsigned long)(now-data.gnss.altitude_update_ms));
-    (void)snprintf(s_row_text[5], UI_ROW_TEXT_LEN, "UTC %s / age %lums / mask 0x%02lX", data.gnss.valid_mask & PX4LITE_GNSS_VALID_TIME ? "valid" : "N/A", (unsigned long)(now-data.gnss.time_update_ms), (unsigned long)data.gnss.valid_mask);
+    (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Link %s / RX age %lums / fix %u / dimension %u", result == PX4LITE_OK ? "active" : "N/A", (unsigned long)(now-data.gnss.last_rx_ms), (unsigned int)data.gnss.fix_type, (unsigned int)data.gnss.fix_dimension);
+    (void)UiFormat(s_row_text[1], UI_ROW_TEXT_LEN, "GPS visible %u used %u / BDS visible %u used %u / antenna %u", (unsigned int)data.gnss.gps_visible, (unsigned int)data.gnss.gps_used, (unsigned int)data.gnss.bds_visible, (unsigned int)data.gnss.bds_used, (unsigned int)data.gnss.antenna_state);
+    (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "Position %s / age %lums / HDOP %.2f", data.gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION ? "valid" : "N/A", (unsigned long)(now-data.gnss.position_update_ms), (double)data.gnss.hdop_x100/100.0);
+    if (data.gnss.valid_mask & PX4LITE_GNSS_VALID_VELOCITY) { (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "Ground speed %.2fm/s / course %.2fdeg / age %lums", (double)data.gnss.ground_speed_cms/100.0, (double)data.gnss.heading_deg100/100.0, (unsigned long)(now-data.gnss.velocity_update_ms)); }
+    (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "Altitude %s / age %lums", data.gnss.valid_mask & PX4LITE_GNSS_VALID_ALTITUDE ? "valid" : "N/A", (unsigned long)(now-data.gnss.altitude_update_ms));
+    (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "UTC %s / age %lums / mask 0x%02lX", data.gnss.valid_mask & PX4LITE_GNSS_VALID_TIME ? "valid" : "N/A", (unsigned long)(now-data.gnss.time_update_ms), (unsigned long)data.gnss.valid_mask);
   } else if (s_details_kind == 2U) {
     (void)App_CopyEnvironment(&data.env, now);
-    if ((data.env.valid_mask & APP_ENV_VALID_PRESSURE_TEMPERATURE) != 0U) { (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "Pressure %.1fPa / temperature %.2fC / age %lums", (double)data.env.pressure_pa, (double)data.env.temperature_c, (unsigned long)(now-data.env.environment_measurement_ms)); }
-    if ((data.env.valid_mask & APP_ENV_VALID_HUMIDITY) != 0U) { (void)snprintf(s_row_text[1], UI_ROW_TEXT_LEN, "Humidity %.1f%%", (double)data.env.relative_humidity_pct); }
+    if ((data.env.valid_mask & APP_ENV_VALID_PRESSURE_TEMPERATURE) != 0U) { (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Pressure %.1fPa / temperature %.2fC / age %lums", (double)data.env.pressure_pa, (double)data.env.temperature_c, (unsigned long)(now-data.env.environment_measurement_ms)); }
+    if ((data.env.valid_mask & APP_ENV_VALID_HUMIDITY) != 0U) { (void)UiFormat(s_row_text[1], UI_ROW_TEXT_LEN, "Humidity %.1f%%", (double)data.env.relative_humidity_pct); }
     for (i = 0U; i < 2U; i++) {
       uint32_t mask = i ? APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_CURRENT2 : APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_CURRENT1;
       uint32_t mv = i ? data.env.voltage2_mv : data.env.voltage_mv;
       int32_t ma = i ? data.env.current2_ma : data.env.current_ma;
-      if (data.env.valid_mask & (i ? APP_ENV_VALID_VOLTAGE2 : APP_ENV_VALID_VOLTAGE1)) { (void)snprintf(s_row_text[2U+i*2U], UI_ROW_TEXT_LEN, "%s %.3fV / age %lums", i ? "Motor supply" : "Main supply", (double)mv/1000.0, (unsigned long)(now-(i ? data.env.power2_measurement_ms : data.env.power1_measurement_ms))); }
-      if ((data.env.valid_mask & mask) == mask) { (void)snprintf(s_row_text[3U+i*2U], UI_ROW_TEXT_LEN, "Current %.3fA / power %.3fW", (double)ma/1000.0, (double)mv*(double)ma/1000000.0); }
+      if (data.env.valid_mask & (i ? APP_ENV_VALID_VOLTAGE2 : APP_ENV_VALID_VOLTAGE1)) { (void)UiFormat(s_row_text[2U+i*2U], UI_ROW_TEXT_LEN, "%s %.3fV / age %lums", i ? "Motor supply" : "Main supply", (double)mv/1000.0, (unsigned long)(now-(i ? data.env.power2_measurement_ms : data.env.power1_measurement_ms))); }
+      if ((data.env.valid_mask & mask) == mask) { (void)UiFormat(s_row_text[3U+i*2U], UI_ROW_TEXT_LEN, "Current %.3fA / power %.3fW", (double)ma/1000.0, (double)mv*(double)ma/1000000.0); }
     }
   } else {
     if (App_CopyMotor(&data.motor, now) == PX4LITE_OK) {
-      (void)snprintf(s_row_text[0], UI_ROW_TEXT_LEN, "Selected motor %u / %s / state %u", (unsigned int)s_motor_selected+1U, data.motor.control_mode ? "Assist" : "Direct", (unsigned int)data.motor.operation_state);
-      for (i = 0U; i < 4U; i++) { (void)snprintf(s_row_text[1U+i], UI_ROW_TEXT_LEN, "Motor %u / Target %u%% / Output %u%% / PWM %uus", (unsigned int)i+1U, (unsigned int)data.motor.base_percent[i], (unsigned int)data.motor.duty_percent[i], (unsigned int)data.motor.pulse_us[i]); }
-      (void)snprintf(s_row_text[5], UI_ROW_TEXT_LEN, "Command age %lums / %s", (unsigned long)(now-data.motor.header.sample_time_ms), s_control_feedback);
+      (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Selected motor %u / %s / state %u", (unsigned int)s_motor_selected+1U, data.motor.control_mode ? "Assist" : "Direct", (unsigned int)data.motor.operation_state);
+      for (i = 0U; i < 4U; i++) { (void)UiFormat(s_row_text[1U+i], UI_ROW_TEXT_LEN, "Motor %u / Target %u%% / Output %u%% / PWM %uus", (unsigned int)i+1U, (unsigned int)data.motor.base_percent[i], (unsigned int)data.motor.duty_percent[i], (unsigned int)data.motor.pulse_us[i]); }
+      (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "Command age %lums / %s", (unsigned long)(now-data.motor.header.sample_time_ms), s_control_feedback);
     }
   }
-  for (i = 0U; i < 6U; i++) { UiText(s_row_labels[i], s_row_text[i]); }
+  UiRowsFinish(6U, "N/A");
 }
 
 /** @brief 活动告警分页，全部 16 项可读；无数据与无活动告警独立表达。 */
@@ -1504,9 +1611,9 @@ static void Display_LvglLayoutComm(void)
   (void)UiButton(next_view[s_comm_view],634,65,146,42,UI_ACTION_COMM_VIEW,0,0x173749);
   if(!s_comm_draft_ready) { s_comm_node=App_GetLocalNodeId(); App_FormatLocalProductId(s_local_product_id,sizeof(s_local_product_id)); s_comm_draft_ready=1U; }
   if(s_comm_view==0U) {
-    (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"Data: %s",s_comm_data_names[s_comm_data]);
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Data: %s",s_comm_data_names[s_comm_data]);
     (void)UiButton(s_row_text[0],26,112,242,48,UI_ACTION_LAB_DATA,0,0x173749);
-    (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"Interval: %lus",(unsigned long)(s_comm_intervals[s_comm_interval_index]/1000U));
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Interval: %lus",(unsigned long)(s_comm_intervals[s_comm_interval_index]/1000U));
     (void)UiButton(s_row_text[1],286,112,234,48,UI_ACTION_LAB_INTERVAL,0,0x173749);
     s_row_labels[2]=UiLabel("",28,176,744,&lv_font_montserrat_14,UI_COLOR_TEXT);
     s_row_labels[3]=UiLabel("",28,205,744,&lv_font_montserrat_14,UI_COLOR_TEXT);
@@ -1520,7 +1627,7 @@ static void Display_LvglLayoutComm(void)
     lv_slider_set_value(s_motor_pwm_bars[0],s_comm_node,LV_ANIM_OFF); s_control_update_active=0U;
     lv_obj_set_pos(s_motor_pwm_bars[0],42,194); lv_obj_set_size(s_motor_pwm_bars[0],324,24);
     lv_obj_clear_flag(s_motor_pwm_bars[0],LV_OBJ_FLAG_HIDDEN);
-    (void)snprintf(s_row_text[2],UI_ROW_TEXT_LEN,"Channel: %u",(unsigned int)s_comm_channels[s_comm_channel_index]);
+    (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"Channel: %u",(unsigned int)s_comm_channels[s_comm_channel_index]);
     (void)UiButton(s_row_text[2],416,147,350,44,UI_ACTION_CHANNEL,0,0x173749);
     s_row_labels[3]=UiLabel("",416,205,354,&lv_font_montserrat_14,UI_COLOR_TEXT);
     (void)UiLabel(s_local_product_id,28,234,740,&lv_font_montserrat_12,UI_COLOR_MUTED);
@@ -1560,6 +1667,8 @@ static void Display_LvglLayoutRecording(void)
 static void Display_LvglUpdateRecording(void)
 {
   App_RecordingStatus_t st;uint8_t i;static const char * const states[6]={"Stopped","Recording","Stopping / wait sync","Saved","Partial","Error"};
+  s_content_pending = 0U;
+  s_inspector_due_ms = s_last_tick_ms + 200U;
   static const uint16_t intervals[4]={1000U,2000U,5000U,10000U};(void)App_CopyRecording(&st,s_last_tick_ms);
   /* 请求由storage异步完成，按钮也必须跟随已发布状态。 */
   for(i=0U;i<s_button_used;i++) {
@@ -1569,14 +1678,14 @@ static void Display_LvglUpdateRecording(void)
       else { lv_obj_clear_state(s_buttons[i].obj,LV_STATE_DISABLED); }
     }
   }
-  (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"%s / session %lu / %u ms",states[st.state<6U?st.state:5U],(unsigned long)st.session_id,(unsigned int)intervals[st.interval]);
-  (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"Action #%lu / done #%lu / %s / result %d",(unsigned long)st.request_id,(unsigned long)st.completed_request_id,st.pending?"Request queued":"Handled",(int)st.result);
-  (void)snprintf(s_row_text[2],UI_ROW_TEXT_LEN,"Accepted %lu / Queued %lu / outstanding %lu",(unsigned long)st.accepted_count,(unsigned long)st.queued_count,(unsigned long)st.outstanding);
-  (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"Written %lu / Synced %lu",(unsigned long)st.written_count,(unsigned long)st.synced_count);
-  (void)snprintf(s_row_text[4],UI_ROW_TEXT_LEN,"Queue drop %lu / Write drop %lu / reason %d",(unsigned long)st.queue_drop,(unsigned long)st.write_drop,(int)st.reason);
-  (void)snprintf(s_row_text[5],UI_ROW_TEXT_LEN,"SD state %u / card %u / fault phase %u / FatFs %u",(unsigned int)st.sd_state,(unsigned int)st.card_type,(unsigned int)st.open_phase,(unsigned int)st.fatfs_result);
-  if(st.session_id) { (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"Start uptime %lu ms / finish %lu ms",(unsigned long)st.started_ms,(unsigned long)st.finished_ms); }else { (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"No recording session"); }
-  (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"CSV schema 2 / %s",s_control_feedback);
+  (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"%s / session %lu / %u ms",states[st.state<6U?st.state:5U],(unsigned long)st.session_id,(unsigned int)intervals[st.interval]);
+  (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Action #%lu / done #%lu / %s / result %d",(unsigned long)st.request_id,(unsigned long)st.completed_request_id,st.pending?"Request queued":"Handled",(int)st.result);
+  (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"Accepted %lu / Queued %lu / outstanding %lu",(unsigned long)st.accepted_count,(unsigned long)st.queued_count,(unsigned long)st.outstanding);
+  (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"Written %lu / Synced %lu",(unsigned long)st.written_count,(unsigned long)st.synced_count);
+  (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"Queue drop %lu / Write drop %lu / reason %d",(unsigned long)st.queue_drop,(unsigned long)st.write_drop,(int)st.reason);
+  (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"SD state %u / card %u / fault phase %u / FatFs %u",(unsigned int)st.sd_state,(unsigned int)st.card_type,(unsigned int)st.open_phase,(unsigned int)st.fatfs_result);
+  if(st.session_id) { (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Start uptime %lu ms / finish %lu ms",(unsigned long)st.started_ms,(unsigned long)st.finished_ms); }else { (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"No recording session"); }
+  (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"CSV schema 2 / %s",s_control_feedback);
   for(i=0U;i<8U;i++) { UiText(s_row_labels[i],s_row_text[i]); }
 }
 
@@ -1600,6 +1709,8 @@ static void Display_LvglLayoutObservation(void)
 static void Display_LvglUpdateObservation(void)
 {
   App_ObservationStatus_t st;uint8_t ch,i;static const uint16_t intervals[3]={200U,500U,1000U};
+  s_content_pending = 0U;
+  s_observe_due_ms = s_last_tick_ms + 200U;
   (void)App_CopyObservation(&st,s_last_tick_ms);
   /* 复用固定池，不重建布局；Field A在Drift组绑定Set ref。 */
   for(i=0U;i<s_button_used;i++) {
@@ -1612,18 +1723,18 @@ static void Display_LvglUpdateObservation(void)
       UiText(button->label,reference?"Set ref":"Field A >");
     }
   }
-  (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"%s / %s / %u ms / s%lu / %s",st.running?"Running":"Stopped",st.frozen?"Plot frozen":"Live plot",(unsigned int)intervals[st.interval],(unsigned long)st.session_id,st.pending?"Request queued":(st.result==PX4LITE_OK?"Accepted":(st.result==PX4LITE_BUSY?"Stop before edit":"Not ready")));UiText(s_page_info,s_page_info_text);
+  (void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"%s / %s / %u ms / s%lu / %s",st.running?"Running":"Stopped",st.frozen?"Plot frozen":"Live plot",(unsigned int)intervals[st.interval],(unsigned long)st.session_id,st.pending?"Request queued":(st.result==PX4LITE_OK?"Accepted":(st.result==PX4LITE_BUSY?"Stop before edit":"Not ready")));UiText(s_page_info,s_page_info_text);
   for(ch=0U;ch<2U;ch++) {
     const App_ObservationFieldInfo_t *info=App_ObservationFieldInfo(st.field[ch]);App_ObservationStats_t *stat=&st.stats[ch];uint8_t row=(uint8_t)(ch*3U);
-    (void)snprintf(s_row_text[row],UI_ROW_TEXT_LEN,"%c: %s [%s]%s / count %lu",ch?'B':'A',info->name,info->unit,info->angle?" unwrapped":"",(unsigned long)stat->count);
-    if(stat->segment_count) { (void)snprintf(s_row_text[row+1U],UI_ROW_TEXT_LEN,"Min %.2f / Max %.2f / Mean %.2f",(double)stat->minimum,(double)stat->maximum,(double)stat->mean); }
-    else { (void)snprintf(s_row_text[row+1U],UI_ROW_TEXT_LEN,"Min / Max / Mean N/A"); }
-    if(stat->count) { (void)snprintf(s_row_text[row+2U],UI_ROW_TEXT_LEN,"%s n%lu / missing %lu / age %lu ms",info->angle?"Segment":"Valid",(unsigned long)stat->segment_count,(unsigned long)stat->missing,(unsigned long)(s_last_tick_ms-stat->last_ms)); }
-    else { (void)snprintf(s_row_text[row+2U],UI_ROW_TEXT_LEN,"Missing %lu / age N/A",(unsigned long)stat->missing); }
+    (void)UiFormat(s_row_text[row],UI_ROW_TEXT_LEN,"%c: %s [%s]%s / count %lu",ch?'B':'A',info->name,info->unit,info->angle?" unwrapped":"",(unsigned long)stat->count);
+    if(stat->segment_count) { (void)UiFormat(s_row_text[row+1U],UI_ROW_TEXT_LEN,"Min %.2f / Max %.2f / Mean %.2f",(double)stat->minimum,(double)stat->maximum,(double)stat->mean); }
+    else { (void)UiFormat(s_row_text[row+1U],UI_ROW_TEXT_LEN,"Min / Max / Mean N/A"); }
+    if(stat->count) { (void)UiFormat(s_row_text[row+2U],UI_ROW_TEXT_LEN,"%s n%lu / missing %lu / age %lu ms",info->angle?"Segment":"Valid",(unsigned long)stat->segment_count,(unsigned long)stat->missing,(unsigned long)(s_last_tick_ms-stat->last_ms)); }
+    else { (void)UiFormat(s_row_text[row+2U],UI_ROW_TEXT_LEN,"Missing %lu / age N/A",(unsigned long)stat->missing); }
   }
-  if(st.drift_state==1U) { (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"Drift N %.2f / E %.2f / dist %.2f m",(double)st.north_m,(double)st.east_m,(double)sqrtf(st.north_m*st.north_m+st.east_m*st.east_m)); }
-  else { (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"Drift %s",st.drift_state==3U?"Out of range":(st.reference_valid?"N/A":"Set ref required")); }
-  (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"%u/64 slots / separate A/B scales",(unsigned int)st.point_count);
+  if(st.drift_state==1U) { (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Drift N %.2f / E %.2f / dist %.2f m",(double)st.north_m,(double)st.east_m,(double)sqrtf(st.north_m*st.north_m+st.east_m*st.east_m)); }
+  else { (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Drift %s",st.drift_state==3U?"Out of range":(st.reference_valid?"N/A":"Set ref required")); }
+  (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"%u/64 slots / separate A/B scales",(unsigned int)st.point_count);
   for(ch=0U;ch<8U;ch++) { UiText(s_row_labels[ch],s_row_text[ch]); }
   Display_ObservationUpdate(&st,s_attitude_obj);
 }
@@ -1640,17 +1751,19 @@ static void Display_LvglUpdateSerial(void)
 {
   App_SerialExperiment_t v;uint8_t i;
   static const char * const states[4]={"Idle","Accepted / wait UART","Applied","Apply failed"};
+  s_content_pending = 0U;
+  s_inspector_due_ms = s_last_tick_ms + 200U;
   (void)App_CopySerialExperiment(&v);
-  (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"F407 responder / UART6 %lu bps / age %lu ms",(unsigned long)v.b1.current_baud_bps,(unsigned long)(s_last_tick_ms-v.measured_ms));
-  (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"H1 type 1 -> 2 / view accepted %lu / total sent %lu / %s",(unsigned long)(v.h1.handled_request_count-s_serial_h1_base),(unsigned long)v.h1.response_sent_count,v.h1.handled_request_count?(v.h1.pending?"Queued":"UART done"):"N/A");
-  (void)snprintf(s_row_text[2],UI_ROW_TEXT_LEN,"H1 nonce %02X%02X%02X%02X%02X%02X%02X%02X / age %lu ms",v.h1.nonce[0],v.h1.nonce[1],v.h1.nonce[2],v.h1.nonce[3],v.h1.nonce[4],v.h1.nonce[5],v.h1.nonce[6],v.h1.nonce[7],(unsigned long)(s_last_tick_ms-v.h1.request_ms));
-  (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"H1 reject %lu / duplicate %lu / busy %lu",(unsigned long)v.h1.rejected_request_count,(unsigned long)v.h1.duplicate_count,(unsigned long)v.h1.busy_count);
-  (void)snprintf(s_row_text[4],UI_ROW_TEXT_LEN,"B1 type 3 -> 4 / view accepted %lu / %s",(unsigned long)(v.b1.accepted_count-s_serial_b1_base),states[v.b1.state<4U?v.b1.state:3U]);
-  (void)snprintf(s_row_text[5],UI_ROW_TEXT_LEN,"B1 nonce %02X%02X%02X%02X%02X%02X%02X%02X / UART done %lu",v.b1.nonce[0],v.b1.nonce[1],v.b1.nonce[2],v.b1.nonce[3],v.b1.nonce[4],v.b1.nonce[5],v.b1.nonce[6],v.b1.nonce[7],(unsigned long)v.b1.response_sent_count);
-  (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"B1 reject %lu / duplicate %lu / busy %lu / apply OK %lu / fail %lu",(unsigned long)v.b1.rejected_count,(unsigned long)v.b1.duplicate_count,(unsigned long)v.b1.busy_count,(unsigned long)v.b1.apply_success_count,(unsigned long)v.b1.apply_failure_count);
-  (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"B0 115200 -> B1 57600 / reset: B0");
-  if(!v.h1.handled_request_count) { (void)snprintf(s_row_text[2],UI_ROW_TEXT_LEN,"H1 nonce N/A"); }
-  if(!v.b1.accepted_count) { (void)snprintf(s_row_text[5],UI_ROW_TEXT_LEN,"B1 nonce N/A"); }
+  (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"F407 responder / UART6 %lu bps / age %lu ms",(unsigned long)v.b1.current_baud_bps,(unsigned long)(s_last_tick_ms-v.measured_ms));
+  (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"H1 type 1 -> 2 / view accepted %lu / total sent %lu / %s",(unsigned long)(v.h1.handled_request_count-s_serial_h1_base),(unsigned long)v.h1.response_sent_count,v.h1.handled_request_count?(v.h1.pending?"Queued":"UART done"):"N/A");
+  if(v.h1.handled_request_count) { (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"H1 nonce %02X%02X%02X%02X%02X%02X%02X%02X / age %lu ms",v.h1.nonce[0],v.h1.nonce[1],v.h1.nonce[2],v.h1.nonce[3],v.h1.nonce[4],v.h1.nonce[5],v.h1.nonce[6],v.h1.nonce[7],(unsigned long)(s_last_tick_ms-v.h1.request_ms)); }
+  else { (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"H1 nonce N/A"); }
+  (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"H1 reject %lu / duplicate %lu / busy %lu",(unsigned long)v.h1.rejected_request_count,(unsigned long)v.h1.duplicate_count,(unsigned long)v.h1.busy_count);
+  (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"B1 type 3 -> 4 / view accepted %lu / %s",(unsigned long)(v.b1.accepted_count-s_serial_b1_base),states[v.b1.state<4U?v.b1.state:3U]);
+  if(v.b1.accepted_count) { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"B1 nonce %02X%02X%02X%02X%02X%02X%02X%02X / UART done %lu",v.b1.nonce[0],v.b1.nonce[1],v.b1.nonce[2],v.b1.nonce[3],v.b1.nonce[4],v.b1.nonce[5],v.b1.nonce[6],v.b1.nonce[7],(unsigned long)v.b1.response_sent_count); }
+  else { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"B1 nonce N/A"); }
+  (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"B1 reject %lu / duplicate %lu / busy %lu / apply OK %lu / fail %lu",(unsigned long)v.b1.rejected_count,(unsigned long)v.b1.duplicate_count,(unsigned long)v.b1.busy_count,(unsigned long)v.b1.apply_success_count,(unsigned long)v.b1.apply_failure_count);
+  (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"B0 115200 -> B1 57600 / reset: B0");
   for(i=0U;i<8U;i++) { UiText(s_row_labels[i],s_row_text[i]); }
 }
 static void Display_LvglLayoutInspector(void)
@@ -1672,77 +1785,76 @@ static void Display_LvglLayoutInspector(void)
 static void Display_LvglUpdateInspector(void)
 {
   App_CaptureStatus_t status;
-  uint8_t i;
+  uint8_t i, title_written = 0U;
   static const char * const sources[5]={"LoRa RX","LoRa TX","RPi RX","RPi TX","NMEA"};
   static const char * const views[3]={"Messages","Raw","Decoded"};
   static const char * const stages[7]={"Submitting","Queued","UART done","Module idle","Error","RX valid","Timeout"};
+  s_content_pending = 0U;
+  s_inspector_due_ms = s_last_tick_ms + (s_inspector_mode ? 200U : 1000U);
   (void)App_CopyCaptureStatus(&status);
   if(s_selected_session!=status.session_id) { s_selected_ready=0U;s_inspector_page=0U;s_inspector_row=0U;s_selected_session=status.session_id; }
-  (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"%s / %s / %s / s%lu",views[s_inspector_mode],sources[status.source],status.pending?"Request queued":(status.running?"Capturing":"Paused"),(unsigned long)status.session_id);UiText(s_page_info,s_page_info_text);
-  for(i=0U;i<8U;i++) { s_row_text[i][0]='\0'; }
+  s_row_written = 0U;
   if(s_inspector_mode==0U) {
     uint8_t first=(uint8_t)((s_inspector_row/4U)*4U);
     if(s_inspector_row>=status.summary_count) { s_inspector_row=0U;first=0U; }
-    (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"Count %lu / stored %u / overwrite %lu / drop %lu / summary drop %lu",(unsigned long)status.count,(unsigned int)status.stored_count,(unsigned long)status.overwritten,(unsigned long)status.capture_drops,(unsigned long)status.summary_drops);
-    (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"Reject %lu / %u keys / %s",(unsigned long)status.rejected,(unsigned int)status.summary_count,s_control_feedback);
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Count %lu / stored %u / overwrite %lu / drop %lu / summary drop %lu",(unsigned long)status.count,(unsigned int)status.stored_count,(unsigned long)status.overwritten,(unsigned long)status.capture_drops,(unsigned long)status.summary_drops);
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Reject %lu / %u keys / %s",(unsigned long)status.rejected,(unsigned int)status.summary_count,s_control_feedback);
     for(i=0U;i<4U;i++) {
       App_CaptureSummary_t row;
       if(App_CopyCaptureSummaryRow(status.session_id,(uint8_t)(first+i),&row)==PX4LITE_OK) {
         uint32_t span=row.last_ms-row.first_ms;
-        if(span && row.count>1U) { (void)snprintf(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n%lu avg %.2fHz age%lums",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id,(unsigned long)row.count,(double)(row.count-1U)*1000.0/(double)span,(unsigned long)(s_last_tick_ms-row.last_ms)); }
-        else if(row.count) { (void)snprintf(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n%lu avg N/A age%lums",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id,(unsigned long)row.count,(unsigned long)(s_last_tick_ms-row.last_ms)); }
-        else { (void)snprintf(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n0 avg/age N/A / attempt Raw",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id); }
+        if(span && row.count>1U) { (void)UiFormat(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n%lu avg %.2fHz age%lums",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id,(unsigned long)row.count,(double)(row.count-1U)*1000.0/(double)span,(unsigned long)(s_last_tick_ms-row.last_ms)); }
+        else if(row.count) { (void)UiFormat(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n%lu avg N/A age%lums",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id,(unsigned long)row.count,(unsigned long)(s_last_tick_ms-row.last_ms)); }
+        else { (void)UiFormat(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %u/%u msg%lu n0 avg/age N/A / attempt Raw",first+i==s_inspector_row?">":" ",(unsigned int)row.system_id,(unsigned int)row.component_id,(unsigned long)row.msg_id); }
       }
     }
-    (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"%s",s_control_feedback);
     if(status.source==PX4LITE_CAPTURE_LORA_TX || status.source==PX4LITE_CAPTURE_RPI_TX) {
-      (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"TX Attempt %lu / Timeout %lu / Error %lu",(unsigned long)status.tx_attempts,(unsigned long)status.tx_timeouts,(unsigned long)status.tx_errors);
-    }
-    { Px4Lite_CommDebugInfo_t comm; App_GetCommStats(&comm); (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"LoRa CRC %lu / queue drop %lu / DMA overflow %lu",(unsigned long)comm.crc_error_count,(unsigned long)comm.rx_drop_count,(unsigned long)comm.rx_overflow_count); }
-  } else if(!s_selected_ready) { (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"No selected frame / use Messages then Select"); }
+      (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"TX Attempt %lu / Timeout %lu / Error %lu",(unsigned long)status.tx_attempts,(unsigned long)status.tx_timeouts,(unsigned long)status.tx_errors);
+    } else { (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"%s",s_control_feedback); }
+    { Px4Lite_CommDebugInfo_t comm; App_GetCommStats(&comm); (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"LoRa CRC %lu / queue drop %lu / DMA overflow %lu",(unsigned long)comm.crc_error_count,(unsigned long)comm.rx_drop_count,(unsigned long)comm.rx_overflow_count); }
+  } else if(!s_selected_ready) { (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"No selected frame / use Messages then Select"); }
   else if(status.source==PX4LITE_CAPTURE_NMEA) {
     App_NmeaSentence_t *line=&s_selected_capture.nmea;
     uint8_t pages=(uint8_t)((line->length+31U)/32U);
     uint16_t first=(uint16_t)((s_inspector_page%pages)*32U);
     static const char * const types[5]={"Other","GGA","RMC","GSA","GSV"};
-    (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"#%lu %s / %uB / checksum %s / age %lums",(unsigned long)line->token,types[line->type<5U?line->type:0U],(unsigned int)line->length,line->checksum_valid?"OK":"BAD/missing",(unsigned long)(s_last_tick_ms-line->time_ms));
-    (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"Bytes %u..%u / page %u/%u",(unsigned int)first,(unsigned int)((first+32U<line->length)?first+31U:line->length-1U),(unsigned int)(s_inspector_page%pages)+1U,(unsigned int)pages);
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"#%lu %s / %uB / checksum %s / age %lums",(unsigned long)line->token,types[line->type<5U?line->type:0U],(unsigned int)line->length,line->checksum_valid?"OK":"BAD/missing",(unsigned long)(s_last_tick_ms-line->time_ms));
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Bytes %u..%u / page %u/%u",(unsigned int)first,(unsigned int)((first+32U<line->length)?first+31U:line->length-1U),(unsigned int)(s_inspector_page%pages)+1U,(unsigned int)pages);
     for(i=0U;i<2U;i++) {
-      uint16_t at=(uint16_t)(first+i*16U),used=0U;uint8_t j;
-      for(j=0U;j<16U && at+j<line->length;j++) { uint8_t ch=line->bytes[at+j];
-        if(ch=='\r'||ch=='\n') { used+=(uint16_t)snprintf(&s_row_text[2U+i][used],UI_ROW_TEXT_LEN-used,"%s",ch=='\r'?"\\r":"\\n"); }
-        else { s_row_text[2U+i][used++]=(char)((ch>=32U&&ch<127U)?ch:'.');s_row_text[2U+i][used]=0; }
-      }
-      used=(uint16_t)snprintf(s_row_text[4U+i],UI_ROW_TEXT_LEN,"%03u:",(unsigned int)at);
-      for(j=0U;j<16U && at+j<line->length;j++) { used+=(uint16_t)snprintf(&s_row_text[4U+i][used],UI_ROW_TEXT_LEN-used," %02X",(unsigned int)line->bytes[at+j]); }
+      uint16_t at=(uint16_t)(first+i*16U);
+      UiRawLine((uint8_t)(2U+i),at,line->bytes,line->length,1U);
+      UiRawLine((uint8_t)(4U+i),at,line->bytes,line->length,0U);
     }
-    (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"%s",s_control_feedback);
+    (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"%s",s_control_feedback);
   } else if(s_inspector_mode==1U) {
     App_CaptureFrame_t *frame=&s_selected_capture.mav;
     uint8_t stage=frame->stage;
     uint8_t in_ring=(uint8_t)(App_CopyCapturedStage(frame->session_id,frame->token,&stage)==PX4LITE_OK);
     uint8_t pages=(uint8_t)((frame->length+63U)/64U);
     uint16_t first=(uint16_t)((s_inspector_page%pages)*64U);
-    (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"#%lu msg%lu sys%u comp%u seq%u / %uB / MAV%u",(unsigned long)frame->token,(unsigned long)frame->msg_id,(unsigned int)frame->system_id,(unsigned int)frame->component_id,(unsigned int)frame->sequence,(unsigned int)frame->length,frame->bytes[0]==0xFD?2U:1U);
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"#%lu msg%lu sys%u comp%u seq%u / %uB / MAV%u",(unsigned long)frame->token,(unsigned long)frame->msg_id,(unsigned int)frame->system_id,(unsigned int)frame->component_id,(unsigned int)frame->sequence,(unsigned int)frame->length,frame->bytes[0]==0xFD?2U:1U);
     frame->stage=stage;
-    (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"%s%s / age%lums / bytes %u..%u / page%u/%u",stages[stage<7U?stage:4U],in_ring?"":" (slot overwritten)",(unsigned long)(s_last_tick_ms-frame->time_ms),(unsigned int)first,(unsigned int)((first+64U<frame->length)?first+63U:frame->length-1U),(unsigned int)(s_inspector_page%pages)+1U,(unsigned int)pages);
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"%s%s / age%lums / bytes %u..%u / page%u/%u",stages[stage<7U?stage:4U],in_ring?"":" (slot overwritten)",(unsigned long)(s_last_tick_ms-frame->time_ms),(unsigned int)first,(unsigned int)((first+64U<frame->length)?first+63U:frame->length-1U),(unsigned int)(s_inspector_page%pages)+1U,(unsigned int)pages);
     for(i=0U;i<4U;i++) {
-      uint8_t j; uint16_t at=(uint16_t)(first+i*16U); uint16_t used;
+      uint16_t at=(uint16_t)(first+i*16U);
       if(at>=frame->length) { break; }
-      used=(uint16_t)snprintf(s_row_text[2U+i],UI_ROW_TEXT_LEN,"%03u:",(unsigned int)at);
-      for(j=0U;j<16U && at+j<frame->length;j++) { used+=(uint16_t)snprintf(&s_row_text[2U+i][used],UI_ROW_TEXT_LEN-used," %02X",(unsigned int)frame->bytes[at+j]); }
+      UiRawLine((uint8_t)(2U+i),at,frame->bytes,frame->length,0U);
     }
-    (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"Signature %s / verification not performed",(frame->flags&1U)?"present":"absent");
-    (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"%s / local TX stage does not confirm peer RX",s_control_feedback);
+    (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Signature %s / verification not performed",(frame->flags&1U)?"present":"absent");
+    (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"%s / local TX stage does not confirm peer RX",s_control_feedback);
   } else {
     App_DecodedPage_t decoded;
     if(App_DecodeCapturedFrame(&s_selected_capture.mav,s_inspector_page,&decoded)==PX4LITE_OK) {
-      (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"%s / # %lu / page %u/%u",decoded.name,(unsigned long)s_selected_capture.mav.token,(unsigned int)decoded.page+1U,(unsigned int)decoded.page_count);UiText(s_page_info,s_page_info_text);
-      for(i=0U;i<decoded.row_count;i++) { (void)snprintf(s_row_text[i],UI_ROW_TEXT_LEN,"%s",decoded.rows[i]); }
+      (void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"%s / # %lu / page %u/%u",decoded.name,(unsigned long)s_selected_capture.mav.token,(unsigned int)decoded.page+1U,(unsigned int)decoded.page_count);title_written = 1U;
+      for(i=0U;i<decoded.row_count;i++) { (void)UiFormat(s_row_text[i],UI_ROW_TEXT_LEN,"%s",decoded.rows[i]); }
     }
   }
-  if(status.source==PX4LITE_CAPTURE_NMEA) { static const char * const filters[5]={"All","GGA","RMC","GSA","GSV"};(void)snprintf(s_page_info_text,sizeof(s_page_info_text),"NMEA / %s / %s / s%lu",filters[status.filter],status.running?"Capturing":"Paused",(unsigned long)status.session_id);UiText(s_page_info,s_page_info_text);s_row_text[7][0]=0; }
-  for(i=0U;i<8U;i++) { UiText(s_row_labels[i],s_row_text[i]); }
+  if(status.source==PX4LITE_CAPTURE_NMEA) { static const char * const filters[5]={"All","GGA","RMC","GSA","GSV"};(void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"NMEA / %s / %s / s%lu",filters[status.filter],status.running?"Capturing":"Paused",(unsigned long)status.session_id);title_written = 1U;(void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"%s",""); }
+  if (!title_written) {
+  (void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"%s / %s / %s / s%lu",views[s_inspector_mode],sources[status.source],status.pending?"Request queued":(status.running?"Capturing":"Paused"),(unsigned long)status.session_id);
+  }
+  UiText(s_page_info, s_page_info_text);
+  UiRowsFinish(8U, "");
 }
 
 /** @brief 将固定容量日志投影到当前视口，普通无新事件时不重排。 */
@@ -1776,24 +1888,24 @@ static void Display_LvglUpdateLogs(void)
       Display_MessageLogEntry_t *entry = &s_log_entries[indices[begin + i]];
       uint32_t t = entry->time_hhmmss;
       if (history) {
-        (void)snprintf(s_row_text[slot], UI_ROW_TEXT_LEN, "%02lu:%02lu:%02lu  %-5s %s\n#%u  %s  0x%04X  active=%u",
+        (void)UiFormat(s_row_text[slot], UI_ROW_TEXT_LEN, "%02lu:%02lu:%02lu  %-5s %s\n#%u  %s  0x%04X  active=%u",
           (unsigned long)(t / 10000U), (unsigned long)((t / 100U) % 100U), (unsigned long)(t % 100U),
           UiSeverity(entry->severity), Px4Lite_LogMessageText((uint16_t)entry->msg),
           (unsigned int)entry->sequence, (entry->source_id < PX4LITE_MODULE_COUNT) ? s_module_names[entry->source_id] : "system",
           (unsigned int)entry->fault_code, (unsigned int)entry->active);
       } else {
-        (void)snprintf(s_row_text[slot], UI_ROW_TEXT_LEN, "%02lu:%02lu:%02lu  %-5s %s",
+        (void)UiFormat(s_row_text[slot], UI_ROW_TEXT_LEN, "%02lu:%02lu:%02lu  %-5s %s",
           (unsigned long)(t / 10000U), (unsigned long)((t / 100U) % 100U), (unsigned long)(t % 100U),
           UiSeverity(entry->severity), Px4Lite_LogMessageText((uint16_t)entry->msg));
       }
       if (s_row_labels[slot]) { lv_obj_set_style_text_color(s_row_labels[slot], lv_color_hex(UiSeverityColor(entry->severity)), 0); }
     } else {
-      (void)snprintf(s_row_text[slot], UI_ROW_TEXT_LEN, "%s", (i == 0U) ? "No events in view" : "");
+      (void)UiFormat(s_row_text[slot], UI_ROW_TEXT_LEN, "%s", (i == 0U) ? "No events in view" : "");
     }
     UiText(s_row_labels[slot], s_row_text[slot]);
   }
   if (history) {
-    (void)snprintf(s_page_info_text, sizeof(s_page_info_text), "Uptime / local  %u-%u of %u  (ring %u/32)%s",
+    (void)UiFormat(s_page_info_text, sizeof(s_page_info_text), "Uptime / local  %u-%u of %u  (ring %u/32)%s",
                    n ? (unsigned int)(begin + 1U) : 0U, (unsigned int)end, (unsigned int)n,
                    (unsigned int)s_log_count, s_history_cleared ? "  view cleared" : "");
     UiText(s_page_info, s_page_info_text);
@@ -1804,8 +1916,8 @@ static void Display_LvglUpdateLogs(void)
 static void Display_LvglUpdateAlarms(void)
 {
   uint8_t i, rows, offset;
-  if (s_alarm_available) { (void)snprintf(s_alarm_header_text, sizeof(s_alarm_header_text), "Alarms %u", (unsigned int)s_alarm_count); }
-  else { (void)snprintf(s_alarm_header_text, sizeof(s_alarm_header_text), "Alarms N/A"); }
+  if (s_alarm_available) { (void)UiFormat(s_alarm_header_text, sizeof(s_alarm_header_text), "Alarms %u", (unsigned int)s_alarm_count); }
+  else { (void)UiFormat(s_alarm_header_text, sizeof(s_alarm_header_text), "Alarms N/A"); }
   UiText(s_alarm_header, s_alarm_header_text);
   if ((s_current_lvgl_page != DISPLAY_HMI_PAGE_SELF_CHECK) && (s_current_lvgl_page != DISPLAY_HMI_PAGE_ALARM)) { return; }
   rows = (s_current_lvgl_page == DISPLAY_HMI_PAGE_SELF_CHECK) ? 4U : 5U;
@@ -1813,7 +1925,7 @@ static void Display_LvglUpdateAlarms(void)
   offset = (s_current_lvgl_page == DISPLAY_HMI_PAGE_SELF_CHECK) ? 0U : s_alarm_offset;
   for (i = 0U; i < rows; i++) {
     uint8_t index = (uint8_t)(offset + i);
-    if (!s_alarm_available) { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%s", i ? "" : "N/A - unavailable"); }
+    if (!s_alarm_available) { (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "%s", i ? "" : "N/A - unavailable"); }
     else if (index < s_alarm_count) {
       uint16_t source = (uint16_t)(s_alarm_packed[index] >> 16);
       uint16_t fault = (uint16_t)s_alarm_packed[index];
@@ -1827,20 +1939,20 @@ static void Display_LvglUpdateAlarms(void)
       }
       if ((rows == 5U) && detail) {
         uint32_t seconds = detail->raised_ms / 1000U;
-        (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "0x%04X %s %s  %s\nUptime %02lu:%02lu:%02lu",
+        (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "0x%04X %s %s  %s\nUptime %02lu:%02lu:%02lu",
           (unsigned int)fault, (source < PX4LITE_MODULE_COUNT) ? s_module_names[source] : "System",
           UiSeverity(detail->severity), App_GetFaultReasonText(fault),
           (unsigned long)(seconds / 3600U), (unsigned long)((seconds / 60U) % 60U), (unsigned long)(seconds % 60U));
       } else {
-        (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "0x%04X %s%s%s%s", (unsigned int)fault,
+        (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "0x%04X %s%s%s%s", (unsigned int)fault,
           (source < PX4LITE_MODULE_COUNT) ? s_module_names[source] : "System",
           (rows == 4U) ? "\n" : "  ", App_GetFaultReasonText(fault), (rows == 5U) ? "\nUptime N/A" : "");
       }
-    } else { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%s", i ? "" : "No active alarms"); }
+    } else { (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "%s", i ? "" : "No active alarms"); }
     UiText(s_row_labels[i], s_row_text[i]);
   }
   if (s_current_lvgl_page == DISPLAY_HMI_PAGE_ALARM) {
-    (void)snprintf(s_page_info_text, sizeof(s_page_info_text), "%u-%u / %u",
+    (void)UiFormat(s_page_info_text, sizeof(s_page_info_text), "%u-%u / %u",
       s_alarm_count ? (unsigned int)(offset + 1U) : 0U,
       (unsigned int)(((uint16_t)offset + rows < s_alarm_count) ? offset + rows : s_alarm_count), (unsigned int)s_alarm_count);
     UiText(s_page_info, s_page_info_text);
@@ -1863,7 +1975,7 @@ static void Display_LvglUpdateModules(void)
           else if ((status.state == PX4LITE_STATE_STARTING) || (status.state == PX4LITE_STATE_DEGRADED)) { color = UI_COLOR_WARN; }
           else if ((status.state == PX4LITE_STATE_OFFLINE) || (status.state == PX4LITE_STATE_FAILED)) { color = UI_COLOR_ERROR; }
         }
-        (void)snprintf(s_state_text[i], sizeof(s_state_text[i]), "%s", state);
+        (void)UiFormat(s_state_text[i], sizeof(s_state_text[i]), "%s", state);
         UiText(s_state_labels[i], s_state_text[i]);
         lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(color), 0);
       }
@@ -1872,7 +1984,7 @@ static void Display_LvglUpdateModules(void)
     if (s_diag_view != 0U) {
       App_RuntimeSnapshot_t resources;
       (void)App_CopyRuntimeStats(&resources, s_last_tick_ms);
-      (void)snprintf(s_runtime_text, sizeof(s_runtime_text), "Resources / Tasks  age %lums  register errors %lu",
+      (void)UiFormat(s_runtime_text, sizeof(s_runtime_text), "Resources / Tasks  age %lums  register errors %lu",
         (unsigned long)(s_last_tick_ms - resources.measured_ms), (unsigned long)resources.registration_errors);
       UiText(s_runtime_label, s_runtime_text);
       UiText(s_page_info, s_diag_view == 1U ? "Heap / LVGL / Timing / Production counters" : "Task / cfg word / min word / age / margin");
@@ -1880,19 +1992,19 @@ static void Display_LvglUpdateModules(void)
         if (s_diag_view == 2U) {
           App_TaskRuntime_t row;
           if (App_CopyTaskRuntime((uint8_t)(s_diag_offset + i), &row, s_last_tick_ms) == PX4LITE_OK) {
-            if (row.measured) { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%s  cfg %uW  min %uW  age %lus  %s", row.name,
+            if (row.measured) { (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "%s  cfg %uW  min %uW  age %lus  %s", row.name,
               (unsigned int)row.configured_words, (unsigned int)row.minimum_free_words,
               (unsigned long)((s_last_tick_ms - row.measured_ms) / 1000U), row.warning ? "WARN" : "OK"); }
-            else { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%s  cfg %uW  unmeasured", row.name, (unsigned int)row.configured_words); }
-          } else { s_row_text[i][0] = '\0'; }
+            else { (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "%s  cfg %uW  unmeasured", row.name, (unsigned int)row.configured_words); }
+          } else { (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "%s", ""); }
         } else {
           switch (i) {
-            case 0: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "RTOS heap %luB / free %luB / min %luB", (unsigned long)resources.heap_total, (unsigned long)resources.heap_free, (unsigned long)resources.heap_minimum); break;
-            case 1: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "LVGL used %luB / peak %luB / max block %luB / frag %u%%", (unsigned long)resources.display.lvgl_used, (unsigned long)resources.display.lvgl_peak, (unsigned long)resources.display.lvgl_max_free, (unsigned int)resources.display.lvgl_fragmentation); break;
-            case 2: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "Display whole %luus / max %luus / overruns %lu", (unsigned long)resources.display.service_us, (unsigned long)resources.display.service_max_us, (unsigned long)resources.display.overruns); break;
-            case 3: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "Render %luus max %luus / Flush %luus max %luus", (unsigned long)resources.display.render_us, (unsigned long)resources.display.render_max_us, (unsigned long)resources.display.flush_us, (unsigned long)resources.display.flush_max_us); break;
-            case 4: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "IMU FIFO %u / peak %u / overflow %lu", (unsigned int)resources.imu_count, (unsigned int)resources.imu_peak, (unsigned long)resources.imu_overflows); break;
-            default: (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "RX drop %lu / DMA overflow %lu / comm max %lums", (unsigned long)resources.rx_drops, (unsigned long)resources.rx_overflows, (unsigned long)resources.comm_period_max_ms); break;
+            case 0: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "RTOS heap %luB / free %luB / min %luB", (unsigned long)resources.heap_total, (unsigned long)resources.heap_free, (unsigned long)resources.heap_minimum); break;
+            case 1: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "LVGL used %luB / peak %luB / max block %luB / frag %u%%", (unsigned long)resources.display.lvgl_used, (unsigned long)resources.display.lvgl_peak, (unsigned long)resources.display.lvgl_max_free, (unsigned int)resources.display.lvgl_fragmentation); break;
+            case 2: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "Display whole %luus / max %luus / overruns %lu", (unsigned long)resources.display.service_us, (unsigned long)resources.display.service_max_us, (unsigned long)resources.display.overruns); break;
+            case 3: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "Render %luus max %luus / Flush %luus max %luus", (unsigned long)resources.display.render_us, (unsigned long)resources.display.render_max_us, (unsigned long)resources.display.flush_us, (unsigned long)resources.display.flush_max_us); break;
+            case 4: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "IMU FIFO %u / peak %u / overflow %lu", (unsigned int)resources.imu_count, (unsigned int)resources.imu_peak, (unsigned long)resources.imu_overflows); break;
+            default: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "RX drop %lu / DMA overflow %lu / comm max %lums", (unsigned long)resources.rx_drops, (unsigned long)resources.rx_overflows, (unsigned long)resources.comm_period_max_ms); break;
           }
         }
         UiText(s_row_labels[i], s_row_text[i]);
@@ -1901,20 +2013,20 @@ static void Display_LvglUpdateModules(void)
     }
     Display_RuntimeStatus_t runtime;
     Display_LvglGetStatus(&runtime);
-    (void)snprintf(s_runtime_text, sizeof(s_runtime_text), "LCD %s  Touch %s  retries %lu  error %u",
+    (void)UiFormat(s_runtime_text, sizeof(s_runtime_text), "LCD %s  Touch %s  retries %lu  error %u",
       runtime.display_ready ? "ready" : "N/A", runtime.touch_ready ? "ready" : "N/A",
       (unsigned long)runtime.touch_recovery_count, (unsigned int)runtime.touch_last_error);
     UiText(s_runtime_label, s_runtime_text);
-    (void)snprintf(s_page_info_text, sizeof(s_page_info_text), "Module / state / fault / age / errors / recoveries");
+    (void)UiFormat(s_page_info_text, sizeof(s_page_info_text), "Module / state / fault / age / errors / recoveries");
     UiText(s_page_info, s_page_info_text);
     for (i = 0U; i < 6U; i++) {
       uint8_t id = (uint8_t)(s_diag_offset + i);
       if (id < PX4LITE_MODULE_COUNT && App_GetModuleStatus((Px4Lite_ModuleId_t)id, &status) == PX4LITE_OK) {
-        (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%s  %s  0x%04X\nage %lus  errors %lu  recoveries %u",
+        (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "%s  %s  0x%04X\nage %lus  errors %lu  recoveries %u",
           s_module_names[id], UiModuleState(status.state), (unsigned int)status.fault_code,
           (unsigned long)((s_last_tick_ms - status.state_since_ms) / 1000U), (unsigned long)status.error_count,
           (unsigned int)status.recovery_count);
-      } else { (void)snprintf(s_row_text[i], UI_ROW_TEXT_LEN, "%s", (id < PX4LITE_MODULE_COUNT) ? "N/A" : ""); }
+      } else { (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "%s", (id < PX4LITE_MODULE_COUNT) ? "N/A" : ""); }
       UiText(s_row_labels[i], s_row_text[i]);
     }
   }
@@ -1939,32 +2051,34 @@ static void Display_LvglUpdateRemote(void)
   static const char * const address[]={"Idle","Writing","Saved","Full","Motor lock","Error"};
   static const char * const radio[]={"Unknown","Busy","Ready","Profile mismatch","Timeout","I/O error","Verify failed"};
   if(s_current_lvgl_page!=DISPLAY_HMI_PAGE_HIDDEN) { return; }
+  s_content_pending = 0U;
+  s_next_comm_ms = s_last_tick_ms + 200U;
   App_CopyLoraLab(&s_comm_state);
   if(s_comm_view==0U) {
-    (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"Experiment / %s / %s",s_comm_state.running?"RUNNING":"STOPPED",results[s_comm_state.result]);
-    (void)snprintf(s_row_text[2],UI_ROW_TEXT_LEN,"Queued(lab) %lu   UART(all) %lu   Module idle(all) %lu",(unsigned long)s_comm_state.queued_frames,(unsigned long)s_comm_state.radio.uart_done,(unsigned long)s_comm_state.radio.module_idle);
-    (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"RX(session) %lu   CRC %lu   Drop %lu   Loss est. %.1f%%",(unsigned long)s_comm_state.rx_frames,(unsigned long)s_comm_state.crc_errors,(unsigned long)s_comm_state.rx_drops,s_comm_state.loss_rate_x10/10.0);
+    (void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"Experiment / %s / %s",s_comm_state.running?"RUNNING":"STOPPED",results[s_comm_state.result]);
+    (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"Queued(lab) %lu   UART(all) %lu   Module idle(all) %lu",(unsigned long)s_comm_state.queued_frames,(unsigned long)s_comm_state.radio.uart_done,(unsigned long)s_comm_state.radio.module_idle);
+    (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"RX(session) %lu   CRC %lu   Drop %lu   Loss est. %.1f%%",(unsigned long)s_comm_state.rx_frames,(unsigned long)s_comm_state.crc_errors,(unsigned long)s_comm_state.rx_drops,s_comm_state.loss_rate_x10/10.0);
     UiText(s_row_labels[2],s_row_text[2]); UiText(s_row_labels[3],s_row_text[3]);
   } else if(s_comm_view==1U) {
-    (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"Config%s / Node: %s / CH: %s",
+    (void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"Config%s / Node: %s / CH: %s",
       (s_comm_state.radio.busy || s_comm_state.address.busy)?" Working":
       ((s_comm_state.result==PX4LITE_LAB_ERROR)?" Rejected":""),
       address[s_comm_state.address.result],radio[s_comm_state.radio.result]);
-    (void)snprintf(s_row_text[0],UI_ROW_TEXT_LEN,"Current Node %u   Saved %u   %s",(unsigned int)s_comm_state.address.current_node_id,(unsigned int)s_comm_state.address.saved_node_id,s_comm_state.address.reboot_pending?"Reboot required":"");
-    (void)snprintf(s_row_text[1],UI_ROW_TEXT_LEN,"Node ID: %u",(unsigned int)s_comm_node);
-    if(s_comm_state.radio.channel_known) { (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"Actual CH %u / %s",(unsigned int)s_comm_state.radio.channel,radio[s_comm_state.radio.result]); }
-    else { (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"Actual CH N/A / %s",radio[s_comm_state.radio.result]); }
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Current Node %u   Saved %u   %s",(unsigned int)s_comm_state.address.current_node_id,(unsigned int)s_comm_state.address.saved_node_id,s_comm_state.address.reboot_pending?"Reboot required":"");
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Node ID: %u",(unsigned int)s_comm_node);
+    if(s_comm_state.radio.channel_known) { (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"Actual CH %u / %s",(unsigned int)s_comm_state.radio.channel,radio[s_comm_state.radio.result]); }
+    else { (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"Actual CH N/A / %s",radio[s_comm_state.radio.result]); }
     UiText(s_row_labels[0],s_row_text[0]); UiText(s_row_labels[1],s_row_text[1]); UiText(s_row_labels[3],s_row_text[3]);
   } else {
     App_CopyRemoteLabView(&s_remote_lab_live,s_last_tick_ms);
     if(!s_comm_frozen || s_remote_lab_live.node_id!=s_remote_lab.node_id || !s_remote_lab_live.available || s_remote_lab_live.id_conflict) { s_remote_lab=s_remote_lab_live; s_remote_lab_capture_ms=s_last_tick_ms; }
-    (void)snprintf(s_page_info_text,sizeof(s_page_info_text),"Remote / Node %u / %s",(unsigned int)s_remote_lab_live.node_id,s_remote_lab_live.id_conflict?"ID CONFLICT":(s_comm_frozen?"FROZEN":(s_remote_lab_live.available?"receiving":"waiting")));
+    (void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"Remote / Node %u / %s",(unsigned int)s_remote_lab_live.node_id,s_remote_lab_live.id_conflict?"ID CONFLICT":(s_comm_frozen?"FROZEN":(s_remote_lab_live.available?"receiving":"waiting")));
     for(i=0U;i<3U;i++) {
       uint8_t index=(uint8_t)(s_remote_offset+i);
       if(index<s_remote_count) {
         App_RemoteNodeView_t *v=&s_remote_views[index];
-        (void)snprintf(s_row_text[i],UI_ROW_TEXT_LEN,"Node %u %s\nRX %lu  %s",(unsigned int)v->node_id,v->id_conflict?"ID CONFLICT":(v->identity_known?"ID known":"ID unknown"),(unsigned long)v->rx_frame_count,(v->state==APP_REMOTE_NODE_STALE)?"STALE":"HB");
-      } else { (void)snprintf(s_row_text[i],UI_ROW_TEXT_LEN,"%s",i?"":"No remote nodes"); }
+        (void)UiFormat(s_row_text[i],UI_ROW_TEXT_LEN,"Node %u %s\nRX %lu  %s",(unsigned int)v->node_id,v->id_conflict?"ID CONFLICT":(v->identity_known?"ID known":"ID unknown"),(unsigned long)v->rx_frame_count,(v->state==APP_REMOTE_NODE_STALE)?"STALE":"HB");
+      } else { (void)UiFormat(s_row_text[i],UI_ROW_TEXT_LEN,"%s",i?"":"No remote nodes"); }
       UiText(s_row_labels[i],s_row_text[i]);
     }
     {
@@ -1980,33 +2094,34 @@ static void Display_LvglUpdateRemote(void)
       UiLabAge(hb,sizeof(hb),s_remote_lab_live.heartbeat_age_ms,0U);
       UiLabAge(data_age,sizeof(data_age),s_remote_lab.data_age_ms,frozen_delta);
       if(s_remote_lab.valid_bits&APP_LAB_POSITION) {
-        (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"%s\nFix %u  Sat %u  GPS age %s",s_remote_lab_live.identity_known?s_remote_lab_live.product_id:"Identity N/A",(unsigned int)s_remote_lab.gnss_fix_type,(unsigned int)s_remote_lab.satellites_used,gnss_age);
+        (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"%s\nFix %u  Sat %u  GPS age %s",s_remote_lab_live.identity_known?s_remote_lab_live.product_id:"Identity N/A",(unsigned int)s_remote_lab.gnss_fix_type,(unsigned int)s_remote_lab.satellites_used,gnss_age);
       } else {
-        (void)snprintf(s_row_text[3],UI_ROW_TEXT_LEN,"%s\nFix / Sat N/A  GPS age %s",s_remote_lab_live.identity_known?s_remote_lab_live.product_id:"Identity N/A",gnss_age);
+        (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"%s\nFix / Sat N/A  GPS age %s",s_remote_lab_live.identity_known?s_remote_lab_live.product_id:"Identity N/A",gnss_age);
       }
       if(s_remote_lab.valid_bits&APP_LAB_ALTITUDE) { (void)snprintf(alt,sizeof(alt),"%.1fm",s_remote_lab.altitude_mm/1000.0); } else { (void)snprintf(alt,sizeof(alt),"N/A"); }
       if(s_remote_lab.valid_bits&APP_LAB_VELOCITY) { (void)snprintf(velocity,sizeof(velocity),"%.1f/%.1fm/s",s_remote_lab.velocity_north_cms/100.0,s_remote_lab.velocity_east_cms/100.0); } else { (void)snprintf(velocity,sizeof(velocity),"N/A"); }
-      if(s_remote_lab.valid_bits&APP_LAB_POSITION) { (void)snprintf(s_row_text[4],UI_ROW_TEXT_LEN,"Lat %.5f  Lon %.5f\nH %s  V N/E %s",(double)s_remote_lab.latitude_e7/1e7,(double)s_remote_lab.longitude_e7/1e7,alt,velocity); }
-      else { (void)snprintf(s_row_text[4],UI_ROW_TEXT_LEN,"Position N/A / stale\nH %s  V N/E %s",alt,velocity); }
-      if(s_remote_lab.valid_bits&APP_LAB_ATTITUDE) { (void)snprintf(s_row_text[5],UI_ROW_TEXT_LEN,"R/P/Y %.1f/%.1f/%.1f deg\nRate %.1f/%.1f/%.1f d/s age %s",s_remote_lab.roll_deg100/100.0,s_remote_lab.pitch_deg100/100.0,s_remote_lab.yaw_deg100/100.0,s_remote_lab.roll_rate_dps100/100.0,s_remote_lab.pitch_rate_dps100/100.0,s_remote_lab.yaw_rate_dps100/100.0,att_age); }
-      else { (void)snprintf(s_row_text[5],UI_ROW_TEXT_LEN,"Attitude / Rate N/A / stale\nage %s",att_age); }
+      if(s_remote_lab.valid_bits&APP_LAB_POSITION) { (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"Lat %.5f  Lon %.5f\nH %s  V N/E %s",(double)s_remote_lab.latitude_e7/1e7,(double)s_remote_lab.longitude_e7/1e7,alt,velocity); }
+      else { (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"Position N/A / stale\nH %s  V N/E %s",alt,velocity); }
+      if(s_remote_lab.valid_bits&APP_LAB_ATTITUDE) { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"R/P/Y %.1f/%.1f/%.1f deg\nRate %.1f/%.1f/%.1f d/s age %s",s_remote_lab.roll_deg100/100.0,s_remote_lab.pitch_deg100/100.0,s_remote_lab.yaw_deg100/100.0,s_remote_lab.roll_rate_dps100/100.0,s_remote_lab.pitch_rate_dps100/100.0,s_remote_lab.yaw_rate_dps100/100.0,att_age); }
+      else { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"Attitude / Rate N/A / stale\nage %s",att_age); }
       UiLabNumber(v1,sizeof(v1),s_remote_lab.valid_bits&APP_LAB_VOLTAGE1,s_remote_lab.voltage_mv/1000.0,"V");
       UiLabNumber(v2,sizeof(v2),s_remote_lab.valid_bits&APP_LAB_VOLTAGE2,s_remote_lab.voltage2_mv/1000.0,"V");
       UiLabNumber(c1,sizeof(c1),s_remote_lab.valid_bits&APP_LAB_CURRENT1,s_remote_lab.current_ma/1000.0,"A");
       UiLabNumber(c2,sizeof(c2),s_remote_lab.valid_bits&APP_LAB_CURRENT2,s_remote_lab.current2_ma/1000.0,"A");
       if(s_remote_lab.valid_bits&APP_LAB_PERCENT1) { (void)snprintf(b1,sizeof(b1),"%u%%",(unsigned int)s_remote_lab.battery_percent); } else { (void)snprintf(b1,sizeof(b1),"N/A"); }
       if(s_remote_lab.valid_bits&APP_LAB_PERCENT2) { (void)snprintf(b2,sizeof(b2),"%u%%",(unsigned int)s_remote_lab.battery2_percent); } else { (void)snprintf(b2,sizeof(b2),"N/A"); }
-      (void)snprintf(s_row_text[6],UI_ROW_TEXT_LEN,"P1 %s %s %s age %s\nP2 %s %s %s age %s",v1,c1,b1,p1_age,v2,c2,b2,p2_age);
+      (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"P1 %s %s %s age %s\nP2 %s %s %s age %s",v1,c1,b1,p1_age,v2,c2,b2,p2_age);
       if(s_remote_lab.valid_bits&APP_LAB_HUMIDITY) { (void)snprintf(humidity,sizeof(humidity),"%.1f%%",s_remote_lab.humidity_pct100/100.0); } else { (void)snprintf(humidity,sizeof(humidity),"N/A"); }
-      if(s_remote_lab.valid_bits&APP_LAB_ENVIRONMENT) { (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"T %.1fC P %luPa age %s\nRH %s age %s",s_remote_lab.temperature_deg100/100.0,(unsigned long)s_remote_lab.pressure_pa,env_age,humidity,rh_age); }
-      else { (void)snprintf(s_row_text[7],UI_ROW_TEXT_LEN,"T/P N/A / stale age %s\nRH %s age %s",env_age,humidity,rh_age); }
-      (void)snprintf(s_row_text[8],UI_ROW_TEXT_LEN,"HB age %s data age %s\nRX %lu  seq loss %.1f%%",hb,data_age,(unsigned long)s_remote_lab_live.rx_frames,s_remote_lab_live.loss_rate_x10/10.0);
+      if(s_remote_lab.valid_bits&APP_LAB_ENVIRONMENT) { (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"T %.1fC P %luPa age %s\nRH %s age %s",s_remote_lab.temperature_deg100/100.0,(unsigned long)s_remote_lab.pressure_pa,env_age,humidity,rh_age); }
+      else { (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"T/P N/A / stale age %s\nRH %s age %s",env_age,humidity,rh_age); }
+      (void)UiFormat(s_row_text[8],UI_ROW_TEXT_LEN,"HB age %s data age %s\nRX %lu  seq loss %.1f%%",hb,data_age,(unsigned long)s_remote_lab_live.rx_frames,s_remote_lab_live.loss_rate_x10/10.0);
     }
     for(i=3U;i<9U;i++) { UiText(s_row_labels[i],s_row_text[i]); }
   }
   if(s_comm_feedback_until_ms && (int32_t)(s_comm_feedback_until_ms-s_last_tick_ms)>0) {
     size_t used=strlen(s_page_info_text);
-    (void)snprintf(s_page_info_text+used,sizeof(s_page_info_text)-used," / Busy");
+    (void)UiFormat(s_page_info_text+used,sizeof(s_page_info_text)-used," / Busy");
+    UiMarkTextChanged(s_page_info_text);
   }
   UiText(s_page_info,s_page_info_text);
 }
@@ -2091,7 +2206,7 @@ void Display_LvglRequestRecover(void) { s_lvgl_display_ready = 0U; }
 /** @brief 页面切换/重排的即时服务提示。 */
 uint8_t Display_LvglNeedsRefresh(void)
 {
-  return (uint8_t)(s_lvgl_display_ready && (s_page_change_requested || s_layout_requested));
+  return (uint8_t)(s_lvgl_display_ready && (s_page_change_requested || s_layout_requested || s_content_pending));
 }
 
 /** @brief 服务触摸、页面请求与低频诊断；底层 LVGL flush 耗时仍需实板测量。 */
@@ -2112,31 +2227,32 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
     s_page_change_requested = 0U;
     if (s_requested_page != s_current_lvgl_page) { (void)Display_SetHmiPage(s_requested_page); }
   }
-  if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) && ((int32_t)(now_ms - s_next_remote_ms) >= 0)) {
-    uint8_t old_ids[UI_REMOTE_CAP], old_count = s_remote_count, i;
-    for (i = 0U; i < old_count; i++) { old_ids[i] = s_remote_views[i].node_id; }
-    if (App_CopyRemoteNodeStatuses(s_remote_views, UI_REMOTE_CAP, &s_remote_count, now_ms) != PX4LITE_OK) { s_remote_count = 0U; }
-    if (old_count != s_remote_count) { s_layout_requested = 1U; }
-    else { for (i = 0U; i < old_count; i++) { if (old_ids[i] != s_remote_views[i].node_id) { s_layout_requested = 1U; break; } } }
-    if (s_remote_offset >= s_remote_count) { s_remote_offset = 0U; }
-    s_next_remote_ms = now_ms + 1000U;
-    Display_LvglUpdateRemote();
-  }
-  if(s_current_lvgl_page==DISPLAY_HMI_PAGE_HIDDEN && (int32_t)(now_ms-s_next_comm_ms)>=0) { Display_LvglUpdateRemote(); s_next_comm_ms=now_ms+200U; }
   if (s_layout_requested) { s_layout_requested = 0U; s_layout_stage = 1U; }
   if (App_RuntimeGetUs() - started_us < budget_us) {
+    if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) && ((int32_t)(now_ms - s_next_remote_ms) >= 0)) {
+      uint8_t old_ids[UI_REMOTE_CAP], old_count = s_remote_count, i;
+      for (i = 0U; i < old_count; i++) { old_ids[i] = s_remote_views[i].node_id; }
+      if (App_CopyRemoteNodeStatuses(s_remote_views, UI_REMOTE_CAP, &s_remote_count, now_ms) != PX4LITE_OK) { s_remote_count = 0U; }
+      if (old_count != s_remote_count) { s_layout_requested = 1U; }
+      else { for (i = 0U; i < old_count; i++) { if (old_ids[i] != s_remote_views[i].node_id) { s_layout_requested = 1U; break; } } }
+      if (s_remote_offset >= s_remote_count) { s_remote_offset = 0U; }
+      s_next_remote_ms = now_ms + 1000U;
+      s_content_pending = 1U;
+    }
+    if (s_layout_requested) { s_layout_requested = 0U; s_layout_stage = 1U; }
     if (s_layout_stage) { Display_LvglLayout(); }
-    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_OBSERVE && (int32_t)(now_ms-s_observe_due_ms)>=0) { Display_LvglUpdateObservation();s_observe_due_ms=now_ms+200U; }
-    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_RECORD && (int32_t)(now_ms-s_inspector_due_ms)>=0) { Display_LvglUpdateRecording();s_inspector_due_ms=now_ms+200U; }
-    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_SERIAL && (int32_t)(now_ms-s_inspector_due_ms)>=0) { Display_LvglUpdateSerial();s_inspector_due_ms=now_ms+200U; }
-    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DETAILS && (int32_t)(now_ms-s_details_due_ms) >= 0) { Display_LvglUpdateDetails(); s_details_due_ms = now_ms+200U; }
-    else if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_INSPECTOR || s_current_lvgl_page == DISPLAY_HMI_PAGE_NMEA) && (int32_t)(now_ms-s_inspector_due_ms) >= 0) { Display_LvglUpdateInspector(); s_inspector_due_ms=now_ms+(s_inspector_mode?200U:1000U); }
+    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN && (s_content_pending || (int32_t)(now_ms-s_next_comm_ms)>=0)) { Display_LvglUpdateRemote(); }
+    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_OBSERVE && (s_content_pending || (int32_t)(now_ms-s_observe_due_ms)>=0)) { Display_LvglUpdateObservation();s_observe_due_ms=now_ms+200U; }
+    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_RECORD && (s_content_pending || (int32_t)(now_ms-s_inspector_due_ms)>=0)) { Display_LvglUpdateRecording();s_inspector_due_ms=now_ms+200U; }
+    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_SERIAL && (s_content_pending || (int32_t)(now_ms-s_inspector_due_ms)>=0)) { Display_LvglUpdateSerial();s_inspector_due_ms=now_ms+200U; }
+    else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DETAILS && (s_content_pending || (int32_t)(now_ms-s_details_due_ms) >= 0)) { Display_LvglUpdateDetails(); s_details_due_ms = now_ms+200U; }
+    else if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_INSPECTOR || s_current_lvgl_page == DISPLAY_HMI_PAGE_NMEA) && (s_content_pending || (int32_t)(now_ms-s_inspector_due_ms) >= 0)) { Display_LvglUpdateInspector(); s_inspector_due_ms=now_ms+(s_inspector_mode?200U:1000U); }
     else if ((int32_t)(now_ms - s_next_status_ms) >= 0) { Display_LvglUpdateModules(); s_next_status_ms = now_ms + 1000U; }
     else if (s_log_version != Display_PagesGetLogVersion()) { Display_LvglUpdateLogs(); }
   }
   if (s_current_lvgl_page == DISPLAY_HMI_PAGE_MOTOR || s_current_lvgl_page == DISPLAY_HMI_PAGE_DETAILS) { UiText(s_freeze_label, s_control_feedback); }
   if (!s_layout_stage) {
-    uint16_t scanned = 0U;
+    uint16_t scanned = UiValuesPending() ? 0U : DISPLAY_HMI_VAR_COUNT;
     while (scanned++ < DISPLAY_HMI_VAR_COUNT && App_RuntimeGetUs() - started_us < budget_us) {
       uint16_t id = s_value_cursor;
       s_value_cursor = (uint16_t)((s_value_cursor + 1U) % DISPLAY_HMI_VAR_COUNT);
@@ -2197,7 +2313,7 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id)
 {
   uint32_t value = s_values[id];
   if (!s_workspace_ready) { return; }
-  if (s_value_slots[id].label) { Display_LvglFormatValue(id, value); UiText(s_value_slots[id].label, s_value_slots[id].text); }
+  if (s_value_slots[id].label) { Display_LvglFormatValue(id, value); UiTextForce(s_value_slots[id].label, s_value_slots[id].text); }
   if ((id >= DISPLAY_HMI_VAR_MOTOR_TARGET_1) && (id <= DISPLAY_HMI_VAR_MOTOR_TARGET_4) && (s_current_lvgl_page == DISPLAY_HMI_PAGE_MOTOR)) {
     uint8_t index = (uint8_t)(id - DISPLAY_HMI_VAR_MOTOR_TARGET_1);
     if (!s_value_valid[id]) { lv_obj_add_flag(s_motor_pwm_bars[index], LV_OBJ_FLAG_HIDDEN); return; }
@@ -2208,7 +2324,7 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id)
   }
   if ((id >= DISPLAY_HMI_VAR_ATTITUDE_ACTION) && (id <= DISPLAY_HMI_VAR_ATTITUDE_REFERENCE) && s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].label) {
     Display_LvglFormatValue(DISPLAY_HMI_VAR_ATTITUDE_PHASE, s_values[DISPLAY_HMI_VAR_ATTITUDE_PHASE]);
-    UiText(s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].label, s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].text);
+    UiTextForce(s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].label, s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].text);
   }
   if ((id == DISPLAY_HMI_VAR_ROLL) || (id == DISPLAY_HMI_VAR_PITCH) || (id == DISPLAY_HMI_VAR_YAW)) {
     s_attitude_roll_deg10 = (int16_t)s_values[DISPLAY_HMI_VAR_ROLL];
@@ -2244,7 +2360,7 @@ Display_Result_t Display_LvglSetMotorPulseUs(uint8_t motor_index, uint16_t pulse
   }
   if (s_motor_pulse_valid[motor_index] && s_motor_pulse_us[motor_index] == pulse_us) { return DISPLAY_OK; }
   s_motor_pulse_us[motor_index] = pulse_us; s_motor_pulse_valid[motor_index] = 1U;
-  (void)snprintf(s_motor_pulse_text[motor_index], sizeof(s_motor_pulse_text[motor_index]), "%uus", (unsigned int)pulse_us);
+  (void)UiFormat(s_motor_pulse_text[motor_index], sizeof(s_motor_pulse_text[motor_index]), "%uus", (unsigned int)pulse_us);
   UiText(s_motor_pulse_labels[motor_index], s_motor_pulse_text[motor_index]);
   return DISPLAY_OK;
 }
@@ -2254,7 +2370,7 @@ Display_Result_t Display_LvglInvalidateMotorPulseUs(uint8_t motor_index)
 {
   if (motor_index >= 4U) { return DISPLAY_ERROR; }
   s_motor_pulse_valid[motor_index] = 0U;
-  (void)snprintf(s_motor_pulse_text[motor_index], sizeof(s_motor_pulse_text[motor_index]), "N/A");
+  (void)UiFormat(s_motor_pulse_text[motor_index], sizeof(s_motor_pulse_text[motor_index]), "N/A");
   UiText(s_motor_pulse_labels[motor_index], s_motor_pulse_text[motor_index]);
   return DISPLAY_OK;
 }
