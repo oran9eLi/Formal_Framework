@@ -23,13 +23,10 @@
 #define DISPLAY_MOTOR_SLIDER_MAX_VALUE 100U
 #define DISPLAY_INIT_RETRY_MS          500U
 
+/** @brief 显示门面校验后的数值缓存；待绘制位由 LVGL 后端单独管理。 */
 typedef struct {
-  uint32_t value;           /* 当前缓存的原始显示值 */
-  uint32_t drawn_value;     /* 上一次已经绘制到屏幕的值 */
-  uint32_t last_refresh_ms; /* 上一次字段重绘时间 */
-  uint8_t valid;            /* 0 表示缓存无效，1 表示可用于绘制 */
-  uint8_t drawn_valid;      /* 0 表示当前页还未绘制过该字段 */
-  uint8_t dirty;            /* 1 表示下次 LVGL 刷新需要重绘 */
+  uint32_t value; /**< 当前原始显示值，单位及解释由 HMI 变量配置确定。 */
+  uint8_t valid;  /**< 0 表示无效，1 表示可读取；不代表已经完成绘制。 */
 } Display_ValueCache_t;
 
 /*
@@ -401,7 +398,6 @@ static Display_Result_t Display_SetValue(Display_HmiVariableId_t id, Display_Hmi
 
   s_hmi_values[id].value = value;
   s_hmi_values[id].valid = 1U;
-  s_hmi_values[id].dirty = 1U;
 #if DISPLAY_USE_LVGL_BACKEND
   (void)Display_LvglSetValue(id, value);
 #endif
@@ -413,8 +409,6 @@ static void Display_InvalidateValue(Display_HmiVariableId_t id)
 {
   if ((id >= DISPLAY_HMI_VAR_COUNT) || (s_hmi_values[id].valid == 0U)) { return; }
   s_hmi_values[id].valid = 0U;
-  s_hmi_values[id].drawn_valid = 0U;
-  s_hmi_values[id].dirty = 1U;
 #if DISPLAY_USE_LVGL_BACKEND
   (void)Display_LvglInvalidateValue(id);
 #endif
@@ -559,11 +553,7 @@ Display_Result_t Display_Init(void)
 
   for (i = 0U; i < DISPLAY_HMI_VAR_COUNT; i++) {
     s_hmi_values[i].value           = 0U;
-    s_hmi_values[i].drawn_value     = 0U;
-    s_hmi_values[i].last_refresh_ms = 0U;
     s_hmi_values[i].valid           = 0U;
-    s_hmi_values[i].drawn_valid     = 0U;
-    s_hmi_values[i].dirty           = 0U;
   }
 
   /* LCD 恢复仅重建显示缓存，不初始化或清空生产日志。 */

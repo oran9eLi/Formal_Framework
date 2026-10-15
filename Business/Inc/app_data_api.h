@@ -72,6 +72,8 @@ Px4Lite_Result_t App_RequestAttitudeAction(Px4Lite_AttitudeAction_t action);
 Px4Lite_Result_t App_CopyAttitudeStatus(App_AttitudeStatus_t *out);
 #include "px4lite_remote_telemetry.h"
 
+#define APP_REMOTE_NODE_CAPACITY 8U /**< 最多八项远端发现摘要；完整数据仅保存一个活动对端。 */
+
 /*
  * 后续任意外设必须先通过模块状态进入 App API；只有存在明确业务数据消费需求时，
  * 才新增命名清楚的 App_Copy* 快照。AT 指令类控制面由所属服务/驱动封装，不向
@@ -534,16 +536,6 @@ uint8_t App_CommandMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_pe
  * @retval PX4LITE_STALE 时间快照超过可接受年龄。
  */
 Px4Lite_Result_t App_CopyDateTime(App_DateTimeSnapshot_t *out, uint32_t now_ms);
-
-/**
- * @brief 复制 Display 专用聚合视图。
- *
- * @param[out] out 输出缓冲区，不能为 NULL。
- * @param[in] now_ms 当前系统毫秒时间，用于各快照新鲜度判断。
- *
- * @return 1 表示至少一个主要显示快照可用，0 表示无可用显示数据。
- */
-uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms);
 
 /**
  * @brief 复制远端节点 Display 专用聚合视图。

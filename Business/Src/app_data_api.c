@@ -29,6 +29,10 @@ Px4Lite_Result_t App_CopyRecording(App_RecordingStatus_t *out,uint32_t now_ms) {
 #include "px4lite_remote_telemetry.h"
 #include "px4lite_topics.h"
 
+#if APP_REMOTE_NODE_CAPACITY != PX4LITE_REMOTE_NODE_MAX
+#error "App and Framework remote discovery capacities must match"
+#endif
+
 /** @brief 常驻资源采集入口，打印开关不参与门控。 */
 void App_RuntimeStatsStep(uint32_t now_ms) { Px4Lite_RuntimeStep(now_ms); }
 /** @brief 复制汇总，调用方依据measured_ms显示年龄。 */
@@ -82,18 +86,9 @@ Px4Lite_Result_t App_CopyGnssDetails(App_GnssDetails_t *out, uint32_t now_ms)
   return now_ms - out->last_rx_ms <= PX4LITE_GNSS_MAX_AGE_MS ? PX4LITE_OK : PX4LITE_STALE;
 }
 
-/*
- * Display 聚合视图只由 biz_display 周期任务调用。以下 scratch 使用静态存储，
- * 避免把 System/Alarm 等较大快照压到任务栈上。
- */
-static App_NavigationSnapshot_t s_display_navigation_scratch;
-static App_SystemSnapshot_t s_display_system_scratch;
-static App_EnvironmentSnapshot_t s_display_environment_scratch;
-static App_DateTimeSnapshot_t s_display_date_time_scratch;
-static App_MotorSnapshot_t s_display_motor_scratch;
-static Px4Lite_AlarmSnapshot_t s_display_alarm_scratch;
+/** @brief 显示任务独占的活动远端及发现摘要转换暂存，禁止用于生产采集。 */
 static Px4Lite_RemoteTelemetry_t s_display_remote_scratch;
-static Px4Lite_RemoteNodeStatus_t s_remote_node_status_scratch[PX4LITE_REMOTE_NODE_MAX];
+static Px4Lite_RemoteNodeStatus_t s_remote_node_status_scratch[APP_REMOTE_NODE_CAPACITY];
 
 static uint16_t App_CountBits32(uint32_t value)
 {
@@ -505,67 +500,8 @@ static App_ViewState_t App_MapViewState(Px4Lite_State_t state)
   return APP_VIEW_STATE_UNKNOWN;
 }
 
-/**
- * @brief 从 Framework 模块状态填充 Display 模块视图。
- */
-static void App_FillModuleViewFromStatus(App_ModuleView_t *out, const Px4Lite_ModuleStatus_t *status)
-{
-  if ((out == 0) || (status == 0)) { return; }
 
-  out->state      = App_MapViewState(status->state);
-  out->fault_code = status->fault_code;
-  out->severity   = status->severity;
-  out->reserved   = 0U;
-}
 
-/**
- * @brief 直接读取一个模块状态作为 Display fallback。
- */
-static uint8_t App_CopyModuleView(Px4Lite_ModuleId_t module_id, App_ModuleView_t *out)
-{
-  Px4Lite_ModuleStatus_t status;
-
-  if (out == 0) { return 0U; }
-  if (Px4Lite_GetModuleStatus(module_id, &status) != PX4LITE_OK) { return 0U; }
-
-  App_FillModuleViewFromStatus(out, &status);
-  return 1U;
-}
-
-/**
- * @brief 填充 Display 关心的固定模块视图。
- */
-static uint8_t App_FillDisplayModuleViews(App_DisplaySnapshot_t *out, const App_SystemSnapshot_t *system)
-{
-  uint8_t loaded = 0U;
-
-  if (out == 0) { return 0U; }
-
-  if (system != 0) {
-    App_FillModuleViewFromStatus(&out->gnss, &system->modules[PX4LITE_MODULE_GNSS]);
-    App_FillModuleViewFromStatus(&out->imu, &system->modules[PX4LITE_MODULE_IMU]);
-    App_FillModuleViewFromStatus(&out->baro, &system->modules[PX4LITE_MODULE_BARO]);
-    App_FillModuleViewFromStatus(&out->battery, &system->modules[PX4LITE_MODULE_BATTERY]);
-    App_FillModuleViewFromStatus(&out->lora, &system->modules[PX4LITE_MODULE_LORA]);
-    App_FillModuleViewFromStatus(&out->storage, &system->modules[PX4LITE_MODULE_STORAGE]);
-    App_FillModuleViewFromStatus(&out->control, &system->modules[PX4LITE_MODULE_CONTROL]);
-    App_FillModuleViewFromStatus(&out->five_g, &system->modules[PX4LITE_MODULE_5G]);
-    App_FillModuleViewFromStatus(&out->remote_id, &system->modules[PX4LITE_MODULE_REMOTE_ID]);
-    return 1U;
-  }
-
-  loaded |= App_CopyModuleView(PX4LITE_MODULE_GNSS, &out->gnss);
-  loaded |= App_CopyModuleView(PX4LITE_MODULE_IMU, &out->imu);
-  loaded |= App_CopyModuleView(PX4LITE_MODULE_BARO, &out->baro);
-  loaded |= App_CopyModuleView(PX4LITE_MODULE_BATTERY, &out->battery);
-  loaded |= App_CopyModuleView(PX4LITE_MODULE_LORA, &out->lora);
-  loaded |= App_CopyModuleView(PX4LITE_MODULE_STORAGE, &out->storage);
-  loaded |= App_CopyModuleView(PX4LITE_MODULE_CONTROL, &out->control);
-  loaded |= App_CopyModuleView(PX4LITE_MODULE_5G, &out->five_g);
-  loaded |= App_CopyModuleView(PX4LITE_MODULE_REMOTE_ID, &out->remote_id);
-
-  return loaded;
-}
 
 /**
  * @brief 从远端模块状态填充一个 Display 模块视图。
@@ -611,144 +547,7 @@ static uint8_t App_ViewStateHasUsableData(App_ViewState_t state)
   return ((state == APP_VIEW_STATE_ONLINE) || (state == APP_VIEW_STATE_DEGRADED)) ? 1U : 0U;
 }
 
-/**
- * @brief 按严重度从高到低复制告警记录到 Display 视图。
- */
-static void App_CopyDisplayAlarms(App_DisplaySnapshot_t *out, const Px4Lite_AlarmSnapshot_t *alarm)
-{
-  int32_t severity;
-  uint16_t record_index;
-  uint16_t out_index = 0U;
 
-  if ((out == 0) || (alarm == 0)) { return; }
-
-  out->alarm_valid              = 1U;
-  out->alarm_active_count       = alarm->active_count;
-  out->alarm_highest_fault_code = alarm->highest_fault_code;
-  if (alarm->highest_fault_code != 0U) {
-    out->highest_fault_code = alarm->highest_fault_code;
-    out->highest_source_id  = alarm->highest_source_id;
-  }
-
-  for (severity = (int32_t)PX4LITE_ALARM_FATAL; (severity >= (int32_t)PX4LITE_ALARM_INFO) && (out_index < APP_DISPLAY_ALARM_MAX); severity--) {
-    for (record_index = 0U; (record_index < (uint16_t)PX4LITE_MODULE_COUNT) && (out_index < APP_DISPLAY_ALARM_MAX); record_index++) {
-      const Px4Lite_AlarmRecord_t *record = &alarm->records[record_index];
-
-      if ((record->active != 0U) && (record->fault_code != 0U) && (record->severity == (uint8_t)severity)) {
-        out->alarms[out_index].source_id  = record->source_id;
-        out->alarms[out_index].fault_code = record->fault_code;
-        out->alarms[out_index].severity   = (uint8_t)record->severity;
-        out->alarms[out_index].active     = record->active;
-        out->alarms[out_index].reserved   = 0U;
-        out->alarms[out_index].raised_ms  = record->raised_ms;
-        out->alarms[out_index].updated_ms = record->updated_ms;
-        out->alarms[out_index].detail     = record->detail;
-        out_index++;
-      }
-    }
-  }
-}
-
-uint8_t App_CopyDisplaySnapshot(App_DisplaySnapshot_t *out, uint32_t now_ms)
-{
-  Px4Lite_CommDebugInfo_t comm;
-  uint8_t i;
-  uint8_t module_loaded;
-
-  if (out == 0) { return 0U; }
-
-  memset(out, 0, sizeof(*out));
-  out->view_node_id = (uint8_t)Px4Lite_IdentityGetNodeId();
-  out->view_system_id = (uint8_t)Px4Lite_IdentityGetMavlinkSystemId();
-  out->view_remote_id_valid = 1U;
-
-  if (App_CopyNavigation(&s_display_navigation_scratch, now_ms) == PX4LITE_OK) {
-    out->navigation_valid   = 1U;
-    out->attitude_valid     = ((s_display_navigation_scratch.valid_mask & PX4LITE_NAV_VALID_ATTITUDE) != 0U) ? 1U : 0U;
-    out->gnss_utc_sec       = s_display_navigation_scratch.gnss_utc_sec;
-    out->gnss_utc_date      = s_display_navigation_scratch.gnss_utc_date;
-    out->latitude_e7        = s_display_navigation_scratch.latitude_e7;
-    out->longitude_e7       = s_display_navigation_scratch.longitude_e7;
-    out->altitude_mm        = s_display_navigation_scratch.altitude_mm;
-    out->velocity_north_cms = s_display_navigation_scratch.velocity_north_cms;
-    out->velocity_east_cms  = s_display_navigation_scratch.velocity_east_cms;
-    out->roll_deg100        = s_display_navigation_scratch.roll_deg100;
-    out->pitch_deg100       = s_display_navigation_scratch.pitch_deg100;
-    out->yaw_deg100         = s_display_navigation_scratch.yaw_deg100;
-    out->hdop_x100          = s_display_navigation_scratch.hdop_x100;
-    out->satellites_used    = s_display_navigation_scratch.satellites_used;
-    out->gnss_fix_type      = s_display_navigation_scratch.gnss_fix_type;
-  }
-
-  if (App_CopyDateTime(&s_display_date_time_scratch, now_ms) == PX4LITE_OK) {
-    out->date_time_valid   = 1U;
-    out->local_date_ymd    = s_display_date_time_scratch.local_date_ymd;
-    out->local_time_hhmmss = s_display_date_time_scratch.local_time_hhmmss;
-  }
-
-  if (App_CopySystem(&s_display_system_scratch, now_ms) == PX4LITE_OK) {
-    out->system_valid        = 1U;
-    out->status_version      = s_display_system_scratch.status_version;
-    out->warning_fault_mask  = s_display_system_scratch.warning_fault_mask;
-    out->blocking_fault_mask = s_display_system_scratch.blocking_fault_mask;
-    out->highest_fault_code  = s_display_system_scratch.highest_fault_code;
-    out->highest_source_id   = s_display_system_scratch.highest_source_id;
-    out->system_ready        = s_display_system_scratch.system_ready;
-    module_loaded            = App_FillDisplayModuleViews(out, &s_display_system_scratch);
-  } else {
-    module_loaded = App_FillDisplayModuleViews(out, 0);
-  }
-
-  if ((Px4Lite_CopyAlarmSnapshot(&s_display_alarm_scratch) == PX4LITE_OK) && (Px4Lite_IsFresh(&s_display_alarm_scratch.header, now_ms, APP_ALARM_MAX_AGE_MS) != 0U)) { App_CopyDisplayAlarms(out, &s_display_alarm_scratch); }
-
-  if (App_CopyEnvironment(&s_display_environment_scratch, now_ms) == PX4LITE_OK) {
-    out->environment_valid     = 1U;
-    out->pressure_pa           = s_display_environment_scratch.pressure_pa;
-    out->temperature_c         = s_display_environment_scratch.temperature_c;
-    out->relative_humidity_pct = s_display_environment_scratch.relative_humidity_pct;
-    out->voltage_mv            = s_display_environment_scratch.voltage_mv;
-    out->voltage2_mv           = s_display_environment_scratch.voltage2_mv;
-    out->current_ma            = s_display_environment_scratch.current_ma;
-    out->current2_ma           = s_display_environment_scratch.current2_ma;
-    out->battery_percent       = s_display_environment_scratch.battery_percent;
-    out->battery2_percent      = s_display_environment_scratch.battery2_percent;
-    out->low_voltage           = s_display_environment_scratch.low_voltage;
-    out->low_voltage2          = s_display_environment_scratch.low_voltage2;
-  }
-
-  if (App_CopyMotor(&s_display_motor_scratch, now_ms) == PX4LITE_OK) {
-    out->motor_valid = 1U;
-    for (i = 0U; (i < APP_DISPLAY_MOTOR_COUNT) && (i < PX4LITE_MOTOR_COUNT); i++) {
-      out->motor_duty_percent[i] = s_display_motor_scratch.duty_percent[i];
-      out->motor_pulse_us[i]     = s_display_motor_scratch.pulse_us[i];
-      out->motor_base_percent[i] = s_display_motor_scratch.base_percent[i];
-    }
-    out->motor_run_state   = s_display_motor_scratch.run_state;
-    out->motor_speed_level = s_display_motor_scratch.speed_level;
-  }
-
-  App_GetCommStats(&comm);
-  out->lora_tx_count = comm.tx_frame_count;
-  out->lora_rx_count = comm.rx_frame_count;
-  out->lora_lost_count = comm.rx_sequence_lost_count;
-  out->lora_ack_count = comm.mav_command_ack_rx_count + comm.mav_command_ack_tx_count;
-  out->lora_loss_rate_x10 = comm.rx_loss_rate_x10;
-
-  /* 姿态显示需要同时满足数据位有效和 IMU 模块状态可用。 */
-  if (App_ViewStateHasUsableData(out->imu.state) == 0U) { out->attitude_valid = 0U; }
-  if (App_ViewStateHasUsableData(out->baro.state) == 0U) { out->environment_valid = 0U; }
-  if (App_ViewStateHasUsableData(out->battery.state) == 0U) {
-    out->battery_percent = 0U;
-    out->battery2_percent = 0U;
-    out->voltage_mv = 0U;
-    out->voltage2_mv = 0U;
-    out->current_ma = 0;
-    out->current2_ma = 0;
-  }
-
-  out->any_valid = ((out->navigation_valid != 0U) || (out->system_valid != 0U) || (out->environment_valid != 0U) || (module_loaded != 0U)) ? 1U : 0U;
-  return out->any_valid;
-}
 
 static uint8_t App_CopyRemoteDisplaySnapshotImpl(App_DisplaySnapshot_t *out, uint32_t now_ms)
 {
