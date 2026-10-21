@@ -607,7 +607,19 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
   /* 请求已进入所属控制服务，实际目标以随后发布的快照为准。 */
 }
 
-/** @brief 姿态仪直接绘制；只使用显示缓存，不启动采集或控制。 */
+/** @brief 三轴观察值全部有效才可绘制真实姿态，不把缺失值解释为水平姿态。 */
+static uint8_t Display_LvglAttitudeValid(void)
+{
+  return (uint8_t)(s_value_valid[DISPLAY_HMI_VAR_ROLL] &&
+                   s_value_valid[DISPLAY_HMI_VAR_PITCH] &&
+                   s_value_valid[DISPLAY_HMI_VAR_YAW]);
+}
+
+/**
+ * @brief 绘制姿态仪；有效时显示真实姿态，无效时保留灰色仪表并标记 NO DATA。
+ * @details 只消费显示缓存。灰色几何使用固定中性角度，不修改数值有效位或复用失效测量；
+ *          Observe 页面仍由原观察绘制路径接管，不触发采集、解算或控制。
+ */
 static void Display_LvglHorizonDrawCb(lv_event_t *e)
 {
   lv_obj_t *obj = lv_event_get_target(e);
@@ -620,6 +632,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   lv_draw_mask_line_param_t mline;
   lv_point_t pa;
   lv_point_t pb;
+  uint8_t attitude_valid;
   lv_coord_t w;
   lv_coord_t h;
   lv_coord_t cx;
@@ -649,6 +662,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   }
 
   if(s_current_lvgl_page==DISPLAY_HMI_PAGE_OBSERVE) { Display_ObservationDraw(obj,dc);return; }
+  attitude_valid = Display_LvglAttitudeValid();
   lv_obj_get_coords(obj, &co);
   w = lv_area_get_width(&co);
   h = lv_area_get_height(&co);
@@ -658,9 +672,10 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   r_ci = (lv_coord_t)(r_co - 22);                /* 罗盘内半径 = 姿态盘外缘 */
   r = (lv_coord_t)(r_ci - 3);                    /* 姿态盘（天/地）半径 */
 
-  pitch_deg = ((float)s_attitude_pitch_deg10 / 10.0f) * HZ_PITCH_SIGN;
-  yaw_deg = (((float)s_attitude_yaw_deg10 / 10.0f) * HZ_YAW_SIGN) + HZ_YAW_OFFSET_DEG;
-  a = ((float)s_attitude_roll_deg10 / 10.0f) * HZ_ROLL_SIGN * (float)(M_PI / 180.0);
+  /* 无效时只展示中性示意几何；右侧角度继续由有效位显示 N/A。 */
+  pitch_deg = attitude_valid ? ((float)s_attitude_pitch_deg10 / 10.0f) * HZ_PITCH_SIGN : 0.0f;
+  yaw_deg = attitude_valid ? (((float)s_attitude_yaw_deg10 / 10.0f) * HZ_YAW_SIGN) + HZ_YAW_OFFSET_DEG : 0.0f;
+  a = attitude_valid ? ((float)s_attitude_roll_deg10 / 10.0f) * HZ_ROLL_SIGN * (float)(M_PI / 180.0) : 0.0f;
   ca = cosf(a);
   sa = sinf(a);
   tx = ca;            /* 地平线切向 */
@@ -683,7 +698,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   /* 天空铺满圆盘 */
   lv_draw_rect_dsc_init(&rdsc);
   rdsc.bg_opa = LV_OPA_COVER;
-  rdsc.bg_color = lv_color_hex(0x2E8BE6);
+  rdsc.bg_color = lv_color_hex(attitude_valid ? 0x2E8BE6 : 0x353535);
   lv_draw_rect(dc, &rdsc, &fill);
 
   /* 地面：沿地平线加直线遮罩（保留下半侧）后覆盖棕色 */
@@ -694,7 +709,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     lv_coord_t p2y = (lv_coord_t)(oy + (ty * (float)(r + 4)));
     lv_draw_mask_line_points_init(&mline, p1x, p1y, p2x, p2y, LV_DRAW_MASK_LINE_SIDE_BOTTOM);
     id_l = lv_draw_mask_add(&mline, NULL);
-    rdsc.bg_color = lv_color_hex(0x8A5A2B);
+    rdsc.bg_color = lv_color_hex(attitude_valid ? 0x8A5A2B : 0x252525);
     lv_draw_rect(dc, &rdsc, &fill);
     lv_draw_mask_remove_id(id_l);
     lv_draw_mask_free_param(&mline);
@@ -703,7 +718,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   /* 地平线（俯仰刻度梯 v=0），整条略粗 */
   lv_draw_line_dsc_init(&ldsc);
   ldsc.opa = LV_OPA_COVER;
-  ldsc.color = lv_color_hex(0xFFFFFF);
+  ldsc.color = lv_color_hex(attitude_valid ? 0xFFFFFF : 0x777777);
   ldsc.round_start = 1;
   ldsc.round_end = 1;
   ldsc.width = 3;
@@ -746,7 +761,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     ctr.y = cy;
     lv_draw_arc_dsc_init(&adsc);
     adsc.opa = LV_OPA_COVER;
-    adsc.color = lv_color_hex(0x33485C);
+    adsc.color = lv_color_hex(attitude_valid ? 0x33485C : 0x505050);
     adsc.width = 2;
     lv_draw_arc(dc, &adsc, &ctr, r_ci, 0, 360);
   }
@@ -769,13 +784,13 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     ctr.y = cy;
     lv_draw_arc_dsc_init(&bandsc);
     bandsc.opa = LV_OPA_COVER;
-    bandsc.color = lv_color_hex(0x101D29);
+    bandsc.color = lv_color_hex(attitude_valid ? 0x101D29 : 0x202020);
     bandsc.width = (lv_coord_t)(r_co - r_ci);
     lv_draw_arc(dc, &bandsc, &ctr, (lv_coord_t)r_mid, 0, 360);
 
     lv_draw_line_dsc_init(&tdsc);
     tdsc.opa = LV_OPA_COVER;
-    tdsc.color = lv_color_hex(0xC8D6E2);
+    tdsc.color = lv_color_hex(attitude_valid ? 0xC8D6E2 : 0x707070);
     for (d = 0; d < 360; d = (int16_t)(d + 10)) {
       float sang = ((float)d * (float)(M_PI / 180.0)) - yaw_r;
       float dxx = sinf(sang);
@@ -802,7 +817,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
       lv_coord_t ly = (lv_coord_t)((float)cy + (dyy * r_mid));
       lv_area_t la;
 
-      txtdsc.color = (card_deg[c] == 0) ? lv_color_hex(0xF2C14E) : lv_color_hex(0xDCE8F2);
+      txtdsc.color = (card_deg[c] == 0) ? lv_color_hex(attitude_valid ? 0xF2C14E : 0x909090) : lv_color_hex(attitude_valid ? 0xDCE8F2 : 0x808080);
       la.x1 = (lv_coord_t)(lx - 8);
       la.y1 = (lv_coord_t)(ly - 9);
       la.x2 = (lv_coord_t)(lx + 8);
@@ -817,7 +832,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     lv_point_t tri[3];
     lv_draw_rect_dsc_init(&tdsc);
     tdsc.bg_opa = LV_OPA_COVER;
-    tdsc.bg_color = lv_color_hex(0xF2C14E);
+    tdsc.bg_color = lv_color_hex(attitude_valid ? 0xF2C14E : 0x909090);
     tri[0].x = cx;
     tri[0].y = (lv_coord_t)(cy - r_ci + 1);
     tri[1].x = (lv_coord_t)(cx - 6);
@@ -833,7 +848,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     lv_area_t da;
     lv_draw_line_dsc_init(&ldsc);
     ldsc.opa = LV_OPA_COVER;
-    ldsc.color = lv_color_hex(0xFFC400);
+    ldsc.color = lv_color_hex(attitude_valid ? 0xFFC400 : 0x909090);
     ldsc.width = 4;
     ldsc.round_start = 1;
     ldsc.round_end = 1;
@@ -859,13 +874,31 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     lv_draw_line(dc, &ldsc, &pa, &pb);
     lv_draw_rect_dsc_init(&ddsc);
     ddsc.bg_opa = LV_OPA_COVER;
-    ddsc.bg_color = lv_color_hex(0xFFC400);
+    ddsc.bg_color = lv_color_hex(attitude_valid ? 0xFFC400 : 0x909090);
     ddsc.radius = LV_RADIUS_CIRCLE;
     da.x1 = (lv_coord_t)(cx - 3);
     da.y1 = (lv_coord_t)(cy - 3);
     da.x2 = (lv_coord_t)(cx + 3);
     da.y2 = (lv_coord_t)(cy + 3);
     lv_draw_rect(dc, &ddsc, &da);
+  }
+
+  if (attitude_valid == 0U) {
+    lv_draw_label_dsc_t text_dsc;
+    /* 复用本次绘制描述符和固定字体，不新增 LVGL 对象、持久缓冲或动态分配。 */
+    fill.x1 = (lv_coord_t)(cx - 47); fill.x2 = (lv_coord_t)(cx + 47);
+    fill.y1 = (lv_coord_t)(cy + 30); fill.y2 = (lv_coord_t)(cy + 49);
+    lv_draw_rect_dsc_init(&rdsc);
+    rdsc.bg_opa = LV_OPA_COVER;
+    rdsc.bg_color = lv_color_hex(0x252525);
+    rdsc.radius = 4;
+    lv_draw_rect(dc, &rdsc, &fill);
+    lv_draw_label_dsc_init(&text_dsc);
+    text_dsc.opa = LV_OPA_COVER;
+    text_dsc.font = &lv_font_montserrat_14;
+    text_dsc.color = lv_color_hex(0xBDBDBD);
+    text_dsc.align = LV_TEXT_ALIGN_CENTER;
+    lv_draw_label(dc, &text_dsc, &fill, "NO DATA", NULL);
   }
 }
 
@@ -1410,14 +1443,12 @@ static void Display_LvglLayoutFlight(void)
   (void)UiButton("Details >", 614, 285, 162, 40, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DETAILS, 0x173749);
 }
 
-/** @brief 姿态仪与操作各用独立区域，校准状态不随观察冻结。 */
+/** @brief 姿态页始终保留仪表；无数据由绘制回调灰显，校准状态不随观察冻结。 */
 static void Display_LvglLayoutAttitude(void)
 {
   UiPanel(0U, 8, 62, 784, 272);
   lv_obj_set_pos(s_attitude_obj, 26, 64); lv_obj_set_size(s_attitude_obj, 258, 258);
-  if (s_value_valid[DISPLAY_HMI_VAR_ROLL] && s_value_valid[DISPLAY_HMI_VAR_PITCH] && s_value_valid[DISPLAY_HMI_VAR_YAW]) {
-    lv_obj_clear_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN);
-  }
+  lv_obj_clear_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN);
   (void)UiButton("IMU >", 630, 68, 145, 38, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DETAILS, 0x173749);
   UiValueRow(DISPLAY_HMI_VAR_ROLL, "Roll", 314, 116, 118);
   UiValueRow(DISPLAY_HMI_VAR_PITCH, "Pitch", 314, 152, 118);
@@ -2330,7 +2361,8 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id)
     s_attitude_roll_deg10 = (int16_t)s_values[DISPLAY_HMI_VAR_ROLL];
     s_attitude_pitch_deg10 = (int16_t)s_values[DISPLAY_HMI_VAR_PITCH];
     s_attitude_yaw_deg10 = (int16_t)s_values[DISPLAY_HMI_VAR_YAW];
-    if ((s_current_lvgl_page == DISPLAY_HMI_PAGE_AIRCRAFT) && s_value_valid[DISPLAY_HMI_VAR_ROLL] && s_value_valid[DISPLAY_HMI_VAR_PITCH] && s_value_valid[DISPLAY_HMI_VAR_YAW]) {
+    if (s_current_lvgl_page == DISPLAY_HMI_PAGE_AIRCRAFT) {
+      /* 数值变化与有效性转换都重绘，数据丢失时切为灰盘而不是隐藏控件。 */
       lv_obj_clear_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); lv_obj_invalidate(s_attitude_obj);
     } else if(s_current_lvgl_page!=DISPLAY_HMI_PAGE_OBSERVE) { lv_obj_add_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); }
   }
