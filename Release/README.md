@@ -2,9 +2,11 @@
 
 ## 当前发布计划
 
+- [2026-10-22运行性能候选](Archive/2026-10-22_runtime-performance-candidate/MANIFEST.md)：codex/fix-runtime-performance，Latest已更新为同次本地候选，Keil0/0、SRAM+8 B/Flash+192 B；未合入develop或推送，实板待验，灰显日期归档保留。
+
 - [2026-10-22姿态仪灰显合入](V1.0_姿态仪灰显_合入记录.md)：已本地合入develop，合入后Keil0/0且HEX不变；后续性能问题另开分支，实板验收继续待补。
 
-- [2026-10-21姿态仪无数据灰显候选](Archive/2026-10-21_attitude-no-data-candidate/MANIFEST.md)：独立修复分支，本地Keil0/0，SRAM不变、Flash+624 B；Latest更新为该同次候选，尚未推送/发布，实板待验。原优化预发布与标签保留。
+- [2026-10-21姿态仪无数据灰显候选](Archive/2026-10-21_attitude-no-data-candidate/MANIFEST.md)：独立修复分支，本地Keil0/0，SRAM不变、Flash+624 B；该同次候选保留在日期归档，尚未推送/发布，实板待验。原优化预发布与标签保留。
 
 - [2026-10-15 SRAM与显示精简记录](../Development_Guide/2026-10-15_SRAM与显示刷新精简说明.md)：已合入develop，[优化预发布](https://github.com/oran9eLi/Formal_Framework/releases/tag/v1.0.0-pre.opt.20261015)及固件已归档，合入后Keil0/0，主SRAM空余19384 B；四项净释放14768 B。该优化候选与M5历史产物均保留在日期归档；实板与计时待验，见[合入归档记录](V1.0_SRAM与显示精简_合入与归档记录.md)。
 - [V1-M5实施计划](V1.0_M5_实施计划.md)、[验证记录](V1.0_M5_验证记录.md)与[原M5候选身份](Archive/2026-10-14_v1.0.0-pre.m5.20261014/MANIFEST.md)：六步软件及审查修正完成，主SRAM余4616 B；Details/Inspector/NMEA/Serial/Observe/Drift/Record和电脑LoRa工具已交付。2026-10-14重新Keil全量0/0、41 s，M5标签/四个固件附件已推送并回下载一致，见[GitHub归档记录](V1.0_M5_GitHub归档记录.md)。M5已合入develop，已合并分支已清理，交互/显示首轮观察良好，见[合入记录](V1.0_M5_合入记录.md)；功能完整性与数据正确性等C01—C16待联合验收，问题单开修复分支。[课堂说明](../Development_Guide/2026-10-13_M5教学观察与记录说明.md)、[PC LoRa说明](../Tools/LoRa测试工具说明.md)。

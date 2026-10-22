@@ -1,30 +1,33 @@
-# 姿态仪无数据灰显本地候选
+# 运行资源统计与耗时收敛本地候选
 
-日期：2026-10-21。候选：attitude-no-data-20261021。状态：本地软件构建完成，实板待验证，未推送/发布；原优化标签保持不变。
+日期：2026-10-22。候选：runtime-performance-20261022。状态：软件构建完成，实板待验证；本地独立分支，未合入develop、未推送或打tag。
 
 | 项目 | 实际记录 |
 |---|---|
-| 分支 / 生产提交 | codex/fix-attitude-no-data / `579a3d2e77060e7de94320791c981fa46f6c9f91` |
-| develop基线 | `22e37356b822039690604c685aabc53d78a1af36` |
-| 构建 | 2026-10-21T19:41:02.7109956+08:00 — 2026-10-21T19:41:47.5187363+08:00；Keil Rebuild All，退出码0，0 Error(s), 0 Warning(s)，日志37s |
-| 工程 / 工具链 | MDK-ARM/formal_framework.uvprojx / Target1 / ARMCC5.06 u5 build528 / DFP2.17.0 |
-| Code / RO / RW / ZI | 339412 / 111008 / 1980 / 109708 B |
-| 主SRAM | 使用111688 B、余19384 B，与优化基线一致 |
-| Flash装载 | 450548 B，比优化基线增加624 B |
-| HEX范围 | [0x8000000, 0x806dff4)；450548 B；逐条校验和/地址核对，不占Node ID sector11 |
-| 输入 | 1021项构建前后及归档时原始SHA一致、与生产提交内容逐项一致；原始输入ZIP逐文件核对 |
-| 源码ZIP SHA-256 | `4c919e2af69de9e1dee23b14c14a335dc851a0f91aa0f624e18d9e52b9a88f3c` |
+| 分支 / 生产提交 | codex/fix-runtime-performance / `02b352482b02c81b92eac8c0a44cf7705f2fe015` |
+| develop基线 | `4d1886b0f7b4ada7dd93808e5767de7c8f0a8dfc`；已包含姿态仪灰显修复 |
+| 构建 | 2026-10-22T11:10:25.3503948+08:00 — 2026-10-22T11:11:03.8615025+08:00；Rebuild All，退出码0，0 Error(s), 0 Warning(s)，日志36 s |
+| 工程 / 工具链 | MDK-ARM/formal_framework.uvprojx / Target 1 / ARMCC5.06 u5 build528 / DFP2.17.0 |
+| Code / RO / RW / ZI | 339604 / 111008 / 1980 / 109716 B |
+| 主SRAM | 使用111696 B、空余19376 B；相比灰显版增加8 B |
+| Flash装载 | 450740 B；相比灰显版增加192 B，按链接器压缩装载口径 |
+| HEX数据范围 | [0x8000000, 0x806e0b4)；450740 B；逐条校验通过，不占配置sector11 |
+| 输入 | 1021项构建前后和归档时原始SHA一致，生产提交内容经换行归一化逐项一致，ZIP逐文件SHA一致 |
+| 输入清单SHA-256 | `bc1a739e89c65d6c8149da88c5c44b990e975cfce2f67747e9a6d67e314e04f7` |
+| 源码ZIP SHA-256 | `3ba85012c32de2701cc19b672f7df4d22c8abc8d8754899f572a3b7f9acd7c89` |
 
 ## 同次产物 SHA-256
 
 | 文件 | SHA-256 |
 |---|---|
-| formal_framework.hex | `833407579aa9046420508cb61220732b1b56b8ea3ae93382572fb8ee88eebcf5` |
-| formal_framework.axf | `a1215f4ce3d933e50115dd5d49d27b1bc735c42dfe598c6f3e6b03f585904af4` |
-| formal_framework.htm | `7aa201a132de3c2bbfe5392ec426d2836e636f8b011c21c0f59c41dbb6d0a6b8` |
-| formal_framework.map | `e3fa36b32db6d5de3e1cfc98d474f5b9e5f1f363b9cc980a7274f6edb5c9af77` |
-| keil-rebuild.log | `ccbb9665cb0de0845f9184038356023bd54ec24805f326b5a11b99316784c9fb` |
+| formal_framework.hex | `0e46fca1dc42473ea5219052f492e19c01bf9ba9aec4df298f7d7484fce81765` |
+| formal_framework.axf | `8f862f539e7f7595324a147b78ad519b7137c18af83b3bd1b233ed9370d1e45d` |
+| formal_framework.htm | `1d67d9b422579b31b92dc3abe647dd627629cae1f2336fcd96357ca7ed541b11` |
+| formal_framework.map | `142295364fcd2194ba95490a73174de3e7045152bac85243e4671c6bdd5c6653` |
+| keil-rebuild.log | `2d5af21cf6dee65776b84b42889c62a497ce59144c43eace4a189dca814dc6a3` |
 
-无有效姿态时保留灰色仪表和NO DATA，角度仍为N/A；恢复新鲜有效姿态后回到原彩色绘制。原Freeze/Resume观察规则、Observe曲线、IMU采集/解算/控制/记录均不修改。没有新增对象、持久缓冲、任务或堆分配；运行栈和灰盘实际绘制耗时尚未实测。
+Latest与日期归档保存同次HEX/AXF/MAP和build.log（即上述keil-rebuild.log）。完整HTM、原始输入清单、生产源码ZIP、身份JSON与原日志保存在本工作区build/runtime_performance_20261022/artifacts/，并复制到主工作区同路径。旧灰显归档保留。
 
-未新增/运行host测试，未烧录或完成实屏、数据恢复、组合资源及长稳验收；M5/M6与M5-R01保持待验。软件审查无阻断不构成实板通过。详见执行台账V1-E24及2026-10-21变更记录。
+本次缩短离线IMU地址探测、批量写入FSMC像素，修正LVGL采样峰值口径并增加sensor/comm单轮经过时间最大值。未改变任务优先级/周期、堆池、16行绘图缓冲、页面操作、UART6协议与上报规则。未新增任务/堆分配。
+
+独立只读评审未发现本次差异的阻断问题；记录既有IMU重初始化稳定帧计数与连续有效帧规范不符的风险，未在本分支改动该发布路径。未新增/运行host测试，未烧录或完成空载/满载计时、热插拔、串口/RF/CSV及长稳验收。不能据构建声称61.56 ms显示尖峰、203 ms通信间隔或75.21%堆占用已解决。M5/M6及M5-R01继续待验。
