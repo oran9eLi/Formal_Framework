@@ -10,6 +10,7 @@
  *       + U+53EA/U+8BFB (只读), Tests/tools/extend_display_font.py; glyphs=208, bitmap_bytes=26624. */
 
 #include "display_lvgl_font_zh.h"
+#include "display_lvgl_numeric_font.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -3113,5 +3114,5 @@ const lv_font_t display_lvgl_font_zh_16 = {
     -2,
     1,
     NULL,
-    &lv_font_montserrat_16
+    &display_lvgl_numeric_16
 };

@@ -8,6 +8,7 @@
 #include "display_observation.h"
 #include "app_data_api.h"
 #include "display_lvgl_font_zh.h"
+#include "display_lvgl_numeric_font.h"
 #include "display_pages.h"
 #include "display_gt911.h"
 #include "lv_port_disp.h"
@@ -807,7 +808,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
 
     lv_draw_label_dsc_init(&txtdsc);
     txtdsc.opa = LV_OPA_COVER;
-    txtdsc.font = &lv_font_montserrat_14;
+    txtdsc.font = &display_lvgl_numeric_14;
     txtdsc.align = LV_TEXT_ALIGN_CENTER;
     for (c = 0U; c < 4U; c++) {
       float sang = ((float)card_deg[c] * (float)(M_PI / 180.0)) - yaw_r;
@@ -895,7 +896,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     lv_draw_rect(dc, &rdsc, &fill);
     lv_draw_label_dsc_init(&text_dsc);
     text_dsc.opa = LV_OPA_COVER;
-    text_dsc.font = &lv_font_montserrat_14;
+    text_dsc.font = &display_lvgl_numeric_14;
     text_dsc.color = lv_color_hex(0xBDBDBD);
     text_dsc.align = LV_TEXT_ALIGN_CENTER;
     lv_draw_label(dc, &text_dsc, &fill, "NO DATA", NULL);
@@ -980,7 +981,7 @@ static lv_obj_t *UiLabel(const char *text, lv_coord_t x, lv_coord_t y, lv_coord_
   obj = s_labels[s_label_used++];
   lv_obj_set_pos(obj, x, y);
   lv_obj_set_size(obj, w, 22);
-  lv_obj_set_style_text_font(obj, font, 0);
+  lv_obj_set_style_text_font(obj, Display_LvglNumericFont(font), 0);
   lv_obj_set_style_text_color(obj, lv_color_hex(color), 0);
   UiText(obj, text);
   lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
@@ -1823,6 +1824,18 @@ static void Display_LvglUpdateInspector(void)
   s_content_pending = 0U;
   s_inspector_due_ms = s_last_tick_ms + (s_inspector_mode ? 200U : 1000U);
   (void)App_CopyCaptureStatus(&status);
+  /* 原始HEX行稳定字节列；切回Messages/Decoded必须恢复普通数字等宽字体。 */
+  for (i = 0U; i < 8U; i++) {
+    const lv_font_t *font = &display_lvgl_numeric_14;
+    if (s_inspector_mode == 1U &&
+        ((status.source == PX4LITE_CAPTURE_NMEA && i >= 4U && i < 6U) ||
+         (status.source != PX4LITE_CAPTURE_NMEA && i >= 2U && i < 6U))) {
+      font = &display_lvgl_hex_14;
+    }
+    if (lv_obj_get_style_text_font(s_row_labels[i], 0) != font) {
+      lv_obj_set_style_text_font(s_row_labels[i], font, 0);
+    }
+  }
   if(s_selected_session!=status.session_id) { s_selected_ready=0U;s_inspector_page=0U;s_inspector_row=0U;s_selected_session=status.session_id; }
   s_row_written = 0U;
   if(s_inspector_mode==0U) {

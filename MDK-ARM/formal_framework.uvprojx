@@ -755,6 +755,11 @@
               <FilePath>..\Display\Src\display_lvgl.c</FilePath>
             </File>
             <File>
+              <FileName>display_lvgl_numeric_font.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Display\Src\display_lvgl_numeric_font.c</FilePath>
+            </File>
+            <File>
               <FileName>display_lvgl_font_zh.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Display\Src\display_lvgl_font_zh.c</FilePath>
