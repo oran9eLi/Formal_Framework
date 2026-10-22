@@ -365,10 +365,12 @@ Px4Lite_Result_t Px4Lite_RemoteIdRecover(void)
 }
 
 /**
- * @brief 执行一次非阻塞传感器采集和发布周期。
+ * @brief 执行一次传感器采集和发布周期。
+ * @details 外设调用可能同步等待；记录整轮经过时间（含抢占），不含任务周期等待。
  */
 void Px4Lite_SensorWorkRun(uint32_t now_ms)
 {
+  uint32_t work_started_us = Px4Lite_PlatformGetUs();
 #if PX4LITE_ENABLE_GNSS
   Px4Lite_SensorGnss_t gnss;
   Px4Lite_Result_t result;
@@ -531,6 +533,7 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 #if !PX4LITE_ENABLE_GNSS && !PX4LITE_ENABLE_IMU && !PX4LITE_ENABLE_BARO && !PX4LITE_ENABLE_BATTERY
   (void)now_ms;
 #endif
+  Px4Lite_RuntimeReportSensorWork(Px4Lite_PlatformGetUs() - work_started_us);
 }
 
 /**
@@ -1033,8 +1036,13 @@ static Px4Lite_Result_t Px4Lite_RemoteIdRunReinitIfRequested(uint32_t now_ms)
 }
 #endif
 
+/**
+ * @brief 执行既有通信服务并记录整轮经过时间。
+ * @details 保持 UART6 协议和调度；计时包含同步发送及抢占，不代表 CPU 利用率。
+ */
 void Px4Lite_CommWorkRun(uint32_t now_ms)
 {
+  uint32_t work_started_us = Px4Lite_PlatformGetUs();
   Px4Lite_RuntimeReportComm(now_ms);
   Px4Lite_CaptureWorkRun();
 #if PX4LITE_ENABLE_RPI_MAVLINK
@@ -1158,6 +1166,7 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 #if !PX4LITE_ENABLE_LORA && !PX4LITE_ENABLE_REMOTE_ID && !PX4LITE_ENABLE_RPI_MAVLINK
   (void)now_ms;
 #endif
+  Px4Lite_RuntimeReportCommWork(Px4Lite_PlatformGetUs() - work_started_us);
 }
 
 void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out)

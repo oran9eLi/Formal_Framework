@@ -1,6 +1,7 @@
 /**
  * @file sensor_mpu6050.c
- * @brief Implement the typed MPU6050 six-axis sensor driver.
+ * @brief MPU6050 六轴协议、设备事实与有界离线重试。
+ * @details 属于 Sensor Driver 层，依赖 BSP I2C/时间接口；由 sensor 任务推进，不访问 HAL 或判定最终 OFFLINE。
  */
 
 #include "sensor_mpu6050.h"
@@ -41,6 +42,7 @@
 #define MPU6050_ACCEL_RANGE_8G            0x10U
 
 #define MPU6050_I2C_TIMEOUT_MS            20U
+#define MPU6050_PROBE_TIMEOUT_MS          4U /**< 地址探测短超时，寄存器传输仍使用 20 ms。 */
 #define MPU6050_WAKEUP_DELAY_MS           10U
 #define MPU6050_INIT_RETRY_FAST_MS        100U
 #define MPU6050_INIT_RETRY_SLOW_MS        500U
@@ -223,57 +225,26 @@ static Mpu6050_Result_t Mpu6050_WriteReg(uint8_t reg, uint8_t value)
   return Mpu6050_MapBspStatus(BSP_I2C_MemWrite(s_addr, reg, &value, 1U, MPU6050_I2C_TIMEOUT_MS));
 }
 
-/* ======================= [TEMP-DIAG-I2C] 开始：临时诊断代码 =======================
- *
- * 用途：区分 probe 阶段失败到底是"从机不应答"还是"主机外设拒发"。
- *
- * 背景：Mpu6050_ProbeAddress() 原本只判断 == BSP_STATUS_OK，其余一律折成
- * MPU6050_RESULT_IO_ERROR，导致 BSP_STATUS_BUSY(主机 I2C BUSY 标志闩死，
- * HAL 直接返回不发 START) 与 BSP_STATUS_ERROR(从机 NACK) 在日志里无法区分。
- * 本块把 probe 的原始 BSP 返回码记入 s_last_bsp_status，由已有的
- * IMU 监控打印(debug_service.c)以 bsp=%u 输出。
- *
- * 判读：bsp=0 OK / 1 ERROR(从机不应答) / 2 BUSY(主机拒发) / 3 TIMEOUT
- *
- * 删除方法：把开关改为 0U 即可停用；彻底清理时全局搜索 TEMP-DIAG-I2C，
- * 删除本注释块、下方宏定义，以及 Mpu6050_ProbeAddress() 内两处
- * MPU6050_PROBE_DIAG_NOTE() 调用（把 status 变量还原为直接比较即可）。
+/**
+ * @brief 每个地址仅探测一次，将失败重试交给既有 100/500 ms 调度。
+ * @return 成功或最后一次 BSP 探测的真实失败类别。
+ * @details 不在最高优先级 sensor 任务中做三组重复探测和两段 5 ms 忙等；
+ *          保留 0x68/0x69 两地址、寄存器超时与后续热插拔恢复规则。
+ *          HAL 的 BUSY 标志等待仍可能超出短探测参数，不能据此承诺硬实时上限。
  */
-#define MPU6050_PROBE_BSP_DIAG_ENABLE 0U
-
-#if MPU6050_PROBE_BSP_DIAG_ENABLE
-#define MPU6050_PROBE_DIAG_NOTE(status_) do { s_last_bsp_status = (uint8_t)(status_); } while (0)
-#else
-#define MPU6050_PROBE_DIAG_NOTE(status_) do { (void)(status_); } while (0)
-#endif
-/* ======================= [TEMP-DIAG-I2C] 结束 ======================= */
-
 static Mpu6050_Result_t Mpu6050_ProbeAddress(void)
 {
-  uint8_t retry;
   BSP_Status_t status;
 
-  for (retry = 0U; retry < 3U; retry++) {
-    status = BSP_I2C_IsDeviceReady(MPU6050_I2C_ADDR_PRIMARY, MPU6050_I2C_TIMEOUT_MS);
-    MPU6050_PROBE_DIAG_NOTE(status); /* [TEMP-DIAG-I2C] */
-    if (status == BSP_STATUS_OK) {
-      s_addr = MPU6050_I2C_ADDR_PRIMARY;
-      return MPU6050_RESULT_OK;
-    }
-
-    status = BSP_I2C_IsDeviceReady(MPU6050_I2C_ADDR_SECONDARY, MPU6050_I2C_TIMEOUT_MS);
-    MPU6050_PROBE_DIAG_NOTE(status); /* [TEMP-DIAG-I2C] */
-    if (status == BSP_STATUS_OK) {
-      s_addr = MPU6050_I2C_ADDR_SECONDARY;
-      return MPU6050_RESULT_OK;
-    }
-
-    if (retry < 2U) {
-      BSP_Time_DelayMs(5U); // 5ms 冷却, 给芯片/PLL 稳定时间
-    }
+  status = BSP_I2C_IsDeviceReady(MPU6050_I2C_ADDR_PRIMARY, MPU6050_PROBE_TIMEOUT_MS);
+  if (status == BSP_STATUS_OK) {
+    s_addr = MPU6050_I2C_ADDR_PRIMARY;
+    return Mpu6050_MapBspStatus(status);
   }
 
-  return MPU6050_RESULT_IO_ERROR;
+  status = BSP_I2C_IsDeviceReady(MPU6050_I2C_ADDR_SECONDARY, MPU6050_PROBE_TIMEOUT_MS);
+  if (status == BSP_STATUS_OK) { s_addr = MPU6050_I2C_ADDR_SECONDARY; }
+  return Mpu6050_MapBspStatus(status);
 }
 
 static Mpu6050_Result_t Mpu6050_CheckChipId(void)

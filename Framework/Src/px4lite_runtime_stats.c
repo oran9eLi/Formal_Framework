@@ -1,7 +1,7 @@
 /**
  * @file px4lite_runtime_stats.c
  * @brief Framework 固定任务登记及低频资源测量。
- * @details 单写者biz_system扫描栈；comm/display只提交各自事实；临界区仅复制。
+ * @details 单写者biz_system扫描栈；sensor/comm/display只提交各自事实；临界区仅复制或更新固定计数。
  */
 #include "px4lite_runtime_stats.h"
 #include "px4lite_topics.h"
@@ -80,6 +80,26 @@ void Px4Lite_RuntimeReportComm(uint32_t now_ms)
   taskENTER_CRITICAL();
   if (s_comm_seen && period > s_runtime.comm_period_max_ms) { s_runtime.comm_period_max_ms = period; }
   s_comm_seen = 1U; s_comm_last_ms = now_ms;
+  taskEXIT_CRITICAL();
+}
+/**
+ * @brief comm 所属任务提交本轮经过时间并维护历史最大值。
+ * @param[in] elapsed_us 经过时间，us；包含被抢占的时间，不表示纯 CPU 执行时间。
+ */
+void Px4Lite_RuntimeReportCommWork(uint32_t elapsed_us)
+{
+  taskENTER_CRITICAL();
+  if (elapsed_us > s_runtime.comm_service_max_us) { s_runtime.comm_service_max_us = elapsed_us; }
+  taskEXIT_CRITICAL();
+}
+/**
+ * @brief sensor 所属任务提交本轮经过时间，不扫描任务或访问硬件。
+ * @param[in] elapsed_us 经过时间，us；包含中断等抢占时间。
+ */
+void Px4Lite_RuntimeReportSensorWork(uint32_t elapsed_us)
+{
+  taskENTER_CRITICAL();
+  if (elapsed_us > s_runtime.sensor_service_max_us) { s_runtime.sensor_service_max_us = elapsed_us; }
   taskEXIT_CRITICAL();
 }
 /** @brief 显示测量只能由显示任务产生。 */

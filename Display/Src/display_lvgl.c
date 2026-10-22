@@ -2031,11 +2031,11 @@ static void Display_LvglUpdateModules(void)
         } else {
           switch (i) {
             case 0: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "RTOS heap %luB / free %luB / min %luB", (unsigned long)resources.heap_total, (unsigned long)resources.heap_free, (unsigned long)resources.heap_minimum); break;
-            case 1: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "LVGL used %luB / peak %luB / max block %luB / frag %u%%", (unsigned long)resources.display.lvgl_used, (unsigned long)resources.display.lvgl_peak, (unsigned long)resources.display.lvgl_max_free, (unsigned int)resources.display.lvgl_fragmentation); break;
+            case 1: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "LVGL used %luB / sample max %luB / block %luB / frag %u%%", (unsigned long)resources.display.lvgl_used, (unsigned long)resources.display.lvgl_peak, (unsigned long)resources.display.lvgl_max_free, (unsigned int)resources.display.lvgl_fragmentation); break;
             case 2: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "Display whole %luus / max %luus / overruns %lu", (unsigned long)resources.display.service_us, (unsigned long)resources.display.service_max_us, (unsigned long)resources.display.overruns); break;
             case 3: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "Render %luus max %luus / Flush %luus max %luus", (unsigned long)resources.display.render_us, (unsigned long)resources.display.render_max_us, (unsigned long)resources.display.flush_us, (unsigned long)resources.display.flush_max_us); break;
-            case 4: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "IMU FIFO %u / peak %u / overflow %lu", (unsigned int)resources.imu_count, (unsigned int)resources.imu_peak, (unsigned long)resources.imu_overflows); break;
-            default: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "RX drop %lu / DMA overflow %lu / comm max %lums", (unsigned long)resources.rx_drops, (unsigned long)resources.rx_overflows, (unsigned long)resources.comm_period_max_ms); break;
+            case 4: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "IMU FIFO %u / peak %u / ovf %lu / sensor max %luus", (unsigned int)resources.imu_count, (unsigned int)resources.imu_peak, (unsigned long)resources.imu_overflows, (unsigned long)resources.sensor_service_max_us); break;
+            default: (void)UiFormat(s_row_text[i], UI_ROW_TEXT_LEN, "RX drop %lu / DMA ovf %lu / comm gap %lums / work max %luus", (unsigned long)resources.rx_drops, (unsigned long)resources.rx_overflows, (unsigned long)resources.comm_period_max_ms, (unsigned long)resources.comm_service_max_us); break;
           }
         }
         UiText(s_row_labels[i], s_row_text[i]);
@@ -2304,7 +2304,8 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
     lv_mem_monitor_t memory;
     lv_mem_monitor(&memory);
     runtime.display.lvgl_used = memory.total_size - memory.free_size;
-    runtime.display.lvgl_peak = memory.max_used;
+    /* 当前量和采样峰值同用池大小减空闲，避免混用 LVGL 分配计数与池占用。 */
+    if (runtime.display.lvgl_used > runtime.display.lvgl_peak) { runtime.display.lvgl_peak = runtime.display.lvgl_used; }
     runtime.display.lvgl_max_free = memory.free_biggest_size;
     runtime.display.lvgl_fragmentation = memory.frag_pct;
     s_lvgl_memory_ms = now_ms;

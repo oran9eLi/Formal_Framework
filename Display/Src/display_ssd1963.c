@@ -1,6 +1,7 @@
 /**
  * @file display_ssd1963.c
- * @brief Implement the SSD1963-like LCD controller driver for ATK-MD0700.
+ * @brief 实现 ATK-MD0700 的 SSD1963 类显示控制器协议。
+ * @details 属于 Display 驱动层，依赖 BSP 原始 FSMC 接口；管理窗口和 RGB565 数据，不处理页面或采集。
  */
 
 #include "display_ssd1963.h"
@@ -224,15 +225,14 @@ void Display_Ssd1963_FillRect(uint16_t x, uint16_t y, uint16_t width, uint16_t h
 }
 
 /**
- * @brief Write one clipped RGB565 pixel block to GRAM.
+ * @brief 将裁剪后的 RGB565 像素块同步批量写入 GRAM。
+ * @details 保留输入行跨度与裁剪规则；无水平裁剪时整块直写，否则逐有效行写入，不分配缓冲。
  */
 void Display_Ssd1963_FlushPixels(uint16_t x, uint16_t y, uint16_t width, uint16_t height, const uint16_t *pixels)
 {
   uint16_t clipped_width;
   uint16_t clipped_height;
   uint16_t row;
-  uint16_t col;
-  uint16_t skip;
   const uint16_t *row_pixels;
 
   if ((s_ssd1963_ready == 0U) || (pixels == 0) || (width == 0U) || (height == 0U) || (x >= DISPLAY_SSD1963_WIDTH) || (y >= DISPLAY_SSD1963_HEIGHT)) { return; }
@@ -243,14 +243,14 @@ void Display_Ssd1963_FlushPixels(uint16_t x, uint16_t y, uint16_t width, uint16_
   if (((uint32_t)y + clipped_height) > DISPLAY_SSD1963_HEIGHT) { clipped_height = (uint16_t)(DISPLAY_SSD1963_HEIGHT - y); }
 
   Display_Ssd1963_SetWindow(x, y, (uint16_t)(x + clipped_width - 1U), (uint16_t)(y + clipped_height - 1U));
-  skip = (uint16_t)(width - clipped_width);
-  row_pixels = pixels;
-  for (row = 0U; row < clipped_height; row++) {
-    for (col = 0U; col < clipped_width; col++) {
-      Display_Ssd1963_WriteData(*row_pixels);
-      row_pixels++;
+  if (clipped_width == width) {
+    BSP_LcdFsmc_WriteDataBuffer(pixels, (uint32_t)clipped_width * clipped_height);
+  } else {
+    row_pixels = pixels;
+    for (row = 0U; row < clipped_height; row++) {
+      BSP_LcdFsmc_WriteDataBuffer(row_pixels, clipped_width);
+      row_pixels += width;
     }
-    row_pixels += skip;
   }
 }
 

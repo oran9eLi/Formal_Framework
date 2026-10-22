@@ -22,7 +22,7 @@ typedef struct {
 /** @brief 由唯一显示任务提交的资源事实；时间均为us。 */
 typedef struct {
   uint32_t measured_ms; /**< 最近提交时间，ms。 */
-  uint32_t service_us; /**< 触摸、取数、布局、渲染和flush整轮耗时。 */
+  uint32_t service_us; /**< 触摸/取数/布局/渲染/flush整轮经过时间，含抢占，非CPU占用。 */
   uint32_t service_max_us; /**< 整轮历史最大耗时。 */
   uint32_t render_us; /**< lv_timer_handler耗时扣除同步flush。 */
   uint32_t render_max_us; /**< 渲染历史最大耗时。 */
@@ -30,7 +30,7 @@ typedef struct {
   uint32_t flush_max_us; /**< 单次像素写入最大耗时。 */
   uint32_t overruns; /**< 整轮超过配置预算的次数。 */
   uint32_t lvgl_used; /**< LVGL当前使用字节。 */
-  uint32_t lvgl_peak; /**< LVGL历史最大使用字节。 */
+  uint32_t lvgl_peak; /**< 1 s 周期采样所得池占用峰值，字节；不代表采样间瞬时峰值。 */
   uint32_t lvgl_max_free; /**< LVGL最大空闲块字节。 */
   uint8_t lvgl_fragmentation; /**< LVGL碎片率，0..100%。 */
   uint8_t reserved[3]; /**< 对齐。 */
@@ -46,6 +46,8 @@ typedef struct {
   uint32_t rx_drops; /**< 生产LoRa接收队列累计丢弃。 */
   uint32_t rx_overflows; /**< 生产LoRa DMA累计溢出。 */
   uint32_t comm_period_max_ms; /**< comm实测相邻服务最大间隔，ms。 */
+  uint32_t comm_service_max_us; /**< comm单轮历史最长经过时间，us，包含抢占。 */
+  uint32_t sensor_service_max_us; /**< sensor单轮历史最长经过时间，us，包含中断抢占。 */
   uint16_t imu_count; /**< FIFO当前元素数。 */
   uint16_t imu_peak; /**< FIFO历史峰值元素数。 */
   uint8_t task_count; /**< 已登记任务数。 */
@@ -60,6 +62,10 @@ BaseType_t Px4Lite_RuntimeRegister(TaskHandle_t handle, const char *name, uint16
 void Px4Lite_RuntimeStep(uint32_t now_ms);
 /** @brief comm所有者提交服务时间，不改变调度。 */
 void Px4Lite_RuntimeReportComm(uint32_t now_ms);
+/** @brief comm 唯一写者提交单轮经过时间，us，不含周期等待。 */
+void Px4Lite_RuntimeReportCommWork(uint32_t elapsed_us);
+/** @brief sensor 唯一写者提交单轮经过时间，us，不含周期等待。 */
+void Px4Lite_RuntimeReportSensorWork(uint32_t elapsed_us);
 /** @brief 显示所有者提交固定摘要。 */
 void Px4Lite_RuntimeReportDisplay(const Px4Lite_DisplayRuntime_t *sample);
 /** @brief 原子复制常驻摘要。 */

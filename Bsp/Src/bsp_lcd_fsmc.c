@@ -1,6 +1,7 @@
 /**
  * @file bsp_lcd_fsmc.c
  * @brief 实现 ATK-MD0700 LCD 的 FSMC 8080 总线访问接口。
+ * @details 属于 BSP 层，依赖 HAL 与板级地址配置；只执行原始总线访问，不解释屏幕协议。
  */
 
 #include "bsp_lcd_fsmc.h"
@@ -68,6 +69,29 @@ void BSP_LcdFsmc_WriteCommand(uint16_t command)
 void BSP_LcdFsmc_WriteData(uint16_t data)
 {
   BSP_LCD_FSMC_DAT_REG = data;
+}
+
+/**
+ * @brief 同步批量写原始数据，消除逐 word 跨层调用。
+ * @param[in] data 源数据，返回前已完成读取，不保存指针。
+ * @param[in] count 16-bit word 数量；空指针或零长度不写入。
+ * @details 复用既有 FSMC 硬件时序；每次 volatile 存储对应一次总线写，中断始终可抢占。
+ */
+void BSP_LcdFsmc_WriteDataBuffer(const uint16_t *data, uint32_t count)
+{
+  if (data == 0) { return; }
+  while (count >= 4U) {
+    BSP_LCD_FSMC_DAT_REG = data[0];
+    BSP_LCD_FSMC_DAT_REG = data[1];
+    BSP_LCD_FSMC_DAT_REG = data[2];
+    BSP_LCD_FSMC_DAT_REG = data[3];
+    data += 4U;
+    count -= 4U;
+  }
+  while (count != 0U) {
+    BSP_LCD_FSMC_DAT_REG = *data++;
+    count--;
+  }
 }
 
 /**
