@@ -2,6 +2,8 @@
 
 ## 当前发布计划
 
+- [2026-10-22姿态仪灰显合入](V1.0_姿态仪灰显_合入记录.md)：已本地合入develop，合入后Keil0/0且HEX不变；后续性能问题另开分支，实板验收继续待补。
+
 - [2026-10-21姿态仪无数据灰显候选](Archive/2026-10-21_attitude-no-data-candidate/MANIFEST.md)：独立修复分支，本地Keil0/0，SRAM不变、Flash+624 B；Latest更新为该同次候选，尚未推送/发布，实板待验。原优化预发布与标签保留。
 
 - [2026-10-15 SRAM与显示精简记录](../Development_Guide/2026-10-15_SRAM与显示刷新精简说明.md)：已合入develop，[优化预发布](https://github.com/oran9eLi/Formal_Framework/releases/tag/v1.0.0-pre.opt.20261015)及固件已归档，合入后Keil0/0，主SRAM空余19384 B；四项净释放14768 B。该优化候选与M5历史产物均保留在日期归档；实板与计时待验，见[合入归档记录](V1.0_SRAM与显示精简_合入与归档记录.md)。
