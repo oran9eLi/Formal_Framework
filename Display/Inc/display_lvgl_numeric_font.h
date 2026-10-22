@@ -12,9 +12,9 @@
 extern "C" {
 #endif
 
-extern const lv_font_t display_lvgl_numeric_12; /**< 12 px字形，数字步进8 px。 */
-extern const lv_font_t display_lvgl_numeric_14; /**< 14 px字形，数字步进10 px。 */
-extern const lv_font_t display_lvgl_numeric_16; /**< 16 px字形，数字步进11 px。 */
+extern const lv_font_t display_lvgl_numeric_12; /**< 12 px字形，0-9/A-F步进10 px。 */
+extern const lv_font_t display_lvgl_numeric_14; /**< 14 px字形，0-9/A-F步进12 px。 */
+extern const lv_font_t display_lvgl_numeric_16; /**< 16 px字形，0-9/A-F步进13 px。 */
 extern const lv_font_t display_lvgl_hex_14; /**< 原始HEX行；0-9/A-F/空格步进12 px。 */
 
 /**

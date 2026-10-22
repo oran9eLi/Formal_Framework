@@ -6,29 +6,29 @@
  */
 #include "display_lvgl_numeric_font.h"
 
-/** @brief 只读字体配置；步进覆盖当前字库的数字实际位图宽度及未加kerning步进。 */
+/** @brief 只读字体配置；步进覆盖当前字库0-9/A-F实际位图宽度及未加kerning步进。 */
 typedef struct {
   const lv_font_t *base; /**< 提供原始位图与度量的字库。 */
   uint16_t advance_px; /**< 等宽字符的水平步进，单位px。 */
-  uint8_t hexadecimal; /**< 0仅0-9；1同时包含A-F和ASCII空格。 */
+  uint8_t space_cell; /**< 0保留普通词间距；1将ASCII空格也作为HEX字节列单格。 */
 } Display_NumericFontConfig_t;
 
-static const Display_NumericFontConfig_t s_numeric_12 = { &lv_font_montserrat_12, 8U, 0U };
-static const Display_NumericFontConfig_t s_numeric_14 = { &lv_font_montserrat_14, 10U, 0U };
-static const Display_NumericFontConfig_t s_numeric_16 = { &lv_font_montserrat_16, 11U, 0U };
+static const Display_NumericFontConfig_t s_numeric_12 = { &lv_font_montserrat_12, 10U, 0U };
+static const Display_NumericFontConfig_t s_numeric_14 = { &lv_font_montserrat_14, 12U, 0U };
+static const Display_NumericFontConfig_t s_numeric_16 = { &lv_font_montserrat_16, 13U, 0U };
 static const Display_NumericFontConfig_t s_hex_14 = { &lv_font_montserrat_14, 12U, 1U };
 
-/** @brief 判定会随数值变化的十进制数字。 */
+/** @brief 十进制及大写HEX共用固定单格，覆盖nonce、掩码和故障码。 */
 static uint8_t Display_NumericIsDigit(uint32_t letter)
 {
-  return (uint8_t)(letter >= '0' && letter <= '9');
+  return (uint8_t)((letter >= '0' && letter <= '9') || (letter >= 'A' && letter <= 'F'));
 }
 
 /** @brief HEX行的空格与半字节字符必须占同一格，稳定逐字节列位置。 */
 static uint8_t Display_NumericIsFixed(const Display_NumericFontConfig_t *config, uint32_t letter)
 {
   return (uint8_t)(Display_NumericIsDigit(letter) ||
-    (config->hexadecimal && ((letter >= 'A' && letter <= 'F') || letter == ' ')));
+    (config->space_cell && letter == ' '));
 }
 
 /**
