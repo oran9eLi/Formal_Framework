@@ -2,6 +2,8 @@
 
 ## 当前发布计划
 
+- [2026-10-23 Serial通用监视候选](Archive/2026-10-23_serial-monitor-candidate/MANIFEST.md)：codex/serial-monitor独立分支；完整UART6配置和端口统计，标题Serial、协议及实验保持；Keil0/0，同次产物更新Latest，实板待验证。
+
 - [2026-10-23数字字距修复合入](V1.0_数字字距修复_合入记录.md)：用户确认第二版字距显示正常，完整候选已本地快进合入develop；合入后Keil0/0且HEX与已验收候选相同，推送目标origin/develop。未新增tag/Release附件，M5/M6其他验收保留。以下日期候选保留历史身份。
 
 - [2026-10-22运行性能候选](Archive/2026-10-22_runtime-performance-candidate/MANIFEST.md)：codex/fix-runtime-performance，Latest已更新为同次本地候选，Keil0/0、SRAM+8 B/Flash+192 B；未合入develop或推送，实板待验，灰显日期归档保留。
