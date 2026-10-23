@@ -34,6 +34,10 @@ typedef Px4Lite_CaptureFrame_t App_CaptureFrame_t; /**< 稳定完整原字节帧
 /** @brief 对稳定原始帧只读解码，不执行命令或修改协议状态。 */
 Px4Lite_Result_t App_DecodeCapturedFrame(const App_CaptureFrame_t *frame, uint8_t page, App_DecodedPage_t *out);
 typedef Px4Lite_NmeaSentence_t App_NmeaSentence_t; /**< 稳定完整NMEA原字节。 */
+typedef Px4Lite_SerialMonitor_t App_SerialMonitor_t; /**< 通用 UART6 配置与累计收发快照。 */
+/** @brief 只复制 Comm 发布的串口事实；不触发硬件 I/O 或捕获，未发布返回 NOT_READY。 */
+Px4Lite_Result_t App_CopySerialMonitor(App_SerialMonitor_t *out);
+
 typedef Px4Lite_SerialExperiment_t App_SerialExperiment_t; /**< 串口实验本机事实。 */
 /** @brief 复制串口实验快照，不访问UART。 */
 Px4Lite_Result_t App_CopySerialExperiment(App_SerialExperiment_t *out);

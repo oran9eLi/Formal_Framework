@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file display_lvgl.c
  * @brief Display 层固定容量 LVGL 工作区、两层本机导航及事件观察视图。
  * @details 数据经 display.h / app_data_api.h 输入；不读取 BSP、驱动私有数据或 topic。
@@ -224,7 +224,20 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id);
 static void Display_LvglUpdateDetails(void);
 static void Display_LvglUpdateInspector(void);
 static void Display_LvglUpdateSerial(void);
-static uint32_t s_serial_h1_base, s_serial_b1_base;
+/** @brief 显示任务独占的九项计数基线；清屏/切页不修改任何生产计数。 */
+typedef struct {
+  uint32_t rx_bytes;    /**< RX 字节显示基线。 */
+  uint32_t tx_bytes;    /**< 完整 TX 字节显示基线。 */
+  uint32_t rx_frames;   /**< 有效 RX 帧显示基线。 */
+  uint32_t tx_frames;   /**< 完整 TX 帧显示基线。 */
+  uint32_t tx_failures; /**< 发送失败显示基线。 */
+  uint32_t frame_errors;/**< MAVLink 校验错误显示基线。 */
+  uint32_t uart_errors; /**< UART 错误显示基线。 */
+  uint32_t drops;       /**< RX 舍弃字节显示基线。 */
+  uint32_t rearm;       /**< 重新挂接失败显示基线。 */
+} UiSerialCountBase_t;
+static UiSerialCountBase_t s_serial_base;
+static uint8_t s_serial_counts_cleared; /**< 1=学生已手动清除显示基线，离页保持。 */
 static void Display_LvglUpdateObservation(void);
 static uint32_t s_observe_due_ms;
 static void Display_LvglUpdateRecording(void);
@@ -1179,7 +1192,23 @@ static void UiButtonEvent(lv_event_t *event)
       }
       break;
     case UI_ACTION_SERIAL_CLEAR:
-      { App_SerialExperiment_t serial;(void)App_CopySerialExperiment(&serial);s_serial_h1_base=serial.h1.handled_request_count;s_serial_b1_base=serial.b1.accepted_count;s_content_pending = 1U; } break;
+      {
+        App_SerialMonitor_t serial;
+        if (App_CopySerialMonitor(&serial) == PX4LITE_OK) {
+          s_serial_base.rx_bytes = serial.rx_byte_count;
+          s_serial_base.tx_bytes = serial.tx_complete_byte_count;
+          s_serial_base.rx_frames = serial.rx_valid_frame_count;
+          s_serial_base.tx_frames = serial.tx_complete_frame_count;
+          s_serial_base.tx_failures = serial.tx_failure_count;
+          s_serial_base.frame_errors = serial.rx_frame_error_count;
+          s_serial_base.uart_errors = serial.rx_uart_error_count;
+          s_serial_base.drops = serial.rx_drop_count;
+          s_serial_base.rearm = serial.rx_rearm_failure_count;
+          s_serial_counts_cleared = 1U;
+        }
+        s_content_pending = 1U;
+      }
+      break;
     case UI_ACTION_OBSERVE_GROUP: case UI_ACTION_OBSERVE_FIELD: case UI_ACTION_OBSERVE_INTERVAL:
     case UI_ACTION_OBSERVE_RUN: case UI_ACTION_OBSERVE_FREEZE: case UI_ACTION_OBSERVE_REF:
       {
@@ -1770,32 +1799,60 @@ static void Display_LvglUpdateObservation(void)
   for(ch=0U;ch<8U;ch++) { UiText(s_row_labels[ch],s_row_text[ch]); }
   Display_ObservationUpdate(&st,s_attitude_obj);
 }
+/** @brief 通用 UART6 监视页，保留 Serial 标题、既有日志及报文观察入口。 */
 static void Display_LvglLayoutSerial(void)
 {
-  uint8_t i;UiPanel(0U,8,62,784,272);
-  (void)UiButton("Clear view",640,68,136,36,UI_ACTION_SERIAL_CLEAR,0,0x173749);
-  (void)UiButton("Capture >",486,68,140,36,UI_ACTION_SERIAL_CAPTURE,0,0x173749);
+  uint8_t i;
+  UiPanel(0U,8,62,784,272);
+  s_page_info = UiLabel("UART6 / MAVLink",24,78,440,&lv_font_montserrat_14,UI_COLOR_ACCENT);
+  (void)UiButton("Clear stats",640,68,136,36,UI_ACTION_SERIAL_CLEAR,0,0x173749);
+  (void)UiButton("Frames >",486,68,140,36,UI_ACTION_SERIAL_CAPTURE,0,0x173749);
   for(i=0U;i<8U;i++) { s_row_labels[i]=UiLabel("",24,(lv_coord_t)(112+i*27),748,&lv_font_montserrat_14,UI_COLOR_TEXT); }
   Display_LvglUpdateSerial();
 }
-/** @brief nonce绑定真实阶段，不推断对端或Server成功。 */
+/**
+ * @brief 显示完整串口配置及九项通用统计，不参与协议解析或实验判定。
+ * @details 200 ms 更新、仅文本变化时重绘；计数按 uint32_t 差值处理回绕。
+ * 最近活动基于同份快照时间；从未收发时 N/A，不把清零理解成从未活动。
+ */
 static void Display_LvglUpdateSerial(void)
 {
-  App_SerialExperiment_t v;uint8_t i;
-  static const char * const states[4]={"Idle","Accepted / wait UART","Applied","Apply failed"};
+  App_SerialMonitor_t v;
+  uint32_t age;
+  uint8_t i, ready;
+  char rx_age[16] = {0}, tx_age[16] = {0};
+  static const char * const parity[] = {"None","Even","Odd","N/A"};
+  static const char * const flow[] = {"None","RTS","CTS","RTS/CTS","N/A"};
   s_content_pending = 0U;
   s_inspector_due_ms = s_last_tick_ms + 200U;
-  (void)App_CopySerialExperiment(&v);
-  (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"F407 responder / UART6 %lu bps / age %lu ms",(unsigned long)v.b1.current_baud_bps,(unsigned long)(s_last_tick_ms-v.measured_ms));
-  (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"H1 type 1 -> 2 / view accepted %lu / total sent %lu / %s",(unsigned long)(v.h1.handled_request_count-s_serial_h1_base),(unsigned long)v.h1.response_sent_count,v.h1.handled_request_count?(v.h1.pending?"Queued":"UART done"):"N/A");
-  if(v.h1.handled_request_count) { (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"H1 nonce %02X%02X%02X%02X%02X%02X%02X%02X / age %lu ms",v.h1.nonce[0],v.h1.nonce[1],v.h1.nonce[2],v.h1.nonce[3],v.h1.nonce[4],v.h1.nonce[5],v.h1.nonce[6],v.h1.nonce[7],(unsigned long)(s_last_tick_ms-v.h1.request_ms)); }
-  else { (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"H1 nonce N/A"); }
-  (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"H1 reject %lu / duplicate %lu / busy %lu",(unsigned long)v.h1.rejected_request_count,(unsigned long)v.h1.duplicate_count,(unsigned long)v.h1.busy_count);
-  (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"B1 type 3 -> 4 / view accepted %lu / %s",(unsigned long)(v.b1.accepted_count-s_serial_b1_base),states[v.b1.state<4U?v.b1.state:3U]);
-  if(v.b1.accepted_count) { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"B1 nonce %02X%02X%02X%02X%02X%02X%02X%02X / UART done %lu",v.b1.nonce[0],v.b1.nonce[1],v.b1.nonce[2],v.b1.nonce[3],v.b1.nonce[4],v.b1.nonce[5],v.b1.nonce[6],v.b1.nonce[7],(unsigned long)v.b1.response_sent_count); }
-  else { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"B1 nonce N/A"); }
-  (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"B1 reject %lu / duplicate %lu / busy %lu / apply OK %lu / fail %lu",(unsigned long)v.b1.rejected_count,(unsigned long)v.b1.duplicate_count,(unsigned long)v.b1.busy_count,(unsigned long)v.b1.apply_success_count,(unsigned long)v.b1.apply_failure_count);
-  (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"B0 115200 -> B1 57600 / reset: B0");
+  ready = (uint8_t)(App_CopySerialMonitor(&v) == PX4LITE_OK);
+  age = (int32_t)(s_last_tick_ms-v.measured_ms) > 0 ? s_last_tick_ms-v.measured_ms : 0U;
+  if (ready && v.config_valid && age <= 1000U) {
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Baud rate: %lu bps   Data bits: %u   Stop bits: %s",(unsigned long)v.baud_bps,(unsigned int)v.data_bits,v.stop_bits_x2==2U?"1":(v.stop_bits_x2==4U?"2":"N/A"));
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Parity: %s   Flow control: %s",parity[v.parity<4U?v.parity:3U],flow[v.flow_control<5U?v.flow_control:4U]);
+  } else {
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Baud rate: N/A   Data bits: N/A   Stop bits: N/A");
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Parity: N/A   Flow control: N/A");
+  }
+  if (ready) {
+    (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"RX bytes: %lu   Valid frames: %lu",(unsigned long)(v.rx_byte_count-s_serial_base.rx_bytes),(unsigned long)(v.rx_valid_frame_count-s_serial_base.rx_frames));
+    (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"TX complete bytes: %lu   Frames: %lu",(unsigned long)(v.tx_complete_byte_count-s_serial_base.tx_bytes),(unsigned long)(v.tx_complete_frame_count-s_serial_base.tx_frames));
+    (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"TX failures: %lu   RX frame errors: %lu",(unsigned long)(v.tx_failure_count-s_serial_base.tx_failures),(unsigned long)(v.rx_frame_error_count-s_serial_base.frame_errors));
+    (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"RX errors: %lu   Drops: %lu   Rearm: %lu",(unsigned long)(v.rx_uart_error_count-s_serial_base.uart_errors),(unsigned long)(v.rx_drop_count-s_serial_base.drops),(unsigned long)(v.rx_rearm_failure_count-s_serial_base.rearm));
+    if (v.rx_seen) { (void)UiFormat(rx_age,sizeof(rx_age),"%lu ms",(unsigned long)(v.measured_ms-v.last_rx_ms)); }
+    else { (void)UiFormat(rx_age,sizeof(rx_age),"N/A"); }
+    if (v.tx_seen) { (void)UiFormat(tx_age,sizeof(tx_age),"%lu ms",(unsigned long)(v.measured_ms-v.last_tx_ms)); }
+    else { (void)UiFormat(tx_age,sizeof(tx_age),"N/A"); }
+    (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Last RX: %s   Last TX complete: %s",rx_age,tx_age);
+    (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"Counts: %s   Snapshot %s: %lu ms",s_serial_counts_cleared?"since clear":"since boot",age>1000U?"STALE":"age",(unsigned long)age);
+  } else {
+    (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"RX bytes: N/A   Valid frames: N/A");
+    (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"TX complete bytes: N/A   Frames: N/A");
+    (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"TX failures: N/A   RX frame errors: N/A");
+    (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"RX errors: N/A   Drops: N/A   Rearm: N/A");
+    (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Last RX: N/A   Last TX complete: N/A");
+    (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"UART6 monitor not ready");
+  }
   for(i=0U;i<8U;i++) { UiText(s_row_labels[i],s_row_text[i]); }
 }
 static void Display_LvglLayoutInspector(void)

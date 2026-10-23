@@ -60,6 +60,8 @@ Px4Lite_Result_t App_CopyCapturedFrame(uint32_t session, uint32_t token, App_Cap
 Px4Lite_Result_t App_CopyCapturedStage(uint32_t session, uint32_t token, uint8_t *stage) { return Px4Lite_CaptureCopyStage(session, token, stage); }
 /** @brief 稳定NMEA句复制边界。 */
 Px4Lite_Result_t App_CopyNmeaSentence(uint32_t session, uint32_t token, App_NmeaSentence_t *out) { return Px4Lite_CaptureCopyNmea(session, token, out); }
+/** @brief 通用串口监视只读边界，既不清除底层统计，也不影响实验事务。 */
+Px4Lite_Result_t App_CopySerialMonitor(App_SerialMonitor_t *out) { return Px4Lite_CopySerialMonitor(out); }
 /** @brief 串口实验只读边界。 */
 Px4Lite_Result_t App_CopySerialExperiment(App_SerialExperiment_t *out) { return Px4Lite_CopySerialExperiment(out); }
 

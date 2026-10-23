@@ -334,7 +334,10 @@ void Px4Lite_RemoteIdAbortTx(void);
  */
 Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len);
 
+/** @brief Comm 初始化 UART6 及其通用累计统计；不在页面切换时调用。 */
 Px4Lite_Result_t Px4Lite_RpiMavlinkInit(void);
+/** @brief 仅由 Comm 复制 UART6 配置/原始收发/解析事实，不消费 RX 或触发总线 I/O。 */
+Px4Lite_Result_t Px4Lite_RpiMavlinkCopyMonitor(Px4Lite_SerialMonitor_t *out);
 Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len);
 Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms);
 Px4Lite_Result_t Px4Lite_RpiMavlinkCopyRxFrame(Px4Lite_CommRxFrame_t *out);

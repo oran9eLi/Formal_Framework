@@ -596,4 +596,50 @@ static __inline uint8_t Px4Lite_IsFresh(const Px4Lite_TopicHeader_t *header, uin
   return (Px4Lite_ElapsedMs(now_ms, header->sample_time_ms) <= max_age_ms) ? 1U : 0U;
 }
 
+/** @brief 通用串口校验方式；不向应用暴露 HAL 编码。 */
+typedef enum {
+  PX4LITE_SERIAL_PARITY_NONE = 0, /**< 无校验。 */
+  PX4LITE_SERIAL_PARITY_EVEN,     /**< 偶校验。 */
+  PX4LITE_SERIAL_PARITY_ODD,      /**< 奇校验。 */
+  PX4LITE_SERIAL_PARITY_UNKNOWN  /**< 当前配置不能识别。 */
+} Px4Lite_SerialParity_t;
+
+/** @brief 通用串口硬件流控方式；不包括应用协议确认。 */
+typedef enum {
+  PX4LITE_SERIAL_FLOW_NONE = 0, /**< 无硬件流控。 */
+  PX4LITE_SERIAL_FLOW_RTS,      /**< RTS。 */
+  PX4LITE_SERIAL_FLOW_CTS,      /**< CTS。 */
+  PX4LITE_SERIAL_FLOW_RTS_CTS,  /**< RTS/CTS。 */
+  PX4LITE_SERIAL_FLOW_UNKNOWN  /**< 当前配置不能识别。 */
+} Px4Lite_SerialFlow_t;
+
+/**
+ * @brief UART6 通用监视快照；Comm 单写发布，Business 只读复制。
+ * @details 计数自端口初始化累计，按 uint32_t 自然回绕，切速率/捕获/清屏不复位。
+ * TX 完成只证明本机整帧发完；超时可能已有部分字节出线，不计入完成字节数。
+ */
+typedef struct {
+  uint32_t baud_bps;                /**< 实际生效波特率，单位 bit/s；config_valid=0 时不可用。 */
+  uint32_t rx_byte_count;           /**< RX 完成回调交付的字节数，含后续入环失败的字节。 */
+  uint32_t tx_complete_byte_count;  /**< 整次发送成功的字节数，不包含失败发送的部分字节。 */
+  uint32_t rx_valid_frame_count;    /**< 解析器返回FRAMING_OK的帧数，不要求业务接受；签名按现有解析器配置处理。 */
+  uint32_t tx_complete_frame_count; /**< 本机 UART 整帧发送完成次数，不证明对端接收。 */
+  uint32_t tx_failure_count;        /**< 有效发送请求返回非 OK 次数，包括 BUSY/超时/错误。 */
+  uint32_t rx_frame_error_count;    /**< MAVLink BAD_CRC/BAD_SIGNATURE 结果次数。 */
+  uint32_t rx_uart_error_count;     /**< USART6 IRQ 入口含 ORE/NE/FE/PE 标志的次数，多标志合计一次。 */
+  uint32_t rx_drop_count;           /**< RX 环满而未能入环的字节数，不等同协议丢帧。 */
+  uint32_t rx_rearm_failure_count;  /**< 接收回调/错误回调中重新挂接单字节接收失败次数。 */
+  uint32_t last_rx_ms;              /**< 最近 RX 完成回调的真实毫秒时间，rx_seen=1 时有效。 */
+  uint32_t last_tx_ms;              /**< 最近完整发送成功的真实毫秒时间，tx_seen=1 时有效。 */
+  uint32_t measured_ms;             /**< 本快照采集结束的真实毫秒时间。 */
+  uint8_t data_bits;               /**< 实际数据位数 7/8/9，不包括校验位；0 表示未知。 */
+  uint8_t stop_bits_x2;            /**< 停止位数乘 2；2=1 位，4=2 位，0=未知。 */
+  uint8_t parity;                  /**< Px4Lite_SerialParity_t。 */
+  uint8_t flow_control;            /**< Px4Lite_SerialFlow_t。 */
+  uint8_t config_valid;            /**< 1 表示端口已初始化且不处于重新配置中。 */
+  uint8_t rx_seen;                 /**< 1 表示曾收到字节，独立于计数回绕与页面清零。 */
+  uint8_t tx_seen;                 /**< 1 表示曾完整发送成功，独立于计数回绕与页面清零。 */
+  uint8_t available;               /**< 1 表示此构建启用并已发布 UART6 监视事实。 */
+} Px4Lite_SerialMonitor_t;
+
 #endif

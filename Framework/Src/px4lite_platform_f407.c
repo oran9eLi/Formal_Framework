@@ -75,6 +75,17 @@ static uint32_t s_rpi_last_byte_ms; /**< 最近消费字节时刻；解析状态
 static uint8_t s_rpi_pending_frame;
 static uint8_t s_rpi_diagnostic_raw[PX4LITE_CAPTURE_FRAME_BYTES];
 static uint16_t s_rpi_diagnostic_length;
+/** @brief Comm 独占的协议收发累计事实；不随半帧重置或波特率切换清零。 */
+static struct {
+  uint32_t rx_valid_frames;  /**< MAVLink 解析器返回 FRAMING_OK 的帧数。 */
+  uint32_t rx_frame_errors;  /**< BAD_CRC/BAD_SIGNATURE 次数。 */
+  uint32_t tx_bytes;         /**< 完整发送成功的字节数。 */
+  uint32_t tx_frames;        /**< 完整发送成功的帧数。 */
+  uint32_t tx_failures;      /**< 非 OK 发送结果次数。 */
+  uint32_t last_tx_ms;       /**< 最近完整发送时间，ms。 */
+  uint8_t tx_seen;           /**< 是否有过完整发送。 */
+} s_rpi_monitor;
+
 #endif
 
 /** @brief Driver原字节事实经Adapter转换，捕获不接触生产队列。 */
@@ -774,21 +785,36 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkInit(void)
 #if PX4LITE_ENABLE_RPI_MAVLINK
   /* 树莓派链路走独立的 USART6(PC6/PC7)，与调试口 USART1 物理分离。 */
   Px4Lite_RpiMavlinkResetRxState();
+  memset(&s_rpi_monitor, 0, sizeof(s_rpi_monitor));
   return (BSP_RpiUART_Init() == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
 #else
   return PX4LITE_OK;
 #endif
 }
 
+/**
+ * @brief Comm 沿既有阻塞路径发送 UART6 原始帧，并独立累计本机完成/失败事实。
+ * @details 返回码、捕获提交和超时保持既有语义；不推断对端是否收到，不改变实验事务。
+ */
 Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
 {
 #if PX4LITE_ENABLE_RPI_MAVLINK
   BSP_Status_t status;
+  uint32_t completed_ms;
 
   if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
 
   status = BSP_RpiUART_Send(data, len, PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS);
-  Px4Lite_CaptureRpiTx(data, len, Px4Lite_PlatformGetMs(), status == BSP_STATUS_OK ? PX4LITE_CAPTURE_UART_DONE : (status == BSP_STATUS_TIMEOUT ? PX4LITE_CAPTURE_TIMEOUT : PX4LITE_CAPTURE_ERROR));
+  completed_ms = Px4Lite_PlatformGetMs();
+  if (status == BSP_STATUS_OK) {
+    s_rpi_monitor.tx_bytes += len;
+    s_rpi_monitor.tx_frames++;
+    s_rpi_monitor.last_tx_ms = completed_ms;
+    s_rpi_monitor.tx_seen = 1U;
+  } else {
+    s_rpi_monitor.tx_failures++;
+  }
+  Px4Lite_CaptureRpiTx(data, len, completed_ms, status == BSP_STATUS_OK ? PX4LITE_CAPTURE_UART_DONE : (status == BSP_STATUS_TIMEOUT ? PX4LITE_CAPTURE_TIMEOUT : PX4LITE_CAPTURE_ERROR));
   if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
   if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
   return PX4LITE_IO_ERROR;
@@ -796,6 +822,54 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
   (void)data;
   (void)len;
   return PX4LITE_OK;
+#endif
+}
+
+/**
+ * @brief Comm 复制通用 UART6 监视事实，并把 HAL 配置转换为与平台无关的值。
+ * @details BSP 只复制原始事实；本函数不改变解析、发送、捕获或实验事务。
+ */
+Px4Lite_Result_t Px4Lite_RpiMavlinkCopyMonitor(Px4Lite_SerialMonitor_t *out)
+{
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+  memset(out, 0, sizeof(*out));
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  {
+    BSP_RpiUART_Diagnostics_t raw;
+    BSP_RpiUART_CopyDiagnostics(&raw);
+    out->baud_bps = raw.baud_rate;
+    out->data_bits = raw.word_length == UART_WORDLENGTH_8B ? 8U :
+                     (raw.word_length == UART_WORDLENGTH_9B ? 9U : 0U);
+    out->parity = raw.parity == UART_PARITY_NONE ? PX4LITE_SERIAL_PARITY_NONE :
+                  (raw.parity == UART_PARITY_EVEN ? PX4LITE_SERIAL_PARITY_EVEN :
+                  (raw.parity == UART_PARITY_ODD ? PX4LITE_SERIAL_PARITY_ODD : PX4LITE_SERIAL_PARITY_UNKNOWN));
+    if (out->data_bits != 0U && out->parity != PX4LITE_SERIAL_PARITY_NONE &&
+        out->parity != PX4LITE_SERIAL_PARITY_UNKNOWN) { out->data_bits--; }
+    out->stop_bits_x2 = raw.stop_bits == UART_STOPBITS_1 ? 2U : (raw.stop_bits == UART_STOPBITS_2 ? 4U : 0U);
+    out->flow_control = raw.hw_flow_ctl == UART_HWCONTROL_NONE ? PX4LITE_SERIAL_FLOW_NONE :
+                        (raw.hw_flow_ctl == UART_HWCONTROL_RTS ? PX4LITE_SERIAL_FLOW_RTS :
+                        (raw.hw_flow_ctl == UART_HWCONTROL_CTS ? PX4LITE_SERIAL_FLOW_CTS :
+                        (raw.hw_flow_ctl == UART_HWCONTROL_RTS_CTS ? PX4LITE_SERIAL_FLOW_RTS_CTS : PX4LITE_SERIAL_FLOW_UNKNOWN)));
+    out->rx_byte_count = raw.rx_byte_count;
+    out->rx_uart_error_count = raw.rx_uart_error_count;
+    out->rx_drop_count = raw.rx_drop_count;
+    out->rx_rearm_failure_count = raw.rx_rearm_failure_count;
+    out->last_rx_ms = raw.last_rx_ms;
+    out->rx_seen = raw.rx_seen;
+    out->config_valid = raw.config_valid;
+    out->rx_valid_frame_count = s_rpi_monitor.rx_valid_frames;
+    out->rx_frame_error_count = s_rpi_monitor.rx_frame_errors;
+    out->tx_complete_byte_count = s_rpi_monitor.tx_bytes;
+    out->tx_complete_frame_count = s_rpi_monitor.tx_frames;
+    out->tx_failure_count = s_rpi_monitor.tx_failures;
+    out->last_tx_ms = s_rpi_monitor.last_tx_ms;
+    out->tx_seen = s_rpi_monitor.tx_seen;
+    out->available = 1U;
+    out->measured_ms = Px4Lite_PlatformGetMs();
+    return PX4LITE_OK;
+  }
+#else
+  return PX4LITE_NOT_READY;
 #endif
 }
 
@@ -870,11 +944,13 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms)
     if (framing == MAVLINK_FRAMING_BAD_CRC || framing == MAVLINK_FRAMING_BAD_SIGNATURE) {
       mavlink_status_t *parser = mavlink_get_channel_status(MAVLINK_COMM_0);
       mavlink_message_t *message = mavlink_get_channel_buffer(MAVLINK_COMM_0);
+      s_rpi_monitor.rx_frame_errors++;
       Px4Lite_CaptureReject(PX4LITE_CAPTURE_RPI_RX);
       s_rpi_diagnostic_length = 0U; parser->msg_received = MAVLINK_FRAMING_INCOMPLETE; parser->parse_state = MAVLINK_PARSE_STATE_IDLE;
       if (byte == MAVLINK_STX) { parser->parse_state = MAVLINK_PARSE_STATE_GOT_STX; message->len = 0U; mavlink_start_checksum(message); s_rpi_diagnostic_raw[0] = byte; s_rpi_diagnostic_length = 1U; }
     }
     if (framing == MAVLINK_FRAMING_OK) {
+      s_rpi_monitor.rx_valid_frames++;
       Px4Lite_CaptureRx(PX4LITE_CAPTURE_RPI_RX, s_rpi_diagnostic_raw, s_rpi_diagnostic_length, now_ms);
       s_rpi_diagnostic_length = 0U;
       s_rpi_pending_rx_ms = now_ms;

@@ -16,6 +16,8 @@ typedef struct {
 } Px4Lite_SerialExperiment_t;
 /** @brief 不访问UART的串口实验副本。 */
 Px4Lite_Result_t Px4Lite_CopySerialExperiment(Px4Lite_SerialExperiment_t *out);
+/** @brief 复制 Comm 发布的通用 UART6 快照；与诊断捕获是否运行无关，未发布返回 NOT_READY。 */
+Px4Lite_Result_t Px4Lite_CopySerialMonitor(Px4Lite_SerialMonitor_t *out);
 #define PX4LITE_CAPTURE_CAPACITY 4U /**< 完整帧槽数量。 */
 #define PX4LITE_CAPTURE_SUMMARIES 16U /**< 汇总键容量。 */
 #define PX4LITE_CAPTURE_FRAME_BYTES 280U /**< MAVLink2含签名的最大帧字节数。 */

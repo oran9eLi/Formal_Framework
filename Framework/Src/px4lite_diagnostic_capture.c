@@ -1,6 +1,6 @@
 /**
  * @file px4lite_diagnostic_capture.c
- * @brief Framework 固定捕获环与互斥会话管理。
+ * @brief Framework 固定捕获环、互斥会话及通用串口监视快照发布。
  * @details 无任务/堆分配；Comm执行动作，Adapter提交副本，不读生产队列或DMA。
  */
 #include "px4lite_diagnostic_capture.h"
@@ -9,6 +9,8 @@
 #include <string.h>
 #include "px4lite_platform.h"
 static Px4Lite_SerialExperiment_t s_serial;
+/** @brief Comm 发布、应用只读的通用串口事实，独立于捕获会话。 */
+static Px4Lite_SerialMonitor_t s_serial_monitor;
 /** @brief 固定互斥区；切类型必须换会话且暂停。 */
 typedef union {
   Px4Lite_CaptureFrame_t mav[PX4LITE_CAPTURE_CAPACITY]; /**< MAVLink完整帧。 */
@@ -25,6 +27,7 @@ static uint32_t CaptureNext(uint32_t value) { return value == UINT32_MAX ? 1U : 
 /** @brief 调度前一次初始化。 */
 void Px4Lite_CaptureInit(void)
 {
+  memset(&s_serial_monitor, 0, sizeof(s_serial_monitor));
   memset(&s_store, 0, sizeof(s_store)); memset(s_summary, 0, sizeof(s_summary)); memset(&s_status, 0, sizeof(s_status));
   s_status.session_id = 1U; s_status.source = PX4LITE_CAPTURE_LORA_RX; s_head = 0U; s_tx_session = 0U; s_tx_token = 0U;
 }
@@ -37,7 +40,7 @@ Px4Lite_Result_t Px4Lite_CaptureRequest(const Px4Lite_CaptureRequest_t *request)
   s_request = *request; s_status.request_id = CaptureNext(s_status.request_id); s_status.pending = 1U;
   taskEXIT_CRITICAL(); return PX4LITE_OK;
 }
-/** @brief 换会话时只清固定元数据；旧union字节不会被旧token授权读取。 */
+/** @brief Comm 处理捕获动作并发布独立串口快照；捕获换会话只清元数据，不清端口统计。 */
 void Px4Lite_CaptureWorkRun(void)
 {
   Px4Lite_SerialExperiment_t serial;
@@ -60,6 +63,18 @@ void Px4Lite_CaptureWorkRun(void)
   Px4Lite_RpiH1EchoGetStats(&serial.h1); Px4Lite_RpiBaudSwitchGetStats(&serial.b1);
   serial.measured_ms=Px4Lite_PlatformGetMs();
   taskENTER_CRITICAL(); s_serial=serial; taskEXIT_CRITICAL();
+  {
+    Px4Lite_SerialMonitor_t monitor;
+    (void)Px4Lite_RpiMavlinkCopyMonitor(&monitor);
+    taskENTER_CRITICAL(); s_serial_monitor = monitor; taskEXIT_CRITICAL();
+  }
+}
+/** @brief 只复制已发布事实，不让显示任务触碰 UART 或消耗接收字节。 */
+Px4Lite_Result_t Px4Lite_CopySerialMonitor(Px4Lite_SerialMonitor_t *out)
+{
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+  taskENTER_CRITICAL(); *out = s_serial_monitor; taskEXIT_CRITICAL();
+  return out->available ? PX4LITE_OK : PX4LITE_NOT_READY;
 }
 /** @brief 只复制Comm已发布状态，不让消费者访问外设。 */
 Px4Lite_Result_t Px4Lite_CopySerialExperiment(Px4Lite_SerialExperiment_t *out)
