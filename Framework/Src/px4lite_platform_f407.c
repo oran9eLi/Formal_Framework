@@ -20,6 +20,7 @@
 #include "bsp_remoteid.h"
 #include "bsp_button.h"
 #include "bsp_pwm.h"
+#include "bsp_buzzer.h"
 #include "bsp_rtc.h"
 #include "bsp_uart.h"
 #include "bsp_watchdog.h"
@@ -176,6 +177,18 @@ static int32_t Px4Lite_BaroUpdateVerticalSpeed(int32_t altitude_mm, uint32_t sam
   return s_baro_vertical_speed_cms;
 }
 
+
+/** @brief 可选声输出的初始化适配，BSP错误仅返回给试听服务。 */
+Px4Lite_Result_t Px4Lite_PlatformBuzzerInit(void)
+{
+  return (BSP_Buzzer_Init() == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+}
+
+/** @brief 原始PWM适配，频率和旋律策略由调用者负责。 */
+Px4Lite_Result_t Px4Lite_PlatformBuzzerSetFrequency(uint16_t frequency_hz)
+{
+  return (BSP_Buzzer_SetFrequency(frequency_hz) == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+}
 
 /**
  * @brief 复位平台心跳状态并初始化适配层拥有的服务。

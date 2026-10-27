@@ -13,6 +13,11 @@
 
 #include "px4lite_types.h"
 
+/** @brief sensor所有者初始化可选蜂鸣器；失败不扩大关键启动门禁。 */
+Px4Lite_Result_t Px4Lite_PlatformBuzzerInit(void);
+/** @brief sensor设置PWM频率，单位Hz，0表示低电平静音；不等待播放。 */
+Px4Lite_Result_t Px4Lite_PlatformBuzzerSetFrequency(uint16_t frequency_hz);
+
 /**
  * @brief 必须参与 watchdog 门控的任务心跳编号。
  */

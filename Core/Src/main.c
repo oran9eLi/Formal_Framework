@@ -10,6 +10,7 @@
 #include "main.h"
 #include "core_fatal.h"
 #include "bsp_pwm.h"
+#include "bsp_buzzer.h"
 #include "bsp_watchdog.h"
 #include "px4lite_config.h"
 #include "bsp.h"
@@ -30,6 +31,8 @@ static void SystemClock_Config(void);
  */
 int main(void)
 {
+  /* 首次执行即撤收可选蜂鸣器，不等待HAL或传感器初始化；复位保持期由硬件下拉保证。 */
+  BSP_Buzzer_EmergencyStop();
   BSP_Watchdog_CaptureResetCause();
 #if PX4LITE_ENABLE_HARDWARE_WATCHDOG
   if (BSP_Watchdog_StartBoot() != BSP_STATUS_OK) { Error_Handler(); }
@@ -119,6 +122,7 @@ void Core_FatalQuiesce(void)
 {
   __disable_irq();
   BSP_PWM_EmergencyStop();
+  BSP_Buzzer_EmergencyStop();
 }
 
 /** @brief 不可恢复停机，不恢复中断、不喂狗。 */

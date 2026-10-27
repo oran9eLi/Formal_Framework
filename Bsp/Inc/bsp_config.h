@@ -26,6 +26,18 @@
 #define BSP_ENABLE_REMOTEID 1U
 #define BSP_ENABLE_RPI_UART 1U
 
+/* 本分支为PE5启动音试听候选，旧硬件可独立关闭，不影响电机PWM。 */
+#ifndef BSP_ENABLE_BUZZER
+#define BSP_ENABLE_BUZZER 1U
+#endif
+#define BSP_BUZZER_TIM TIM9
+#define BSP_BUZZER_CHANNEL TIM_CHANNEL_1
+#define BSP_BUZZER_PORT GPIOE
+#define BSP_BUZZER_PIN GPIO_PIN_5
+#define BSP_BUZZER_AF GPIO_AF3_TIM9
+#define BSP_BUZZER_MIN_HZ 200U
+#define BSP_BUZZER_MAX_HZ 5000U
+
 /*
  * 独立看门狗(IWDG)。IWDG 由 LSI 驱动，STM32F407 的 LSI 标称 32 kHz，数据手册给出
  * 的实际范围是 17~47 kHz，因此超时选型必须按最快的 47 kHz 校核"最短超时"，否则

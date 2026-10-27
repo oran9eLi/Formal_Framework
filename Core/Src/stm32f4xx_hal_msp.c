@@ -143,8 +143,24 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
   }
 }
 
+/** @brief 按外设实例配置PWM资源；蜂鸣器独立于电机使能开关。 */
 void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
 {
+#if BSP_ENABLE_BUZZER
+  if (htim->Instance == BSP_BUZZER_TIM) {
+    GPIO_InitTypeDef buzzer_gpio = {0};
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+    __HAL_RCC_TIM9_CLK_ENABLE();
+    HAL_GPIO_WritePin(BSP_BUZZER_PORT, BSP_BUZZER_PIN, GPIO_PIN_RESET);
+    buzzer_gpio.Pin = BSP_BUZZER_PIN;
+    buzzer_gpio.Mode = GPIO_MODE_AF_PP;
+    buzzer_gpio.Pull = GPIO_PULLDOWN;
+    buzzer_gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+    buzzer_gpio.Alternate = BSP_BUZZER_AF;
+    HAL_GPIO_Init(BSP_BUZZER_PORT, &buzzer_gpio);
+    return;
+  }
+#endif
 #if (BSP_ENABLE_PWM == 1U)
   GPIO_InitTypeDef gpio;
 
@@ -180,8 +196,23 @@ void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
 #endif
 }
 
+/** @brief 释放TIM9后将蜂鸣器信号固定为低，不让停用输出浮空。 */
 void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef *htim)
 {
+#if BSP_ENABLE_BUZZER
+  if (htim->Instance == BSP_BUZZER_TIM) {
+    GPIO_InitTypeDef buzzer_gpio = {0};
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+    HAL_GPIO_WritePin(BSP_BUZZER_PORT, BSP_BUZZER_PIN, GPIO_PIN_RESET);
+    buzzer_gpio.Pin = BSP_BUZZER_PIN;
+    buzzer_gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    buzzer_gpio.Pull = GPIO_PULLDOWN;
+    buzzer_gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(BSP_BUZZER_PORT, &buzzer_gpio);
+    __HAL_RCC_TIM9_CLK_DISABLE();
+    return;
+  }
+#endif
 #if (BSP_ENABLE_PWM == 1U)
   if (htim->Instance == BSP_PWM_MOTOR1_TIM) {
     __HAL_RCC_TIM3_CLK_DISABLE();

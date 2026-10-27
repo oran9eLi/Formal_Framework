@@ -28,6 +28,12 @@
 #define PX4LITE_ENABLE_COMMAND             0U
 #define PX4LITE_ENABLE_LOG_POOL            0U
 
+/** 本候选只试听一次经典启动音，不启用声光操作反馈。 */
+#ifndef PX4LITE_ENABLE_STARTUP_TONE
+#define PX4LITE_ENABLE_STARTUP_TONE 1U
+#endif
+#define PX4LITE_STARTUP_TONE_DELAY_MS 1000U
+
 #define PX4LITE_SENSOR_WORK_PERIOD_MS      10U
 #define PX4LITE_ESTIMATOR_PERIOD_MS        20U
 #define PX4LITE_HEALTH_PERIOD_MS           100U
