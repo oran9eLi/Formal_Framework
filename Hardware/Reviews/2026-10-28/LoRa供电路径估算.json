@@ -1,0 +1,10 @@
+{
+  "start": "H3.1",
+  "end": "CN1.6",
+  "length_mm": 280.27,
+  "trace_widths_mm": [
+    0.25
+  ],
+  "resistance_ohm_1oz_20C": 0.552,
+  "drop_at_0p51A": 0.282
+}

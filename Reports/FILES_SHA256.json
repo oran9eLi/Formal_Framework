@@ -1,0 +1,42 @@
+[
+  {
+    "path": "Reports/2026-09-29_CNS汇报/CNS教学实验箱研发进展汇报_2026-09-29.pptx",
+    "bytes": 740688,
+    "sha256": "7a621ba9fc94e2bcb1ca33a4211339c12cff6c0c4ab1f497e213f59b0af0b575"
+  },
+  {
+    "path": "Reports/CNS产品手册V1.5.docx",
+    "bytes": 5645724,
+    "sha256": "f842a69c960b1a6c6d504180b18f8ca44e84b8bb2abcacd57fdfc72d73b552ba"
+  },
+  {
+    "path": "Reports/CNS箱V1.0系统交互说明_2026-10-14.docx",
+    "bytes": 51646,
+    "sha256": "6fc8e97bd6c53ecd8df0dbfe5ca0ecc5a649b1effc28c215b03f7c5e2d6ef6f1"
+  },
+  {
+    "path": "Reports/output/CNS研发周报.pptx",
+    "bytes": 339811,
+    "sha256": "82091f105584a46ddf76bc07371a308ee6f13a8386c07d2139789f9a15fa7585"
+  },
+  {
+    "path": "Reports/README.md",
+    "bytes": 1291,
+    "sha256": "9268e61046178e9a409237f1420331903cb908c2d24f9ebedccd5cf4c0fffd59"
+  },
+  {
+    "path": "Reports/Validation/CNS产品手册V1.5_排版核对.pdf",
+    "bytes": 2005960,
+    "sha256": "9ff76ec272347502580459289197eba0b5171ddf2cd2e957f547da0b6457ba20"
+  },
+  {
+    "path": "Reports/Validation/产品手册V1.5_verification.json",
+    "bytes": 1646,
+    "sha256": "dad44a563086e196c4a0721e6858abad1b76e8cb50d620b0c43ad8c3e237c341"
+  },
+  {
+    "path": "Reports/Validation/研发进展汇报20260929_final-validation.json",
+    "bytes": 3958,
+    "sha256": "83fcce709deb6596097d1d99bff4cac634e1a7a019732adb432df953eef2ef87"
+  }
+]

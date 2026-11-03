@@ -2,6 +2,8 @@
 
 ## 当前发布计划
 
+- [2026-11-03项目归档候选](Archive/2026-11-03_project-archive/MANIFEST.md)：最新功能代码与固件完整归档，常规候选重新Keil全量0/0、41 s；GT911诊断另包保存。当前触摸故障未定位，M5/M6和长稳状态保持；本次不合入develop，不作为稳定版发布。
+
 - [2026-10-27 PE5经典启动音试听](../Development_Guide/Change_History/2026-10-27_PE5经典启动音试听.md)：独立本地候选，Keil0/0；仅一次启动音，接线与实听待验，不覆盖Latest，不作为正式发布。
 
 - [2026-10-23 Serial通用监视候选](Archive/2026-10-23_serial-monitor-candidate/MANIFEST.md)：codex/serial-monitor独立分支；完整UART6配置和端口统计，标题Serial、协议及实验保持；Keil0/0，同次产物更新Latest，实板待验证。

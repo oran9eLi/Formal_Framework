@@ -35,3 +35,8 @@ Desktop.ini
 
 # Python tools output
 Tools/__pycache__/
+
+# Local document generation caches and temporary review outputs
+Reports/**/.build/
+/output/
+/tmp/

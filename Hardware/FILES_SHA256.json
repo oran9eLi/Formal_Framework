@@ -1,0 +1,142 @@
+[
+  {
+    "path": "Hardware/Design/ProPrj_CNS扩展板_2026-10-28.epro2",
+    "bytes": 1229648,
+    "sha256": "f99bbb941a1b5c1a4c05df54b8e4ed6eacd0ad5d26102b7e5c2b34a0412dbaff"
+  },
+  {
+    "path": "Hardware/README.md",
+    "bytes": 1805,
+    "sha256": "8a2e6ece206b28bb69608617c32c83843726656f3c5cc66b1c4cc0f8e2662ca2"
+  },
+  {
+    "path": "Hardware/Reference/CNS扩展板_1比1尺寸核对_20261027.pdf",
+    "bytes": 46621,
+    "sha256": "f2fb07eafb3374a24f6e0470947da22e0e63c4df2b6e8f0b9da2be40e8721690"
+  },
+  {
+    "path": "Hardware/Reference/CNS扩展板_1比1尺寸核对_25.5mm_20261027.pdf",
+    "bytes": 46622,
+    "sha256": "a081fe085206594bca3dc34613f7d30683cfe0e96739346e4651cb65e1872f7a"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-27/F407排线_目标导通表.csv",
+    "bytes": 2469,
+    "sha256": "fb2627ea932ad034d33a122beb5519e85e0773f1fa8bf99446962413e1e03cac"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-27/全部接口_实际PCB针序.csv",
+    "bytes": 8106,
+    "sha256": "5317848bec82929fa11413165e0854d1105da09811c6fd7b1835d95562239ea0"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-27/排线左右位置核对.png",
+    "bytes": 119802,
+    "sha256": "d7c8f10954a178112a1b985b02d61386edb7a122ee06c2dac6d0ed411180ef41"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-27/背面排线接口_逐针核对.png",
+    "bytes": 131755,
+    "sha256": "9f845141a4505a9e2b4e496436e3468ee7341b3321bf4f6b5be695806c956579"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/CNS五块PCB_打样前电气复核.md",
+    "bytes": 12661,
+    "sha256": "240fe48a24407f1fef2cc7f79af5d8fcffc06ffc21836ac0f649759083a619b0"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/electrical_checks.json",
+    "bytes": 96094,
+    "sha256": "405bd81722bcba0ecacaf62cd368b0474fd473722d6d4a1aeb1d56a0f958936f"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/F407排线_目标导通表.csv",
+    "bytes": 3211,
+    "sha256": "d7e28b020235b16b57570d683e35e49c1bd4267820cba2359b42d0378a5dc73f"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/GNSS转接板.png",
+    "bytes": 26674,
+    "sha256": "2440323dfedb5c9f773b4e22db66712bfb941b192f0ff9406a0383db74837c96"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/IMU转接板.png",
+    "bytes": 31269,
+    "sha256": "f462e4439b2955172f6a55b356c3a08134066bfa167b5d65132963a2cb082fb1"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/LoRa供电路径估算.json",
+    "bytes": 169,
+    "sha256": "602f665fc39bdaf2867948b3a4b30c230a7d4664d1c22ea605e9127d094ef7b1"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/LoRa转接板.png",
+    "bytes": 25735,
+    "sha256": "bf741af509a08bf21b52463621da6057eb249118d263309787e4d0188c37f718"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/主扩展板.png",
+    "bytes": 76730,
+    "sha256": "fe6dbd4b3917fbac03b4dcf3426961eddb1a96e37b867fc235091c7611017b57"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/全部接口与焊盘网络.csv",
+    "bytes": 18174,
+    "sha256": "20df7b72a381ade37dda878a4c1e1eba3dd4d8c5ead36b82740f426406e725e5"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28/气压计转接板.png",
+    "bytes": 23574,
+    "sha256": "7b67b610a1fe55d33b46f55fcb70aa4e9c74e90c5553c36c1ddceab64a95b8dd"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/CNS五块PCB_更新版电气复核.md",
+    "bytes": 6311,
+    "sha256": "21a792cfd329219f33451d5596eb1e5f4048d0eb25d445003dd5fb7510359740"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/electrical_checks.json",
+    "bytes": 96248,
+    "sha256": "f3a929bf76fc7d80e2f52c8a922e1ba968e5ff2eb232ebb11f5033fa8915bc18"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/F407排线_目标导通表.csv",
+    "bytes": 5571,
+    "sha256": "afc03b9a13dcb026e6addf3492f67f6378cb3754e126101bba3e70b16f33f1c4"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/GNSS转接板.png",
+    "bytes": 26674,
+    "sha256": "2440323dfedb5c9f773b4e22db66712bfb941b192f0ff9406a0383db74837c96"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/IMU转接板.png",
+    "bytes": 31269,
+    "sha256": "f462e4439b2955172f6a55b356c3a08134066bfa167b5d65132963a2cb082fb1"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/LoRa供电路径估算.json",
+    "bytes": 169,
+    "sha256": "7692825402f5075a699b3238045a34771dbac03208f0925ce7f12fd662f04d2e"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/LoRa转接板.png",
+    "bytes": 25001,
+    "sha256": "d1c6883a30ddcd3ebd7b0042d71f38be0455faecbc5c612d15deec7b3456a8b5"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/主扩展板.png",
+    "bytes": 76907,
+    "sha256": "d1982adc3bdcb5d768451a6f8adec10134f38bb77110635387e0f92a8278db55"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/全部接口与焊盘网络.csv",
+    "bytes": 18184,
+    "sha256": "4db09c84c7b2e75c94f807a8254f5c360a8f4f8b49d077ef2c7e2bd009970b42"
+  },
+  {
+    "path": "Hardware/Reviews/2026-10-28_r2/气压计转接板.png",
+    "bytes": 23574,
+    "sha256": "7b67b610a1fe55d33b46f55fcb70aa4e9c74e90c5553c36c1ddceab64a95b8dd"
+  }
+]

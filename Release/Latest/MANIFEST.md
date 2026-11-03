@@ -1,30 +1,44 @@
-# Serial 通用串口监视本地候选
+# 2026-11-03 项目归档候选
 
-日期：2026-10-23。候选：serial-monitor-20261023。状态：软件构建完成，实板待验证；独立分支，未合入develop、未推送或打tag。
+状态：预发布开发归档；触摸故障未定位，M5/M6完整验收及M7长稳未完成，不是V1.0稳定版。
 
-| 项目 | 实际记录 |
+| 项目 | 记录 |
 |---|---|
-| 分支 / 生产提交 | codex/serial-monitor / `d6515d7551ae7600e23b17da7320c0c54b4ca45a` |
-| develop基线 | `5e1b2e266f899de5f4915615bf9f41a5c30d7edc` |
-| Rebuild All | 2026-10-23T09:57:10.7083548+08:00 — 2026-10-23T09:57:52.9121560+08:00，退出码0，0 Error(s), 0 Warning(s)，日志00:00:40 |
-| 工具链 / 工程 | ARMCC5.06 u5 build528 / MDK-ARM/formal_framework.uvprojx / Target 1 |
-| Code / RO / RW / ZI | 341196 / 111084 / 1988 / 109844 B |
-| 主SRAM | 111832 B、余19240 B；基线+136 B |
-| Flash装载 | 452408 B；基线+1132 B，压缩装载口径 |
-| HEX范围 | [0x08000000, 0x0806E738)；不占配置sector11 |
-| 生产输入 | 1023项，构建前后/归档SHA不变；清单SHA `068971c3ea9caf3ea7ebe46100517e24d305ace5aeff8b7142aa6bf0804ada87` |
-| 源码ZIP | `4c83f69eb04128cc93415a68cf2b05dec67a810dacd64a8d7ce86cccda5b182a`；生产输入逐项SHA与清单一致 |
+| 归档分支 | `codex/project-archive-20261103`；基于`367ac0507714335dbbed99c730c530e6bb8f9977`，归档改动仅资料、索引和进度记录 |
+| 功能来源 | `codex/buzzer-startup-audition`，含Serial通用监视、显示/性能修正及PE5/TIM9一次经典启动音 |
+| develop基线 | `5e1b2e266f899de5f4915615bf9f41a5c30d7edc`；本次不合入未完成验收的Serial/启动音候选 |
+| 标签 | `v1.0.0-pre.archive.20261103` |
+| 工程 / Target | `MDK-ARM/formal_framework.uvprojx` / `Target 1` |
+| 工具链 | Keil MDK5 / ARMCC5.06 update5 build528 / STM32F4xx_DFP2.17.0 / C99 |
+| 实际Rebuild All | 2026-11-03 17:21:58—17:22:44 UTC+8；退出码0，`0 Error(s), 0 Warning(s)`；日志41 s |
+| Code / RO / RW / ZI | 342608 / 111120 / 1996 / 109948 B |
+| 主SRAM静态使用 / 余量 | 111944 / 19128 B；包含固定堆池，不等于实时空闲堆或栈水位 |
+| Flash实际装载 | 453856 B；压缩装载口径 |
+| HEX范围 | `[0x08000000, 0x0806ECE0)`；连续，无重叠，校验通过，不写sector11配置区 |
+| 生产输入 | 1027项，构建前后SHA不变；源码ZIP逐项核对一致 |
+| HEX SHA-256 | `3355692eaeea435d03429fa18247c645b3d1d5c3bd91da9a7afeee055d918506`，与2026-10-27试听候选一致 |
 
-## 同次产物SHA-256
+## 固件获取
 
-| 文件 | SHA-256 |
-|---|---|
-| formal_framework.hex | `31e851c1e3e17eab7e70c4567ec336ac65c001d77445cb7da22d1bbcb5f96cd3` |
-| formal_framework.axf | `9c70860e3dae07f8996957355d61184b9833020725119932e3b01e22742e9c09` |
-| formal_framework.htm | `9c3076e0a8c7ea5dd482095fa741fc6d0c9435190751bf4bd4579c0e713b50c9` |
-| formal_framework.map | `061c6f970a0bc2ba2a625a73e564f587204b6e81fe5e0f80565fe612fe386a10` |
-| keil-rebuild.log | `af9e1c31137d0163bcdd31c6604b4e6ff6f43ac48d5ac098ef595fc52d183354` |
+[GitHub预发布附件](https://github.com/oran9eLi/Formal_Framework/releases/tag/v1.0.0-pre.archive.20261103)：
 
-Latest与日期归档保存HEX/AXF/MAP和build.log（对应keil-rebuild.log）；完整HTM、源码输入ZIP、输入清单及身份JSON在两个工作区build/serial_monitor_20261023/artifacts中。
+- `cns-f407-classic-startup-20261103.hex`：常规候选。
+- `cns-f407-classic-startup-20261103.zip`：同次HEX/AXF/MAP/HTM、日志、输入清单、完整生产源码ZIP、build-evidence及启动音许可证说明。
+- `cns-f407-gt911-diagnostic-20261103.hex` / `.zip`：另一个触摸诊断候选，不能与常规候选混用性能数据。诊断包附独立输入源码、构建证据及现场结果补充。
+- `cns-f407-serial-monitor-20261023.zip`：Serial独立候选历史构建；不是11月3日的新构建。
+- `cns-f407-numeric-control-20261023.zip`：此前显示修复对照固件历史构建；用户回刷下载/校验成功，触摸仍未恢复。
+- `SHA256SUMS.txt` / `ASSETS.json`：附件大小与SHA-256。
 
-完整显示UART6配置与九项独立累计统计，Serial名称保持，Clear stats仅改变显示基线；Frames复用有界捕获。H1/B1及现有通信协议、编码/调度/实验事务保持。没有新增FreeRTOS任务、业务动态分配、队列、大缓存或改变任务栈；页面继续使用固定LVGL池，新增端口标题标签的池内占用待实屏采样。代码审查及构建完成，不代替实屏、真实收发、栈水位/性能和长稳验收；未新增或运行host测试，M5/M6保留待验。
+本地同次常规HEX/AXF/MAP/build.log存于本目录及`Release/Latest/`，二进制不进Git。源码与固件状态分别记录，GitHub源代码自动ZIP不等于诊断配置快照。
+
+## GT911诊断候选
+
+基于367ac05，仅在`Debug/Inc/debug_config.h`打开`DEBUG_SELFTEST_ENABLE`与`DEBUG_SELFTEST_GT911_ENABLE`，未改GPIO、I2C、复位时序或触摸算法。16:29:34—16:30:18 UTC+8已实际Keil Rebuild All 0/0；Flash实际装载454392 B，主SRAM静态111944 B。
+
+诊断HEX SHA-256：`8a31498536744e6a0c3406a47ed1da18c7f1d140a901a51062ae94ece19615df`。UART1为115200、8N1、无流控。诊断启用既有DebugTask（384 words栈），不能作为常规性能样本。
+
+用户烧录后持续输出`addr=0x00 result=1 err=65 init_err=0 cfg_ver=0 cfg_ok=0 int=0 scl=1 sda=1 status=0x00 cfg=00000000`。65即0x41，表示读取寄存器的设备写地址阶段未收到ACK；没有逐地址探测或波形证据，不能断言两个地址都NACK或认定硬件损坏。
+
+## 验证边界
+
+外接HW-508模块已有启动音试听反馈；扩展板蜂鸣器本体因5V-BEC供电问题仍需核对。RGB与UART1 CLI未实现。当前屏幕可显示、运行时间增加，但触摸不可用；完全断电、断开扩展板、回刷旧显示修复版、重插外部屏幕排线均无恢复。尚缺供电测量与信号波形，问题保持未解决。统一host回归、完整数据/RF/CSV/保护/资源验收和长稳均未因本次归档新增通过结论。
