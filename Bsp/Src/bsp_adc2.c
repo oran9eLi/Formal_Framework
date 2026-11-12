@@ -1,6 +1,6 @@
 /**
  * @file bsp_adc2.c
- * @brief 实现用于第二块电池电源采样的板级 ADC2 接口。
+ * @brief BSP 层第二组外部电压采样；当前测量整机主回路输入。
  *
  * @details 参照 bsp_adc.c 实现，使用独立的 ADC2 外设(PA4/ADC2_IN4)。
  */
@@ -8,6 +8,8 @@
 #include "bsp_adc2.h"
 
 #include "bsp_adc.h" /* 复用 ADC1 的 VREFINT 实测 VDDA(VDDA 为公共供电) */
+#include "bsp_critical.h"
+#include <string.h>
 #include "bsp_config.h"
 #include "stm32f4xx_hal.h"
 
@@ -19,6 +21,7 @@
 
 static ADC_HandleTypeDef s_hadc2;
 static uint8_t s_initialized2;
+static BSP_ADC2_Diag_t s_adc2_diag;
 
 /**
  * @brief 将 HAL ADC 返回状态映射为 BSP 通用返回码。
@@ -35,8 +38,10 @@ static BSP_Status_t BSP_ADC2_MapHalStatus(HAL_StatusTypeDef status)
   return BSP_STATUS_ERROR;
 }
 
+/** @brief 初始化第二组 ADC2；关闭该组时拒绝访问硬件。 */
 BSP_Status_t BSP_ADC2_Init(void)
 {
+#if BSP_ENABLE_POWER2
   ADC_ChannelConfTypeDef channel;
 
   if (s_initialized2 != 0U) { return BSP_STATUS_OK; }
@@ -65,6 +70,9 @@ BSP_Status_t BSP_ADC2_Init(void)
 
   s_initialized2 = 1U;
   return BSP_STATUS_OK;
+#else
+  return BSP_STATUS_ERROR;
+#endif
 }
 
 BSP_Status_t BSP_ADC2_DeInit(void)
@@ -83,11 +91,12 @@ BSP_Status_t BSP_ADC2_Recover(void)
   return BSP_ADC2_Init();
 }
 
+/** @brief 读取第二组单次原始码；停用或失败时不改写输出。 */
 BSP_Status_t BSP_ADC2_ReadRaw(uint32_t *raw)
 {
   HAL_StatusTypeDef result;
 
-  if (raw == 0) { return BSP_STATUS_ERROR; }
+  if ((raw == 0) || (BSP_ENABLE_POWER2 == 0U)) { return BSP_STATUS_ERROR; }
 
   BSP_ADC2_Init();
   if (s_initialized2 == 0U) { return BSP_STATUS_ERROR; }
@@ -102,9 +111,11 @@ BSP_Status_t BSP_ADC2_ReadRaw(uint32_t *raw)
   return BSP_ADC2_MapHalStatus(result);
 }
 
-BSP_Status_t BSP_ADC2_ReadAverage(uint32_t *raw, uint8_t count)
+/** @brief 在同一批转换中求平均与最值；不因诊断新增采样，失败不写输出。 */
+static BSP_Status_t BSP_ADC2_ReadStatistics(uint32_t *raw, uint8_t count, uint32_t *minimum, uint32_t *maximum)
 {
-  uint32_t sum = 0U;
+  uint64_t sum = 0U;
+  uint32_t low = UINT32_MAX, high = 0U;
   uint8_t i;
 
   if ((raw == 0) || (count == 0U)) { return BSP_STATUS_ERROR; }
@@ -115,28 +126,54 @@ BSP_Status_t BSP_ADC2_ReadAverage(uint32_t *raw, uint8_t count)
 
     if (result != BSP_STATUS_OK) { return result; }
     sum += sample;
+    if (sample < low) { low = sample; }
+    if (sample > high) { high = sample; }
   }
 
-  *raw = (sum + ((uint32_t)count / 2U)) / (uint32_t)count;
+  *raw = (uint32_t)((sum + ((uint32_t)count / 2U)) / (uint32_t)count);
+  if (minimum != 0) { *minimum = low; }
+  if (maximum != 0) { *maximum = high; }
   return BSP_STATUS_OK;
 }
 
+/** @brief 保留原平均读取接口，由同一统计实现执行所请求的count次转换。 */
+BSP_Status_t BSP_ADC2_ReadAverage(uint32_t *raw, uint8_t count)
+{ return BSP_ADC2_ReadStatistics(raw, count, 0, 0); }
+
+/** @brief 读取主回路输入毫伏值；复用 ADC1 的公共 VDDA 修正，停用时输出不变。 */
 BSP_Status_t BSP_ADC2_ReadVoltageMv(uint32_t *voltage_mv)
 {
-  uint32_t raw = 0U;
-  uint32_t vdda;
-  uint32_t pin_mv;
+  BSP_ADC2_Diag_t diag;
+  uint32_t key;
   BSP_Status_t result;
 
-  if (voltage_mv == 0) { return BSP_STATUS_ERROR; }
+  if ((voltage_mv == 0) || (BSP_ENABLE_POWER2 == 0U)) { return BSP_STATUS_ERROR; }
+  memset(&diag, 0, sizeof(diag)); diag.sequence = s_adc2_diag.sequence + 1U; diag.ready = 1U;
+  (void)BSP_ADC_GetVddaMv();
+  result = BSP_ADC_GetReferenceDiag(&diag.reference);
+  if (result == BSP_STATUS_OK) {
+    result = BSP_ADC2_ReadStatistics(&diag.raw_average, BSP_ADC2_AVERAGE_COUNT, &diag.raw_min, &diag.raw_max);
+  }
+  if (result == BSP_STATUS_OK && (diag.raw_average > BSP_ADC2_RAW_MAX || diag.raw_max > BSP_ADC2_RAW_MAX)) { result = BSP_STATUS_ERROR; }
+  if (result == BSP_STATUS_OK) {
+    diag.pin_mv = ((diag.raw_average * diag.reference.vdda_mv) + (BSP_ADC2_RAW_MAX / 2U)) / BSP_ADC2_RAW_MAX;
+    diag.input_mv = (diag.pin_mv * BSP_ADC2_DIVIDER_NUM) / BSP_ADC2_DIVIDER_DEN;
+    diag.sample_valid = 1U;
+  }
+  diag.sample_status = (uint8_t)result;
+  key = BSP_Critical_Enter(); s_adc2_diag = diag; BSP_Critical_Exit(key);
+  if (result == BSP_STATUS_OK) { *voltage_mv = diag.input_mv; }
+  return result;
+}
 
-  vdda   = BSP_ADC_GetVddaMv(); /* VREFINT 仅接 ADC1，用其实测的公共 VDDA */
-  result = BSP_ADC2_ReadAverage(&raw, BSP_ADC2_AVERAGE_COUNT);
-  if (result != BSP_STATUS_OK) { return result; }
-
-  if (raw > BSP_ADC2_RAW_MAX) { raw = BSP_ADC2_RAW_MAX; }
-
-  pin_mv      = ((raw * vdda) + (BSP_ADC2_RAW_MAX / 2U)) / BSP_ADC2_RAW_MAX;
-  *voltage_mv = (pin_mv * BSP_ADC2_DIVIDER_NUM) / BSP_ADC2_DIVIDER_DEN;
+/** @brief 只复制同轮电压/参考缓存，不发起ADC转换，warm初始化/恢复不擦历史证据。 */
+BSP_Status_t BSP_ADC2_GetDiag(BSP_ADC2_Diag_t *out)
+{
+  uint32_t key;
+  if (out == 0) { return BSP_STATUS_ERROR; }
+  key = BSP_Critical_Enter();
+  if (s_adc2_diag.ready == 0U) { BSP_Critical_Exit(key); return BSP_STATUS_ERROR; }
+  *out = s_adc2_diag;
+  BSP_Critical_Exit(key);
   return BSP_STATUS_OK;
 }

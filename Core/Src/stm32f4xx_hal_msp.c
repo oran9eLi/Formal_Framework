@@ -63,9 +63,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     HAL_GPIO_Init(BSP_GNSS_TX_PORT, &gpio);
 
     HAL_NVIC_SetPriority(BSP_GNSS_IRQn, BSP_GNSS_IRQ_PRIORITY, 0U);
-    HAL_NVIC_EnableIRQ(BSP_GNSS_IRQn);
     HAL_NVIC_SetPriority(BSP_GNSS_RX_DMA_IRQn, BSP_GNSS_IRQ_PRIORITY, 0U);
-    HAL_NVIC_EnableIRQ(BSP_GNSS_RX_DMA_IRQn);
+    /* GNSS仅设优先级；UART/DMA完整挂接后由BSP开放中断。 */
   } else if (huart->Instance == BSP_LORA_UART) {
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_USART3_CLK_ENABLE();
@@ -143,8 +142,46 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
   }
 }
 
+/** @brief 按外设实例配置RGB、蜂鸣器和电机PWM资源，各可选输出独立使能。 */
 void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
 {
+#if BSP_ENABLE_RGB
+  if (htim->Instance == BSP_RGB_TIM) {
+    GPIO_InitTypeDef rgb_gpio = {0};
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_TIM8_CLK_ENABLE();
+    /* TIM8由RGB独占，重建时清除遗留从模式/中断，避免旧触发配置阻止启动。 */
+    __HAL_RCC_TIM8_FORCE_RESET();
+    __HAL_RCC_TIM8_RELEASE_RESET();
+    __HAL_RCC_DMA2_CLK_ENABLE();
+    HAL_GPIO_WritePin(BSP_RGB_PORT, BSP_RGB_PIN, GPIO_PIN_RESET);
+    rgb_gpio.Pin = BSP_RGB_PIN;
+    rgb_gpio.Mode = GPIO_MODE_AF_PP;
+    rgb_gpio.Pull = GPIO_PULLDOWN;
+    rgb_gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    rgb_gpio.Alternate = BSP_RGB_AF;
+    HAL_GPIO_Init(BSP_RGB_PORT, &rgb_gpio);
+    HAL_NVIC_DisableIRQ(BSP_RGB_DMA_IRQn);
+    HAL_NVIC_SetPriority(BSP_RGB_DMA_IRQn, BSP_RGB_IRQ_PRIORITY, 0U);
+    /* DMA句柄挂接、清理挂起标志后由BSP开放NVIC，避免半初始化IRQ。 */
+    return;
+  }
+#endif
+#if BSP_ENABLE_BUZZER
+  if (htim->Instance == BSP_BUZZER_TIM) {
+    GPIO_InitTypeDef buzzer_gpio = {0};
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+    __HAL_RCC_TIM9_CLK_ENABLE();
+    HAL_GPIO_WritePin(BSP_BUZZER_PORT, BSP_BUZZER_PIN, GPIO_PIN_RESET);
+    buzzer_gpio.Pin = BSP_BUZZER_PIN;
+    buzzer_gpio.Mode = GPIO_MODE_AF_PP;
+    buzzer_gpio.Pull = GPIO_PULLDOWN;
+    buzzer_gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+    buzzer_gpio.Alternate = BSP_BUZZER_AF;
+    HAL_GPIO_Init(BSP_BUZZER_PORT, &buzzer_gpio);
+    return;
+  }
+#endif
 #if (BSP_ENABLE_PWM == 1U)
   GPIO_InitTypeDef gpio;
 
@@ -180,8 +217,40 @@ void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
 #endif
 }
 
+/** @brief 释放可选输出后固定对应引脚为低，不关闭共享DMA控制器时钟。 */
 void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef *htim)
 {
+#if BSP_ENABLE_RGB
+  if (htim->Instance == BSP_RGB_TIM) {
+    GPIO_InitTypeDef rgb_gpio = {0};
+    HAL_NVIC_DisableIRQ(BSP_RGB_DMA_IRQn);
+    HAL_NVIC_ClearPendingIRQ(BSP_RGB_DMA_IRQn);
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    HAL_GPIO_WritePin(BSP_RGB_PORT, BSP_RGB_PIN, GPIO_PIN_RESET);
+    rgb_gpio.Pin = BSP_RGB_PIN;
+    rgb_gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    rgb_gpio.Pull = GPIO_PULLDOWN;
+    rgb_gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(BSP_RGB_PORT, &rgb_gpio);
+    __HAL_RCC_TIM8_CLK_DISABLE();
+    /* DMA2时钟可能由其他外设使用，不在释放单个Stream时关闭。 */
+    return;
+  }
+#endif
+#if BSP_ENABLE_BUZZER
+  if (htim->Instance == BSP_BUZZER_TIM) {
+    GPIO_InitTypeDef buzzer_gpio = {0};
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+    HAL_GPIO_WritePin(BSP_BUZZER_PORT, BSP_BUZZER_PIN, GPIO_PIN_RESET);
+    buzzer_gpio.Pin = BSP_BUZZER_PIN;
+    buzzer_gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    buzzer_gpio.Pull = GPIO_PULLDOWN;
+    buzzer_gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(BSP_BUZZER_PORT, &buzzer_gpio);
+    __HAL_RCC_TIM9_CLK_DISABLE();
+    return;
+  }
+#endif
 #if (BSP_ENABLE_PWM == 1U)
   if (htim->Instance == BSP_PWM_MOTOR1_TIM) {
     __HAL_RCC_TIM3_CLK_DISABLE();
@@ -193,6 +262,55 @@ void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef *htim)
 #else
   (void)htim;
 #endif
+}
+
+/**
+ * @brief 初始化 IMU 专用 SPI2 时钟与 GPIO，其他 SPI 实例保持其原有初始化路径。
+ * @details 先将两个 CS 输出锁存为高，再配置推挽输出，避免初始化时误选中器件。
+ *          采用轮询收发，不分配 DMA，不开启 SPI2 IRQ。
+ */
+void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
+{
+  GPIO_InitTypeDef gpio = {0};
+
+  if (hspi->Instance != BSP_IMU_SPI_INS) { return; }
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_SPI2_CLK_ENABLE();
+
+  HAL_GPIO_WritePin(BSP_IMU_SPI_ACCEL_CS_PORT, BSP_IMU_SPI_ACCEL_CS_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(BSP_IMU_SPI_GYRO_CS_PORT, BSP_IMU_SPI_GYRO_CS_PIN, GPIO_PIN_SET);
+  gpio.Mode = GPIO_MODE_OUTPUT_PP;
+  gpio.Pull = GPIO_PULLUP;
+  gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+  gpio.Pin = BSP_IMU_SPI_ACCEL_CS_PIN;
+  HAL_GPIO_Init(BSP_IMU_SPI_ACCEL_CS_PORT, &gpio);
+  gpio.Pin = BSP_IMU_SPI_GYRO_CS_PIN;
+  HAL_GPIO_Init(BSP_IMU_SPI_GYRO_CS_PORT, &gpio);
+
+  gpio.Mode = GPIO_MODE_AF_PP;
+  gpio.Pull = GPIO_NOPULL;
+  gpio.Pin = BSP_IMU_SPI_SCK_PIN;
+  gpio.Alternate = BSP_IMU_SPI_SCK_AF;
+  HAL_GPIO_Init(BSP_IMU_SPI_SCK_PORT, &gpio);
+  gpio.Pin = BSP_IMU_SPI_MISO_PIN;
+  gpio.Alternate = BSP_IMU_SPI_MISO_AF;
+  HAL_GPIO_Init(BSP_IMU_SPI_MISO_PORT, &gpio);
+  gpio.Pin = BSP_IMU_SPI_MOSI_PIN;
+  gpio.Alternate = BSP_IMU_SPI_MOSI_AF;
+  HAL_GPIO_Init(BSP_IMU_SPI_MOSI_PORT, &gpio);
+}
+
+/** @brief 释放 SPI2 数据 GPIO 和时钟，保留两个片选为高电平输出。 */
+void HAL_SPI_MspDeInit(SPI_HandleTypeDef *hspi)
+{
+  if (hspi->Instance != BSP_IMU_SPI_INS) { return; }
+  HAL_GPIO_WritePin(BSP_IMU_SPI_ACCEL_CS_PORT, BSP_IMU_SPI_ACCEL_CS_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(BSP_IMU_SPI_GYRO_CS_PORT, BSP_IMU_SPI_GYRO_CS_PIN, GPIO_PIN_SET);
+  HAL_GPIO_DeInit(BSP_IMU_SPI_SCK_PORT, BSP_IMU_SPI_SCK_PIN);
+  HAL_GPIO_DeInit(BSP_IMU_SPI_MISO_PORT, BSP_IMU_SPI_MISO_PIN);
+  HAL_GPIO_DeInit(BSP_IMU_SPI_MOSI_PORT, BSP_IMU_SPI_MOSI_PIN);
+  __HAL_RCC_SPI2_CLK_DISABLE();
 }
 
 void HAL_I2C_MspInit(I2C_HandleTypeDef *hi2c)
@@ -226,50 +344,70 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef *hi2c)
   HAL_GPIO_DeInit(BSP_I2C_SDA_PORT, BSP_I2C_SDA_PIN);
 }
 
+/** @brief 配置启用组的模拟输入；ADC1 内部参考保持可用，停用组不占用 GPIO。 */
 void HAL_ADC_MspInit(ADC_HandleTypeDef *hadc)
 {
+#if BSP_ENABLE_POWER1 || BSP_ENABLE_POWER2
   GPIO_InitTypeDef gpio;
 
   gpio.Mode  = GPIO_MODE_ANALOG;
   gpio.Pull  = GPIO_NOPULL;
   gpio.Speed = GPIO_SPEED_FREQ_LOW;
+#endif
 
   if (hadc->Instance == BSP_ADC_INS) {
-    __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_ADC1_CLK_ENABLE();
 
+#if BSP_ENABLE_POWER1
+    __HAL_RCC_GPIOA_CLK_ENABLE();
     gpio.Pin = BSP_ADC_PIN;
     HAL_GPIO_Init(BSP_ADC_PORT, &gpio);
+#endif
   } else if (hadc->Instance == BSP_ADC2_INS) {
+#if BSP_ENABLE_POWER2
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_ADC2_CLK_ENABLE();
 
     gpio.Pin = BSP_ADC2_PIN;
     HAL_GPIO_Init(BSP_ADC2_PORT, &gpio);
+#endif
   } else if (hadc->Instance == BSP_ADC_CURRENT_INS) {
-    /* 两路电流计 PC0/PC1 走 ADC3，模拟输入。 */
+    /* 仅初始化启用组；PC0 停用后不配置其引脚。 */
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_ADC3_CLK_ENABLE();
 
+#if BSP_ENABLE_POWER1
     gpio.Pin = BSP_ADC_CURRENT1_PIN;
     HAL_GPIO_Init(BSP_ADC_CURRENT1_PORT, &gpio);
+#endif
+#if BSP_ENABLE_POWER2
     gpio.Pin = BSP_ADC_CURRENT2_PIN;
     HAL_GPIO_Init(BSP_ADC_CURRENT2_PORT, &gpio);
+#endif
   }
 }
 
+/** @brief 释放对应 ADC 与启用组 GPIO；不得重置已停用组的可复用引脚。 */
 void HAL_ADC_MspDeInit(ADC_HandleTypeDef *hadc)
 {
   if (hadc->Instance == BSP_ADC_INS) {
     __HAL_RCC_ADC1_CLK_DISABLE();
+#if BSP_ENABLE_POWER1
     HAL_GPIO_DeInit(BSP_ADC_PORT, BSP_ADC_PIN);
+#endif
   } else if (hadc->Instance == BSP_ADC2_INS) {
+#if BSP_ENABLE_POWER2
     __HAL_RCC_ADC2_CLK_DISABLE();
     HAL_GPIO_DeInit(BSP_ADC2_PORT, BSP_ADC2_PIN);
+#endif
   } else if (hadc->Instance == BSP_ADC_CURRENT_INS) {
     __HAL_RCC_ADC3_CLK_DISABLE();
+#if BSP_ENABLE_POWER1
     HAL_GPIO_DeInit(BSP_ADC_CURRENT1_PORT, BSP_ADC_CURRENT1_PIN);
+#endif
+#if BSP_ENABLE_POWER2
     HAL_GPIO_DeInit(BSP_ADC_CURRENT2_PORT, BSP_ADC_CURRENT2_PIN);
+#endif
   }
 }
 

@@ -25,6 +25,7 @@ Px4Lite_Result_t App_CopyRecording(App_RecordingStatus_t *out,uint32_t now_ms);
 #include "px4lite_types.h"
 #include "px4lite_runtime_stats.h"
 #include "px4lite_diagnostic_capture.h"
+#include "px4lite_gnss_diagnostics.h"
 #include "px4lite_mavlink_decode.h"
 typedef Px4Lite_DecodedPage_t App_DecodedPage_t; /**< 固定八行解码工作区。 */
 typedef Px4Lite_CaptureRequest_t App_CaptureRequest_t; /**< 有界捕获动作请求。 */
@@ -34,6 +35,11 @@ typedef Px4Lite_CaptureFrame_t App_CaptureFrame_t; /**< 稳定完整原字节帧
 /** @brief 对稳定原始帧只读解码，不执行命令或修改协议状态。 */
 Px4Lite_Result_t App_DecodeCapturedFrame(const App_CaptureFrame_t *frame, uint8_t page, App_DecodedPage_t *out);
 typedef Px4Lite_NmeaSentence_t App_NmeaSentence_t; /**< 稳定完整NMEA原字节。 */
+typedef Px4Lite_GnssCapturedFrame_t App_GnssCapturedFrame_t; /**< 稳定完整GNSS原帧，协议与校验状态独立于定位。 */
+typedef Px4Lite_SerialMonitor_t App_SerialMonitor_t; /**< 通用 UART6 配置与累计收发快照。 */
+/** @brief 只复制 Comm 发布的串口事实；不触发硬件 I/O 或捕获，未发布返回 NOT_READY。 */
+Px4Lite_Result_t App_CopySerialMonitor(App_SerialMonitor_t *out);
+
 typedef Px4Lite_SerialExperiment_t App_SerialExperiment_t; /**< 串口实验本机事实。 */
 /** @brief 复制串口实验快照，不访问UART。 */
 Px4Lite_Result_t App_CopySerialExperiment(App_SerialExperiment_t *out);
@@ -49,6 +55,8 @@ Px4Lite_Result_t App_CopyCapturedFrame(uint32_t session_id, uint32_t token, App_
 Px4Lite_Result_t App_CopyCapturedStage(uint32_t session_id, uint32_t token, uint8_t *stage);
 /** @brief 按代数复制完整NMEA句。 */
 Px4Lite_Result_t App_CopyNmeaSentence(uint32_t session_id, uint32_t token, App_NmeaSentence_t *out);
+/** @brief 按会话/token复制NMEA或UBX原帧；失败不改输出，不访问生产接收队列。 */
+Px4Lite_Result_t App_CopyCapturedGnssFrame(uint32_t session_id, uint32_t token, App_GnssCapturedFrame_t *out);
 typedef Px4Lite_RuntimeSnapshot_t App_RuntimeSnapshot_t; /**< 常驻资源只读摘要。 */
 typedef Px4Lite_TaskRuntime_t App_TaskRuntime_t; /**< 任务栈只读行。 */
 typedef Px4Lite_DisplayRuntime_t App_DisplayRuntime_t; /**< 显示所有者测量摘要。 */
@@ -96,6 +104,24 @@ typedef Px4Lite_SensorGnss_t App_GnssDetails_t; /**< GNSS逐域测量，消费va
 Px4Lite_Result_t App_CopyImuLatest(App_ImuSnapshot_t *out, uint32_t now_ms);
 /** @brief 复制GNSS详情；新鲜位逐域裁剪，链路活动不冒充新位置。 */
 Px4Lite_Result_t App_CopyGnssDetails(App_GnssDetails_t *out, uint32_t now_ms);
+
+typedef Px4Lite_GnssSatellitePage_t App_GnssSatellitePage_t; /**< UBX逐星固定5项页，仅通过App时效门控读取。 */
+#define APP_GNSS_SAT_VALID_ELEVATION PX4LITE_GNSS_SAT_VALID_ELEVATION
+#define APP_GNSS_SAT_VALID_AZIMUTH PX4LITE_GNSS_SAT_VALID_AZIMUTH
+#define APP_GNSS_SAT_MAX_AGE_MS 2500U /**< 1Hz逐星表的本地新鲜度上限，单位ms。 */
+/** @brief 只读复制逐星页；过期清available并返回STALE，不授权旧表项作为实时值。 */
+Px4Lite_Result_t App_CopyGnssSatellitePage(uint8_t page, App_GnssSatellitePage_t *out, uint32_t now_ms);
+
+typedef Px4Lite_GnssDiagnostics_t App_GnssDiagnostics_t; /**< 本机 GNSS 链路诊断；不受位置有效位门控。 */
+/**
+ * @brief 复制本机 GNSS 服务及收发事实，未收定位数据时仍可用。
+ * @param[out] out 输出副本，不能为 NULL。
+ * @param[in] now_ms 当前真实毫秒，用于检查 sensor 服务时效。
+ * @return 无副本返回 NOT_READY，超过 1500 ms 返回 STALE 并清 available，保留历史计数。
+ * @note 不修改捕获会话、不发送命令；实时传输读取不能刷新 measured_ms。
+ *       复制期间sensor抢占产生较新副本时，可用复制后的本平台时刻复核年龄。
+ */
+Px4Lite_Result_t App_CopyGnssDiagnostics(App_GnssDiagnostics_t *out, uint32_t now_ms);
 
 /**
  * @brief 应用层显示状态灯语义。
@@ -202,37 +228,38 @@ typedef struct {
 } App_AlarmSnapshot_t;
 
 #define APP_ENV_VALID_PRESSURE_TEMPERATURE (1UL << 0) /**< 气压和温度有效。 */
-#define APP_ENV_VALID_VOLTAGE1 (1UL << 1) /**< 主电池电压有效。 */
-#define APP_ENV_VALID_VOLTAGE2 (1UL << 2) /**< 第二电池电压有效。 */
-#define APP_ENV_VALID_CURRENT1 (1UL << 3) /**< 主电池电流有效。 */
-#define APP_ENV_VALID_PERCENT1 (1UL << 4) /**< 主电池电量百分比有效。 */
-#define APP_ENV_VALID_CURRENT2 (1UL << 5) /**< 第二电池电流有效。 */
-#define APP_ENV_VALID_PERCENT2 (1UL << 6) /**< 第二电池电量百分比有效。 */
+#define APP_ENV_VALID_VOLTAGE1 (1UL << 1) /**< 采样组1电压有效；禁用组不置位。 */
+#define APP_ENV_VALID_VOLTAGE2 (1UL << 2) /**< 采样组2总输入电压有效。 */
+#define APP_ENV_VALID_CURRENT1 (1UL << 3) /**< 采样组1电流有效；有效零电流也置位。 */
+#define APP_ENV_VALID_PERCENT1 (1UL << 4) /**< 旧电压模型估算的预留有效位；通用输入不置位。 */
+#define APP_ENV_VALID_CURRENT2 (1UL << 5) /**< 采样组2总输入电流有效；有效零电流也置位。 */
+#define APP_ENV_VALID_PERCENT2 (1UL << 6) /**< 第二组旧电压模型估算的预留有效位；通用输入不置位。 */
 #define APP_ENV_VALID_HUMIDITY (1UL << 7) /**< 相对湿度有效。 */
 #define APP_ENV_VALID_ENVIRONMENT (APP_ENV_VALID_PRESSURE_TEMPERATURE | APP_ENV_VALID_HUMIDITY) /**< 环境来源字段组合。 */
 #define APP_ENV_VALID_BATTERY1 (APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_CURRENT1 | APP_ENV_VALID_PERCENT1) /**< 主电池来源字段组合。 */
 #define APP_ENV_VALID_BATTERY2 (APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_CURRENT2 | APP_ENV_VALID_PERCENT2) /**< 第二电池来源字段组合。 */
 
 /**
- * @brief 应用层环境和电源快照；各来源分别报告有效性。
+ * @brief 应用层环境和输入电源快照；各来源分别报告有效性。
+ * @details 字段编号保持采样组身份，禁用组仅保留无效字段；不复制其他组或识别供电源类型。
  */
 typedef struct {
   Px4Lite_TopicHeader_t header; /**< 快照头，包含环境数据发布时间。 */
   uint32_t valid_mask;          /**< 新鲜字段位，使用 APP_ENV_VALID_*；未置位字段清零。 */
   uint32_t environment_measurement_ms; /**< 环境源测量时间，ms。 */
-  uint32_t power1_measurement_ms; /**< 主控电源源测量时间，ms。 */
-  uint32_t power2_measurement_ms; /**< 动力电源源测量时间，ms。 */
+  uint32_t power1_measurement_ms; /**< 采样组1源测量时间，ms；禁用时为0。 */
+  uint32_t power2_measurement_ms; /**< 采样组2总输入源测量时间，ms。 */
   float pressure_pa;            /**< 气压，单位：Pa。 */
   float temperature_c;          /**< 温度，单位：摄氏度。 */
   float relative_humidity_pct;  /**< 相对湿度，单位：%。 */
-  uint32_t voltage_mv;          /**< 电池或输入电压，单位：mV。 */
-  uint32_t voltage2_mv;         /**< 第二电池或外设独立供电电压，单位：mV。 */
-  int32_t current_ma;           /**< 电池 1 电流，单位：mA；未接入或采样失败时为 0。 */
-  int32_t current2_ma;          /**< 电池 2 电流，单位：mA；未接入或采样失败时为 0。 */
-  uint8_t battery_percent;      /**< 电量百分比，范围：0 到 100。 */
-  uint8_t battery2_percent;     /**< 第二电池电量百分比，范围：0 到 100。 */
-  uint8_t low_voltage;          /**< 低电压标志，1 表示低电压。 */
-  uint8_t low_voltage2;         /**< 第二电池低电压标志，1 表示低电压。 */
+  uint32_t voltage_mv;          /**< 采样组1输入电压，单位：mV；有效性以位图为准。 */
+  uint32_t voltage2_mv;         /**< 采样组2总输入电压，单位：mV；不标识电源类型。 */
+  int32_t current_ma;           /**< 采样组1电流，单位：mA；无效值0不等于有效零电流。 */
+  int32_t current2_ma;          /**< 采样组2总输入电流，单位：mA；独立有效位识别有效零值。 */
+  uint8_t battery_percent;      /**< 旧电压模型估算百分比，0到100；当前通用输入不声明有效。 */
+  uint8_t battery2_percent;     /**< 第二组旧电压模型估算百分比，0到100；当前不声明有效。 */
+  uint8_t low_voltage;          /**< 既有输入低压阈值标志，1表示低压，不识别供电源类型。 */
+  uint8_t low_voltage2;         /**< 第二组既有输入低压阈值标志，1表示低压。 */
 } App_EnvironmentSnapshot_t;
 
 /**
@@ -473,6 +500,15 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
 Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms);
 
 /**
+ * @brief 本机人工上锁/解锁，1 上锁并撤收、0 解锁后进行 ESC 最小脉宽预备。
+ * @note 不提交非零油门；远端显示模式拒绝，本机底层失败仍保持上锁。
+ */
+Px4Lite_Result_t App_SetMotorLocked(uint8_t locked);
+
+/** @brief 查询本机人工锁，OK 时 *locked 为 0/1；远端显示或 Control 未初始化时 NOT_READY。 */
+Px4Lite_Result_t App_GetMotorLocked(uint8_t *locked);
+
+/**
  * @brief 设置单路电机目标油门百分比。
  *
  * @param[in] motor_index 电机编号，范围 0 到 `PX4LITE_MOTOR_COUNT - 1`。
@@ -504,13 +540,13 @@ Px4Lite_Result_t App_EmergencyStopMotors(void);
 
 
 /**
- * @brief Report whether the motor-battery power inhibit is currently latched.
+ * @brief 只读查询电压门禁闭锁；门禁旁路时为 0，不代表人工锁已解除。
  *
  * @return 1 when output is inhibited, 0 when allowed.
  */
 uint8_t App_IsMotorPowerInhibited(void);
 
-/** @brief 只读查询本机有效新鲜采样的低压事实，缺帧/过期不冒称低压。 */
+/** @brief 查询启用电压门禁时的低压事实；旁路时为 0，供电测量仍从环境快照读取。 */
 uint8_t App_IsMotorPowerLowVoltage(void);
 
 /**

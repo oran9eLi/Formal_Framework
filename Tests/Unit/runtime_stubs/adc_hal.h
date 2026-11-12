@@ -35,17 +35,19 @@ typedef unsigned GPIO_TypeDef;
 #define __HAL_RCC_GPIOC_CLK_ENABLE() ((void)0)
 #define __NOP() ((void)0)
 static unsigned drive_calls, write_calls, adc_calls, pin_mode = GPIO_MODE_ANALOG;
+static unsigned adc_last_channel, adc_channel_configs[32];
 static HAL_StatusTypeDef adc_result = HAL_OK;
 static HAL_StatusTypeDef HAL_ADC_Init(ADC_HandleTypeDef *h) { (void)h; return HAL_OK; }
 static HAL_StatusTypeDef HAL_ADC_DeInit(ADC_HandleTypeDef *h) { (void)h; return HAL_OK; }
 static HAL_StatusTypeDef HAL_ADC_ConfigChannel(ADC_HandleTypeDef *h, ADC_ChannelConfTypeDef *c)
-{ (void)h; (void)c; return HAL_OK; }
+{ (void)h; adc_last_channel = c->Channel; if (c->Channel < 32U) { ++adc_channel_configs[c->Channel]; } return HAL_OK; }
 static HAL_StatusTypeDef HAL_ADC_Start(ADC_HandleTypeDef *h)
 { (void)h; ++adc_calls; assert(pin_mode == GPIO_MODE_ANALOG); return adc_result; }
 static HAL_StatusTypeDef HAL_ADC_Stop(ADC_HandleTypeDef *h) { (void)h; return HAL_OK; }
 static HAL_StatusTypeDef HAL_ADC_PollForConversion(ADC_HandleTypeDef *h, uint32_t ms)
 { (void)h; (void)ms; return HAL_OK; }
-static uint32_t HAL_ADC_GetValue(ADC_HandleTypeDef *h) { (void)h; return 1000U; }
+static uint32_t HAL_ADC_GetValue(ADC_HandleTypeDef *h)
+{ (void)h; return (adc_last_channel == 17U) ? 1500U : 1000U; }
 static inline void HAL_GPIO_Init(GPIO_TypeDef *p, GPIO_InitTypeDef *g)
 { (void)p; pin_mode = g->Mode; if (pin_mode == GPIO_MODE_OUTPUT_PP) { ++drive_calls; } }
 static inline void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, unsigned value)

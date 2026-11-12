@@ -1,0 +1,48 @@
+{
+  "scope": "Deterministic host fixture, real GNSS uplink codec + MAVLink TUNNEL encoding/parser; no serial hardware",
+  "test_source": "Tests/Unit/test_gnss_unified_uplink.c",
+  "sysid": 42,
+  "compid": 193,
+  "bundle_id": 1,
+  "snapshot_uptime_ms": 1000,
+  "source_vector": "Sources(1000) in test: mixed per-domain sources 1/3/1/2/1, mapped fix4, dimension3, rawstatus4, used12, lat=-123456789, lon=987654321, alt=-1234, speed456, course12345, UTC20261106/45296; DOP101..107 with solution_mask127; HDOP NMEA GSA no iTOW; other DOP UBX iTOW123456; counts0/14/0/8; independent system UTC sourceRTC",
+  "age_semantics": "Bodies use encode_uptime_ms; header snapshot remains1000. MAVLink2 may legally trim zero tail bytes; decode to fixed declared TUNNEL inner length.",
+  "frames": [
+    {
+      "frame_index": 0,
+      "wire_hex": "FD450000002AC181010011800000400101000101000000E80300003F00591404030C04EB32A4F8B168DE3A2EFBFFFFC801000039306900F2283501F0B0000000000000000000000000000000003F047B43",
+      "wire_length_bytes": 81,
+      "encode_uptime_ms": 1000
+    },
+    {
+      "frame_index": 1,
+      "wire_hex": "FD440000012AC181010012800000400102000201000000E80300000400000000060B0065000A0040E2010001060B0066000A0040E2010002060B0067000A0040E2010003060B0068000A0040E201E322",
+      "wire_length_bytes": 80,
+      "encode_uptime_ms": 1010
+    },
+    {
+      "frame_index": 2,
+      "wire_hex": "FD380000022AC181010012800000400102010201000000E80300000300000004040300690014000000000005060B006A00140040E2010006060B006B00140040E20196D3",
+      "wire_length_bytes": 68,
+      "encode_uptime_ms": 1020
+    },
+    {
+      "frame_index": 3,
+      "wire_hex": "FD240000032AC181010013800000200103000101000000E80300000F0F0000000E0008050504041E001E001E001EA64C",
+      "wire_length_bytes": 48,
+      "encode_uptime_ms": 1030
+    },
+    {
+      "frame_index": 4,
+      "wire_hex": "FD420000042AC181010014800000400104000201000000E80300007F0203030301520D00C2010039300000070000005900000002000000030000000400000005000000060000002800000028FC27",
+      "wire_length_bytes": 78,
+      "encode_uptime_ms": 1040
+    },
+    {
+      "frame_index": 5,
+      "wire_hex": "FD430000052AC181010014800000400104010201000000E8030000010101002A0000000A0000000300000001000000020000000B0000000C0000000D0000003D300000B6020000F2283501F0B0275E",
+      "wire_length_bytes": 79,
+      "encode_uptime_ms": 1050
+    }
+  ]
+}

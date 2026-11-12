@@ -143,6 +143,8 @@ typedef enum {
   DISPLAY_HMI_VAR_ATTITUDE_REASON,       /* Px4Lite_AttitudeReason_t */
   DISPLAY_HMI_VAR_ATTITUDE_PROGRESS,     /* 校准进度，0到100 */
   DISPLAY_HMI_VAR_ATTITUDE_REFERENCE,    /* 本机显示相对基准是否启用 */
+  DISPLAY_HMI_VAR_INPUT_POWER_MW,       /**< 已启用总输入的功率，单位 mW；仅电压/电流均有效时可用。 */
+  DISPLAY_HMI_VAR_MOTOR_LOCKED,         /**< 本机人工锁实际状态，0解锁、1上锁；未知时该变量无效。 */
   DISPLAY_HMI_VAR_COUNT                  /* HMI 变量数量 */
 } Display_HmiVariableId_t;
 
@@ -328,6 +330,13 @@ Display_Result_t Display_RequestMotorThrottle(Display_HmiVariableId_t id, uint16
 Display_Result_t Display_RequestMotorAutoTakeoff(void);
 
 Display_Result_t Display_RequestMotorEmergencyStop(void);
+
+/**
+ * @brief 请求本机人工上锁或解锁，动作结果与锁状态均以App控制接口为准。
+ * @param[in] locked 1上锁并撤收、0仅允许后续控制；解锁不提交油门。
+ * @return DISPLAY_OK表示请求执行成功，NOT_READY表示本机控制未就绪，ERROR表示拒绝或执行失败。
+ */
+Display_Result_t Display_RequestMotorLocked(uint8_t locked);
 
 Display_Result_t Display_RequestMotorAutoLanding(void);
 

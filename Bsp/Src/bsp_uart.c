@@ -3,7 +3,7 @@
  * @brief 实现板级 UART 原始发送接口（调试 USART1 + 树莓派 MAVLink USART6）。
  *
  * @details
- * 本文件只封装串口的 HAL 初始化和阻塞发送，不做日志格式化、不做业务判断。
+ * 本文件封装串口 HAL 初始化、原始收发及配置/接收计数快照，不做协议解析、日志格式化或业务判断。
  * 调试输出必须通过 DebugConsole 互斥后调用；树莓派 UART 与调试口物理分离，
  * 两个句柄各自独立，互不影响。
  */
@@ -12,6 +12,7 @@
 
 #include "bsp_config.h"
 #include "bsp_critical.h"
+#include "bsp_time.h"
 #include "stm32f4xx_hal.h"
 
 static UART_HandleTypeDef huart1;
@@ -22,7 +23,11 @@ static volatile uint16_t s_rpi_rx_head;
 static volatile uint16_t s_rpi_rx_tail;
 static volatile uint16_t s_rpi_rx_count;
 static volatile uint32_t s_rpi_rx_drop_count;
-static volatile uint32_t s_rpi_rx_error_count;
+static volatile uint32_t s_rpi_rx_error_count; /**< 含硬件错误标志的 IRQ 次数。 */
+static volatile uint32_t s_rpi_rx_byte_count; /**< RX 交付字节数，包含环满舍弃。 */
+static volatile uint32_t s_rpi_rx_rearm_failure_count; /**< 接收重新挂接失败次数。 */
+static volatile uint32_t s_rpi_last_rx_ms; /**< ISR 最近接收时间，单位 ms。 */
+static volatile uint8_t s_rpi_rx_seen; /**< 独立标志避免零时间与计数回绕歧义。 */
 static volatile uint8_t s_rpi_initialized;
 static volatile uint8_t s_rpi_reconfiguring;
 static uint8_t s_rpi_rx_byte;
@@ -96,6 +101,7 @@ void BSP_UART_GetDebugInfo(BSP_UART_DebugInfo_t *out)
 }
 
 #if (BSP_ENABLE_RPI_UART == 1U)
+/** @brief 清空接收环；仅端口完整初始化复位累计计数，切速率/回滚保留累计事实。 */
 static void BSP_RpiUART_ResetRxState(uint8_t reset_counters)
 {
   uint32_t primask;
@@ -107,6 +113,10 @@ static void BSP_RpiUART_ResetRxState(uint8_t reset_counters)
   if (reset_counters != 0U) {
     s_rpi_rx_drop_count  = 0U;
     s_rpi_rx_error_count = 0U;
+    s_rpi_rx_byte_count = 0U;
+    s_rpi_rx_rearm_failure_count = 0U;
+    s_rpi_last_rx_ms = 0U;
+    s_rpi_rx_seen = 0U;
   }
   s_rpi_rx_byte        = 0U;
   BSP_Critical_Exit(primask);
@@ -138,8 +148,12 @@ static HAL_StatusTypeDef BSP_RpiUART_Start(uint32_t baud_bps)
   return status;
 }
 
+/** @brief ISR 仅记录字节/时间并入环；环满也保留收到字节的事实。 */
 static void BSP_RpiUART_PushRxByteFromIsr(uint8_t byte)
 {
+  s_rpi_rx_byte_count++;
+  s_rpi_last_rx_ms = BSP_Time_GetTickMs();
+  s_rpi_rx_seen = 1U;
   if (s_rpi_rx_count >= BSP_RPI_RX_BUF_SIZE) {
     s_rpi_rx_drop_count++;
     return;
@@ -182,6 +196,28 @@ BSP_Status_t BSP_RpiUART_Send(const uint8_t *data, uint16_t length, uint32_t tim
   if ((data == 0) || (length == 0U)) { return BSP_STATUS_ERROR; }
   if ((s_rpi_initialized == 0U) || (s_rpi_reconfiguring != 0U)) { return BSP_STATUS_BUSY; }
   return BSP_UART_MapHalStatus(HAL_UART_Transmit(&huart6, (uint8_t *)data, length, timeout_ms));
+}
+
+/** @brief 在保存/恢复 PRIMASK 的短临界区内复制配置和 ISR 计数，不消费 RX 环。 */
+void BSP_RpiUART_CopyDiagnostics(BSP_RpiUART_Diagnostics_t *out)
+{
+  uint32_t primask;
+
+  if (out == 0) { return; }
+  primask = BSP_Critical_Enter();
+  out->baud_rate = huart6.Init.BaudRate;
+  out->word_length = huart6.Init.WordLength;
+  out->stop_bits = huart6.Init.StopBits;
+  out->parity = huart6.Init.Parity;
+  out->hw_flow_ctl = huart6.Init.HwFlowCtl;
+  out->rx_byte_count = s_rpi_rx_byte_count;
+  out->rx_uart_error_count = s_rpi_rx_error_count;
+  out->rx_drop_count = s_rpi_rx_drop_count;
+  out->rx_rearm_failure_count = s_rpi_rx_rearm_failure_count;
+  out->last_rx_ms = s_rpi_last_rx_ms;
+  out->config_valid = (uint8_t)(s_rpi_initialized != 0U && s_rpi_reconfiguring == 0U);
+  out->rx_seen = s_rpi_rx_seen;
+  BSP_Critical_Exit(primask);
 }
 
 /**
@@ -280,21 +316,23 @@ void BSP_RpiUART_IrqHandler(void)
   HAL_UART_IRQHandler(&huart6);
 }
 
+/** @brief USART6 ISR 接收完成：记录收到字节/时间、尝试入环并按原路径重新挂接接收。 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if ((huart != 0) && (huart->Instance == BSP_RPI_UART) &&
       (s_rpi_initialized != 0U) && (s_rpi_reconfiguring == 0U)) {
     BSP_RpiUART_PushRxByteFromIsr(s_rpi_rx_byte);
-    if (HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U) != HAL_OK) { s_rpi_rx_error_count++; }
+    if (HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U) != HAL_OK) { s_rpi_rx_rearm_failure_count++; }
   }
 }
 
+/** @brief USART6 ISR 错误回调：保留原恢复动作，仅另记重新挂接失败，不重复累计硬件错误。 */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   if ((huart != 0) && (huart->Instance == BSP_RPI_UART) &&
       (s_rpi_initialized != 0U) && (s_rpi_reconfiguring == 0U)) {
-    s_rpi_rx_error_count++;
-    if (HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U) != HAL_OK) { s_rpi_rx_error_count++; }
+    /* 硬件错误已在 IRQ 入口计数，此处只记录重新挂接失败，避免同次错误重复统计。 */
+    if (HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U) != HAL_OK) { s_rpi_rx_rearm_failure_count++; }
   }
 }
 #endif

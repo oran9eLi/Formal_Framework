@@ -1,0 +1,26 @@
+{
+  "archive": "D:\\1\\OneDrive\\Desktop\\Formal_Framework\\Release\\Archive\\2026-11-10_bmi088-dual-bus",
+  "input_count": 1039,
+  "inputs_match_current_and_zip": true,
+  "production_changes": 15,
+  "host_groups": 35,
+  "keil_configurations": 3,
+  "hex_files": {
+    "bmi088_i2c": {
+      "name": "cns-f407-bmi088-i2c-20261110.hex",
+      "sha256": "b9a839868a42470709f752906bf48a5210967613a1a5bf4f57b3b51b33211b09"
+    },
+    "bmi088_spi_debug": {
+      "name": "cns-f407-bmi088-spi-debug-20261110.hex",
+      "sha256": "347d532bffff8bd0f275adc4c64dd5512ed7a16fb1dbdc7d801a3c474b620e19"
+    },
+    "mpu6050": {
+      "name": "cns-f407-mpu6050-compatible-20261110.hex",
+      "sha256": "6a090bb307c8bccb9625bbda1026d7f143c20852ab85a7e51c9279099fe08baa"
+    }
+  },
+  "default_main_sram_used": 124392,
+  "default_main_sram_free": 6680,
+  "default_flash_load_bytes": 479044,
+  "hardware_status": "not_wired_not_tested"
+}

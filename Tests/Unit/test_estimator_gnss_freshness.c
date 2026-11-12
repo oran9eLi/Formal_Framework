@@ -3,8 +3,12 @@
  */
 #include <assert.h>
 #include <stdio.h>
+/* 主机夹具补齐任务类型和真实日志实现，不模拟或弱化导航过期断言。 */
+typedef int BaseType_t;
+typedef void *TaskHandle_t;
 #include "../../Framework/Src/px4lite_modules.c"
 #include "../../Framework/Src/px4lite_attitude.c"
+#include "../../Framework/Src/px4lite_local_msglog.c"
 static Px4Lite_SensorGnss_t gnss_input;
 static Px4Lite_SensorImu_t imu_input;
 static Px4Lite_VehicleNavigation_t published;

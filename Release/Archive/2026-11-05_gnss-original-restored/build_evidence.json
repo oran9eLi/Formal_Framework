@@ -1,0 +1,66 @@
+{
+  "date": "2026-11-05",
+  "candidate": "Release/Archive/2026-11-05_gnss-original-restored",
+  "hex": "cns-f407-gnss-original-restored-20261105.hex",
+  "hex_sha256": "3cfd631440c51b03b2e1a5727a546c0c9e3e20a28b6adc66ecf2481d8e4a2ddc",
+  "matches_pre_p25_hex": true,
+  "production_inputs": 1027,
+  "production_matches_pre_p25": true,
+  "keil": {
+    "ended_utc": "2026-11-05T10:51:09.0892473Z",
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "sha256": "3cfd631440c51b03b2e1a5727a546c0c9e3e20a28b6adc66ecf2481d8e4a2ddc",
+        "bytes": 1272933
+      },
+      {
+        "name": "formal_framework.axf",
+        "sha256": "384a6bbc25280c8a84a08a7b592f40a8e3e59da9c30fcba757071b54401b780a",
+        "bytes": 5630028
+      },
+      {
+        "name": "formal_framework.map",
+        "sha256": "256d179b00a5f69624538062cba7d32146c06018da86d43bd652933e2adc642f",
+        "bytes": 2289002
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "sha256": "d3eaaf3ae7094f026f81dab44c590804099c71de6870db9f2e6bec652fffa844",
+        "bytes": 7822
+      }
+    ],
+    "variant": "original",
+    "started_utc": "2026-11-05T10:50:50.8130848Z",
+    "inputs_unchanged": true,
+    "passed": true,
+    "errors": 0,
+    "input_count": 1027,
+    "baseline": "2026-11-04_motor-manual-lock",
+    "exit_code": 0,
+    "warnings": 0
+  },
+  "program_size": {
+    "code": 341400,
+    "ro": 111020,
+    "rw": 1956,
+    "zi": 110036
+  },
+  "main_sram_static_bytes": 111992,
+  "main_sram_free_bytes": 19080,
+  "flash_loaded_bytes": 452544,
+  "hex_records": 28293,
+  "hex_min_address": "0x8000000",
+  "hex_end_exclusive": "0x806e7c0",
+  "hex_checksums_valid": true,
+  "hex_no_overlap": true,
+  "sector11_untouched": true,
+  "gnss_dma_map_lines": [
+    "bsp_gnss.o(i.BSP_GNSS_GetRxData) refers to bsp_gnss.o(.bss) for s_rx_buf",
+    "s_rx_buf                                 0x200061a8   Data         512  bsp_gnss.o(.bss)"
+  ],
+  "host_source_files": 60,
+  "tests": "18 main groups passed; one additional unchanged UART6 fixture failed to link due to missing PlatformGetMs stub",
+  "flashed": false,
+  "latest_changed": false
+}

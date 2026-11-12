@@ -59,10 +59,16 @@ static const AppLog_Module_t s_modules[APP_MSGLOG_MODULES] = {
 /** @brief 启动检查仅覆盖这五项；禁用项不计入通过集合。 */
 static const uint8_t s_checks[5] = {0U, 1U, 2U, 4U, 6U};
 static AppLog_Debounce_t s_module_db[APP_MSGLOG_MODULES];
-static AppLog_Debounce_t s_check_db, s_fix_db, s_motor_db, s_main_db, s_alarm_db;
+static AppLog_Debounce_t s_check_db, s_fix_db, s_alarm_db;
 static uint8_t s_initialized;
+#if PX4LITE_ENABLE_BATTERY2
+static AppLog_Debounce_t s_motor_db;
 static uint8_t s_motor_band = APP_MSGLOG_BAND_UNKNOWN;
+#endif
+#if PX4LITE_ENABLE_BATTERY1
+static AppLog_Debounce_t s_main_db;
 static uint8_t s_main_band = APP_MSGLOG_BAND_UNKNOWN;
+#endif
 static uint32_t s_check_signature;
 static uint8_t s_check_signature_valid;
 static uint32_t s_rid_errors, s_rid_error_ms;
@@ -111,7 +117,8 @@ static void AppLog_Observe(AppLog_Debounce_t *db, uint16_t message, uint16_t nor
   db->committed_key = key;
   db->committed_source = source;
 }
-/** @brief 仅输入有效电压时推进带 200 mV 滞回的档位；首次按实际电压分类。 */
+#if PX4LITE_ENABLE_BATTERY1 || PX4LITE_ENABLE_BATTERY2
+/** @brief 仅输入有效电压时推进带 200 mV 滞回的电压档位，不识别供电源类型。 */
 static uint8_t AppLog_Band(uint8_t current, uint32_t mv, const uint32_t *limits, uint8_t count)
 {
   uint8_t plain = 0U;
@@ -121,29 +128,38 @@ static uint8_t AppLog_Band(uint8_t current, uint32_t mv, const uint32_t *limits,
   if ((plain < current) && (mv + 200U < limits[current - 1U])) { return plain; }
   return current;
 }
-/** @brief 分别观察主电与动力电压；失效不沿用旧电压，不推断电机机械状态。 */
+#endif
+/** @brief 只观察已启用的输入电压；禁用组不生成缺测事件，不由电压推断电源类型。 */
 static void AppLog_ObservePower(uint32_t now_ms)
 {
+#if PX4LITE_ENABLE_BATTERY1 || PX4LITE_ENABLE_BATTERY2
+  App_EnvironmentSnapshot_t env;
+  uint8_t ready = (uint8_t)(App_CopyEnvironment(&env, now_ms) == PX4LITE_OK);
+#if PX4LITE_ENABLE_BATTERY2
   static const uint32_t motor_limits[4] = {5000U, 9000U, 9900U, 10500U};
-  static const uint32_t main_limits[2] = {5000U, 10500U};
   static const uint16_t motor_messages[5] = {PX4LITE_LOGMSG_MOTOR_DISCONNECT, PX4LITE_LOGMSG_MOTOR_DEAD,
     PX4LITE_LOGMSG_MOTOR_LOWPOWER, PX4LITE_LOGMSG_MOTOR_CHARGE, PX4LITE_LOGMSG_MOTOR_OK};
-  static const uint16_t main_messages[3] = {PX4LITE_LOGMSG_MAIN_ABSENT, PX4LITE_LOGMSG_MAIN_CHARGE, PX4LITE_LOGMSG_MAIN_NORMAL};
-  App_EnvironmentSnapshot_t env;
-  uint16_t motor = PX4LITE_LOGMSG_MOTOR_UNAVAILABLE, main = PX4LITE_LOGMSG_MAIN_UNAVAILABLE;
-  if (App_CopyEnvironment(&env, now_ms) == PX4LITE_OK) {
-    if ((env.valid_mask & APP_ENV_VALID_VOLTAGE2) != 0U) {
-      if (env.voltage2_mv > 13500U) { s_motor_band = APP_MSGLOG_BAND_UNKNOWN; motor = PX4LITE_LOGMSG_MOTOR_DISCONNECT; }
-      else { s_motor_band = AppLog_Band(s_motor_band, env.voltage2_mv, motor_limits, 4U); motor = motor_messages[s_motor_band]; }
-    } else { s_motor_band = APP_MSGLOG_BAND_UNKNOWN; }
-    if ((env.valid_mask & APP_ENV_VALID_VOLTAGE1) != 0U) {
-      s_main_band = AppLog_Band(s_main_band, env.voltage_mv, main_limits, 2U); main = main_messages[s_main_band];
-    } else { s_main_band = APP_MSGLOG_BAND_UNKNOWN; }
-  } else { s_motor_band = APP_MSGLOG_BAND_UNKNOWN; s_main_band = APP_MSGLOG_BAND_UNKNOWN; }
+  uint16_t motor = PX4LITE_LOGMSG_MOTOR_UNAVAILABLE;
+  if (ready && ((env.valid_mask & APP_ENV_VALID_VOLTAGE2) != 0U)) {
+    if (env.voltage2_mv > 13500U) { s_motor_band = APP_MSGLOG_BAND_UNKNOWN; motor = PX4LITE_LOGMSG_MOTOR_DISCONNECT; }
+    else { s_motor_band = AppLog_Band(s_motor_band, env.voltage2_mv, motor_limits, 4U); motor = motor_messages[s_motor_band]; }
+  } else { s_motor_band = APP_MSGLOG_BAND_UNKNOWN; }
   AppLog_Observe(&s_motor_db, motor, PX4LITE_LOGMSG_MOTOR_OK, PX4LITE_LOGMSG_MOTOR_RESTORED,
                  0U, PX4LITE_MODULE_BATTERY, Px4Lite_LogMessageSeverity(motor), now_ms);
+#endif
+#if PX4LITE_ENABLE_BATTERY1
+  static const uint32_t main_limits[2] = {5000U, 10500U};
+  static const uint16_t main_messages[3] = {PX4LITE_LOGMSG_MAIN_ABSENT, PX4LITE_LOGMSG_MAIN_CHARGE, PX4LITE_LOGMSG_MAIN_NORMAL};
+  uint16_t main = PX4LITE_LOGMSG_MAIN_UNAVAILABLE;
+  if (ready && ((env.valid_mask & APP_ENV_VALID_VOLTAGE1) != 0U)) {
+    s_main_band = AppLog_Band(s_main_band, env.voltage_mv, main_limits, 2U); main = main_messages[s_main_band];
+  } else { s_main_band = APP_MSGLOG_BAND_UNKNOWN; }
   AppLog_Observe(&s_main_db, main, PX4LITE_LOGMSG_MAIN_NORMAL, PX4LITE_LOGMSG_MAIN_RESTORED,
                  0U, PX4LITE_MODULE_BATTERY, Px4Lite_LogMessageSeverity(main), now_ms);
+#endif
+#else
+  (void)now_ms;
+#endif
 }
 /**
  * @brief 观察 RID 发送提交错误；成功提交不代表 ESP 已接收。
@@ -226,7 +242,13 @@ void App_MessageLogInit(uint32_t now_ms)
   if (s_initialized != 0U) { return; }
   for (i = 0U; i < APP_MSGLOG_MODULES; ++i) { AppLog_InitDebounce(&s_module_db[i]); }
   AppLog_InitDebounce(&s_check_db); AppLog_InitDebounce(&s_fix_db);
-  AppLog_InitDebounce(&s_motor_db); AppLog_InitDebounce(&s_main_db); AppLog_InitDebounce(&s_alarm_db);
+#if PX4LITE_ENABLE_BATTERY2
+  AppLog_InitDebounce(&s_motor_db);
+#endif
+#if PX4LITE_ENABLE_BATTERY1
+  AppLog_InitDebounce(&s_main_db);
+#endif
+  AppLog_InitDebounce(&s_alarm_db);
   s_check_db.committed = PX4LITE_LOGMSG_CHECKING;
   s_check_db.committed_key = (uint32_t)PX4LITE_LOGMSG_CHECKING << 18U;
   s_initialized = 1U;

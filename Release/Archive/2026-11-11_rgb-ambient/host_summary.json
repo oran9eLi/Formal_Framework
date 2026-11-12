@@ -1,0 +1,42 @@
+{
+  "groups": 4,
+  "passed": 4,
+  "failed": 0,
+  "real_hardware_tested": false,
+  "initial_attempt": {
+    "groups": 4,
+    "passed": 3,
+    "failed": 1,
+    "reason": "Test fixture skipped final silent slot and mistook ambient phase entry for accepted-send timestamp; fixture corrected without production changes."
+  },
+  "cases": [
+    {
+      "group": "rgb_platform",
+      "passed": true,
+      "run_log": "build/20261111_rgb_ambient/host/final/rgb_platform.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "9b3f880022bb086ed71d7d24d763c0df16008dc2e857e305108400eb66ee02e2"
+    },
+    {
+      "group": "startup_rgb",
+      "passed": true,
+      "run_log": "build/20261111_rgb_ambient/host/final/startup_rgb.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "4f638912dd43008d1881064bd8b85b2f3c050831beb809438667a7b60f417201"
+    },
+    {
+      "group": "startup_rgb_off",
+      "passed": true,
+      "run_log": "build/20261111_rgb_ambient/host/final/startup_rgb_off.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "4a9433cf1ee416a6aae9642f2a0e0a99e96ed29b6d0903612355693d95220cd7"
+    },
+    {
+      "group": "startup_tone_off",
+      "passed": true,
+      "run_log": "build/20261111_rgb_ambient/host/final/startup_tone_off.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "da499ba18e4300053e157f5f46cad6d57ab60b5a5a63dcc54230e36ea1329785"
+    }
+  ]
+}

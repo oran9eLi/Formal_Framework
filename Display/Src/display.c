@@ -77,7 +77,7 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_LONGITUDE, DISPLAY_HMI_PAGE_DATA, 0x1203U, DISPLAY_HMI_TYPE_I32, DISPLAY_HMI_ACCESS_RO, 1000U, 390U, 246U, 118U, 22U, "longitude", "\xB0", "CNS_State.gnss"},
     {DISPLAY_HMI_VAR_ALTITUDE, DISPLAY_HMI_PAGE_DATA, 0x1205U, DISPLAY_HMI_TYPE_I32, DISPLAY_HMI_ACCESS_RO, 1000U, 390U, 288U, 118U, 22U, "altitude", "m", "CNS_State.gnss"},
     {DISPLAY_HMI_VAR_GNSS_SPEED, DISPLAY_HMI_PAGE_DATA, 0x1207U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "gnss_speed", "m/s", "CNS_State.gnss"},
-    {DISPLAY_HMI_VAR_GNSS_TIME, DISPLAY_HMI_PAGE_DATA, 0x1208U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "gnss_time", "UTC+8", "HMI/Clock"},
+    {DISPLAY_HMI_VAR_GNSS_TIME, DISPLAY_HMI_PAGE_DATA, 0x1208U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "gnss_time", "UTC", "GNSS"},
     {DISPLAY_HMI_VAR_ROLL, DISPLAY_HMI_PAGE_DATA, 0x1300U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "roll", "\xB0", "CNS_State.sensor"},
     {DISPLAY_HMI_VAR_PITCH, DISPLAY_HMI_PAGE_DATA, 0x1301U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "pitch", "\xB0", "CNS_State.sensor"},
     {DISPLAY_HMI_VAR_YAW, DISPLAY_HMI_PAGE_DATA, 0x1305U, DISPLAY_HMI_TYPE_I16, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "yaw", "\xB0", "CNS_State.navigation"},
@@ -170,6 +170,8 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_MOTOR_TARGET_4, DISPLAY_HMI_PAGE_MOTOR, 0x1613U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_target_4", "%", "App_Control"},
     {DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, DISPLAY_HMI_PAGE_MOTOR, 0x1614U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_control_mode", "-", "App_Control"},
     {DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, DISPLAY_HMI_PAGE_MOTOR, 0x1615U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_operation_state", "-", "App_Control"},
+    {DISPLAY_HMI_VAR_INPUT_POWER_MW, DISPLAY_HMI_PAGE_FLIGHT, 0x1110U, DISPLAY_HMI_TYPE_I32, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "input_power", "mW", "App_Environment"},
+    {DISPLAY_HMI_VAR_MOTOR_LOCKED, DISPLAY_HMI_PAGE_MOTOR, 0x1616U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_locked", "0/1", "App_Control"},
     {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_MOTOR, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 616U, 76U, 176U, 330U, "msg_log_motor", "-", "App_Registry"},
 
     /* 告警页 -- 运行期告警项 */    {DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, DISPLAY_HMI_PAGE_ALARM, 0x1700U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 52U, 72U, 696U, 38U, "alarm_active_mask", "-", "App_Alarm"},
@@ -232,6 +234,9 @@ static uint8_t Display_MotorIndexFromId(Display_HmiVariableId_t id, uint8_t *ind
 
 static void Display_ClearMotorOutputFields(void);
 static void Display_ClearMotorFields(void);
+static void Display_LoadMotorLockState(void);
+static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor);
+static void Display_LoadMotorPulseSnapshot(const App_MotorSnapshot_t *motor);
 
 static const Display_HmiVariableConfig_t *Display_FindMotorSliderByIndex(uint8_t motor_index)
 {
@@ -272,8 +277,9 @@ static Display_Result_t Display_MotorEmergencyStop(void)
   result = App_EmergencyStopMotors();
   if (result == PX4LITE_OK) {
     Display_ClearMotorOutputFields();
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, PX4LITE_MOTOR_OP_STOPPED);
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, PX4LITE_MOTOR_OP_LOCKED);
   }
+  Display_LoadMotorLockState();
 
   return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
 }
@@ -301,6 +307,21 @@ Display_Result_t Display_RequestMotorAutoTakeoff(void)
 Display_Result_t Display_RequestMotorEmergencyStop(void)
 {
   return Display_MotorEmergencyStop();
+}
+
+/** @brief 只通过App提交明确的本机锁动作；成功或失败后均重读实际锁状态，不伪造输出。 */
+Display_Result_t Display_RequestMotorLocked(uint8_t locked)
+{
+  Px4Lite_Result_t result = App_SetMotorLocked(locked);
+  App_MotorSnapshot_t motor;
+  /* Control成功执行后已发布确认的最小输出；只复制该事实，不按请求值推算PWM。 */
+  if ((result == PX4LITE_OK) && (App_CopyMotor(&motor, Px4Lite_PlatformGetMs()) == PX4LITE_OK)) {
+    Display_LoadMotorSnapshot(&motor);
+    Display_LoadMotorPulseSnapshot(&motor);
+  }
+  Display_LoadMotorLockState();
+  if ((result == PX4LITE_NOT_READY) || (result == PX4LITE_BUSY)) { return DISPLAY_NOT_READY; }
+  return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
 }
 
 /** @brief 发起本机缓降；由 Control 记录接受和达到最小输出。 */
@@ -456,7 +477,6 @@ static void Display_LoadMockValues(void)
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LONGITUDE, 1163971280);
   (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_ALTITUDE, 43800);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SPEED, 0U);
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, 93000U);
   (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_ROLL, 12);
   (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_PITCH, 8);
   (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_YAW, 156);
@@ -720,11 +740,9 @@ static uint32_t Display_FloatPaToU32(float pressure_pa)
   return (uint32_t)(pressure_pa + 0.5f);
 }
 
-/** @brief 撤销过期或缺失的显示字段，禁止以有效数值零代替未知。 */
+/** @brief 撤销导航测量；独立GNSS状态与UTC由其各自App有效位维护，不随导航缺失连带清除。 */
 static void Display_ClearNavigationSnapshot(void)
 {
-  Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_FIX);
-  Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_SAT_COUNT);
   Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_HDOP);
   Display_InvalidateValue(DISPLAY_HMI_VAR_LATITUDE);
   Display_InvalidateValue(DISPLAY_HMI_VAR_LONGITUDE);
@@ -811,6 +829,7 @@ static void Display_ClearBatteryFields(void)
   Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE);
   Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT);
   Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT);
+  Display_InvalidateValue(DISPLAY_HMI_VAR_INPUT_POWER_MW);
   /* 复位电压去抖状态，重新接入/上线时按首帧重新播种。 */
   s_disp_main_dv_valid  = 0U;
   s_disp_motor_dv_valid = 0U;
@@ -882,6 +901,15 @@ static void Display_LoadMotorSnapshot(const App_MotorSnapshot_t *motor)
   else { Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE); }
 }
 
+/** @brief 人工锁独立读取Control的实际状态；不能由旧Motor快照、run_state或远端字段推断。 */
+static void Display_LoadMotorLockState(void)
+{
+  uint8_t locked;
+  if ((App_GetMotorLocked(&locked) == PX4LITE_OK) && (locked <= 1U)) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_LOCKED, locked);
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_LOCKED); }
+}
+
 /** @brief 发布姿态操作阶段到显示缓存；远端页面用 255 表示本机操作不可用。 */
 static void Display_LoadAttitudeOperationStatus(Px4Lite_RemoteMode_t display_mode)
 {
@@ -922,19 +950,16 @@ static void Display_LoadMotorPulseSnapshot(const App_MotorSnapshot_t *motor)
 #endif
 }
 
-/** @brief 按 POSITION/ALTITUDE/VELOCITY/ATTITUDE 独立有效位更新导航显示。 */
+/** @brief 各导航子域独立更新；HDOP零表示未知，不能把有效位置扩展成有效精度。 */
 static void Display_LoadNavigationSnapshot(const App_NavigationSnapshot_t *navigation)
 {
   if (navigation == 0) { Display_ClearNavigationSnapshot(); return; }
   if ((navigation->valid_mask & PX4LITE_NAV_VALID_POSITION) != 0U) {
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, navigation->gnss_fix_type);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, navigation->satellites_used);
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, navigation->hdop_x100);
+    if (navigation->hdop_x100 != 0U) { (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_HDOP, navigation->hdop_x100); }
+    else { Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_HDOP); }
     (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LATITUDE, navigation->latitude_e7);
     (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_LONGITUDE, navigation->longitude_e7);
   } else {
-    Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_FIX);
-    Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_SAT_COUNT);
     Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_HDOP);
     Display_InvalidateValue(DISPLAY_HMI_VAR_LATITUDE);
     Display_InvalidateValue(DISPLAY_HMI_VAR_LONGITUDE);
@@ -953,14 +978,11 @@ static void Display_LoadNavigationSnapshot(const App_NavigationSnapshot_t *navig
   } else { Display_ClearAttitudeFields(); }
 }
 
-/*
- * 将统一日期时间快照写入 Display 缓存。
- */
+/** @brief 统一日期时间只更新本地系统钟和日期，不能冒充GNSS原始UTC。 */
 static void Display_LoadDateTimeSnapshot(const App_DateTimeSnapshot_t *date_time)
 {
   if (date_time == 0) { return; }
 
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, date_time->local_time_hhmmss);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_CLOCK_TIME, date_time->local_time_hhmmss);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, date_time->local_date_ymd);
 }
@@ -970,7 +992,8 @@ static void Display_LoadDateTimeSnapshot(const App_DateTimeSnapshot_t *date_time
  *
  * @details
  * 本函数不得读取当前显示模式对应的导航快照，避免切换远端节点时把远端 GNSS 时间
- * 写入顶栏，或因远端模式改用不同兜底源而造成日期时间跳变。
+ * 写入顶栏，或因远端模式改用不同兜底源而造成日期时间跳变；只维护Clock/Date，
+ * 不覆盖独立GPS UTC测量字段。
  */
 static void Display_LoadFallbackDateTime(uint32_t now_ms)
 {
@@ -983,7 +1006,6 @@ static void Display_LoadFallbackDateTime(uint32_t now_ms)
       ((local_navigation.valid_mask & PX4LITE_NAV_VALID_TIME) != 0U) &&
       (local_navigation.gnss_utc_sec < 86400UL)) { navigation = &local_navigation; }
   if (navigation == 0) {
-    Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_TIME);
     Display_InvalidateValue(DISPLAY_HMI_VAR_CLOCK_TIME);
     Display_InvalidateValue(DISPLAY_HMI_VAR_DATE);
     return;
@@ -991,10 +1013,41 @@ static void Display_LoadFallbackDateTime(uint32_t now_ms)
   fallback_time = Display_GnssUtcSecondsToLocalHhmmss(navigation->gnss_utc_sec);
   fallback_date = Display_GnssDateToLocalYmd(navigation->gnss_utc_date, navigation->gnss_utc_sec);
 
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, fallback_time);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_CLOCK_TIME, fallback_time);
   if (fallback_date != 0U) { (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_DATE, fallback_date); }
   else { Display_InvalidateValue(DISPLAY_HMI_VAR_DATE); }
+}
+
+/** @brief 沿既有显示等级映射GGA质量和维度；调用方必须先授权新鲜NAV_STATUS。 */
+static uint16_t Display_GnssStatusFix(const App_GnssDetails_t *gnss)
+{
+  if (gnss->fix_type == 0U || gnss->fix_dimension == 1U) { return 0U; }
+  if (gnss->fix_type == 2U) { return 4U; }
+  if (gnss->fix_dimension == 2U) { return 2U; }
+  if (gnss->fix_dimension == 3U) { return 3U; }
+  return gnss->satellites_used >= 4U ? 3U : 2U;
+}
+
+/**
+ * @brief 本机未冻结时一次读取独立GNSS状态与UTC；不借位置或链路活动授权旧状态。
+ * @details App已分别裁剪NAV_STATUS/TIME时效。无定位和0颗只有NAV_STATUS真实有效才显示；
+ *          GPS时间由utc_sec直接转hhmmss，不加本地时区，不取RTC或系统统一时间。
+ */
+static void Display_LoadLocalGnssSnapshot(uint32_t now_ms)
+{
+  App_GnssDetails_t gnss;
+  Px4Lite_Result_t result = App_CopyGnssDetails(&gnss, now_ms);
+  if (result == PX4LITE_OK && (gnss.valid_mask & PX4LITE_GNSS_VALID_NAV_STATUS)) {
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, Display_GnssStatusFix(&gnss));
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, gnss.satellites_used);
+  } else {
+    Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_FIX);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_SAT_COUNT);
+  }
+  if (result == PX4LITE_OK && (gnss.valid_mask & PX4LITE_GNSS_VALID_TIME) && gnss.utc_sec < 86400U) {
+    uint32_t utc_hhmmss = (gnss.utc_sec / 3600U) * 10000U + ((gnss.utc_sec / 60U) % 60U) * 100U + gnss.utc_sec % 60U;
+    (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_GNSS_TIME, utc_hhmmss);
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_TIME); }
 }
 
 /*
@@ -1014,8 +1067,7 @@ static void Display_LoadSystemSnapshot(const App_SystemSnapshot_t *system)
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, system->warning_fault_mask | system->blocking_fault_mask);
   (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_ALARM_ROW1_CODE, alarm_row);
 
-  /* 自检-定位模块仍反映 GNSS 模块在线态；"定位状态"(GNSS_FIX)改由导航快照的解算 fix 等级
-     驱动(见 Display_LoadNavigationSnapshot)，这里不再用模块态覆盖。 */
+  /* 自检定位模块反映模块在线态；主页面Fix由独立NAV_STATUS事实维护，不能以在线替代定位。 */
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, Display_MapStateValue(system->modules[PX4LITE_MODULE_GNSS].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MPU6050, Display_MapStateValue(system->modules[PX4LITE_MODULE_IMU].state));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, Display_MapStateValue(system->modules[PX4LITE_MODULE_BARO].state));
@@ -1066,27 +1118,27 @@ static uint8_t Display_BatBandHyst(uint8_t cur, uint32_t mv, const uint32_t *t, 
   return cur;
 }
 
-/** @brief 仅对应电压有效时更新电池档位，缺测不解释为断开。 */
+/** @brief 仅对已启用且有效的输入电压更新既有保护档位，不识别供电源类型。 */
 static void Display_UpdateBatteryBands(const App_EnvironmentSnapshot_t *environment)
 {
   static const uint32_t motor_t[4] = {DISPLAY_MOTOR_BAT_CONNECT_MV, DISPLAY_MOTOR_BAT_DEAD_MV, DISPLAY_MOTOR_BAT_RUN_MV, DISPLAY_MOTOR_BAT_OK_MV};
   static const uint32_t main_t[2]  = {DISPLAY_MAIN_BAT_PRESENT_MV, DISPLAY_MAIN_BAT_CHARGE_MV};
 
   if (environment == 0) { return; }
-  if ((environment->valid_mask & APP_ENV_VALID_VOLTAGE2) != 0U) {
+  if (PX4LITE_ENABLE_BATTERY2 && ((environment->valid_mask & APP_ENV_VALID_VOLTAGE2) != 0U)) {
     s_motor_band = Display_BatBandHyst(s_motor_band, environment->voltage2_mv, motor_t, 4U);
   /* 超过在位上限视为悬空/未插，强制断开档：电压电量归 0、电机自检灯红、锁 PWM。 */
   if (environment->voltage2_mv > DISPLAY_MOTOR_BAT_MAX_MV) { s_motor_band = DISPLAY_MOTOR_BAND_DISCONNECT; }
   }
-  if ((environment->valid_mask & APP_ENV_VALID_VOLTAGE1) != 0U) {
+  if (PX4LITE_ENABLE_BATTERY1 && ((environment->valid_mask & APP_ENV_VALID_VOLTAGE1) != 0U)) {
     s_main_band = Display_BatBandHyst(s_main_band, environment->voltage_mv, main_t, 2U);
   }
 }
 
-/** @brief 仅凭有效电机电压产生电源告警，缺测交由模块状态报告。 */
+/** @brief 已启用的第二组电压仅产生既有供电保护提示，缺测不伪造断开。 */
 static uint16_t Display_EvalMotorFault(const App_EnvironmentSnapshot_t *environment)
 {
-  if ((environment == 0) || ((environment->valid_mask & APP_ENV_VALID_VOLTAGE2) == 0U)) { return 0U; }
+  if (!PX4LITE_ENABLE_BATTERY2 || (environment == 0) || ((environment->valid_mask & APP_ENV_VALID_VOLTAGE2) == 0U)) { return 0U; }
   switch (s_motor_band) {
     case DISPLAY_MOTOR_BAND_DISCONNECT:
       return (uint16_t)PX4LITE_FAULT_MOTOR_DISCONNECT;
@@ -1101,10 +1153,10 @@ static uint16_t Display_EvalMotorFault(const App_EnvironmentSnapshot_t *environm
   }
 }
 
-/** @brief 主控电压有效且档位偏低时提示充电，其他数据不能授权此告警。 */
+/** @brief 第一组仅在配置启用且电压有效时产生低压提示；禁用组不派生告警。 */
 static uint16_t Display_EvalMainFault(const App_EnvironmentSnapshot_t *environment)
 {
-  if ((environment == 0) || ((environment->valid_mask & APP_ENV_VALID_VOLTAGE1) == 0U)) { return 0U; }
+  if (!PX4LITE_ENABLE_BATTERY1 || (environment == 0) || ((environment->valid_mask & APP_ENV_VALID_VOLTAGE1) == 0U)) { return 0U; }
   return (s_main_band == DISPLAY_MAIN_BAND_CHARGE) ? (uint16_t)PX4LITE_FAULT_POWER_CHARGE : 0U;
 }
 
@@ -1180,7 +1232,7 @@ static uint8_t Display_LoadModuleStatusFallback(void)
 
   if (App_GetModuleStatus(PX4LITE_MODULE_GNSS, &status) == PX4LITE_OK) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_GNSS, Display_MapStateValue(status.state));
-    /* 定位状态(GNSS_FIX)由导航快照的解算 fix 等级驱动，兜底路径不再用模块态覆盖。 */
+    /* 定位状态由独立NAV_STATUS维护，模块在线态不能代替定位事实。 */
     loaded = 1U;
   }
   if (App_GetModuleStatus(PX4LITE_MODULE_IMU, &status) == PX4LITE_OK) {
@@ -1251,12 +1303,36 @@ static uint16_t Display_CurrentMaToDeciA(int32_t current_ma)
   return (deci_a > 0xFFFFU) ? (uint16_t)0xFFFFU : (uint16_t)deci_a;
 }
 
-/** @brief 每个环境/电源字段仅由自己的有效位授权，部分快照不能填补其他域。 */
+/**
+ * @brief 仅消费已启用采样组的真实字段，通用输入功率由同组新鲜电压、电流相乘得到。
+ * @details 保留历史第一/第二组 HMI 编号，不把第二组复制成第一组；禁用组保持无效。
+ *          功率计算使用原始 mV/mA，不使用屏幕去抖或取整值；任一来源无效则显示 N/A。
+ */
 static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *environment)
 {
   uint32_t valid;
+  uint32_t supply_voltage_mv;
+  int32_t supply_current_ma;
+  uint32_t supply_mask;
   if (environment == 0) { Display_ClearEnvironmentFields(); Display_ClearBatteryFields(); return; }
   valid = environment->valid_mask;
+  if (!PX4LITE_ENABLE_BATTERY1) { valid &= ~APP_ENV_VALID_BATTERY1; }
+  if (!PX4LITE_ENABLE_BATTERY2) { valid &= ~APP_ENV_VALID_BATTERY2; }
+#if PX4LITE_ENABLE_BATTERY2
+  supply_voltage_mv = environment->voltage2_mv;
+  supply_current_ma = environment->current2_ma;
+  supply_mask = APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_CURRENT2;
+#else
+  supply_voltage_mv = environment->voltage_mv;
+  supply_current_ma = environment->current_ma;
+  supply_mask = APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_CURRENT1;
+#endif
+  if ((valid & supply_mask) == supply_mask) {
+    int64_t power_mw = (int64_t)supply_voltage_mv * supply_current_ma / 1000;
+    if (power_mw > INT32_MAX) { power_mw = INT32_MAX; }
+    if (power_mw < INT32_MIN) { power_mw = INT32_MIN; }
+    (void)Display_SetHmiValueI32(DISPLAY_HMI_VAR_INPUT_POWER_MW, (int32_t)power_mw);
+  } else { Display_InvalidateValue(DISPLAY_HMI_VAR_INPUT_POWER_MW); }
   if ((valid & APP_ENV_VALID_PRESSURE_TEMPERATURE) != 0U) {
     (void)Display_SetHmiValueI16(DISPLAY_HMI_VAR_TEMPERATURE, Display_FloatToI16Tenths(environment->temperature_c));
     (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_PRESSURE, Display_FloatPaToU32(environment->pressure_pa));
@@ -1268,8 +1344,9 @@ static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *env
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_HUMIDITY, Display_FloatToU16Tenths(environment->relative_humidity_pct));
   } else { Display_InvalidateValue(DISPLAY_HMI_VAR_HUMIDITY); }
   if ((valid & APP_ENV_VALID_VOLTAGE1) != 0U) {
+    /* 保护档位不能把有效测量改写为零；低压和超范围仍展示实际电压。 */
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, Display_StabilizeVoltCv(environment->voltage_mv,
-        (s_main_band != DISPLAY_MAIN_BAND_ABSENT) ? 1U : 0U, &s_disp_main_dv, &s_disp_main_dv_valid));
+        1U, &s_disp_main_dv, &s_disp_main_dv_valid));
   } else { Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_VOLTAGE); s_disp_main_dv_valid = 0U; }
   if ((valid & APP_ENV_VALID_CURRENT1) != 0U) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_CURRENT, Display_CurrentMaToDeciA(environment->current_ma));
@@ -1279,7 +1356,7 @@ static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *env
   } else { Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_PERCENT); }
   if ((valid & APP_ENV_VALID_VOLTAGE2) != 0U) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, Display_StabilizeVoltCv(environment->voltage2_mv,
-        (s_motor_band != DISPLAY_MOTOR_BAND_DISCONNECT) ? 1U : 0U, &s_disp_motor_dv, &s_disp_motor_dv_valid));
+        1U, &s_disp_motor_dv, &s_disp_motor_dv_valid));
     Display_SetMotorSelfCheckLights(Display_MotorSelfCheckValue());
   } else {
     Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE); s_disp_motor_dv_valid = 0U;
@@ -1311,9 +1388,7 @@ static void Display_LoadLoraStats(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_LOSS_RATE, link.loss_permille);
 }
 
-/*
- * 从应用只读快照准备一版完整显示缓存。
- */
+/** @brief 准备本机显示快照；冻结保留GNSS测量，系统本地钟/日期仍持续更新。 */
 Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
 {
   App_NavigationSnapshot_t navigation;
@@ -1346,6 +1421,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   if (frozen == 0U) {
     if (navigation_result == PX4LITE_OK) { Display_LoadNavigationSnapshot(&navigation); }
     else { Display_ClearNavigationSnapshot(); }
+    Display_LoadLocalGnssSnapshot(now_ms);
   }
   Display_LoadAttitudeOperationStatus(PX4LITE_REMOTE_MODE_LOCAL);
 
@@ -1390,6 +1466,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
     Display_LoadMotorSnapshot(&motor);
     Display_LoadMotorPulseSnapshot(&motor);
   } else { Display_ClearMotorFields(); }
+  Display_LoadMotorLockState();
   Display_LoadLoraStats();
   if ((navigation_result != PX4LITE_OK) && (system_result != PX4LITE_OK) &&
       (environment_result != PX4LITE_OK) && (status_fallback_loaded == 0U)) { return DISPLAY_NOT_READY; }

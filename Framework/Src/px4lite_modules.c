@@ -34,8 +34,19 @@ static uint32_t s_status_version;
 static uint32_t s_gnss_sequence;
 static uint32_t s_imu_sequence;
 static uint32_t s_baro_sequence;
-static uint32_t s_battery_sequence;
-static uint32_t s_battery2_sequence;
+#if PX4LITE_ENABLE_BATTERY
+/** @brief 电源采样服务内部事实；下标 0/1 保留两组既有数据身份，只由 sensor 写入。 */
+typedef struct {
+  uint32_t sequence;       /**< 本组发布序号，0 表示尚未发布。 */
+  uint32_t last_work_ms;   /**< 最近一次调度采集的时间，单位 ms。 */
+  uint32_t sample_time_ms; /**< 最近有效电压采样时间，单位 ms；0 是合法启动时刻。 */
+  uint8_t work_started;   /**< 1 表示已执行首次采集，避免以零毫秒充当未开始。 */
+  uint8_t sample_seen;    /**< 1 表示本组曾产生有效电压快照。 */
+  uint8_t io_failed;      /**< 1 表示最近一次采集存在电压或电流 I/O 失败。 */
+  uint8_t low_voltage;    /**< 最近电压告警事实，1 表示低压。 */
+} Px4Lite_PowerChannelFact_t;
+static Px4Lite_PowerChannelFact_t s_power_facts[2];
+#endif
 static uint32_t s_navigation_sequence;
 static int32_t s_navigation_attitude_cache[6]; /**< 最近姿态/角速度，单位0.01度/0.01度每秒；仅估计任务写。 */
 static uint32_t s_navigation_last_valid_mask; /**< 上次发布字段位，断流过期时也必须发布撤销。 */
@@ -51,8 +62,6 @@ static uint8_t s_lora_link_reset_pending; /**< 1 表示链路已复位且等待�
 static uint32_t s_last_imu_work_ms;
 static uint32_t s_last_baro_work_ms;
 static uint8_t s_baro_work_started; /**< 是否已发出首个气压测量许可，避免 0 ms 哨兵冲突。 */
-static uint32_t s_last_battery_work_ms;
-static uint32_t s_last_battery2_work_ms;
 static Px4Lite_AttitudeState_t s_attitude_state;
 static uint8_t s_attitude_action_request; /**< 临界区保护的单槽请求；估计任务唯一消费者。 */
 static Px4Lite_AttitudeStatus_t s_attitude_status; /**< 临界区发布的操作快照。 */
@@ -234,15 +243,14 @@ Px4Lite_Result_t Px4Lite_ModulesInit(void)
   s_gnss_sequence        = 0U;
   s_imu_sequence         = 0U;
   s_baro_sequence        = 0U;
-  s_battery_sequence     = 0U;
-  s_battery2_sequence    = 0U;
+#if PX4LITE_ENABLE_BATTERY
+  memset(s_power_facts, 0, sizeof(s_power_facts));
+#endif
   s_navigation_sequence  = 0U;
   s_health_sequence      = 0U;
   s_last_imu_work_ms     = 0U;
   s_last_baro_work_ms    = 0U;
   s_baro_work_started    = 0U;
-  s_last_battery_work_ms = 0U;
-  s_last_battery2_work_ms = 0U;
   s_start_ms             = Px4Lite_PlatformGetMs();
   return PX4LITE_OK;
 }
@@ -364,15 +372,131 @@ Px4Lite_Result_t Px4Lite_RemoteIdRecover(void)
   return PX4LITE_OK;
 }
 
+#if PX4LITE_ENABLE_BATTERY
+/** @brief 返回启用的电源输入位图；bit0/bit1 保持既有第一、第二组身份。 */
+static uint8_t Px4Lite_PowerEnabledMask(void)
+{
+  return (uint8_t)((PX4LITE_ENABLE_BATTERY1 ? 1U : 0U) |
+                   (PX4LITE_ENABLE_BATTERY2 ? 2U : 0U));
+}
+
+/**
+ * @brief 用启用通道的事实更新唯一电源服务状态，不让禁用组触发离线恢复。
+ * @param[in] now_ms 当前真实毫秒时间。
+ * @note 仅 sensor 在产生新样本后调用，只提升 ONLINE/DEGRADED；无新鲜样本时
+ *       保留已有状态，最终超时仍由 Health 判定。两组均启用时，任一缺测或 I/O
+ *       失败使服务降级；最近新鲜样本维持服务心跳，不替失败组更新 topic 年龄。
+ */
+static void Px4Lite_PowerPublishStatus(uint32_t now_ms)
+{
+  uint8_t enabled = Px4Lite_PowerEnabledMask();
+  uint8_t fresh = 0U;
+  uint8_t io_failed = 0U;
+  uint8_t low_voltage = 0U;
+  uint8_t index;
+  uint32_t latest_ms = 0U;
+  uint32_t latest_age = UINT32_MAX;
+
+  for (index = 0U; index < 2U; ++index) {
+    const Px4Lite_PowerChannelFact_t *fact = &s_power_facts[index];
+    uint8_t bit = (uint8_t)(1U << index);
+    uint32_t age;
+    if ((enabled & bit) == 0U) { continue; }
+    if (fact->io_failed != 0U) { io_failed = 1U; }
+    if (fact->sample_seen == 0U) { continue; }
+    age = Px4Lite_ElapsedMs(now_ms, fact->sample_time_ms);
+    if (age > PX4LITE_BATTERY_MAX_AGE_MS) { continue; }
+    fresh |= bit;
+    if (fact->low_voltage != 0U) { low_voltage = 1U; }
+    if (age < latest_age) { latest_age = age; latest_ms = fact->sample_time_ms; }
+  }
+  if (fresh == 0U) { return; }
+
+  taskENTER_CRITICAL();
+  s_status[PX4LITE_MODULE_BATTERY].last_rx_ms = latest_ms;
+  s_status[PX4LITE_MODULE_BATTERY].last_valid_ms = latest_ms;
+  if ((fresh == enabled) && (io_failed == 0U)) {
+    s_status[PX4LITE_MODULE_BATTERY].consecutive_errors = 0U;
+    if (s_status[PX4LITE_MODULE_BATTERY].consecutive_valid < 65535U) {
+      s_status[PX4LITE_MODULE_BATTERY].consecutive_valid++;
+    }
+  } else {
+    s_status[PX4LITE_MODULE_BATTERY].consecutive_valid = 0U;
+  }
+  s_status_version++;
+  taskEXIT_CRITICAL();
+
+  if ((fresh != enabled) || (io_failed != 0U) || (low_voltage != 0U)) {
+    Px4Lite_SetStatus(PX4LITE_MODULE_BATTERY, PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, now_ms);
+  } else {
+    Px4Lite_SetStatus(PX4LITE_MODULE_BATTERY, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
+  }
+}
+
+/**
+ * @brief sensor 按固定周期采集启用输入，禁用组不读取、不发布、不累计故障。
+ * @param[in] now_ms 本轮调度的真实毫秒时间。
+ * @details 电流失败仍发布可用电压及 current_valid=0，供 Control 按电压保护；
+ *          电流失败或平台参考回退时记录I/O错误并降级；参考回退的电压仍为兼容估算值。
+ *          第二组始终发布Battery2，不映射到第一组。
+ */
+static void Px4Lite_PowerWorkRun(uint32_t now_ms)
+{
+  uint8_t enabled = Px4Lite_PowerEnabledMask();
+  uint8_t index;
+  uint8_t published = 0U;
+
+  for (index = 0U; index < 2U; ++index) {
+    Px4Lite_PowerChannelFact_t *fact = &s_power_facts[index];
+    Px4Lite_BatteryStatus_t sample;
+    Px4Lite_Result_t result;
+    if ((enabled & (uint8_t)(1U << index)) == 0U) { continue; }
+    if ((fact->work_started != 0U) &&
+        ((uint32_t)(now_ms - fact->last_work_ms) < PX4LITE_BATTERY_WORK_PERIOD_MS)) { continue; }
+    fact->work_started = 1U;
+    fact->last_work_ms = now_ms;
+    memset(&sample, 0, sizeof(sample));
+    result = (index == 0U) ? Px4Lite_BatteryRead(&sample) : Px4Lite_Battery2Read(&sample);
+    if (result == PX4LITE_OK) {
+      fact->sample_seen = 1U;
+      fact->sample_time_ms = sample.header.sample_time_ms;
+      fact->low_voltage = sample.low_voltage;
+      fact->io_failed = ((sample.current_valid == 0U) ||
+                         ((sample.header.flags & PX4LITE_DATA_DEGRADED) != 0U)) ? 1U : 0U;
+      fact->sequence++;
+      if (fact->sequence == 0U) { fact->sequence = 1U; }
+      sample.header.publish_time_ms = Px4Lite_PlatformGetMs();
+      sample.header.sequence = fact->sequence;
+      sample.header.device_id = (uint16_t)PX4LITE_MODULE_BATTERY;
+      sample.header.valid = 1U;
+      sample.header.quality = ((sample.low_voltage != 0U) || (fact->io_failed != 0U)) ? 50U : 100U;
+      sample.header.flags = PX4LITE_DATA_VALID;
+      if (sample.header.quality != 100U) { sample.header.flags |= PX4LITE_DATA_DEGRADED; }
+      if (index == 0U) { Px4Lite_PublishBattery(&sample); }
+      else { Px4Lite_PublishBattery2(&sample); }
+      if (fact->io_failed != 0U) { Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms); }
+      published = 1U;
+    } else if (result == PX4LITE_IO_ERROR) {
+      fact->io_failed = 1U;
+      Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms);
+    }
+  }
+  if (published != 0U) { Px4Lite_PowerPublishStatus(Px4Lite_PlatformGetMs()); }
+}
+#endif
+
 /**
  * @brief 执行一次传感器采集和发布周期。
  * @details 外设调用可能同步等待；记录整轮经过时间（含抢占），不含任务周期等待。
+ *          仅sensor任务调用，不可重入；测量暂存为其独占静态对象且每轮清零。
+ *          topic和IMU FIFO均同步复制完整样本，不向任何消费者借用暂存地址。
  */
 void Px4Lite_SensorWorkRun(uint32_t now_ms)
 {
   uint32_t work_started_us = Px4Lite_PlatformGetUs();
 #if PX4LITE_ENABLE_GNSS
-  Px4Lite_SensorGnss_t gnss;
+  /** @brief sensor所有者的GNSS采集暂存，发布时完整复制，不跨任务共享。 */
+  static Px4Lite_SensorGnss_t gnss;
   Px4Lite_Result_t result;
 
   memset(&gnss, 0, sizeof(gnss));
@@ -405,7 +529,8 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 
 #if PX4LITE_ENABLE_IMU
   if ((s_last_imu_work_ms == 0U) || ((uint32_t)(now_ms - s_last_imu_work_ms) >= PX4LITE_IMU_WORK_PERIOD_MS)) {
-    Px4Lite_SensorImu_t imu;
+    /** @brief sensor所有者的IMU采集暂存，PushImu同步复制到FIFO及latest槽。 */
+    static Px4Lite_SensorImu_t imu;
     Px4Lite_Result_t result;
 
     s_last_imu_work_ms = now_ms;
@@ -438,7 +563,8 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 
 #if PX4LITE_ENABLE_BARO
   {
-    Px4Lite_SensorBaro_t baro;
+    /** @brief sensor所有者的气压采集暂存，PublishBaro同步复制到topic。 */
+    static Px4Lite_SensorBaro_t baro;
     Px4Lite_Result_t result;
     uint8_t start_measurement = 0U;
 
@@ -475,59 +601,7 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 #endif
 
 #if PX4LITE_ENABLE_BATTERY
-  if ((s_last_battery_work_ms == 0U) || ((uint32_t)(now_ms - s_last_battery_work_ms) >= PX4LITE_BATTERY_WORK_PERIOD_MS)) {
-    Px4Lite_BatteryStatus_t battery;
-    Px4Lite_Result_t result;
-
-    s_last_battery_work_ms = now_ms;
-    memset(&battery, 0, sizeof(battery));
-    result = Px4Lite_BatteryRead(&battery);
-    if (result == PX4LITE_OK) {
-      battery.header.sample_time_ms  = (battery.header.sample_time_ms != 0U) ? battery.header.sample_time_ms : now_ms;
-      battery.header.publish_time_ms = now_ms;
-      battery.header.sequence        = ++s_battery_sequence;
-      battery.header.device_id       = (uint16_t)PX4LITE_MODULE_BATTERY;
-      battery.header.valid           = 1U;
-      battery.header.quality         = (battery.low_voltage != 0U) ? 50U : 100U;
-      battery.header.flags           = PX4LITE_DATA_VALID;
-      if (battery.low_voltage != 0U) { battery.header.flags |= PX4LITE_DATA_DEGRADED; }
-      Px4Lite_PublishBattery(&battery);
-
-      taskENTER_CRITICAL();
-      s_status[PX4LITE_MODULE_BATTERY].last_rx_ms         = battery.header.sample_time_ms;
-      s_status[PX4LITE_MODULE_BATTERY].last_valid_ms      = battery.header.sample_time_ms;
-      s_status[PX4LITE_MODULE_BATTERY].consecutive_errors = 0U;
-      if (s_status[PX4LITE_MODULE_BATTERY].consecutive_valid < 65535U) { s_status[PX4LITE_MODULE_BATTERY].consecutive_valid++; }
-      s_status_version++;
-      taskEXIT_CRITICAL();
-
-      Px4Lite_SetStatus(PX4LITE_MODULE_BATTERY, (battery.low_voltage != 0U) ? PX4LITE_STATE_DEGRADED : PX4LITE_STATE_ONLINE, (battery.low_voltage != 0U) ? PX4LITE_FAULT_SENSOR_INVALID : PX4LITE_FAULT_NONE, now_ms);
-    } else if (result == PX4LITE_IO_ERROR) {
-      Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms);
-    }
-  }
-
-  /* 第二块电池(ADC2/PA4)：与电池 1 同周期采样并发布到 battery2 topic。
-     数据链路对等，但不接入模块注册表的健康/离线监控(无独立模块槽)。 */
-  if ((s_last_battery2_work_ms == 0U) || ((uint32_t)(now_ms - s_last_battery2_work_ms) >= PX4LITE_BATTERY_WORK_PERIOD_MS)) {
-    Px4Lite_BatteryStatus_t battery2;
-    Px4Lite_Result_t result;
-
-    s_last_battery2_work_ms = now_ms;
-    memset(&battery2, 0, sizeof(battery2));
-    result = Px4Lite_Battery2Read(&battery2);
-    if (result == PX4LITE_OK) {
-      battery2.header.sample_time_ms  = (battery2.header.sample_time_ms != 0U) ? battery2.header.sample_time_ms : now_ms;
-      battery2.header.publish_time_ms = now_ms;
-      battery2.header.sequence        = ++s_battery2_sequence;
-      battery2.header.device_id       = (uint16_t)PX4LITE_MODULE_BATTERY;
-      battery2.header.valid           = 1U;
-      battery2.header.quality         = (battery2.low_voltage != 0U) ? 50U : 100U;
-      battery2.header.flags           = PX4LITE_DATA_VALID;
-      if (battery2.low_voltage != 0U) { battery2.header.flags |= PX4LITE_DATA_DEGRADED; }
-      Px4Lite_PublishBattery2(&battery2);
-    }
-  }
+  Px4Lite_PowerWorkRun(now_ms);
 #endif
 
 #if !PX4LITE_ENABLE_GNSS && !PX4LITE_ENABLE_IMU && !PX4LITE_ENABLE_BARO && !PX4LITE_ENABLE_BATTERY
@@ -792,7 +866,12 @@ void Px4Lite_HealthRun(uint32_t now_ms)
 
 #if PX4LITE_ENABLE_BATTERY
   if ((battery_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, battery_last_rx_ms) > PX4LITE_BATTERY_OFFLINE_MS)) {
-    if ((battery_last_rx_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_BATTERY_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_BATTERY, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms); }
+    /* 已在线/降级证明曾收到样本；0 ms 是合法首样本时间，不能退回无样本启动宽限。 */
+    if ((battery_last_rx_ms != 0U) || (battery_state == PX4LITE_STATE_ONLINE) ||
+        (battery_state == PX4LITE_STATE_DEGRADED) ||
+        (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_BATTERY_STARTUP_GRACE_MS)) {
+      Px4Lite_SetStatus(PX4LITE_MODULE_BATTERY, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms);
+    }
   }
 #else
   (void)battery_state;

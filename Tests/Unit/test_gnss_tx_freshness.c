@@ -9,7 +9,8 @@ static Px4Lite_VehicleNavigation_t nav;
 static Px4Lite_BatteryStatus_t battery_source;
 Px4Lite_Result_t Px4Lite_CopyGnss(Px4Lite_SensorGnss_t *out) { *out=gnss; return PX4LITE_OK; }
 Px4Lite_Result_t Px4Lite_CopyNavigation(Px4Lite_VehicleNavigation_t *out) { *out=nav; return PX4LITE_OK; }
-Px4Lite_Result_t Px4Lite_CopyBattery(Px4Lite_BatteryStatus_t *out) { *out=battery_source; return PX4LITE_OK; }
+/** @brief 当前单路主回路配置只启用第二组，保留原电流有效性断言。 */
+Px4Lite_Result_t Px4Lite_CopyBattery2(Px4Lite_BatteryStatus_t *out) { *out=battery_source; return PX4LITE_OK; }
 uint8_t Px4Lite_IdentityGetMavlinkSystemId(void) { return 42U; }
 Px4Lite_Result_t Px4Lite_CommSend(const uint8_t *data, uint16_t len) { (void)data; (void)len; return PX4LITE_OK; }
 Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len) { (void)data; (void)len; return PX4LITE_OK; }
@@ -28,11 +29,11 @@ int main(void)
   assert(MavTx_SendPosition(2000U)==PX4LITE_NOT_READY);
   battery_source.header.valid=1U; battery_source.header.sequence=1U; battery_source.header.sample_time_ms=2000U;
   battery_source.voltage_mv=12000U; battery_source.current_ma=0;
-  assert(MavTx_SendBatteryStatus(2000U)==PX4LITE_OK);
+  assert(MavTx_SendBattery2(2000U)==PX4LITE_OK);
   mavlink_msg_battery_status_decode(&s_message,&battery_wire);
   assert(battery_wire.current_battery==-1 && battery_wire.voltages[0]==12000U);
   battery_source.current_valid=1U; battery_source.header.sequence++;
-  assert(MavTx_SendBatteryStatus(2000U)==PX4LITE_OK);
+  assert(MavTx_SendBattery2(2000U)==PX4LITE_OK);
   mavlink_msg_battery_status_decode(&s_message,&battery_wire);
   assert(battery_wire.current_battery==0 && battery_wire.voltages[0]==12000U);
   puts("gnss transmit freshness tests passed"); return 0;

@@ -1,12 +1,16 @@
-﻿/**
+/**
  * @file display_lvgl.c
  * @brief Display 层固定容量 LVGL 工作区、两层本机导航及事件观察视图。
- * @details 数据经 display.h / app_data_api.h 输入；不读取 BSP、驱动私有数据或 topic。
+ * @details 数据经display门面及App只读接口输入；圆圈沿用app_display_model的显示参考，
+ * 不读取BSP、驱动私有数据或topic，不改变采集、估计及其他页面节拍。
  * 启动一次性创建控件和样式。切页只复用平铺控件，禁止清屏销毁/重建和隐式控制操作。
  */
 #include "display_lvgl.h"
 #include "display_observation.h"
+#include "display_hud_present.h"
+#include "display_hud_masks.h"
 #include "app_data_api.h"
+#include "app_display_model.h"
 #include "display_lvgl_font_zh.h"
 #include "display_lvgl_numeric_font.h"
 #include "display_pages.h"
@@ -30,6 +34,8 @@
 #define HZ_PITCH_SIGN 1.0f
 #define HZ_YAW_SIGN 1.0f
 #define HZ_YAW_OFFSET_DEG 0.0f
+/** @brief 仅姿态页圆圈请求20Hz新画面；准备受2ms软预算约束，整帧另作有界集中提交。 */
+#define DISPLAY_LVGL_HUD_PERIOD_MS 50U
 #define DISPLAY_LVGL_VALUE_TEXT_LEN 32U
 #define UI_LABEL_COUNT 48U
 #define UI_BUTTON_COUNT 16U
@@ -46,6 +52,13 @@
 #define UI_COLOR_ACCENT 0x28BDCDU
 #define UI_COLOR_WARN 0xF2C14EU
 #define UI_COLOR_ERROR 0xF76D7EU
+#if PX4LITE_ENABLE_BATTERY2
+#define UI_SUPPLY_VOLTAGE_ID DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE
+#define UI_SUPPLY_CURRENT_ID DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT
+#else
+#define UI_SUPPLY_VOLTAGE_ID DISPLAY_HMI_VAR_BATTERY_VOLTAGE
+#define UI_SUPPLY_CURRENT_ID DISPLAY_HMI_VAR_BATTERY_CURRENT
+#endif
 
 /** @brief HMI 数值绑定；静态文本寿命覆盖全部页面。 */
 typedef struct {
@@ -65,7 +78,9 @@ typedef enum {
   UI_ACTION_CAPTURE_SOURCE, UI_ACTION_CAPTURE_RUN, UI_ACTION_CAPTURE_CLEAR,
   UI_ACTION_CAPTURE_MODE, UI_ACTION_CAPTURE_NEXT, UI_ACTION_CAPTURE_SELECT, UI_ACTION_SERIAL_CLEAR, UI_ACTION_SERIAL_CAPTURE,
   UI_ACTION_OBSERVE_GROUP, UI_ACTION_OBSERVE_FIELD, UI_ACTION_OBSERVE_INTERVAL,
-  UI_ACTION_OBSERVE_RUN, UI_ACTION_OBSERVE_FREEZE, UI_ACTION_OBSERVE_REF, UI_ACTION_RECORD_RUN, UI_ACTION_RECORD_INTERVAL
+  UI_ACTION_OBSERVE_RUN, UI_ACTION_OBSERVE_FREEZE, UI_ACTION_OBSERVE_REF, UI_ACTION_RECORD_RUN, UI_ACTION_RECORD_INTERVAL,
+  UI_ACTION_MOTOR_LOCK,
+  UI_ACTION_GNSS_VIEW, UI_ACTION_GNSS_SAT_NEXT, UI_ACTION_GNSS_SAT_HOLD
 } UiAction_t;
 /** @brief 固定按钮描述；参数仅由显示任务修改。 */
 typedef struct {
@@ -111,7 +126,21 @@ static uint8_t s_motor_touch_value[4];
 static uint8_t s_motor_touch_valid[4];
 static uint8_t s_control_update_active;
 static lv_obj_t *s_attitude_obj;
-static int16_t s_attitude_roll_deg10, s_attitude_pitch_deg10, s_attitude_yaw_deg10;
+/** @brief 圆圈一帧固定角度及三角量；跨协作条带不修改，不影响其他HMI字段。 */
+typedef struct {
+  int16_t roll_deg10;  /**< 显示基准下横滚，单位0.1°。 */
+  int16_t pitch_deg10; /**< 显示基准下俯仰，单位0.1°。 */
+  int16_t yaw_deg10;   /**< 显示基准下相对航向，单位0.1°。 */
+  uint8_t valid;      /**< 三姿态测量新鲜有效为1；0绘制灰盘。 */
+  uint8_t ready;      /**< 已建立首个完整绘制快照为1。 */
+  float roll_sin;     /**< 本帧横滚正弦，无量纲。 */
+  float roll_cos;     /**< 本帧横滚余弦，无量纲。 */
+  float yaw_sin;      /**< 本帧显示航向正弦，无量纲。 */
+  float yaw_cos;      /**< 本帧显示航向余弦，无量纲。 */
+} Display_LvglHudFrame_t;
+static Display_LvglHudFrame_t s_hud;
+static uint32_t s_hud_poll_ms; /**< 上次圆圈取数时刻，真实ms，可回绕。 */
+static uint8_t s_hud_polled; /**< 区分尚未取数与合法0ms时刻。 */
 static lv_obj_t *s_state_labels[UI_STATUS_COUNT];
 static char s_state_text[UI_STATUS_COUNT][20];
 static lv_obj_t *s_row_labels[UI_TEXT_ROWS];
@@ -144,10 +173,17 @@ static App_AlarmSnapshot_t s_alarm_details;
 static uint8_t s_alarm_offset, s_diag_offset, s_remote_offset;
 static uint8_t s_diag_view;
 static uint8_t s_details_kind, s_motor_selected;
+/** @brief GNSS详情复用原6行；0导航、1授时、2逐星，不创建新页面。 */
+static uint8_t s_gnss_details_view;
+static uint8_t s_gnss_satellite_page_index;
+static uint8_t s_gnss_satellite_held;
+static uint8_t s_gnss_satellite_live_valid;
+/** @brief 显示所有者仅缓存当前5颗；Hold只冻结显示，不停止接收、解析或上报。 */
+static App_GnssSatellitePage_t s_gnss_satellite_page;
 static uint32_t s_details_due_ms;
 static char s_control_feedback[24] = "local";
-/** @brief 唯一选中副本与NMEA复用，不被捕获环覆盖修改。 */
-static union { App_CaptureFrame_t mav; App_NmeaSentence_t nmea; } s_selected_capture;
+/** @brief MAVLink与双协议GNSS复用唯一静态选帧副本，不被捕获环覆盖修改。 */
+static union { App_CaptureFrame_t mav; App_GnssCapturedFrame_t gnss; } s_selected_capture;
 static uint32_t s_selected_session, s_inspector_due_ms;
 static uint8_t s_selected_ready, s_inspector_mode, s_inspector_page, s_inspector_row;
 static uint8_t s_capture_pause_on_exit;
@@ -224,7 +260,20 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id);
 static void Display_LvglUpdateDetails(void);
 static void Display_LvglUpdateInspector(void);
 static void Display_LvglUpdateSerial(void);
-static uint32_t s_serial_h1_base, s_serial_b1_base;
+/** @brief 显示任务独占的九项计数基线；清屏/切页不修改任何生产计数。 */
+typedef struct {
+  uint32_t rx_bytes;    /**< RX 字节显示基线。 */
+  uint32_t tx_bytes;    /**< 完整 TX 字节显示基线。 */
+  uint32_t rx_frames;   /**< 有效 RX 帧显示基线。 */
+  uint32_t tx_frames;   /**< 完整 TX 帧显示基线。 */
+  uint32_t tx_failures; /**< 发送失败显示基线。 */
+  uint32_t frame_errors;/**< MAVLink 校验错误显示基线。 */
+  uint32_t uart_errors; /**< UART 错误显示基线。 */
+  uint32_t drops;       /**< RX 舍弃字节显示基线。 */
+  uint32_t rearm;       /**< 重新挂接失败显示基线。 */
+} UiSerialCountBase_t;
+static UiSerialCountBase_t s_serial_base;
+static uint8_t s_serial_counts_cleared; /**< 1=学生已手动清除显示基线，离页保持。 */
 static void Display_LvglUpdateObservation(void);
 static uint32_t s_observe_due_ms;
 static void Display_LvglUpdateRecording(void);
@@ -234,6 +283,112 @@ static void UiCaptureRequest(uint8_t operation, uint8_t source, uint8_t filter)
   App_CaptureRequest_t request;
   request.operation=operation; request.source=source; request.filter=filter; request.reserved=0U;
   (void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"%s",App_RequestCapture(&request)==PX4LITE_OK?"Request queued":"Capture busy");
+}
+
+/** @brief 复用旧筛选编号，按Auto、全NMEA、全UBX、具体消息轮转，不改生产协议。 */
+static uint8_t UiGnssNextFilter(uint8_t current)
+{
+  static const uint8_t order[10] = {0U,5U,6U,1U,2U,3U,4U,7U,8U,9U};
+  uint8_t i;
+  for (i=0U;i<10U;i++) { if (order[i]==current) { return order[(i+1U)%10U]; } }
+  return 0U;
+}
+
+/** @brief GNSS筛选只排队SELECT，执行后由新暂停会话等待显式Start。 */
+static void UiGnssCycleFilter(const App_CaptureStatus_t *status)
+{
+  if (status->pending) { (void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"Capture request pending");return; }
+  UiCaptureRequest(PX4LITE_CAPTURE_SELECT,PX4LITE_CAPTURE_GNSS,
+    status->source==PX4LITE_CAPTURE_GNSS?UiGnssNextFilter(status->filter):0U);
+}
+
+/** @brief 选帧必须经App并核对会话/token/有界长度，不从原帧字节推断协议。 */
+static Px4Lite_Result_t UiGnssCopySelection(uint32_t session, uint32_t token)
+{
+  Px4Lite_Result_t result=App_CopyCapturedGnssFrame(session,token,&s_selected_capture.gnss);
+  if (result!=PX4LITE_OK) { return result; }
+  if (s_selected_capture.gnss.session_id!=session || s_selected_capture.gnss.token!=token ||
+      !s_selected_capture.gnss.length || s_selected_capture.gnss.length>sizeof(s_selected_capture.gnss.bytes)) { return PX4LITE_NOT_READY; }
+  return PX4LITE_OK;
+}
+
+/** @brief 筛选标签仅表示捕获条件，不能冒充当前实际接收协议。 */
+static const char *UiGnssFilterName(uint8_t filter)
+{
+  static const char * const names[10] = {"Auto","GGA","RMC","GSA","GSV","NMEA all","UBX all","NAV-PVT","NAV-DOP","NAV-SAT"};
+  return names[filter<10U?filter:0U];
+}
+
+/** @brief 只按App元数据命名消息，禁止在Display解码原帧payload。 */
+static const char *UiGnssFrameName(uint8_t protocol, uint8_t message_class, uint32_t message_id, uint8_t nmea_type)
+{
+  if (protocol==PX4LITE_GNSS_PROTOCOL_NMEA) {
+    static const char * const names[5] = {"NMEA Other","NMEA GGA","NMEA RMC","NMEA GSA","NMEA GSV"};
+    return names[nmea_type<5U?nmea_type:0U];
+  }
+  if (protocol==PX4LITE_GNSS_PROTOCOL_UBX) {
+    if (message_class==0x01U) {
+      if (message_id==0x07U) { return "UBX NAV-PVT"; }
+      if (message_id==0x04U) { return "UBX NAV-DOP"; }
+      if (message_id==0x35U) { return "UBX NAV-SAT"; }
+    }
+    if (message_class==0x0AU && message_id==0x04U) { return "UBX MON-VER"; }
+    if (message_class==0x05U && message_id==0x01U) { return "UBX ACK-ACK"; }
+    if (message_class==0x05U && message_id==0x00U) { return "UBX ACK-NAK"; }
+    return "UBX Other";
+  }
+  return "GNSS Unknown";
+}
+
+/**
+ * @brief 用显示周期毫秒算年龄；仅夹紧最多3s的前向快照，不清零真实陈旧年龄。
+ * @details App复制时可能被更高优先级采集任务抢占，源时刻略新于本周期；
+ *          uint32差值同时支持回绕，不读取Platform/BSP时钟。
+ */
+static uint32_t UiGnssAge(uint32_t now_ms, uint32_t source_ms)
+{
+  uint32_t age=(uint32_t)(now_ms-source_ms);
+  if (age>3000U && (uint32_t)(source_ms-now_ms)<=3000U) { return 0U; }
+  return age;
+}
+
+/** @brief GNSS详情按钮只改本地视图；Hold必须来自已显示且仍新鲜的一页。 */
+static void UiGnssDetailsAction(UiAction_t action)
+{
+  if (s_details_kind != 1U) { return; }
+  if (action == UI_ACTION_GNSS_VIEW) {
+    s_gnss_details_view = (uint8_t)((s_gnss_details_view + 1U) % 3U);
+    s_gnss_satellite_held = 0U;
+    s_gnss_satellite_live_valid = 0U;
+    s_gnss_satellite_page_index = 0U;
+    s_layout_requested = 1U;
+  } else if (s_gnss_details_view == 2U && action == UI_ACTION_GNSS_SAT_NEXT) {
+    uint8_t pages = (uint8_t)((s_gnss_satellite_page.stored + 4U) / 5U);
+    if (pages == 0U) { pages = 1U; }
+    s_gnss_satellite_page_index = (uint8_t)((s_gnss_satellite_page_index + 1U) % pages);
+    s_gnss_satellite_held = 0U;
+    s_gnss_satellite_live_valid = 0U;
+    s_layout_requested = 1U;
+  } else if (s_gnss_details_view == 2U && action == UI_ACTION_GNSS_SAT_HOLD) {
+    if (s_gnss_satellite_held) { s_gnss_satellite_held = 0U; }
+    else if (s_gnss_satellite_live_valid && s_gnss_satellite_page.available &&
+             UiGnssAge(s_last_tick_ms, s_gnss_satellite_page.received_ms) <= APP_GNSS_SAT_MAX_AGE_MS) {
+      s_gnss_satellite_held = 1U;
+    }
+    s_layout_requested = 1U;
+  }
+}
+
+/** @brief 只用RX源时刻和ready位判断最近3s协议，0ms和uint32回绕均合法。 */
+static const char *UiGnssRxProtocol(const App_CaptureStatus_t *status, uint32_t now_ms)
+{
+  uint8_t recent=0U;
+  if ((status->gnss_seen_mask&1U) && UiGnssAge(now_ms,status->last_nmea_ms)<=3000U) { recent|=1U; }
+  if ((status->gnss_seen_mask&2U) && UiGnssAge(now_ms,status->last_ubx_ms)<=3000U) { recent|=2U; }
+  if (recent==3U) { return "Mixed"; }
+  if (recent==1U) { return "NMEA"; }
+  if (recent==2U) { return "UBX"; }
+  return (status->gnss_seen_mask&3U)?"Stale":"Waiting";
 }
 
 /** @brief 请求结果只表达接受/拒绝；执行事实仍读取操作状态和PWM快照。 */
@@ -370,6 +525,7 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
     const char *unavailable = "N/A";
     if ((id >= DISPLAY_HMI_VAR_MOTOR_TARGET_1) && (id <= DISPLAY_HMI_VAR_MOTOR_TARGET_4)) { unavailable = "Set N/A"; }
     if ((id >= DISPLAY_HMI_VAR_MOTOR_PWM_1) && (id <= DISPLAY_HMI_VAR_MOTOR_PWM_4)) { unavailable = "Out N/A"; }
+    if (id == DISPLAY_HMI_VAR_MOTOR_LOCKED) { unavailable = "Lock N/A"; }
     (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s", unavailable);
     return;
   }
@@ -410,7 +566,10 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
       break;
     case DISPLAY_HMI_VAR_BATTERY_PERCENT:
     case DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT:
-      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%lu%%", (unsigned long)value);
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Est. %lu%%", (unsigned long)value);
+      break;
+    case DISPLAY_HMI_VAR_INPUT_POWER_MW:
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%.3fW", (double)(int32_t)value / 1000.0);
       break;
     case DISPLAY_HMI_VAR_MOTOR_TARGET_1:
     case DISPLAY_HMI_VAR_MOTOR_TARGET_2:
@@ -439,8 +598,12 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
         case PX4LITE_MOTOR_OP_SYNC_RAMP_UP: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Ramp up"); break;
         case PX4LITE_MOTOR_OP_RAMP_DOWN: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Ramp down"); break;
         case PX4LITE_MOTOR_OP_INHIBITED: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Inhibited"); break;
+        case PX4LITE_MOTOR_OP_LOCKED: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "Locked"); break;
         default: (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "N/A"); break;
       }
+      break;
+    case DISPLAY_HMI_VAR_MOTOR_LOCKED:
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s", value ? "LOCKED" : "UNLOCKED");
       break;
     case DISPLAY_HMI_VAR_ATTITUDE_PHASE:
       Display_LvglFormatAttitudePhase(text, value);
@@ -611,9 +774,79 @@ static void Display_LvglMotorSliderEventCb(lv_event_t *event)
 /** @brief 三轴观察值全部有效才可绘制真实姿态，不把缺失值解释为水平姿态。 */
 static uint8_t Display_LvglAttitudeValid(void)
 {
-  return (uint8_t)(s_value_valid[DISPLAY_HMI_VAR_ROLL] &&
-                   s_value_valid[DISPLAY_HMI_VAR_PITCH] &&
-                   s_value_valid[DISPLAY_HMI_VAR_YAW]);
+  return (uint8_t)(s_hud.ready && s_hud.valid);
+}
+
+/**
+ * @brief 只为姿态页圆圈取得最新显示快照；沿用App API的时效、ZERO与本机选源。
+ * @param now_ms 显示服务真实毫秒时间。
+ * @details 未完成条带存在时不替换角度；只在旧失效清空后开始完整离屏帧。
+ *          准备跨节拍而可见GRAM保持旧圆圈，最后集中呈现；不排队过时角度。
+ */
+static void Display_LvglHudService(uint32_t now_ms)
+{
+  Display_LvglHudFrame_t next;
+  App_NavigationSnapshot_t nav;
+  Px4Lite_Result_t result;
+  lv_disp_t *disp;
+  float angle;
+  lv_area_t co;
+  if (!s_workspace_ready || !s_attitude_obj || s_layout_stage ||
+      s_current_lvgl_page != DISPLAY_HMI_PAGE_AIRCRAFT) { return; }
+  if (s_observation_frozen && s_hud.ready) { return; }
+  if (s_hud_polled && (uint32_t)(now_ms-s_hud_poll_ms)<DISPLAY_LVGL_HUD_PERIOD_MS) { return; }
+  disp=lv_disp_get_default();
+  if (!disp || disp->inv_p != 0U) { return; }
+  memset(&next,0,sizeof(next));
+  if (s_observation_frozen) {
+    /* 首次在冻结状态入页只复用已冻结HMI，不偷读当前传感器测量。 */
+    next.valid=(uint8_t)(s_value_valid[DISPLAY_HMI_VAR_ROLL] &&
+        s_value_valid[DISPLAY_HMI_VAR_PITCH] && s_value_valid[DISPLAY_HMI_VAR_YAW]);
+    next.roll_deg10=(int16_t)s_values[DISPLAY_HMI_VAR_ROLL];
+    next.pitch_deg10=(int16_t)s_values[DISPLAY_HMI_VAR_PITCH];
+    next.yaw_deg10=(int16_t)s_values[DISPLAY_HMI_VAR_YAW];
+  } else {
+    result=App_GetDisplayNavigation(&nav,now_ms);
+    next.valid=(uint8_t)(result==PX4LITE_OK && (nav.valid_mask&PX4LITE_NAV_VALID_ATTITUDE)!=0U &&
+        (uint32_t)(now_ms-nav.attitude_measurement_ms)<=PX4LITE_IMU_MAX_AGE_MS);
+    if (next.valid) {
+      next.roll_deg10=(int16_t)(nav.roll_deg100/10);
+      next.pitch_deg10=(int16_t)(nav.pitch_deg100/10);
+      next.yaw_deg10=(int16_t)(nav.yaw_deg100/10);
+    }
+  }
+  s_hud_poll_ms=now_ms;s_hud_polled=1U;
+  if (s_hud.ready && next.valid==s_hud.valid &&
+      (!next.valid || (next.roll_deg10==s_hud.roll_deg10 && next.pitch_deg10==s_hud.pitch_deg10 && next.yaw_deg10==s_hud.yaw_deg10))) { return; }
+  next.ready=1U;
+  if (next.valid) {
+    angle=((float)next.roll_deg10/10.0f)*HZ_ROLL_SIGN*(float)(M_PI/180.0);
+    next.roll_sin=sinf(angle);next.roll_cos=cosf(angle);
+    angle=(((float)next.yaw_deg10/10.0f)*HZ_YAW_SIGN+HZ_YAW_OFFSET_DEG)*(float)(M_PI/180.0);
+    next.yaw_sin=sinf(angle);next.yaw_cos=cosf(angle);
+  } else { next.roll_cos=1.0f;next.yaw_cos=1.0f; }
+  s_hud=next;
+  lv_obj_get_coords(s_attitude_obj,&co);
+  Display_HudPresent_Configure(1U,next.valid,(uint16_t)co.x1,(uint16_t)co.y1,
+      (uint16_t)lv_area_get_width(&co),(uint16_t)lv_area_get_height(&co));
+  (void)LvPortDisp_BeginHudFrame((uint16_t)co.x1,(uint16_t)co.y1,
+      (uint16_t)lv_area_get_width(&co),(uint16_t)lv_area_get_height(&co));
+  lv_obj_invalidate(s_attitude_obj);
+}
+
+/* 仅姿态仪绘制单元加速，不修改第三方库、其他页面或全工程编译等级。 */
+#if defined(__CC_ARM)
+#pragma push
+#pragma O2
+#pragma Otime
+#endif
+
+/** @brief 单位向量每次推进固定10°，替代36个刻度各自调用sin/cos；无动态内存。 */
+static void Display_LvglHudNextTick(float *dx,float *dy)
+{
+  float x=*dx*0.984807753f-*dy*0.173648178f;
+  *dy=*dy*0.984807753f+*dx*0.173648178f;
+  *dx=x;
 }
 
 /**
@@ -641,12 +874,10 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   lv_coord_t r_co;
   lv_coord_t r_ci;
   lv_coord_t r;
-  float a;
   float ca;
   float sa;
   float pitch_deg;
   float pitch_px;
-  float yaw_deg;
   float tx;
   float ty;
   float nx;
@@ -674,11 +905,9 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   r = (lv_coord_t)(r_ci - 3);                    /* 姿态盘（天/地）半径 */
 
   /* 无效时只展示中性示意几何；右侧角度继续由有效位显示 N/A。 */
-  pitch_deg = attitude_valid ? ((float)s_attitude_pitch_deg10 / 10.0f) * HZ_PITCH_SIGN : 0.0f;
-  yaw_deg = attitude_valid ? (((float)s_attitude_yaw_deg10 / 10.0f) * HZ_YAW_SIGN) + HZ_YAW_OFFSET_DEG : 0.0f;
-  a = attitude_valid ? ((float)s_attitude_roll_deg10 / 10.0f) * HZ_ROLL_SIGN * (float)(M_PI / 180.0) : 0.0f;
-  ca = cosf(a);
-  sa = sinf(a);
+  pitch_deg = attitude_valid ? ((float)s_hud.pitch_deg10 / 10.0f) * HZ_PITCH_SIGN : 0.0f;
+  ca = attitude_valid ? s_hud.roll_cos : 1.0f;
+  sa = attitude_valid ? s_hud.roll_sin : 0.0f;
   tx = ca;            /* 地平线切向 */
   ty = sa;
   nx = sa;            /* 指向天空的法向（a=0 时为屏幕上方）*/
@@ -693,7 +922,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   fill.y2 = (lv_coord_t)(cy + r);
 
   /* 圆形遮罩：动态内容全部裁进圆盘 */
-  lv_draw_mask_radius_init(&mcirc, &fill, LV_RADIUS_CIRCLE, false);
+  Display_HudMaskRadiusInit(&mcirc,&fill,LV_RADIUS_CIRCLE,false);
   id_c = lv_draw_mask_add(&mcirc, NULL);
 
   /* 天空铺满圆盘 */
@@ -751,7 +980,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
   }
 
   lv_draw_mask_remove_id(id_c);
-  lv_draw_mask_free_param(&mcirc);
+  Display_HudMaskRadiusFree(&mcirc);
 
   /* ===== 固定层（不裁剪）===== */
   /* 姿态盘外缘细圈 */
@@ -764,7 +993,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     adsc.opa = LV_OPA_COVER;
     adsc.color = lv_color_hex(attitude_valid ? 0x33485C : 0x505050);
     adsc.width = 2;
-    lv_draw_arc(dc, &adsc, &ctr, r_ci, 0, 360);
+    Display_HudDrawFullRing(dc,&adsc,&ctr,r_ci);
   }
 
   /* 外圈指南针：底环 + 刻度 + 方位字母，随航向旋转（航向朝上）。
@@ -776,7 +1005,10 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     lv_point_t ctr;
     static const int16_t card_deg[4] = {0, 90, 180, 270};
     static const char *const card_txt[4] = {"N", "E", "S", "W"};
-    float yaw_r = yaw_deg * (float)(M_PI / 180.0);
+    float yaw_sin = attitude_valid ? s_hud.yaw_sin : 0.0f;
+    float yaw_cos = attitude_valid ? s_hud.yaw_cos : 1.0f;
+    float dxx = -yaw_sin;
+    float dyy = -yaw_cos;
     float r_mid = ((float)r_co + (float)r_ci) / 2.0f;
     int16_t d;
     uint16_t c;
@@ -787,15 +1019,12 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     bandsc.opa = LV_OPA_COVER;
     bandsc.color = lv_color_hex(attitude_valid ? 0x101D29 : 0x202020);
     bandsc.width = (lv_coord_t)(r_co - r_ci);
-    lv_draw_arc(dc, &bandsc, &ctr, (lv_coord_t)r_mid, 0, 360);
+    Display_HudDrawFullRing(dc,&bandsc,&ctr,(uint16_t)r_mid);
 
     lv_draw_line_dsc_init(&tdsc);
     tdsc.opa = LV_OPA_COVER;
     tdsc.color = lv_color_hex(attitude_valid ? 0xC8D6E2 : 0x707070);
     for (d = 0; d < 360; d = (int16_t)(d + 10)) {
-      float sang = ((float)d * (float)(M_PI / 180.0)) - yaw_r;
-      float dxx = sinf(sang);
-      float dyy = -cosf(sang);
       float tlen = ((d % 30) == 0) ? 9.0f : 5.0f;
 
       tdsc.width = ((d % 90) == 0) ? 2 : 1;
@@ -804,6 +1033,7 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
       pb.x = (lv_coord_t)((float)cx + (dxx * ((float)r_co - tlen)));
       pb.y = (lv_coord_t)((float)cy + (dyy * ((float)r_co - tlen)));
       lv_draw_line(dc, &tdsc, &pa, &pb);
+      Display_LvglHudNextTick(&dxx,&dyy);
     }
 
     lv_draw_label_dsc_init(&txtdsc);
@@ -811,11 +1041,10 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     txtdsc.font = &display_lvgl_numeric_14;
     txtdsc.align = LV_TEXT_ALIGN_CENTER;
     for (c = 0U; c < 4U; c++) {
-      float sang = ((float)card_deg[c] * (float)(M_PI / 180.0)) - yaw_r;
-      float dxx = sinf(sang);
-      float dyy = -cosf(sang);
-      lv_coord_t lx = (lv_coord_t)((float)cx + (dxx * r_mid));
-      lv_coord_t ly = (lv_coord_t)((float)cy + (dyy * r_mid));
+      float card_x = (c==0U) ? -yaw_sin : (c==1U) ? yaw_cos : (c==2U) ? yaw_sin : -yaw_cos;
+      float card_y = (c==0U) ? -yaw_cos : (c==1U) ? -yaw_sin : (c==2U) ? yaw_cos : yaw_sin;
+      lv_coord_t lx = (lv_coord_t)((float)cx + (card_x * r_mid));
+      lv_coord_t ly = (lv_coord_t)((float)cy + (card_y * r_mid));
       lv_area_t la;
 
       txtdsc.color = (card_deg[c] == 0) ? lv_color_hex(attitude_valid ? 0xF2C14E : 0x909090) : lv_color_hex(attitude_valid ? 0xDCE8F2 : 0x808080);
@@ -902,6 +1131,10 @@ static void Display_LvglHorizonDrawCb(lv_event_t *e)
     lv_draw_label(dc, &text_dsc, &fill, "NO DATA", NULL);
   }
 }
+
+#if defined(__CC_ARM)
+#pragma pop
+#endif
 
 /** @brief 给固定对象预置所有会修改的局部属性；运行期只更新已有属性。 */
 static void UiInitGeometry(lv_obj_t *obj)
@@ -1028,6 +1261,52 @@ static UiButton_t *UiButton(const char *title, lv_coord_t x, lv_coord_t y, lv_co
   return button;
 }
 
+/** @brief 按当前已显示的实际锁状态选择明确动作；未知状态不允许猜测解锁。 */
+static uint8_t UiMotorLockTarget(uint8_t *locked)
+{
+  if (!locked || !s_value_valid[DISPLAY_HMI_VAR_MOTOR_LOCKED] || s_values[DISPLAY_HMI_VAR_MOTOR_LOCKED] > 1U) { return 0U; }
+  *locked = s_values[DISPLAY_HMI_VAR_MOTOR_LOCKED] ? 0U : 1U;
+  return 1U;
+}
+
+/** @brief 从本机实际目标生成单步命令；使用PWM命令入口编号，绝不把显示TARGET编号当命令。 */
+static Display_Result_t UiMotorStepRequest(uint8_t motor_index, uint16_t increment)
+{
+  App_MotorSnapshot_t motor;
+  int32_t target;
+  if ((motor_index >= 4U) || (increment > 1U)) { return DISPLAY_ERROR; }
+  if (App_CopyMotor(&motor, s_last_tick_ms) != PX4LITE_OK) { return DISPLAY_NOT_READY; }
+  target = (int32_t)motor.base_percent[motor_index] + (increment ? 1 : -1);
+  if (target < 0) { target = 0; }
+  if (target > 100) { target = 100; }
+  return Display_RequestMotorThrottle((Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_PWM_1 + motor_index), (uint16_t)target);
+}
+
+/** @brief 原位更新人工锁按钮和输入权限；复用既有对象，不改变油门或分配控件。 */
+static void UiMotorLockControls(void)
+{
+  uint8_t target = 1U;
+  uint8_t ready = UiMotorLockTarget(&target);
+  uint8_t blocked = (uint8_t)(!ready || target == 0U);
+  uint8_t i;
+  if (s_current_lvgl_page != DISPLAY_HMI_PAGE_MOTOR) { return; }
+  for (i = 0U; i < s_button_used; i++) {
+    UiButton_t *button = &s_buttons[i];
+    if (button->action == UI_ACTION_MOTOR_LOCK) {
+      UiText(button->label, ready ? (target ? "Lock" : "Unlock") : "Lock N/A");
+      if (ready) { lv_obj_clear_state(button->obj, LV_STATE_DISABLED); }
+      else { lv_obj_add_state(button->obj, LV_STATE_DISABLED); }
+    } else if (button->action == UI_ACTION_RAMP) {
+      if (blocked) { lv_obj_add_state(button->obj, LV_STATE_DISABLED); }
+      else { lv_obj_clear_state(button->obj, LV_STATE_DISABLED); }
+    }
+  }
+  for (i = 0U; i < 4U; i++) {
+    if (blocked) { lv_obj_add_state(s_motor_pwm_bars[i], LV_STATE_DISABLED); }
+    else { lv_obj_clear_state(s_motor_pwm_bars[i], LV_STATE_DISABLED); }
+  }
+}
+
 /** @brief 返回真实模块状态文字，不把未知值作为故障或在线。 */
 static const char *UiModuleState(Px4Lite_State_t state)
 {
@@ -1137,27 +1416,32 @@ static void UiButtonEvent(lv_event_t *event)
     case UI_ACTION_LAB_COMMAND: UiLabRequest((Px4Lite_LabOperation_t)button->argument); s_content_pending = 1U; break;
     case UI_ACTION_COMM_FREEZE: s_comm_frozen=(uint8_t)!s_comm_frozen; s_layout_requested=1U; break;
     case UI_ACTION_DETAILS_NEXT:
-      s_details_kind = (uint8_t)((s_details_kind + 1U) % 4U); s_layout_requested = 1U; break;
+      s_details_kind = (uint8_t)((s_details_kind + 1U) % 4U);
+      s_gnss_details_view = s_gnss_satellite_held = s_gnss_satellite_live_valid = 0U;
+      s_gnss_satellite_page_index = 0U; s_layout_requested = 1U; break;
+    case UI_ACTION_GNSS_VIEW:
+    case UI_ACTION_GNSS_SAT_NEXT:
+    case UI_ACTION_GNSS_SAT_HOLD:
+      UiGnssDetailsAction(button->action); break;
     case UI_ACTION_MOTOR_CHANNEL:
       s_motor_selected = (uint8_t)((s_motor_selected + 1U) % 4U); s_content_pending = 1U; break;
     case UI_ACTION_MOTOR_STEP:
-      {
-        App_MotorSnapshot_t motor;
-        if (App_CopyMotor(&motor, s_last_tick_ms) == PX4LITE_OK) {
-          int32_t target = (int32_t)motor.base_percent[s_motor_selected] + (button->argument ? 1 : -1);
-          if (target < 0) { target = 0; } if (target > 100) { target = 100; }
-          UiControlFeedback(Display_RequestMotorThrottle((Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_TARGET_1 + s_motor_selected), (uint16_t)target));
-        } else { UiControlFeedback(DISPLAY_NOT_READY); }
-        s_content_pending = 1U;
-      }
+      UiControlFeedback(UiMotorStepRequest(s_motor_selected, button->argument));
+      s_content_pending = 1U;
       break;
     case UI_ACTION_CAPTURE_SOURCE:
     case UI_ACTION_CAPTURE_RUN:
     case UI_ACTION_CAPTURE_CLEAR:
       {
         App_CaptureStatus_t status;
-        (void)App_CopyCaptureStatus(&status);
-        if (button->action==UI_ACTION_CAPTURE_SOURCE) { UiCaptureRequest(PX4LITE_CAPTURE_SELECT,s_current_lvgl_page==DISPLAY_HMI_PAGE_NMEA?PX4LITE_CAPTURE_NMEA:(uint8_t)((status.source+1U)%4U),s_current_lvgl_page==DISPLAY_HMI_PAGE_NMEA?(uint8_t)((status.filter+1U)%5U):0U); }
+        memset(&status,0,sizeof(status));
+        if (App_CopyCaptureStatus(&status)!=PX4LITE_OK) {
+          (void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"Capture unavailable");s_content_pending=1U;break;
+        }
+        if (button->action==UI_ACTION_CAPTURE_SOURCE) {
+          if (s_current_lvgl_page==DISPLAY_HMI_PAGE_NMEA) { UiGnssCycleFilter(&status); }
+          else { UiCaptureRequest(PX4LITE_CAPTURE_SELECT,(uint8_t)((status.source+1U)%4U),0U); }
+        }
         else { UiCaptureRequest(button->action==UI_ACTION_CAPTURE_CLEAR?PX4LITE_CAPTURE_CLEAR:(status.running?PX4LITE_CAPTURE_PAUSE:PX4LITE_CAPTURE_START),status.source,status.filter); }
         s_content_pending = 1U;
       }
@@ -1170,8 +1454,18 @@ static void UiButtonEvent(lv_event_t *event)
     case UI_ACTION_CAPTURE_SELECT:
       {
         App_CaptureStatus_t status; App_CaptureSummary_t row;
-        (void)App_CopyCaptureStatus(&status);
-        if(App_CopyCaptureSummaryRow(status.session_id,s_inspector_row,&row)==PX4LITE_OK && (status.source==PX4LITE_CAPTURE_NMEA?App_CopyNmeaSentence(status.session_id,row.latest_token,&s_selected_capture.nmea):App_CopyCapturedFrame(status.session_id,row.latest_token,&s_selected_capture.mav))==PX4LITE_OK) {
+        Px4Lite_Result_t copied=PX4LITE_NOT_READY;
+        memset(&status,0,sizeof(status));
+        if (App_CopyCaptureStatus(&status)!=PX4LITE_OK) {
+          s_selected_ready=0U;(void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"Capture unavailable");s_content_pending=1U;break;
+        }
+        s_selected_ready=0U;
+        if (App_CopyCaptureSummaryRow(status.session_id,s_inspector_row,&row)==PX4LITE_OK) {
+          if (status.source==PX4LITE_CAPTURE_GNSS) {
+            copied=UiGnssCopySelection(status.session_id,row.latest_token);
+          } else { copied=App_CopyCapturedFrame(status.session_id,row.latest_token,&s_selected_capture.mav); }
+        }
+        if(copied==PX4LITE_OK) {
           s_selected_ready=1U;s_selected_session=status.session_id;s_inspector_mode=1U;s_inspector_page=0U;
           (void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"Selected #%lu",(unsigned long)row.latest_token);
         } else { (void)UiFormat(s_control_feedback,sizeof(s_control_feedback),"Frame unavailable"); }
@@ -1179,14 +1473,47 @@ static void UiButtonEvent(lv_event_t *event)
       }
       break;
     case UI_ACTION_SERIAL_CLEAR:
-      { App_SerialExperiment_t serial;(void)App_CopySerialExperiment(&serial);s_serial_h1_base=serial.h1.handled_request_count;s_serial_b1_base=serial.b1.accepted_count;s_content_pending = 1U; } break;
+      {
+        App_SerialMonitor_t serial;
+        if (App_CopySerialMonitor(&serial) == PX4LITE_OK) {
+          s_serial_base.rx_bytes = serial.rx_byte_count;
+          s_serial_base.tx_bytes = serial.tx_complete_byte_count;
+          s_serial_base.rx_frames = serial.rx_valid_frame_count;
+          s_serial_base.tx_frames = serial.tx_complete_frame_count;
+          s_serial_base.tx_failures = serial.tx_failure_count;
+          s_serial_base.frame_errors = serial.rx_frame_error_count;
+          s_serial_base.uart_errors = serial.rx_uart_error_count;
+          s_serial_base.drops = serial.rx_drop_count;
+          s_serial_base.rearm = serial.rx_rearm_failure_count;
+          s_serial_counts_cleared = 1U;
+        }
+        s_content_pending = 1U;
+      }
+      break;
     case UI_ACTION_OBSERVE_GROUP: case UI_ACTION_OBSERVE_FIELD: case UI_ACTION_OBSERVE_INTERVAL:
     case UI_ACTION_OBSERVE_RUN: case UI_ACTION_OBSERVE_FREEZE: case UI_ACTION_OBSERVE_REF:
       {
         App_ObservationStatus_t st;App_ObservationRequest_t r;uint8_t i,group;
         (void)App_CopyObservation(&st,s_last_tick_ms);r.field[0]=st.field[0];r.field[1]=st.field[1];r.interval=st.interval;r.operation=APP_OBSERVE_EDIT;
         group=App_ObservationFieldInfo(st.field[0])->group;
-        if(button->action==UI_ACTION_OBSERVE_GROUP) { group=(uint8_t)((group+1U)%7U);for(i=0U;i<APP_OBSERVATION_FIELDS;i++) { if(App_ObservationFieldInfo(i)->group==group) { r.field[0]=i;r.field[1]=(uint8_t)(i+1U);break; } } }
+        if(button->action==UI_ACTION_OBSERVE_GROUP) {
+          uint8_t step;
+          /* 空组直接跳过；禁用采样组保留字段编号，但不能进入用户选择或作为默认第二路。 */
+          for(step=1U;step<=7U;step++) {
+            uint8_t next_group=(uint8_t)((group+step)%7U);
+            for(i=0U;i<APP_OBSERVATION_FIELDS;i++) {
+              if(App_ObservationFieldInfo(i)->group==next_group) {
+                uint8_t second;
+                r.field[0]=i;r.field[1]=i;
+                for(second=(uint8_t)(i+1U);second<APP_OBSERVATION_FIELDS;second++) {
+                  if(App_ObservationFieldInfo(second)->group==next_group) { r.field[1]=second;break; }
+                }
+                break;
+              }
+            }
+            if(i<APP_OBSERVATION_FIELDS) { break; }
+          }
+        }
         else if(button->action==UI_ACTION_OBSERVE_FIELD) { uint8_t ch=(uint8_t)button->argument;for(i=1U;i<=APP_OBSERVATION_FIELDS;i++) { uint8_t field=(uint8_t)((st.field[ch]+i)%APP_OBSERVATION_FIELDS);if(App_ObservationFieldInfo(field)->group==group) { r.field[ch]=field;break; } } }
         else if(button->action==UI_ACTION_OBSERVE_INTERVAL) { r.interval=(uint8_t)((r.interval+1U)%3U); }
         else if(button->action==UI_ACTION_OBSERVE_RUN) { r.operation=st.running?APP_OBSERVE_STOP:APP_OBSERVE_START; }
@@ -1210,6 +1537,12 @@ static void UiButtonEvent(lv_event_t *event)
       break;
     case UI_ACTION_RAMP: UiControlFeedback(Display_RequestMotorAutoTakeoff()); break;
     case UI_ACTION_DOWN: UiControlFeedback(Display_RequestMotorAutoLanding()); break;
+    case UI_ACTION_MOTOR_LOCK:
+      {
+        uint8_t locked;
+        UiControlFeedback(UiMotorLockTarget(&locked) ? Display_RequestMotorLocked(locked) : DISPLAY_NOT_READY);
+      }
+      break;
     case UI_ACTION_ATTITUDE: UiControlFeedback(Display_RequestAttitudeAction((Px4Lite_AttitudeAction_t)button->argument)); break;
     default: break;
   }
@@ -1360,7 +1693,7 @@ static void Display_LvglLayoutChrome(void)
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DIAGNOSTICS) { title = "Diagnostics"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_EVENT_HISTORY) { title = "Event history"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DETAILS) { title = "Details"; }
-  else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_NMEA) { title = "NMEA"; }
+  else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_NMEA) { title = "GNSS Frames"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_SERIAL) { title = "Serial"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_OBSERVE) { title = "Observe"; }
   else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_RECORD) { title = "Record"; }
@@ -1428,19 +1761,16 @@ static void Display_LvglLayoutSelfCheck(void)
   (void)UiButton("\xE5""\x91""\x8A""\xE8""\xAD""\xA6""", 670, 290, 106, 38, s_current_lvgl_page==DISPLAY_HMI_PAGE_OBSERVE?UI_ACTION_ESTOP:UI_ACTION_PAGE, DISPLAY_HMI_PAGE_ALARM, 0x4B2634);
 }
 
-/** @brief 电源与环境按两列展开。 */
+/** @brief 总输入仅显示已启用来源的电压、电流、功率，环境测量保持独立。 */
 static void Display_LvglLayoutFlight(void)
 {
   UiPanel(0U, 8, 62, 784, 272);
-  UiValueRow(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, "Main V", 28, 86, 140);
-  UiValueRow(DISPLAY_HMI_VAR_BATTERY_CURRENT, "Main A", 28, 130, 140);
-  UiValueRow(DISPLAY_HMI_VAR_BATTERY_PERCENT, "Main SOC", 28, 174, 140);
-  UiValueRow(DISPLAY_HMI_VAR_TEMPERATURE, "Temp", 28, 218, 140);
-  UiValueRow(DISPLAY_HMI_VAR_HUMIDITY, "Humidity", 28, 262, 140);
-  UiValueRow(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, "Motor V", 414, 86, 140);
-  UiValueRow(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, "Motor A", 414, 130, 140);
-  UiValueRow(DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, "Motor SOC", 414, 174, 140);
-  UiValueRow(DISPLAY_HMI_VAR_PRESSURE, "Pressure", 414, 218, 140);
+  UiValueRow(UI_SUPPLY_VOLTAGE_ID, "Voltage", 28, 86, 140);
+  UiValueRow(UI_SUPPLY_CURRENT_ID, "Current", 28, 142, 140);
+  UiValueRow(DISPLAY_HMI_VAR_INPUT_POWER_MW, "Power", 28, 198, 140);
+  UiValueRow(DISPLAY_HMI_VAR_TEMPERATURE, "Temp", 414, 86, 140);
+  UiValueRow(DISPLAY_HMI_VAR_HUMIDITY, "Humidity", 414, 142, 140);
+  UiValueRow(DISPLAY_HMI_VAR_PRESSURE, "Pressure", 414, 198, 140);
   (void)UiButton("Details >", 614, 285, 162, 40, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DETAILS, 0x173749);
 }
 
@@ -1460,7 +1790,7 @@ static void Display_LvglLayoutAttitude(void)
   (void)UiButton("RESTORE", 630, 275, 145, 48, UI_ACTION_ATTITUDE, PX4LITE_ATTITUDE_ACTION_RESTORE, 0x173749);
 }
 
-/** @brief 定位数据保留单位、解算等级与未知状态。 */
+/** @brief 正常GNSS页面保留定位字段、物理单位和原有测量/捕获入口。 */
 static void Display_LvglLayoutGnss(void)
 {
   UiPanel(0U, 8, 62, 784, 272);
@@ -1472,11 +1802,11 @@ static void Display_LvglLayoutGnss(void)
   UiValueRow(DISPLAY_HMI_VAR_LONGITUDE, "Longitude", 414, 132, 108);
   UiValueRow(DISPLAY_HMI_VAR_ALTITUDE, "Altitude", 414, 180, 108);
   UiValueRow(DISPLAY_HMI_VAR_GNSS_TIME, "UTC", 414, 228, 108);
-  (void)UiButton("NMEA >", 440, 285, 162, 40, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_NMEA, 0x173749);
+  (void)UiButton("Frames >", 440, 285, 162, 40, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_NMEA, 0x173749);
   (void)UiButton("Details >", 614, 285, 162, 40, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DETAILS, 0x173749);
 }
 
-/** @brief 四路滑块宽度 30、高度 128 像素；实际输出和急停永远为本机实时值。 */
+/** @brief 固定池容纳四个动作按钮；锁状态来自本机App，解锁不会隐式提交油门。 */
 static void Display_LvglLayoutMotor(void)
 {
   uint8_t i;
@@ -1488,7 +1818,8 @@ static void Display_LvglLayoutMotor(void)
   s_value_slots[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE].label = mode->label;
   Display_LvglFormatValue(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, s_values[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE]);
   UiText(mode->label, s_value_slots[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE].text);
-  UiValue(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, 548, 126, 228);
+  UiValue(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, 548, 120, 228);
+  UiValue(DISPLAY_HMI_VAR_MOTOR_LOCKED, 548, 144, 228);
   for (i = 0U; i < 4U; i++) {
     lv_coord_t x = (lv_coord_t)(46 + i * 126);
     Display_HmiVariableId_t target = (Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_TARGET_1 + i);
@@ -1505,9 +1836,21 @@ static void Display_LvglLayoutMotor(void)
     UiValue((Display_HmiVariableId_t)(DISPLAY_HMI_VAR_MOTOR_PWM_1 + i), x - 12, 278, 112);
     s_motor_pulse_labels[i] = UiLabel(s_motor_pulse_valid[i] ? s_motor_pulse_text[i] : "N/A", x - 12, 304, 112, &lv_font_montserrat_14, UI_COLOR_MUTED);
   }
-  (void)UiButton("Ramp up", 548, 154, 228, 48, UI_ACTION_RAMP, 0, 0x173749);
-  (void)UiButton("E-Stop", 548, 211, 228, 56, UI_ACTION_ESTOP, 0, 0x782538);
-  (void)UiButton("Ramp down", 548, 276, 228, 48, UI_ACTION_DOWN, 0, 0x214C36);
+  (void)UiButton("Ramp up", 548, 166, 228, 32, UI_ACTION_RAMP, 0, 0x173749);
+  (void)UiButton("E-Stop", 548, 204, 228, 40, UI_ACTION_ESTOP, 0, 0x782538);
+  (void)UiButton("Ramp down", 548, 250, 228, 32, UI_ACTION_DOWN, 0, 0x214C36);
+  (void)UiButton("Lock N/A", 548, 288, 228, 36, UI_ACTION_MOTOR_LOCK, 0, 0x173749);
+  UiMotorLockControls();
+}
+
+/** @brief GNSS额外按钮最多3个；连同公共9个和详情3个总计15，不扩展16按钮池。 */
+static void UiGnssDetailsButtons(void)
+{
+  (void)UiButton("View >",504,67,132,38,UI_ACTION_GNSS_VIEW,0,0x173749);
+  if (s_gnss_details_view == 2U) {
+    (void)UiButton("Next sats",24,293,150,33,UI_ACTION_GNSS_SAT_NEXT,0,0x173749);
+    (void)UiButton(s_gnss_satellite_held ? "Live" : "Hold",190,293,110,33,UI_ACTION_GNSS_SAT_HOLD,0,0x173749);
+  }
 }
 
 /** @brief 二级数据详情共用标签池；逐路步进保留0..100%和Control保护。 */
@@ -1517,7 +1860,13 @@ static void Display_LvglLayoutDetails(void)
   UiPanel(0U, 8, 62, 784, 272);
   s_page_info = UiLabel("", 24, 73, 472, &lv_font_montserrat_14, UI_COLOR_ACCENT);
   (void)UiButton("Next data", 648, 67, 132, 38, UI_ACTION_DETAILS_NEXT, 0, 0x173749);
-  if(s_details_kind!=3U) { (void)UiButton("Serial >",504,67,132,38,UI_ACTION_PAGE,DISPLAY_HMI_PAGE_SERIAL,0x173749);(void)UiButton("Observe >",504,293,132,33,UI_ACTION_PAGE,DISPLAY_HMI_PAGE_OBSERVE,0x173749);(void)UiButton("Record >",648,293,132,33,UI_ACTION_PAGE,DISPLAY_HMI_PAGE_RECORD,0x173749); }
+  if (s_details_kind != 3U) {
+    if (s_details_kind == 1U) {
+      UiGnssDetailsButtons();
+    } else { (void)UiButton("Serial >",504,67,132,38,UI_ACTION_PAGE,DISPLAY_HMI_PAGE_SERIAL,0x173749); }
+    (void)UiButton("Observe >",504,293,132,33,UI_ACTION_PAGE,DISPLAY_HMI_PAGE_OBSERVE,0x173749);
+    (void)UiButton("Record >",648,293,132,33,UI_ACTION_PAGE,DISPLAY_HMI_PAGE_RECORD,0x173749);
+  }
   for (i = 0U; i < 6U; i++) { s_row_labels[i] = UiLabel("", 26, (lv_coord_t)(113 + i * 31), 748, &lv_font_montserrat_14, UI_COLOR_TEXT); }
   if (s_details_kind == 3U) {
     (void)UiButton("Next motor", 24, 293, 150, 33, UI_ACTION_MOTOR_CHANNEL, 0, 0x173749);
@@ -1528,7 +1877,181 @@ static void Display_LvglLayoutDetails(void)
   Display_LvglUpdateDetails();
 }
 
-/** @brief 格式化本机真实测量；逐域无效显示N/A，不把旧缓存和零占位当测量。 */
+/** @brief 将新鲜状态域转换为既有No fix/2D/3D/DGPS显示等级，不借位置位推断未知状态。 */
+static const char *Display_LvglGnssStatusText(const App_GnssDetails_t *gnss)
+{
+  uint32_t value;
+  if (gnss->fix_type == 0U || gnss->fix_dimension == 1U) { value = 0U; }
+  else if (gnss->fix_type == 2U) { value = 4U; }
+  else if (gnss->fix_dimension == 2U) { value = 2U; }
+  else if (gnss->fix_dimension == 3U) { value = 3U; }
+  else { value = gnss->satellites_used >= 4U ? 3U : 2U; }
+  return Display_LvglGnssFixText(value);
+}
+
+/** @brief App已授权新鲜的字段允许复制时抢占；显示年龄以0为下限，不把未来1ms展开成整圈。 */
+static uint32_t Display_LvglGnssFieldAge(uint32_t now_ms, uint32_t source_ms)
+{
+  uint32_t age = now_ms - source_ms;
+  return age <= APP_NAVIGATION_MAX_AGE_MS ? age : 0U;
+}
+
+/** @brief 系统时间来源只解释已授权的App枚举，未知不猜成RTC。 */
+static const char *UiGnssClockSource(Px4Lite_TimeSource_t source)
+{
+  if (source == PX4LITE_TIME_SOURCE_GNSS) { return "GNSS"; }
+  if (source == PX4LITE_TIME_SOURCE_RTC) { return "RTC"; }
+  return "Unknown";
+}
+
+/** @brief 同步状态与当前来源分别显示；RTC有效不等于刚完成GNSS校准。 */
+static const char *UiGnssClockSync(Px4Lite_TimeSyncState_t state)
+{
+  switch (state) {
+    case PX4LITE_TIME_SYNC_RTC_VALID: return "RTC valid";
+    case PX4LITE_TIME_SYNC_GNSS_SYNCED: return "GNSS synced";
+    case PX4LITE_TIME_SYNC_STALE: return "STALE";
+    default: return "Invalid";
+  }
+}
+
+/** @brief 在固定行内显示日期时间；输入格式YYYYMMDD和HHMMSS，不自行改变时区。 */
+static void UiGnssDateTimeRow(uint8_t row, const char *name, uint32_t date, uint32_t hhmmss)
+{
+  (void)UiFormat(s_row_text[row], UI_ROW_TEXT_LEN, "%s %04lu-%02lu-%02lu %02lu:%02lu:%02lu", name,
+    (unsigned long)(date / 10000U), (unsigned long)((date / 100U) % 100U), (unsigned long)(date % 100U),
+    (unsigned long)(hhmmss / 10000U), (unsigned long)((hhmmss / 100U) % 100U), (unsigned long)(hhmmss % 100U));
+}
+
+/** @brief GNSS与系统授时分别取有效性；无定位/无GNSS时仍可展示新鲜的RTC系统时间。 */
+static void Display_LvglFormatGnssTime(uint32_t now_ms, const App_GnssDetails_t *gnss, Px4Lite_Result_t gnss_result)
+{
+  App_DateTimeSnapshot_t clock;
+  Px4Lite_Result_t clock_result = App_CopyDateTime(&clock, now_ms);
+  uint8_t gnss_time = (uint8_t)(gnss_result == PX4LITE_OK &&
+    (gnss->valid_mask & PX4LITE_GNSS_VALID_TIME) && gnss->utc_sec < 86400U);
+  (void)UiFormat(s_page_info_text, sizeof(s_page_info_text), "%s", "GNSS / Time");
+  UiText(s_page_info, s_page_info_text);
+  if (gnss_time) {
+    uint32_t sec = gnss->utc_sec;
+    uint32_t hhmmss = (sec / 3600U) * 10000U + ((sec / 60U) % 60U) * 100U + sec % 60U;
+    if (gnss->utc_date != 0U) { UiGnssDateTimeRow(0U, "GNSS UTC", 20000000U + gnss->utc_date, hhmmss); }
+    else { (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "GNSS UTC %02lu:%02lu:%02lu / date N/A", (unsigned long)(sec / 3600U), (unsigned long)((sec / 60U) % 60U), (unsigned long)(sec % 60U)); }
+  } else { (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "%s", "GNSS UTC N/A"); }
+  if (clock_result == PX4LITE_OK) {
+    UiGnssDateTimeRow(1U, "System UTC", clock.utc_date_ymd, clock.utc_time_hhmmss);
+    UiGnssDateTimeRow(2U, "Local time", clock.local_date_ymd, clock.local_time_hhmmss);
+    (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "Source %s / sync %s", UiGnssClockSource(clock.source), UiGnssClockSync(clock.sync_state));
+    if (clock.source == PX4LITE_TIME_SOURCE_GNSS || clock.last_sync_ms != 0U) {
+      (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "Last GNSS sync age %lus", (unsigned long)clock.sync_age_s);
+    } else { (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "%s", "Last GNSS sync age N/A"); }
+    (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "System sample age %lums / GNSS time %s", (unsigned long)UiGnssAge(now_ms, clock.header.sample_time_ms), gnss_time ? "valid" : "N/A");
+  } else {
+    (void)UiFormat(s_row_text[1], UI_ROW_TEXT_LEN, "%s", clock_result == PX4LITE_STALE ? "System UTC N/A / STALE" : "System UTC N/A");
+    (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "%s", "Local time N/A");
+    (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "%s", "Source N/A / sync N/A");
+    (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "%s", "Last GNSS sync age N/A");
+    (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "%s", "System time unavailable");
+  }
+}
+
+/** @brief 只按UBX星座标识命名；未知ID保留数字，不能按卫星编号推断星座。 */
+static const char *UiGnssConstellationName(uint8_t id)
+{
+  switch (id) {
+    case 0U: return "GPS";
+    case 1U: return "SBAS";
+    case 2U: return "GAL";
+    case 3U: return "BDS";
+    case 5U: return "QZSS";
+    case 6U: return "GLO";
+    default: return NULL;
+  }
+}
+
+/** @brief 当前页只读复制；源表缩短导致页号失效时返回第一页，不拼接不同代数。 */
+static Px4Lite_Result_t UiGnssCopySatellitePage(uint32_t now_ms)
+{
+  Px4Lite_Result_t result = App_CopyGnssSatellitePage(s_gnss_satellite_page_index, &s_gnss_satellite_page, now_ms);
+  if (result == PX4LITE_INVALID_PARAM && s_gnss_satellite_page_index != 0U) {
+    s_gnss_satellite_page_index = 0U;
+    result = App_CopyGnssSatellitePage(0U, &s_gnss_satellite_page, now_ms);
+  }
+  if (result == PX4LITE_OK && (!s_gnss_satellite_page.available ||
+      s_gnss_satellite_page.count > 5U || s_gnss_satellite_page.stored > 64U)) { return PX4LITE_NOT_READY; }
+  return result;
+}
+
+/** @brief 逐星页复用6行，最多5项；Hold明确显示历史seq/age，Live拒绝过期值。 */
+static void Display_LvglFormatGnssSatellites(uint32_t now_ms)
+{
+  uint8_t i, pages;
+  Px4Lite_Result_t result = PX4LITE_OK;
+  if (!s_gnss_satellite_held) { result = UiGnssCopySatellitePage(now_ms); }
+  s_gnss_satellite_live_valid = (uint8_t)(!s_gnss_satellite_held && result == PX4LITE_OK);
+  if (result != PX4LITE_OK) {
+    (void)UiFormat(s_page_info_text, sizeof(s_page_info_text), "%s", "GNSS / Sat / Live");
+    UiText(s_page_info, s_page_info_text);
+    (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "%s", result == PX4LITE_STALE ? "NAV-SAT STALE / live values N/A" : "NAV-SAT unavailable / waiting for satellite data");
+    return;
+  }
+  pages = (uint8_t)((s_gnss_satellite_page.stored + 4U) / 5U);
+  if (!pages) { pages = 1U; }
+  (void)UiFormat(s_page_info_text, sizeof(s_page_info_text), "GNSS / Sat %u/%u / %s", (unsigned int)s_gnss_satellite_page.page + 1U, (unsigned int)pages, s_gnss_satellite_held ? "HELD" : "Live");
+  UiText(s_page_info, s_page_info_text);
+  (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "%s seq%lu age%lums / NAV-SAT %u stored%u used%u%s", s_gnss_satellite_held ? "HELD" : "Live",
+    (unsigned long)s_gnss_satellite_page.sequence, (unsigned long)UiGnssAge(now_ms, s_gnss_satellite_page.received_ms),
+    (unsigned int)s_gnss_satellite_page.total, (unsigned int)s_gnss_satellite_page.stored, (unsigned int)s_gnss_satellite_page.used_count,
+    s_gnss_satellite_page.truncated ? " TRUNCATED" : "");
+  for (i = 0U; i < s_gnss_satellite_page.count; ++i) {
+    const Px4Lite_GnssSatellite_t *entry = &s_gnss_satellite_page.entries[i];
+    const char *name = UiGnssConstellationName(entry->gnss_id);
+    char identity[12], elevation[8], azimuth[8];
+    if (name) { (void)snprintf(identity, sizeof(identity), "%s", name); }
+    else { (void)snprintf(identity, sizeof(identity), "ID?%u", (unsigned int)entry->gnss_id); }
+    if ((entry->valid_mask & APP_GNSS_SAT_VALID_ELEVATION) && entry->elevation_deg >= -90 && entry->elevation_deg <= 90) {
+      (void)snprintf(elevation, sizeof(elevation), "%d", (int)entry->elevation_deg);
+    } else { (void)snprintf(elevation, sizeof(elevation), "%s", "N/A"); }
+    if ((entry->valid_mask & APP_GNSS_SAT_VALID_AZIMUTH) && entry->azimuth_deg >= 0 && entry->azimuth_deg <= 360) {
+      (void)snprintf(azimuth, sizeof(azimuth), "%d", (int)entry->azimuth_deg);
+    } else { (void)snprintf(azimuth, sizeof(azimuth), "%s", "N/A"); }
+    (void)UiFormat(s_row_text[1U + i], UI_ROW_TEXT_LEN, "%s SV%u / E %s A %s deg / C/N0 %u dBHz / used %s Q%u", identity,
+      (unsigned int)entry->sv_id, elevation, azimuth, (unsigned int)entry->cno_dbhz, entry->used ? "Yes" : "No", (unsigned int)entry->quality);
+  }
+}
+
+/** @brief 三个本地子视图独立读取App快照；无GNSS数据不能抑制系统RTC显示。 */
+static void Display_LvglFormatGnssDetails(uint32_t now_ms)
+{
+  App_GnssDetails_t gnss;
+  Px4Lite_Result_t result;
+  if (s_gnss_details_view == 2U) { Display_LvglFormatGnssSatellites(now_ms); return; }
+  result = App_CopyGnssDetails(&gnss, now_ms);
+  if (s_gnss_details_view == 1U) { Display_LvglFormatGnssTime(now_ms, &gnss, result); return; }
+  (void)UiFormat(s_page_info_text, sizeof(s_page_info_text), "%s", "GNSS / Nav");
+  UiText(s_page_info, s_page_info_text);
+  if (result == PX4LITE_NOT_READY) { return; }
+  if (result == PX4LITE_OK && (gnss.valid_mask & PX4LITE_GNSS_VALID_NAV_STATUS)) {
+    (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Fix %s / used satellites %u / age %lums", Display_LvglGnssStatusText(&gnss),
+      (unsigned int)gnss.satellites_used, (unsigned long)Display_LvglGnssFieldAge(now_ms, gnss.status_update_ms));
+  } else { (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "%s", "Fix N/A / used satellites N/A"); }
+  (void)UiFormat(s_row_text[1], UI_ROW_TEXT_LEN, "%s", "GPS/BDS breakdown N/A / antenna N/A");
+  if ((gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION) && gnss.hdop_x100 != 0U) {
+    (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "Position valid / age %lums / HDOP %.2f", (unsigned long)Display_LvglGnssFieldAge(now_ms, gnss.position_update_ms), (double)gnss.hdop_x100/100.0);
+  } else {
+    (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "%s", gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION ? "Position valid / HDOP N/A" : "Position N/A / HDOP N/A");
+  }
+  if (gnss.valid_mask & PX4LITE_GNSS_VALID_VELOCITY) { (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "Ground speed %.2fm/s / course %.2fdeg / age %lums", (double)gnss.ground_speed_cms/100.0, (double)gnss.heading_deg100/100.0, (unsigned long)Display_LvglGnssFieldAge(now_ms, gnss.velocity_update_ms)); }
+  if (gnss.valid_mask & PX4LITE_GNSS_VALID_ALTITUDE) {
+    (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "Altitude valid / age %lums", (unsigned long)Display_LvglGnssFieldAge(now_ms, gnss.altitude_update_ms));
+  } else { (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "%s", "Altitude N/A"); }
+  if ((gnss.valid_mask & PX4LITE_GNSS_VALID_TIME) && gnss.utc_sec < 86400U) {
+    (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "UTC %02lu:%02lu:%02lu / age %lums", (unsigned long)(gnss.utc_sec / 3600U),
+      (unsigned long)((gnss.utc_sec / 60U) % 60U), (unsigned long)(gnss.utc_sec % 60U), (unsigned long)Display_LvglGnssFieldAge(now_ms, gnss.time_update_ms));
+  } else { (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "%s", "UTC N/A"); }
+}
+
+/** @brief 各详情域独立展示测量，电源只展示真实V/A/W；禁用或缺测字段显示N/A。 */
 static void Display_LvglUpdateDetails(void)
 {
   uint8_t i;
@@ -1553,29 +2076,26 @@ static void Display_LvglUpdateDetails(void)
       (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "Action %u / phase %u / progress %u%% / reason %u", (unsigned int)status.action, (unsigned int)status.phase, (unsigned int)status.progress, (unsigned int)status.reason);
       (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "Bias %s / display reference %s / %s", status.bias_valid ? "set" : "none", status.reference_active ? "set" : "none", s_control_feedback); }
   } else if (s_details_kind == 1U) {
-    Px4Lite_Result_t result = App_CopyGnssDetails(&data.gnss, now);
-    if (result == PX4LITE_NOT_READY) {
-      (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "GNSS waiting for sentence");
-      UiRowsFinish(6U, "N/A");
-      return;
-    }
-    (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Link %s / RX age %lums / fix %u / dimension %u", result == PX4LITE_OK ? "active" : "N/A", (unsigned long)(now-data.gnss.last_rx_ms), (unsigned int)data.gnss.fix_type, (unsigned int)data.gnss.fix_dimension);
-    (void)UiFormat(s_row_text[1], UI_ROW_TEXT_LEN, "GPS visible %u used %u / BDS visible %u used %u / antenna %u", (unsigned int)data.gnss.gps_visible, (unsigned int)data.gnss.gps_used, (unsigned int)data.gnss.bds_visible, (unsigned int)data.gnss.bds_used, (unsigned int)data.gnss.antenna_state);
-    (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "Position %s / age %lums / HDOP %.2f", data.gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION ? "valid" : "N/A", (unsigned long)(now-data.gnss.position_update_ms), (double)data.gnss.hdop_x100/100.0);
-    if (data.gnss.valid_mask & PX4LITE_GNSS_VALID_VELOCITY) { (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "Ground speed %.2fm/s / course %.2fdeg / age %lums", (double)data.gnss.ground_speed_cms/100.0, (double)data.gnss.heading_deg100/100.0, (unsigned long)(now-data.gnss.velocity_update_ms)); }
-    (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "Altitude %s / age %lums", data.gnss.valid_mask & PX4LITE_GNSS_VALID_ALTITUDE ? "valid" : "N/A", (unsigned long)(now-data.gnss.altitude_update_ms));
-    (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "UTC %s / age %lums / mask 0x%02lX", data.gnss.valid_mask & PX4LITE_GNSS_VALID_TIME ? "valid" : "N/A", (unsigned long)(now-data.gnss.time_update_ms), (unsigned long)data.gnss.valid_mask);
+    Display_LvglFormatGnssDetails(now);
   } else if (s_details_kind == 2U) {
+    uint32_t voltage_mv, voltage_bit, current_bit, measurement_ms;
+    int32_t current_ma;
     (void)App_CopyEnvironment(&data.env, now);
     if ((data.env.valid_mask & APP_ENV_VALID_PRESSURE_TEMPERATURE) != 0U) { (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Pressure %.1fPa / temperature %.2fC / age %lums", (double)data.env.pressure_pa, (double)data.env.temperature_c, (unsigned long)(now-data.env.environment_measurement_ms)); }
     if ((data.env.valid_mask & APP_ENV_VALID_HUMIDITY) != 0U) { (void)UiFormat(s_row_text[1], UI_ROW_TEXT_LEN, "Humidity %.1f%%", (double)data.env.relative_humidity_pct); }
-    for (i = 0U; i < 2U; i++) {
-      uint32_t mask = i ? APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_CURRENT2 : APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_CURRENT1;
-      uint32_t mv = i ? data.env.voltage2_mv : data.env.voltage_mv;
-      int32_t ma = i ? data.env.current2_ma : data.env.current_ma;
-      if (data.env.valid_mask & (i ? APP_ENV_VALID_VOLTAGE2 : APP_ENV_VALID_VOLTAGE1)) { (void)UiFormat(s_row_text[2U+i*2U], UI_ROW_TEXT_LEN, "%s %.3fV / age %lums", i ? "Motor supply" : "Main supply", (double)mv/1000.0, (unsigned long)(now-(i ? data.env.power2_measurement_ms : data.env.power1_measurement_ms))); }
-      if ((data.env.valid_mask & mask) == mask) { (void)UiFormat(s_row_text[3U+i*2U], UI_ROW_TEXT_LEN, "Current %.3fA / power %.3fW", (double)ma/1000.0, (double)mv*(double)ma/1000000.0); }
-    }
+#if PX4LITE_ENABLE_BATTERY2
+    voltage_mv = data.env.voltage2_mv; current_ma = data.env.current2_ma;
+    voltage_bit = APP_ENV_VALID_VOLTAGE2; current_bit = APP_ENV_VALID_CURRENT2;
+    measurement_ms = data.env.power2_measurement_ms;
+#else
+    voltage_mv = data.env.voltage_mv; current_ma = data.env.current_ma;
+    voltage_bit = APP_ENV_VALID_VOLTAGE1; current_bit = APP_ENV_VALID_CURRENT1;
+    measurement_ms = data.env.power1_measurement_ms;
+#endif
+    if (data.env.valid_mask & voltage_bit) { (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "Voltage %.3fV / age %lums", (double)voltage_mv/1000.0, (unsigned long)(now-measurement_ms)); }
+    if (data.env.valid_mask & current_bit) { (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "Current %.3fA", (double)current_ma/1000.0); }
+    if ((data.env.valid_mask & (voltage_bit | current_bit)) == (voltage_bit | current_bit)) { (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "Power %.3fW", (double)voltage_mv*(double)current_ma/1000000.0); }
+    (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "Input supply");
   } else {
     if (App_CopyMotor(&data.motor, now) == PX4LITE_OK) {
       (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Selected motor %u / %s / state %u", (unsigned int)s_motor_selected+1U, data.motor.control_mode ? "Assist" : "Direct", (unsigned int)data.motor.operation_state);
@@ -1770,32 +2290,60 @@ static void Display_LvglUpdateObservation(void)
   for(ch=0U;ch<8U;ch++) { UiText(s_row_labels[ch],s_row_text[ch]); }
   Display_ObservationUpdate(&st,s_attitude_obj);
 }
+/** @brief 通用 UART6 监视页，保留 Serial 标题、既有日志及报文观察入口。 */
 static void Display_LvglLayoutSerial(void)
 {
-  uint8_t i;UiPanel(0U,8,62,784,272);
-  (void)UiButton("Clear view",640,68,136,36,UI_ACTION_SERIAL_CLEAR,0,0x173749);
-  (void)UiButton("Capture >",486,68,140,36,UI_ACTION_SERIAL_CAPTURE,0,0x173749);
+  uint8_t i;
+  UiPanel(0U,8,62,784,272);
+  s_page_info = UiLabel("UART6 / MAVLink",24,78,440,&lv_font_montserrat_14,UI_COLOR_ACCENT);
+  (void)UiButton("Clear stats",640,68,136,36,UI_ACTION_SERIAL_CLEAR,0,0x173749);
+  (void)UiButton("Frames >",486,68,140,36,UI_ACTION_SERIAL_CAPTURE,0,0x173749);
   for(i=0U;i<8U;i++) { s_row_labels[i]=UiLabel("",24,(lv_coord_t)(112+i*27),748,&lv_font_montserrat_14,UI_COLOR_TEXT); }
   Display_LvglUpdateSerial();
 }
-/** @brief nonce绑定真实阶段，不推断对端或Server成功。 */
+/**
+ * @brief 显示完整串口配置及九项通用统计，不参与协议解析或实验判定。
+ * @details 200 ms 更新、仅文本变化时重绘；计数按 uint32_t 差值处理回绕。
+ * 最近活动基于同份快照时间；从未收发时 N/A，不把清零理解成从未活动。
+ */
 static void Display_LvglUpdateSerial(void)
 {
-  App_SerialExperiment_t v;uint8_t i;
-  static const char * const states[4]={"Idle","Accepted / wait UART","Applied","Apply failed"};
+  App_SerialMonitor_t v;
+  uint32_t age;
+  uint8_t i, ready;
+  char rx_age[16] = {0}, tx_age[16] = {0};
+  static const char * const parity[] = {"None","Even","Odd","N/A"};
+  static const char * const flow[] = {"None","RTS","CTS","RTS/CTS","N/A"};
   s_content_pending = 0U;
   s_inspector_due_ms = s_last_tick_ms + 200U;
-  (void)App_CopySerialExperiment(&v);
-  (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"F407 responder / UART6 %lu bps / age %lu ms",(unsigned long)v.b1.current_baud_bps,(unsigned long)(s_last_tick_ms-v.measured_ms));
-  (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"H1 type 1 -> 2 / view accepted %lu / total sent %lu / %s",(unsigned long)(v.h1.handled_request_count-s_serial_h1_base),(unsigned long)v.h1.response_sent_count,v.h1.handled_request_count?(v.h1.pending?"Queued":"UART done"):"N/A");
-  if(v.h1.handled_request_count) { (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"H1 nonce %02X%02X%02X%02X%02X%02X%02X%02X / age %lu ms",v.h1.nonce[0],v.h1.nonce[1],v.h1.nonce[2],v.h1.nonce[3],v.h1.nonce[4],v.h1.nonce[5],v.h1.nonce[6],v.h1.nonce[7],(unsigned long)(s_last_tick_ms-v.h1.request_ms)); }
-  else { (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"H1 nonce N/A"); }
-  (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"H1 reject %lu / duplicate %lu / busy %lu",(unsigned long)v.h1.rejected_request_count,(unsigned long)v.h1.duplicate_count,(unsigned long)v.h1.busy_count);
-  (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"B1 type 3 -> 4 / view accepted %lu / %s",(unsigned long)(v.b1.accepted_count-s_serial_b1_base),states[v.b1.state<4U?v.b1.state:3U]);
-  if(v.b1.accepted_count) { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"B1 nonce %02X%02X%02X%02X%02X%02X%02X%02X / UART done %lu",v.b1.nonce[0],v.b1.nonce[1],v.b1.nonce[2],v.b1.nonce[3],v.b1.nonce[4],v.b1.nonce[5],v.b1.nonce[6],v.b1.nonce[7],(unsigned long)v.b1.response_sent_count); }
-  else { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"B1 nonce N/A"); }
-  (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"B1 reject %lu / duplicate %lu / busy %lu / apply OK %lu / fail %lu",(unsigned long)v.b1.rejected_count,(unsigned long)v.b1.duplicate_count,(unsigned long)v.b1.busy_count,(unsigned long)v.b1.apply_success_count,(unsigned long)v.b1.apply_failure_count);
-  (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"B0 115200 -> B1 57600 / reset: B0");
+  ready = (uint8_t)(App_CopySerialMonitor(&v) == PX4LITE_OK);
+  age = (int32_t)(s_last_tick_ms-v.measured_ms) > 0 ? s_last_tick_ms-v.measured_ms : 0U;
+  if (ready && v.config_valid && age <= 1000U) {
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Baud rate: %lu bps   Data bits: %u   Stop bits: %s",(unsigned long)v.baud_bps,(unsigned int)v.data_bits,v.stop_bits_x2==2U?"1":(v.stop_bits_x2==4U?"2":"N/A"));
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Parity: %s   Flow control: %s",parity[v.parity<4U?v.parity:3U],flow[v.flow_control<5U?v.flow_control:4U]);
+  } else {
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Baud rate: N/A   Data bits: N/A   Stop bits: N/A");
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Parity: N/A   Flow control: N/A");
+  }
+  if (ready) {
+    (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"RX bytes: %lu   Valid frames: %lu",(unsigned long)(v.rx_byte_count-s_serial_base.rx_bytes),(unsigned long)(v.rx_valid_frame_count-s_serial_base.rx_frames));
+    (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"TX complete bytes: %lu   Frames: %lu",(unsigned long)(v.tx_complete_byte_count-s_serial_base.tx_bytes),(unsigned long)(v.tx_complete_frame_count-s_serial_base.tx_frames));
+    (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"TX failures: %lu   RX frame errors: %lu",(unsigned long)(v.tx_failure_count-s_serial_base.tx_failures),(unsigned long)(v.rx_frame_error_count-s_serial_base.frame_errors));
+    (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"RX errors: %lu   Drops: %lu   Rearm: %lu",(unsigned long)(v.rx_uart_error_count-s_serial_base.uart_errors),(unsigned long)(v.rx_drop_count-s_serial_base.drops),(unsigned long)(v.rx_rearm_failure_count-s_serial_base.rearm));
+    if (v.rx_seen) { (void)UiFormat(rx_age,sizeof(rx_age),"%lu ms",(unsigned long)(v.measured_ms-v.last_rx_ms)); }
+    else { (void)UiFormat(rx_age,sizeof(rx_age),"N/A"); }
+    if (v.tx_seen) { (void)UiFormat(tx_age,sizeof(tx_age),"%lu ms",(unsigned long)(v.measured_ms-v.last_tx_ms)); }
+    else { (void)UiFormat(tx_age,sizeof(tx_age),"N/A"); }
+    (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Last RX: %s   Last TX complete: %s",rx_age,tx_age);
+    (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"Counts: %s   Snapshot %s: %lu ms",s_serial_counts_cleared?"since clear":"since boot",age>1000U?"STALE":"age",(unsigned long)age);
+  } else {
+    (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"RX bytes: N/A   Valid frames: N/A");
+    (void)UiFormat(s_row_text[3],UI_ROW_TEXT_LEN,"TX complete bytes: N/A   Frames: N/A");
+    (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"TX failures: N/A   RX frame errors: N/A");
+    (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"RX errors: N/A   Drops: N/A   Rearm: N/A");
+    (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Last RX: N/A   Last TX complete: N/A");
+    (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"UART6 monitor not ready");
+  }
   for(i=0U;i<8U;i++) { UiText(s_row_labels[i],s_row_text[i]); }
 }
 static void Display_LvglLayoutInspector(void)
@@ -1813,7 +2361,100 @@ static void Display_LvglLayoutInspector(void)
   Display_LvglUpdateInspector();
 }
 
-/** @brief 一个稳定选帧副本分别投影Messages/Raw/Decoded；不从生产队列取帧。 */
+/**
+ * @brief GNSS报文页只投影App提供的消息元数据及完整原字节，复用现有八行和按钮。
+ * @details RX标题是常驻接收事实；暂停/选帧保留历史，两者不能互相冒充。
+ *          NMEA保留ASCII+HEX，UBX只按完整线帧HEX分页，不解码payload。
+ */
+static void Display_LvglUpdateGnssFrames(const App_CaptureStatus_t *status)
+{
+  uint8_t i;
+  uint32_t now_ms=s_last_tick_ms;
+  const char *rx;
+  rx=UiGnssRxProtocol(status,now_ms);
+  if (s_selected_session!=status->session_id) {
+    s_selected_ready=0U;s_inspector_page=0U;s_inspector_row=0U;s_selected_session=status->session_id;
+  }
+  if (s_inspector_mode>1U) { s_inspector_mode=0U; }
+  s_row_written=0U;
+  for (i=0U;i<8U;i++) {
+    const lv_font_t *font=&display_lvgl_numeric_14;
+    if (s_inspector_mode==1U && s_selected_ready && i>=2U && i<6U &&
+        (s_selected_capture.gnss.protocol!=PX4LITE_GNSS_PROTOCOL_NMEA || i>=4U)) { font=&display_lvgl_hex_14; }
+    if (lv_obj_get_style_text_font(s_row_labels[i],0)!=font) { lv_obj_set_style_text_font(s_row_labels[i],font,0); }
+  }
+  if (s_inspector_mode==0U) {
+    uint8_t first=(uint8_t)((s_inspector_row/4U)*4U);
+    if (s_inspector_row>=status->summary_count) { s_inspector_row=0U;first=0U; }
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Count %lu / stored %u / overwrite %lu / drop %lu / summary drop %lu",(unsigned long)status->count,(unsigned)status->stored_count,(unsigned long)status->overwritten,(unsigned long)status->capture_drops,(unsigned long)status->summary_drops);
+    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Reject %lu / %u keys / %s",(unsigned long)status->rejected,(unsigned)status->summary_count,s_control_feedback);
+    for (i=0U;i<4U;i++) {
+      App_CaptureSummary_t row;
+      if (App_CopyCaptureSummaryRow(status->session_id,(uint8_t)(first+i),&row)==PX4LITE_OK) {
+        uint32_t span=row.last_ms-row.first_ms;
+        const char *name=UiGnssFrameName(row.system_id,row.component_id,row.msg_id,(uint8_t)row.msg_id);
+        if (span && row.count>1U) {
+          (void)UiFormat(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %s n%lu / avg %.2fHz / age%lums",first+i==s_inspector_row?">":" ",name,(unsigned long)row.count,(double)(row.count-1U)*1000.0/(double)span,(unsigned long)UiGnssAge(now_ms,row.last_ms));
+        } else {
+          (void)UiFormat(s_row_text[i+2U],UI_ROW_TEXT_LEN,"%s %s n%lu / avg N/A / Raw #%lu",first+i==s_inspector_row?">":" ",name,(unsigned long)row.count,(unsigned long)row.latest_token);
+        }
+      }
+    }
+    if (!status->summary_count) {
+      (void)UiFormat(s_row_text[2],UI_ROW_TEXT_LEN,"%s",status->running?"No matching captured frames yet":"No stored frames / press Start to capture");
+    }
+    if (!(status->gnss_seen_mask&3U)) {
+      (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"No valid NMEA/UBX frame received yet");
+    } else if (!strcmp(rx,"Stale")) {
+      (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"RX stale (>3s) / stored capture is history");
+    } else {
+      (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"RX %s / %s",rx,status->running?"Messages: select a row for Raw":"Paused capture: showing stored history");
+    }
+    (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"Filter change pauses a new session; press Start");
+  } else if (!s_selected_ready) {
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"No selected GNSS frame / use Messages then Select");
+  } else {
+    App_GnssCapturedFrame_t *frame=&s_selected_capture.gnss;
+    if (!frame->length || frame->length>sizeof(frame->bytes) ||
+        (frame->protocol!=PX4LITE_GNSS_PROTOCOL_NMEA && frame->protocol!=PX4LITE_GNSS_PROTOCOL_UBX)) {
+      s_selected_ready=0U;
+      (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Selected GNSS frame unavailable");
+    } else {
+      uint16_t step=frame->protocol==PX4LITE_GNSS_PROTOCOL_NMEA?32U:64U;
+      uint8_t pages=(uint8_t)((frame->length+step-1U)/step);
+      uint16_t first=(uint16_t)((s_inspector_page%pages)*step);
+      uint16_t end=(uint16_t)(first+step<frame->length?first+step-1U:frame->length-1U);
+      const char *name=UiGnssFrameName(frame->protocol,frame->class_id,frame->message_id,frame->nmea_type);
+      if (frame->protocol==PX4LITE_GNSS_PROTOCOL_NMEA) {
+        (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Selected #%lu %s / %uB / checksum %s",(unsigned long)frame->token,name,(unsigned)frame->length,frame->checksum_valid?"OK":"BAD/missing");
+      } else {
+        (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Selected #%lu %s / class %02X id %02X / %uB / checksum %s",(unsigned long)frame->token,name,(unsigned)frame->class_id,(unsigned)frame->message_id,(unsigned)frame->length,frame->checksum_valid?"OK":"BAD");
+      }
+      (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Received %lums / age%lums / bytes %u..%u / page %u/%u",(unsigned long)frame->time_ms,(unsigned long)UiGnssAge(now_ms,frame->time_ms),(unsigned)first,(unsigned)end,(unsigned)(s_inspector_page%pages)+1U,(unsigned)pages);
+      if (frame->protocol==PX4LITE_GNSS_PROTOCOL_NMEA) {
+        for (i=0U;i<2U;i++) {
+          uint16_t at=(uint16_t)(first+i*16U);
+          if (at>=frame->length) { break; }
+          UiRawLine((uint8_t)(2U+i),at,frame->bytes,frame->length,1U);
+          UiRawLine((uint8_t)(4U+i),at,frame->bytes,frame->length,0U);
+        }
+      } else {
+        for (i=0U;i<4U;i++) {
+          uint16_t at=(uint16_t)(first+i*16U);
+          if (at>=frame->length) { break; }
+          UiRawLine((uint8_t)(2U+i),at,frame->bytes,frame->length,0U);
+        }
+      }
+      (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Selected frame is history; RX title is current link");
+      (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"%s",s_control_feedback);
+    }
+  }
+  (void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"%s RX %s / %s / s%lu",UiGnssFilterName(status->filter),rx,status->pending?"Request queued":(status->running?"Capturing":"Paused"),(unsigned long)status->session_id);
+  UiText(s_page_info,s_page_info_text);
+  UiRowsFinish(8U,"");
+}
+
+/** @brief 一个稳定选帧副本分别投影Messages/Raw/Decoded；GNSS独立使用双协议两模式。 */
 static void Display_LvglUpdateInspector(void)
 {
   App_CaptureStatus_t status;
@@ -1823,7 +2464,14 @@ static void Display_LvglUpdateInspector(void)
   static const char * const stages[7]={"Submitting","Queued","UART done","Module idle","Error","RX valid","Timeout"};
   s_content_pending = 0U;
   s_inspector_due_ms = s_last_tick_ms + (s_inspector_mode ? 200U : 1000U);
-  (void)App_CopyCaptureStatus(&status);
+  memset(&status,0,sizeof(status));
+  if (App_CopyCaptureStatus(&status)!=PX4LITE_OK) {
+    s_row_written=0U;
+    (void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"Capture status unavailable");
+    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"Capture service unavailable / no live RX claim");
+    UiText(s_page_info,s_page_info_text);UiRowsFinish(8U,"");return;
+  }
+  if (status.source==PX4LITE_CAPTURE_GNSS) { Display_LvglUpdateGnssFrames(&status);return; }
   /* 原始HEX行稳定字节列；切回Messages/Decoded必须恢复普通数字等宽字体。 */
   for (i = 0U; i < 8U; i++) {
     const lv_font_t *font = &display_lvgl_numeric_14;
@@ -1857,20 +2505,7 @@ static void Display_LvglUpdateInspector(void)
     } else { (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"%s",s_control_feedback); }
     { Px4Lite_CommDebugInfo_t comm; App_GetCommStats(&comm); (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"LoRa CRC %lu / queue drop %lu / DMA overflow %lu",(unsigned long)comm.crc_error_count,(unsigned long)comm.rx_drop_count,(unsigned long)comm.rx_overflow_count); }
   } else if(!s_selected_ready) { (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"No selected frame / use Messages then Select"); }
-  else if(status.source==PX4LITE_CAPTURE_NMEA) {
-    App_NmeaSentence_t *line=&s_selected_capture.nmea;
-    uint8_t pages=(uint8_t)((line->length+31U)/32U);
-    uint16_t first=(uint16_t)((s_inspector_page%pages)*32U);
-    static const char * const types[5]={"Other","GGA","RMC","GSA","GSV"};
-    (void)UiFormat(s_row_text[0],UI_ROW_TEXT_LEN,"#%lu %s / %uB / checksum %s / age %lums",(unsigned long)line->token,types[line->type<5U?line->type:0U],(unsigned int)line->length,line->checksum_valid?"OK":"BAD/missing",(unsigned long)(s_last_tick_ms-line->time_ms));
-    (void)UiFormat(s_row_text[1],UI_ROW_TEXT_LEN,"Bytes %u..%u / page %u/%u",(unsigned int)first,(unsigned int)((first+32U<line->length)?first+31U:line->length-1U),(unsigned int)(s_inspector_page%pages)+1U,(unsigned int)pages);
-    for(i=0U;i<2U;i++) {
-      uint16_t at=(uint16_t)(first+i*16U);
-      UiRawLine((uint8_t)(2U+i),at,line->bytes,line->length,1U);
-      UiRawLine((uint8_t)(4U+i),at,line->bytes,line->length,0U);
-    }
-    (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"%s",s_control_feedback);
-  } else if(s_inspector_mode==1U) {
+  else if(s_inspector_mode==1U) {
     App_CaptureFrame_t *frame=&s_selected_capture.mav;
     uint8_t stage=frame->stage;
     uint8_t in_ring=(uint8_t)(App_CopyCapturedStage(frame->session_id,frame->token,&stage)==PX4LITE_OK);
@@ -1893,7 +2528,6 @@ static void Display_LvglUpdateInspector(void)
       for(i=0U;i<decoded.row_count;i++) { (void)UiFormat(s_row_text[i],UI_ROW_TEXT_LEN,"%s",decoded.rows[i]); }
     }
   }
-  if(status.source==PX4LITE_CAPTURE_NMEA) { static const char * const filters[5]={"All","GGA","RMC","GSA","GSV"};(void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"NMEA / %s / %s / s%lu",filters[status.filter],status.running?"Capturing":"Paused",(unsigned long)status.session_id);title_written = 1U;(void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"%s",""); }
   if (!title_written) {
   (void)UiFormat(s_page_info_text,sizeof(s_page_info_text),"%s / %s / %s / s%lu",views[s_inspector_mode],sources[status.source],status.pending?"Request queued":(status.running?"Capturing":"Paused"),(unsigned long)status.session_id);
   }
@@ -2126,13 +2760,22 @@ static void Display_LvglUpdateRemote(void)
       UiText(s_row_labels[i],s_row_text[i]);
     }
     {
-      char alt[18],velocity[30],gnss_age[14],att_age[14],p1_age[14],p2_age[14],env_age[14],rh_age[14];
-      char v1[18],v2[18],c1[18],c2[18],b1[14],b2[14],hb[14],data_age[14],humidity[14];
+      char alt[18],velocity[30],gnss_age[14],att_age[14],supply_age[14],env_age[14],rh_age[14];
+      char voltage[18],current[18],power[22],hb[14],data_age[14],humidity[14];
+      uint32_t voltage_bit,current_bit,voltage_mv;
+      int32_t current_ma;
       uint32_t frozen_delta=s_comm_frozen?(s_last_tick_ms-s_remote_lab_capture_ms):0U;
       UiLabAge(gnss_age,sizeof(gnss_age),s_remote_lab.gnss_age_ms,frozen_delta);
       UiLabAge(att_age,sizeof(att_age),s_remote_lab.attitude_age_ms,frozen_delta);
-      UiLabAge(p1_age,sizeof(p1_age),s_remote_lab.power1_age_ms,frozen_delta);
-      UiLabAge(p2_age,sizeof(p2_age),s_remote_lab.power2_age_ms,frozen_delta);
+#if PX4LITE_ENABLE_BATTERY2
+      voltage_bit=APP_LAB_VOLTAGE2;current_bit=APP_LAB_CURRENT2;
+      voltage_mv=s_remote_lab.voltage2_mv;current_ma=(int32_t)s_remote_lab.current2_ma;
+      UiLabAge(supply_age,sizeof(supply_age),s_remote_lab.power2_age_ms,frozen_delta);
+#else
+      voltage_bit=APP_LAB_VOLTAGE1;current_bit=APP_LAB_CURRENT1;
+      voltage_mv=s_remote_lab.voltage_mv;current_ma=(int32_t)s_remote_lab.current_ma;
+      UiLabAge(supply_age,sizeof(supply_age),s_remote_lab.power1_age_ms,frozen_delta);
+#endif
       UiLabAge(env_age,sizeof(env_age),s_remote_lab.environment_age_ms,frozen_delta);
       UiLabAge(rh_age,sizeof(rh_age),s_remote_lab.humidity_age_ms,frozen_delta);
       UiLabAge(hb,sizeof(hb),s_remote_lab_live.heartbeat_age_ms,0U);
@@ -2148,13 +2791,10 @@ static void Display_LvglUpdateRemote(void)
       else { (void)UiFormat(s_row_text[4],UI_ROW_TEXT_LEN,"Position N/A / stale\nH %s  V N/E %s",alt,velocity); }
       if(s_remote_lab.valid_bits&APP_LAB_ATTITUDE) { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"R/P/Y %.1f/%.1f/%.1f deg\nRate %.1f/%.1f/%.1f d/s age %s",s_remote_lab.roll_deg100/100.0,s_remote_lab.pitch_deg100/100.0,s_remote_lab.yaw_deg100/100.0,s_remote_lab.roll_rate_dps100/100.0,s_remote_lab.pitch_rate_dps100/100.0,s_remote_lab.yaw_rate_dps100/100.0,att_age); }
       else { (void)UiFormat(s_row_text[5],UI_ROW_TEXT_LEN,"Attitude / Rate N/A / stale\nage %s",att_age); }
-      UiLabNumber(v1,sizeof(v1),s_remote_lab.valid_bits&APP_LAB_VOLTAGE1,s_remote_lab.voltage_mv/1000.0,"V");
-      UiLabNumber(v2,sizeof(v2),s_remote_lab.valid_bits&APP_LAB_VOLTAGE2,s_remote_lab.voltage2_mv/1000.0,"V");
-      UiLabNumber(c1,sizeof(c1),s_remote_lab.valid_bits&APP_LAB_CURRENT1,s_remote_lab.current_ma/1000.0,"A");
-      UiLabNumber(c2,sizeof(c2),s_remote_lab.valid_bits&APP_LAB_CURRENT2,s_remote_lab.current2_ma/1000.0,"A");
-      if(s_remote_lab.valid_bits&APP_LAB_PERCENT1) { (void)snprintf(b1,sizeof(b1),"%u%%",(unsigned int)s_remote_lab.battery_percent); } else { (void)snprintf(b1,sizeof(b1),"N/A"); }
-      if(s_remote_lab.valid_bits&APP_LAB_PERCENT2) { (void)snprintf(b2,sizeof(b2),"%u%%",(unsigned int)s_remote_lab.battery2_percent); } else { (void)snprintf(b2,sizeof(b2),"N/A"); }
-      (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"P1 %s %s %s age %s\nP2 %s %s %s age %s",v1,c1,b1,p1_age,v2,c2,b2,p2_age);
+      UiLabNumber(voltage,sizeof(voltage),s_remote_lab.valid_bits&voltage_bit,voltage_mv/1000.0,"V");
+      UiLabNumber(current,sizeof(current),s_remote_lab.valid_bits&current_bit,current_ma/1000.0,"A");
+      UiLabNumber(power,sizeof(power),(s_remote_lab.valid_bits&(voltage_bit|current_bit))==(voltage_bit|current_bit),(double)voltage_mv*current_ma/1000000.0,"W");
+      (void)UiFormat(s_row_text[6],UI_ROW_TEXT_LEN,"Voltage %s / Current %s\nPower %s / age %s",voltage,current,power,supply_age);
       if(s_remote_lab.valid_bits&APP_LAB_HUMIDITY) { (void)snprintf(humidity,sizeof(humidity),"%.1f%%",s_remote_lab.humidity_pct100/100.0); } else { (void)snprintf(humidity,sizeof(humidity),"N/A"); }
       if(s_remote_lab.valid_bits&APP_LAB_ENVIRONMENT) { (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"T %.1fC P %luPa age %s\nRH %s age %s",s_remote_lab.temperature_deg100/100.0,(unsigned long)s_remote_lab.pressure_pa,env_age,humidity,rh_age); }
       else { (void)UiFormat(s_row_text[7],UI_ROW_TEXT_LEN,"T/P N/A / stale age %s\nRH %s age %s",env_age,humidity,rh_age); }
@@ -2176,6 +2816,7 @@ static void Display_LvglLayout(void)
   uint16_t i;
   if (s_layout_stage == 0U) { s_layout_stage = 1U; }
   if (s_layout_stage == 1U) {
+  LvPortDisp_AbortHudFrame();
   /* 外部按键也可切页。先取消旧触点，防止同一池对象改绑后把松手识别为新动作。 */
   lv_indev_t *indev = lv_indev_get_next(0);
   while (indev != 0) {
@@ -2231,6 +2872,7 @@ Display_Result_t Display_LvglInit(uint32_t now_ms)
   if (!LvPortDisp_Init()) { s_lvgl_display_ready = 0U; return DISPLAY_ERROR; }
   (void)LvPortIndev_Init();
   s_last_tick_ms = now_ms;
+  s_hud.ready=0U;s_hud_polled=0U;
   Display_LvglInitWorkspace();
   s_lvgl_display_ready = 1U;
   do { Display_LvglLayout(); } while (s_layout_stage != 0U);
@@ -2253,7 +2895,7 @@ uint8_t Display_LvglNeedsRefresh(void)
   return (uint8_t)(s_lvgl_display_ready && (s_page_change_requested || s_layout_requested || s_content_pending));
 }
 
-/** @brief 服务触摸、页面请求与低频诊断；底层 LVGL flush 耗时仍需实板测量。 */
+/** @brief 服务触摸及预算化视图；HUD准备不暴露条带，整帧集中提交计入真实耗时。 */
 Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
 {
   uint32_t elapsed_ms;
@@ -2306,8 +2948,10 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
       }
     }
   } else { LvPortDisp_BeginStep(started_us, 0U); }
+  if (App_RuntimeGetUs()-started_us<budget_us) { Display_LvglHudService(now_ms); }
   handler_started_us = App_RuntimeGetUs();
   lv_timer_handler();
+  if(LvPortDisp_FinishHudFrame()==2U) { s_hud.ready=0U; }
   handler_us = App_RuntimeGetUs() - handler_started_us;
   (void)App_CopyRuntimeStats(&runtime, now_ms);
   LvPortDisp_GetFlushTime(&runtime.display.flush_us, &runtime.display.flush_max_us);
@@ -2342,7 +2986,7 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
   return DISPLAY_OK;
 }
 
-/** @brief 写入显示缓存；仅活动标签和姿态对象失效，不新增控件。 */
+/** @brief 写入常规HMI缓存并设置待更新位；圆圈独立取数，不新增控件。 */
 Display_Result_t Display_LvglSetValue(Display_HmiVariableId_t id, uint32_t value)
 {
   uint8_t changed;
@@ -2359,6 +3003,7 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id)
   uint32_t value = s_values[id];
   if (!s_workspace_ready) { return; }
   if (s_value_slots[id].label) { Display_LvglFormatValue(id, value); UiTextForce(s_value_slots[id].label, s_value_slots[id].text); }
+  if (id == DISPLAY_HMI_VAR_MOTOR_LOCKED) { UiMotorLockControls(); }
   if ((id >= DISPLAY_HMI_VAR_MOTOR_TARGET_1) && (id <= DISPLAY_HMI_VAR_MOTOR_TARGET_4) && (s_current_lvgl_page == DISPLAY_HMI_PAGE_MOTOR)) {
     uint8_t index = (uint8_t)(id - DISPLAY_HMI_VAR_MOTOR_TARGET_1);
     if (!s_value_valid[id]) { lv_obj_add_flag(s_motor_pwm_bars[index], LV_OBJ_FLAG_HIDDEN); return; }
@@ -2372,13 +3017,8 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id)
     UiTextForce(s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].label, s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].text);
   }
   if ((id == DISPLAY_HMI_VAR_ROLL) || (id == DISPLAY_HMI_VAR_PITCH) || (id == DISPLAY_HMI_VAR_YAW)) {
-    s_attitude_roll_deg10 = (int16_t)s_values[DISPLAY_HMI_VAR_ROLL];
-    s_attitude_pitch_deg10 = (int16_t)s_values[DISPLAY_HMI_VAR_PITCH];
-    s_attitude_yaw_deg10 = (int16_t)s_values[DISPLAY_HMI_VAR_YAW];
-    if (s_current_lvgl_page == DISPLAY_HMI_PAGE_AIRCRAFT) {
-      /* 数值变化与有效性转换都重绘，数据丢失时切为灰盘而不是隐藏控件。 */
-      lv_obj_clear_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); lv_obj_invalidate(s_attitude_obj);
-    } else if(s_current_lvgl_page!=DISPLAY_HMI_PAGE_OBSERVE) { lv_obj_add_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); }
+    /* 圆圈由独立快照驱动；200ms数字不能把绘制中帧退回旧角度或重新失效尾带。 */
+    if(s_current_lvgl_page!=DISPLAY_HMI_PAGE_AIRCRAFT && s_current_lvgl_page!=DISPLAY_HMI_PAGE_OBSERVE) { lv_obj_add_flag(s_attitude_obj, LV_OBJ_FLAG_HIDDEN); }
   }
 }
 
@@ -2436,8 +3076,12 @@ Display_Result_t Display_LvglSetPage(Display_HmiPage_t page)
   if (page <= DISPLAY_HMI_PAGE_ALARM) { s_primary_page = page; }
   if (page == DISPLAY_HMI_PAGE_DETAILS) {
     s_details_kind = s_primary_page == DISPLAY_HMI_PAGE_FLIGHT ? 2U : (s_primary_page == DISPLAY_HMI_PAGE_DATA ? 1U : (s_primary_page == DISPLAY_HMI_PAGE_MOTOR ? 3U : 0U));
+    s_gnss_details_view = s_gnss_satellite_held = s_gnss_satellite_live_valid = 0U;
+    s_gnss_satellite_page_index = 0U;
   }
   s_current_lvgl_page = page;
+  LvPortDisp_AbortHudFrame();
+  s_hud.ready=0U;s_hud_polled=0U;
   s_layout_requested = 1U;
   return DISPLAY_OK;
 }

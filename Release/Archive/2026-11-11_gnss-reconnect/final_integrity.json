@@ -1,0 +1,20 @@
+{
+  "production_inputs": 1047,
+  "source_zip_verified": true,
+  "changed_production": 4,
+  "all_other_inputs_unchanged": 1043,
+  "hex_sha256": "caf6619f9085ad99cd360362a49122ec1c22402c1df80973797734496d54e5b1",
+  "main_sram_bytes": 126184,
+  "main_sram_free_bytes": 4888,
+  "main_sram_delta_from_e68_bytes": 168,
+  "rom_size_bytes": 492368,
+  "rom_delta_from_e68_bytes": 1132,
+  "gnss_dma_address": "0x200090a4",
+  "gnss_dma_bytes": 1024,
+  "ccm_uninit_bytes": 65536,
+  "hex_data_start": "0x8000000",
+  "hex_data_end_exclusive": "0x8078350",
+  "board_flashed": false,
+  "runtime_dropout_root_cause_verified": false,
+  "field_previous_candidate": "User confirmed E68 had been flashed; still intermittent, restart necessity not established."
+}

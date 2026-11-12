@@ -91,9 +91,11 @@ BSP_Status_t BSP_Init(void)
   result = BSP_ADC_Init();
   BSP_RecordInitResult(BSP_INIT_ADC_MASK, result);
   if (result != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
+#if BSP_ENABLE_POWER2
   result = BSP_ADC2_Init();
   BSP_RecordInitResult(BSP_INIT_ADC_MASK, result);
   if (result != BSP_STATUS_OK) { status = BSP_STATUS_ERROR; }
+#endif
 #endif
 
 #if BSP_ENABLE_ADC_CURRENT

@@ -1,6 +1,6 @@
 /**
  * @file px4lite_diagnostic_capture.c
- * @brief Framework 固定捕获环与互斥会话管理。
+ * @brief Framework 固定捕获环、互斥会话及通用串口监视快照发布。
  * @details 无任务/堆分配；Comm执行动作，Adapter提交副本，不读生产队列或DMA。
  */
 #include "px4lite_diagnostic_capture.h"
@@ -9,10 +9,12 @@
 #include <string.h>
 #include "px4lite_platform.h"
 static Px4Lite_SerialExperiment_t s_serial;
+/** @brief Comm 发布、应用只读的通用串口事实，独立于捕获会话。 */
+static Px4Lite_SerialMonitor_t s_serial_monitor;
 /** @brief 固定互斥区；切类型必须换会话且暂停。 */
 typedef union {
   Px4Lite_CaptureFrame_t mav[PX4LITE_CAPTURE_CAPACITY]; /**< MAVLink完整帧。 */
-  Px4Lite_NmeaSentence_t nmea[PX4LITE_CAPTURE_CAPACITY]; /**< NMEA句子。 */
+  Px4Lite_GnssCapturedFrame_t gnss[PX4LITE_CAPTURE_CAPACITY]; /**< NMEA/UBX完整原帧。 */
 } CaptureStore_t;
 static CaptureStore_t s_store;
 static Px4Lite_CaptureSummary_t s_summary[PX4LITE_CAPTURE_SUMMARIES];
@@ -25,19 +27,20 @@ static uint32_t CaptureNext(uint32_t value) { return value == UINT32_MAX ? 1U : 
 /** @brief 调度前一次初始化。 */
 void Px4Lite_CaptureInit(void)
 {
+  memset(&s_serial_monitor, 0, sizeof(s_serial_monitor));
   memset(&s_store, 0, sizeof(s_store)); memset(s_summary, 0, sizeof(s_summary)); memset(&s_status, 0, sizeof(s_status));
   s_status.session_id = 1U; s_status.source = PX4LITE_CAPTURE_LORA_RX; s_head = 0U; s_tx_session = 0U; s_tx_token = 0U;
 }
 /** @brief 固定请求槽只复制，不在调用方执行切换。 */
 Px4Lite_Result_t Px4Lite_CaptureRequest(const Px4Lite_CaptureRequest_t *request)
 {
-  if (!request || request->operation > PX4LITE_CAPTURE_SELECT || request->source > PX4LITE_CAPTURE_NMEA || request->filter > 4U) { return PX4LITE_INVALID_PARAM; }
+  if (!request || request->operation > PX4LITE_CAPTURE_SELECT || request->source > PX4LITE_CAPTURE_GNSS || request->filter > PX4LITE_CAPTURE_FILTER_SAT) { return PX4LITE_INVALID_PARAM; }
   taskENTER_CRITICAL();
   if (s_status.pending) { taskEXIT_CRITICAL(); return PX4LITE_BUSY; }
   s_request = *request; s_status.request_id = CaptureNext(s_status.request_id); s_status.pending = 1U;
   taskEXIT_CRITICAL(); return PX4LITE_OK;
 }
-/** @brief 换会话时只清固定元数据；旧union字节不会被旧token授权读取。 */
+/** @brief Comm处理捕获动作；换会话只清记录统计，保留端口统计和独立GNSS协议发现事实。 */
 void Px4Lite_CaptureWorkRun(void)
 {
   Px4Lite_SerialExperiment_t serial;
@@ -60,6 +63,18 @@ void Px4Lite_CaptureWorkRun(void)
   Px4Lite_RpiH1EchoGetStats(&serial.h1); Px4Lite_RpiBaudSwitchGetStats(&serial.b1);
   serial.measured_ms=Px4Lite_PlatformGetMs();
   taskENTER_CRITICAL(); s_serial=serial; taskEXIT_CRITICAL();
+  {
+    Px4Lite_SerialMonitor_t monitor;
+    (void)Px4Lite_RpiMavlinkCopyMonitor(&monitor);
+    taskENTER_CRITICAL(); s_serial_monitor = monitor; taskEXIT_CRITICAL();
+  }
+}
+/** @brief 只复制已发布事实，不让显示任务触碰 UART 或消耗接收字节。 */
+Px4Lite_Result_t Px4Lite_CopySerialMonitor(Px4Lite_SerialMonitor_t *out)
+{
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+  taskENTER_CRITICAL(); *out = s_serial_monitor; taskEXIT_CRITICAL();
+  return out->available ? PX4LITE_OK : PX4LITE_NOT_READY;
 }
 /** @brief 只复制Comm已发布状态，不让消费者访问外设。 */
 Px4Lite_Result_t Px4Lite_CopySerialExperiment(Px4Lite_SerialExperiment_t *out)
@@ -93,14 +108,14 @@ static void CaptureSummary(uint32_t session, uint32_t token, uint32_t msg, uint8
   if (s_status.session_id == session && s_status.source == source) { s_summary[i] = row; if (i == count) { s_status.summary_count++; } }
   taskEXIT_CRITICAL();
 }
-/** @brief 验证原始帧边界，字段读取均在临界区外。 */
+/** @brief 验证MAV入口0..3和原始帧边界，防止GNSS union被另一类型写入；解析在临界区外。 */
 static uint32_t CaptureFrame(uint8_t source, const uint8_t *bytes, uint16_t length, uint32_t now, uint8_t stage)
 {
   Px4Lite_CaptureFrame_t frame;
   uint32_t session;
   uint16_t expected;
   uint8_t v2, accepted, tx;
-  if (!s_status.running || s_status.source != source) { return 0U; }
+  if (source > PX4LITE_CAPTURE_RPI_TX || !s_status.running || s_status.source != source) { return 0U; }
   session = s_status.session_id;
   if (!bytes || length < 8U || length > PX4LITE_CAPTURE_FRAME_BYTES || (bytes[0] != 0xFD && bytes[0] != 0xFE)) { Px4Lite_CaptureReject(source); return 0U; }
   v2 = (uint8_t)(bytes[0] == 0xFD);
@@ -204,34 +219,109 @@ Px4Lite_Result_t Px4Lite_CaptureCopyStage(uint32_t session, uint32_t token, uint
   }
   taskEXIT_CRITICAL(); return PX4LITE_NOT_READY;
 }
-/** @brief 提交完整句；两次代数检查隔离sensor与Comm互斥换型。 */
-void Px4Lite_CaptureNmea(const uint8_t *bytes, uint16_t length, uint8_t type, uint8_t valid, uint32_t now)
+/** @brief 仅按Driver元数据筛选原帧，不解析导航字段或重新校验协议。 */
+static uint8_t CaptureGnssMatches(uint8_t filter, uint8_t protocol, uint8_t type, uint8_t cls, uint8_t id)
 {
-  Px4Lite_NmeaSentence_t sentence;
-  uint32_t session;
-  if (!s_status.running || s_status.source != PX4LITE_CAPTURE_NMEA) { return; }
-  session = s_status.session_id;
-  if (s_status.filter && s_status.filter != type) { return; }
-  if (!bytes || !length || length > PX4LITE_CAPTURE_NMEA_BYTES) {
-    taskENTER_CRITICAL();if(s_status.running && s_status.source==PX4LITE_CAPTURE_NMEA && s_status.session_id==session) { s_status.capture_drops++; }taskEXIT_CRITICAL();return;
-  }
-  sentence.session_id = session; sentence.time_ms = now; sentence.length = length; sentence.type = type; sentence.checksum_valid = valid;
-  memset(sentence.bytes, 0, sizeof(sentence.bytes)); memcpy(sentence.bytes, bytes, length);
-  taskENTER_CRITICAL();
-  if (!s_status.running || s_status.source != PX4LITE_CAPTURE_NMEA || s_status.session_id != session) { taskEXIT_CRITICAL(); return; }
-  sentence.token = CaptureNext(s_status.latest_token); s_status.latest_token = sentence.token;
-  s_store.nmea[s_head] = sentence; s_head = (uint8_t)((s_head + 1U) % PX4LITE_CAPTURE_CAPACITY);
-  s_status.count++; if (s_status.stored_count < PX4LITE_CAPTURE_CAPACITY) { s_status.stored_count++; } else { s_status.overwritten++; }
-  taskEXIT_CRITICAL(); CaptureSummary(session, sentence.token, type, 0U, 0U, PX4LITE_CAPTURE_NMEA, now, 1U);
+  if (filter == PX4LITE_CAPTURE_FILTER_ALL) { return 1U; }
+  if (filter <= PX4LITE_CAPTURE_FILTER_GSV) { return (uint8_t)(protocol == PX4LITE_CAPTURE_PROTOCOL_NMEA && type == filter); }
+  if (filter == PX4LITE_CAPTURE_FILTER_NMEA) { return (uint8_t)(protocol == PX4LITE_CAPTURE_PROTOCOL_NMEA); }
+  if (filter == PX4LITE_CAPTURE_FILTER_UBX) { return (uint8_t)(protocol == PX4LITE_CAPTURE_PROTOCOL_UBX); }
+  if (protocol != PX4LITE_CAPTURE_PROTOCOL_UBX || cls != 1U) { return 0U; }
+  return (uint8_t)((filter == PX4LITE_CAPTURE_FILTER_PVT && id == 7U) ||
+    (filter == PX4LITE_CAPTURE_FILTER_DOP && id == 4U) || (filter == PX4LITE_CAPTURE_FILTER_SAT && id == 0x35U));
 }
-/** @brief 复制互斥区内的完整句子。 */
+
+/** @brief 在临界区外检查完整wire边界；协议发现独立于屏幕存储容量，真实校验结论由Driver传入。 */
+static uint8_t CaptureGnssComplete(const uint8_t *bytes, uint16_t length, uint8_t protocol, uint8_t type, uint8_t cls, uint8_t id)
+{
+  if (bytes == 0 || length < 8U) { return 0U; }
+  if (protocol == PX4LITE_CAPTURE_PROTOCOL_NMEA) {
+    return (uint8_t)(length <= PX4LITE_CAPTURE_NMEA_BYTES && type <= 4U && bytes[0] == '$' && bytes[length - 1U] == '\n');
+  }
+  return (uint8_t)(protocol == PX4LITE_CAPTURE_PROTOCOL_UBX && bytes[0] == 0xB5U && bytes[1] == 0x62U &&
+    bytes[2] == cls && bytes[3] == id && (uint32_t)length == 8U + (uint32_t)bytes[4] + ((uint32_t)bytes[5] << 8));
+}
+
+/**
+ * @brief 发布常驻协议事实并按会话门禁直接入静态槽，sensor栈不放392B帧副本。
+ * @details 发现协议不依赖running/filter/source，只有完整且Driver确认CRC正确才刷新。
+ *          记录含坏CRC帧；临界窗口只复制metadata/bytes和更新索引，不做解析或I/O。
+ */
+static void CaptureGnss(const uint8_t *bytes, uint16_t length, uint8_t protocol, uint8_t type, uint8_t cls, uint8_t id, uint8_t valid, uint32_t now)
+{
+  uint32_t session, token;
+  uint8_t filter;
+  uint8_t complete = CaptureGnssComplete(bytes, length, protocol, type, cls, id);
+  Px4Lite_GnssCapturedFrame_t *frame;
+  if (complete && valid) {
+    taskENTER_CRITICAL();
+    if (protocol == PX4LITE_CAPTURE_PROTOCOL_NMEA) { s_status.gnss_seen_mask |= 1U; s_status.last_nmea_ms = now; }
+    else { s_status.gnss_seen_mask |= 2U; s_status.last_ubx_ms = now; }
+    taskEXIT_CRITICAL();
+  }
+  if (!s_status.running || s_status.source != PX4LITE_CAPTURE_GNSS) { return; }
+  session = s_status.session_id; filter = s_status.filter;
+  if (!CaptureGnssMatches(filter, protocol, type, cls, id)) { return; }
+  taskENTER_CRITICAL();
+  if (!s_status.running || s_status.source != PX4LITE_CAPTURE_GNSS || s_status.session_id != session || s_status.filter != filter) { taskEXIT_CRITICAL(); return; }
+  if (!complete || length > PX4LITE_CAPTURE_GNSS_BYTES) { s_status.capture_drops++; taskEXIT_CRITICAL(); return; }
+  token = CaptureNext(s_status.latest_token); s_status.latest_token = token;
+  frame = &s_store.gnss[s_head];
+  frame->session_id = session; frame->token = token; frame->time_ms = now; frame->length = length;
+  frame->protocol = protocol; frame->nmea_type = type; frame->class_id = cls; frame->message_id = id;
+  frame->checksum_valid = (uint8_t)(valid != 0U);
+  memcpy(frame->bytes, bytes, length);
+  s_head = (uint8_t)((s_head + 1U) % PX4LITE_CAPTURE_CAPACITY);
+  s_status.count++;
+  if (s_status.stored_count < PX4LITE_CAPTURE_CAPACITY) { s_status.stored_count++; } else { s_status.overwritten++; }
+  taskEXIT_CRITICAL();
+  CaptureSummary(session, token, protocol == PX4LITE_CAPTURE_PROTOCOL_UBX ? id : type, protocol, cls, PX4LITE_CAPTURE_GNSS, now, 1U);
+}
+
+/** @brief NMEA兼容提交入口，记录与发现均复用通用GNSS路径。 */
+void Px4Lite_CaptureNmea(const uint8_t *bytes, uint16_t length, uint8_t type, uint8_t valid, uint32_t now)
+{ CaptureGnss(bytes, length, PX4LITE_CAPTURE_PROTOCOL_NMEA, type, 0U, 0U, valid, now); }
+
+/** @brief UBX完整原帧提交入口，坏CRC原字节照录，不能据Count判断定位成功。 */
+void Px4Lite_CaptureUbx(const uint8_t *bytes, uint16_t length, uint8_t cls, uint8_t id, uint8_t valid, uint32_t now)
+{ CaptureGnss(bytes, length, PX4LITE_CAPTURE_PROTOCOL_UBX, 0U, cls, id, valid, now); }
+
+/** @brief 短窗口内复制匹配槽；零填长度之外的输出，但不解析或按类型重解释payload。 */
+Px4Lite_Result_t Px4Lite_CaptureCopyGnss(uint32_t session, uint32_t token, Px4Lite_GnssCapturedFrame_t *out)
+{
+  uint8_t i;
+  if (!out) { return PX4LITE_INVALID_PARAM; }
+  taskENTER_CRITICAL();
+  if (session == s_status.session_id && s_status.source == PX4LITE_CAPTURE_GNSS) {
+    for (i = 0U; i < s_status.stored_count; ++i) {
+      const Px4Lite_GnssCapturedFrame_t *frame = &s_store.gnss[i];
+      if (frame->session_id != session || frame->token != token) { continue; }
+      memset(out, 0, sizeof(*out));
+      out->session_id = frame->session_id; out->token = frame->token; out->time_ms = frame->time_ms; out->length = frame->length;
+      out->protocol = frame->protocol; out->nmea_type = frame->nmea_type; out->class_id = frame->class_id; out->message_id = frame->message_id;
+      out->checksum_valid = frame->checksum_valid; memcpy(out->bytes, frame->bytes, frame->length);
+      taskEXIT_CRITICAL(); return PX4LITE_OK;
+    }
+  }
+  taskEXIT_CRITICAL(); return PX4LITE_NOT_READY;
+}
+
+/** @brief 旧API仅复制NMEA，拒绝UBX且失败不写输出，不在栈上建立通用大帧临时副本。 */
 Px4Lite_Result_t Px4Lite_CaptureCopyNmea(uint32_t session, uint32_t token, Px4Lite_NmeaSentence_t *out)
 {
   uint8_t i;
   if (!out) { return PX4LITE_INVALID_PARAM; }
   taskENTER_CRITICAL();
-  if (session == s_status.session_id && s_status.source == PX4LITE_CAPTURE_NMEA) {
-    for (i = 0U; i < s_status.stored_count; i++) { if (s_store.nmea[i].token == token && s_store.nmea[i].session_id == session) { *out = s_store.nmea[i]; taskEXIT_CRITICAL(); return PX4LITE_OK; } }
+  if (session == s_status.session_id && s_status.source == PX4LITE_CAPTURE_GNSS) {
+    for (i = 0U; i < s_status.stored_count; ++i) {
+      const Px4Lite_GnssCapturedFrame_t *frame = &s_store.gnss[i];
+      if (frame->session_id != session || frame->token != token) { continue; }
+      if (frame->protocol != PX4LITE_CAPTURE_PROTOCOL_NMEA || frame->length > PX4LITE_CAPTURE_NMEA_BYTES) { break; }
+      memset(out, 0, sizeof(*out));
+      out->session_id = frame->session_id; out->token = frame->token; out->time_ms = frame->time_ms;
+      out->length = frame->length; out->type = frame->nmea_type; out->checksum_valid = frame->checksum_valid;
+      memcpy(out->bytes, frame->bytes, frame->length); taskEXIT_CRITICAL(); return PX4LITE_OK;
+    }
   }
   taskEXIT_CRITICAL(); return PX4LITE_NOT_READY;
 }

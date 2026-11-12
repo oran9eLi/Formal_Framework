@@ -1,0 +1,32 @@
+{
+  "groups": [
+    "attitude",
+    "attitude_ops",
+    "attitude_roll_wrap",
+    "bmi088_platform",
+    "bmi088_uplink",
+    "display_field_validity",
+    "display_gnss_status_utc",
+    "display_motor_lock",
+    "gnss_clean_display",
+    "gnss_sat_stream",
+    "hud_frame_port",
+    "hud_present",
+    "hud_present_off",
+    "hud_refresh",
+    "startup_rgb"
+  ],
+  "passed": 15,
+  "failed": 0,
+  "real_lvgl_cases": 1193,
+  "band_rows": [
+    16,
+    49
+  ],
+  "e65_pixel_goldens": 9,
+  "max_rle_bytes": 15016,
+  "rle_capacity": 24576,
+  "native_mask_opacity_cases": 28,
+  "native_ring_pixel_cases": 18,
+  "hardware_fps_measured": false
+}

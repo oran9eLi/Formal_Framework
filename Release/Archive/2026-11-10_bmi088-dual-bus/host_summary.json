@@ -1,0 +1,260 @@
+{
+  "selected_groups": 35,
+  "passed": 35,
+  "failed": 0,
+  "initial_attempt": {
+    "groups": 20,
+    "passed": 15,
+    "failed": 5,
+    "reason": "Existing attitude logging stubs and estimator/barometer RTOS/runtime stubs incomplete; repaired without removing assertions."
+  },
+  "repair_intermediate": "baro_schedule still lacked two runtime stubs; failure logs preserved under build/20261110_bmi088/host_legacy_repair/.",
+  "groups": [
+    {
+      "group": "bmi088_spi_bus",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/bmi088_spi_bus.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "5e5f2815adee64c63c92c54170b0d86be9c036066e427e3a745d25cbfc05fbf1"
+    },
+    {
+      "group": "bmi088_platform",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/bmi088_platform.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "bmi088_platform_spi",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/bmi088_platform_spi.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "mpu6050_platform",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/mpu6050_platform.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "bmi088_axes",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/bmi088_axes.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "d25bab1f2a92e08aaaa2c1ba1656492bb817687fefcf1be9dccea5175004a8e7"
+    },
+    {
+      "group": "bmi088_axes_rotated",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/bmi088_axes_rotated.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "d25bab1f2a92e08aaaa2c1ba1656492bb817687fefcf1be9dccea5175004a8e7"
+    },
+    {
+      "group": "imu",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/imu.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "c6c9b7a45ac0bcc42cad7c344a0e853d765f416bf03cfb501b774839f685dc18"
+    },
+    {
+      "group": "attitude",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_final_core/attitude.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "9c202428943d8752fab57716ca7cd9db3e082f25b98676153a939e7163f3a7c7"
+    },
+    {
+      "group": "attitude_ops",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_final_core/attitude_ops.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "6efbd97e29ed66e253354ef4f726462717d6857e52b115f2b65f65d1f0d235cf"
+    },
+    {
+      "group": "attitude_roll_wrap",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_final_core/attitude_roll_wrap.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "f35f1dafce48cfbc47fc7379e9b9b006241062a29beaac789a68d284670af5df"
+    },
+    {
+      "group": "estimator",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_final_core/estimator.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "fe98f5cc950dbd4171593e85d44d13be5c3771c37ee4b43875741f183c72bef4"
+    },
+    {
+      "group": "baro_schedule",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_final_core/baro_schedule.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "9c9bfbe8362d32f6de29120996bc75bc653502fbb73dcff27372182c2dec4689"
+    },
+    {
+      "group": "bme280_progress",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/bme280_progress.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "c8e175fbed267becb387575a9f25f4541e1c3d7494949bf9f578bed6255a8772"
+    },
+    {
+      "group": "gnss_sat_stream",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/gnss_sat_stream.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "498404cc9695f46f1bf20af4faeb6dc51efe20d1ac236d5652ba38a24cc8eff1"
+    },
+    {
+      "group": "gnss_unified_adapter",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/gnss_unified_adapter.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "2ce7b6b76014003d2aa151698f02d4fbd8a9ea792d1f43da9a762beadb53daca"
+    },
+    {
+      "group": "gnss_unified_uplink",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/gnss_unified_uplink.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "74926ff90873388b5698f6c29fbd840554ab07039b1aa6dda8f83e1adeeccacb"
+    },
+    {
+      "group": "gnss_raw_forward_hooks",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/gnss_raw_forward_hooks.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "756323aa329bd7abe6e5d794e2090706794e3896e07e6de106af588fd0f727c5"
+    },
+    {
+      "group": "power_diagnostics_mapping",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/power_diagnostics_mapping.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "427bdb9a90c7071df67c7dc1eaaaa5e5959064cb8dde04f50508ed30a01752b8"
+    },
+    {
+      "group": "single_supply_service",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/single_supply_service.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "93087b7fdfab3cc10430e30f6b0a4a5e29e3f36b25e8a958811f27d3b062e115"
+    },
+    {
+      "group": "motor_manual_lock",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host/motor_manual_lock.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "63a1aa0773787e99d0f005b31cc45af8aa24f5697bfb62927d94777853ef9ab9"
+    },
+    {
+      "group": "bmi088_driver",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_final_core/bmi088_driver.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "e8a6f18f5e31cd23ec5923007d89ce96fa52174b950df7446730e7b9b6a4cefa"
+    },
+    {
+      "group": "gnss_unified_facts",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/gnss_unified_facts.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "2c896e164bdc657fdbd9d99824e3ec963eebe9ce14920c9a7d2d84d9ef36b815"
+    },
+    {
+      "group": "gnss_satellites",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/gnss_satellites.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "4df4829f0ab60cabe963b300fcc8d6092493a343cfd2323f4380db2497705006"
+    },
+    {
+      "group": "gnss_satellite_mapping",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/gnss_satellite_mapping.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "e1e7af0a51a418822239ef152ec21363bc4f15e736879f8aa67f0b5d3bc92df5"
+    },
+    {
+      "group": "gnss_status_domain",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/gnss_status_domain.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "eba48425184313b86dd1097b0e60440764dbf72cc2365387ecffc3175ecc4258"
+    },
+    {
+      "group": "display_gnss_status_utc",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/display_gnss_status_utc.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "3ad32d2b488118d2491fb0ac2d4138ae7c568d72b87ae993c2369379d9e71aa3"
+    },
+    {
+      "group": "gnss_clean_display",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/gnss_clean_display.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "b22bb09adb7b0f4aadfc89e36b98df74416b3f56ec7fd8160d2d33df3601ac35"
+    },
+    {
+      "group": "gnss_protocol_capture",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/gnss_protocol_capture.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "10366456603e7bc0ff26e11ef5a46557c00645cdc4f2e1dfb91635875c15b941"
+    },
+    {
+      "group": "gnss_raw_uplink",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/gnss_raw_uplink.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "3a0015de2a56a05950d0539c4aa7f9d033ac8450873bf60412f53b1392d7a56e"
+    },
+    {
+      "group": "gnss_raw_debug",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/gnss_raw_debug.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "fbd89a588b1d15cbef1a24b56f76ebb16dd3b7b10f17c3c99de7410b8857b789"
+    },
+    {
+      "group": "single_supply_adc",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/single_supply_adc.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "dc44d9a074c46008ff3f9f3fda1d7db7ae65e805089ce9bcafd88476c781b2a2"
+    },
+    {
+      "group": "single_supply_mavlink",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/single_supply_mavlink.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "48ef4330fda010dab573b3723a0399484c3a43e646625788e26851101c06b733"
+    },
+    {
+      "group": "power_adc_reference",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/power_adc_reference.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "d882aac606100b3745a10351ec0952481c257c4091e2f04e344007fb79c4ca4a"
+    },
+    {
+      "group": "power_current_valid",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/power_current_valid.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "2688754158811c4e25542fb93ff0a0217a3adb695f8959b0ec31701e9690b54c"
+    },
+    {
+      "group": "storage",
+      "passed": true,
+      "evidence": "build/20261110_bmi088/host_additional/storage.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "6d1525dfa5d1feb57ff30ae0bfb90ab8760ec03a51102d33a07b0d011c7f09cf"
+    }
+  ],
+  "real_hardware_tested": false
+}

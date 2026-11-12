@@ -1,0 +1,22 @@
+{
+  "candidate": "Release/Archive/2026-11-11_rgb-ambient",
+  "input_count": 1043,
+  "production_changes": 3,
+  "inputs_match_current_and_zip": true,
+  "host_groups": 4,
+  "keil_configurations": 2,
+  "hex_name": "cns-f407-rgb-ambient-20261111.hex",
+  "hex_sha256": "ee8e81d6c290820aa86f03eff23d667b12c694bfccd5405cd242ace3802f933d",
+  "main_sram_used": 125296,
+  "main_sram_free": 5776,
+  "main_sram_delta": 16,
+  "flash_load_bytes": 485968,
+  "flash_delta": 344,
+  "dma_buffer_address": "0x20008d3c",
+  "dma_buffer_bytes": 254,
+  "code": 373968,
+  "ro": 111868,
+  "rw": 2060,
+  "zi": 123236,
+  "hardware_status": "not_flashed_not_tested"
+}

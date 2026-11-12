@@ -1,0 +1,72 @@
+[
+  {
+    "variant": "hud_frame_off",
+    "defines": [
+      "DISPLAY_HUD_DIFF_ENABLE=0"
+    ],
+    "started_utc": "2026-11-11T02:55:03.638191+00:00",
+    "ended_utc": "2026-11-11T02:55:19.811442+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1047,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1377641,
+        "sha256": "11947c55f0b0d072d0597f32e1675f59c22bdb155688ccf0f5d313b3f7e231cb"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5897740,
+        "sha256": "922f53603018b53e7769f33e095089e0fc0dcd0b90d453849c43e4659fc53161"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2470681,
+        "sha256": "9366181d1d1237bcf584c9d52f66507f2205e9884341ab080719f2bb80f88482"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8115,
+        "sha256": "d00aa378fbbb36ad3b23508845592a1af15dd9575e45cdcbe47148903f5070c6"
+      }
+    ],
+    "passed": true
+  },
+  {
+    "variant": "hud_frame",
+    "defines": [],
+    "started_utc": "2026-11-11T02:55:20.068795+00:00",
+    "ended_utc": "2026-11-11T02:55:36.108020+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1047,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1380566,
+        "sha256": "5d042012c4617bb04815ac9b962ed3c05fd18b58488d5ac2c662168620d1a5d1"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5898300,
+        "sha256": "1e93a38373065bdec9c01035939f21b5d058bc43325ff317781ed96a757dc098"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2476511,
+        "sha256": "e9467380de5519ee2dc15980c38d6927b0760f2df27630df1f8117928c3410f5"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8115,
+        "sha256": "d6c1cf81f211435a03ec29ebd8f80505ad79e905a71ad380081d6bb5b5644745"
+      }
+    ],
+    "passed": true
+  }
+]

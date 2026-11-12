@@ -1,0 +1,46 @@
+{
+  "baseline": "p25_fixed115200_raw_debug",
+  "files": [
+    {
+      "path": "Business/Inc/app_data_api.h",
+      "baseline_sha256": "9604579d0155f1cf06b84d1f09eb483473a079c06e63c62134018cb594d47353",
+      "sha256": "3a07cf9eea986178f28c7d98a268b89b3e4d19b68e51172e18ed291896a45cc3"
+    },
+    {
+      "path": "Business/Src/app_data_api.c",
+      "baseline_sha256": "bebfe071129f791715045448ede91768f36b11d17103c890d295d1ddeba67427",
+      "sha256": "097c554c2117a5c37744fe3cb679fa0afacad59188867632c616c7b951f16616"
+    },
+    {
+      "path": "Display/Src/display_lvgl.c",
+      "baseline_sha256": "b8ddc62ea81c72794d2120b451fd3ebb795f7715cc1ea4cddb3099c97d72788e",
+      "sha256": "69b6aa1340066a9302e922cc0aeb78dd3cddade361f2f1284f08064990691d22"
+    },
+    {
+      "path": "Framework/Inc/px4lite_diagnostic_capture.h",
+      "baseline_sha256": "9ffd3ed5c2591f7a6c559c7d4efcfe0a0cdbf11f908c67728417c7ced0580a5e",
+      "sha256": "589b1afb0a81ebefc59efe6500d9690c798203e09fe9a26f61969a79fc8be322"
+    },
+    {
+      "path": "Framework/Src/px4lite_diagnostic_capture.c",
+      "baseline_sha256": "289869f083696326ad8d904fc82ffcf01887da06a3f61ab3946dd0c8703dcfb5",
+      "sha256": "e240a4f645148a06bd9fd5092b7e0a27a07843ec4178acdf87a94a7c7db20c39"
+    },
+    {
+      "path": "Framework/Src/px4lite_platform_f407.c",
+      "baseline_sha256": "b8247ceb23f4f587b47d73fbce1df128480fa9baaf506643431f6b860151d287",
+      "sha256": "43a933a55972f93c7ac4ddcd101aa12b84530abf58e37befd2ff5693ebec8179"
+    },
+    {
+      "path": "Sensor/Inc/sensor_gnss.h",
+      "baseline_sha256": "121023e593ffaf1bd29ac1de8b993c1942cbc77adaa9edbc36439b8f59733bb7",
+      "sha256": "ff4f027301d3e90a6d400e3efc736503c87975aa5eb19410e675a9b6e6853f20"
+    },
+    {
+      "path": "Sensor/Src/sensor_gnss.c",
+      "baseline_sha256": "dffda67c46524b669def76c82c6d7d69292cd2330b9823b6f239048fd4500a62",
+      "sha256": "6ed0316c5e2376e4cd73b2ebd4549f0ae16189ca7b8ac22559914dd5e7f9608b"
+    }
+  ],
+  "new_production_sources": []
+}

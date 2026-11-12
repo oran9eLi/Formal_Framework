@@ -1,0 +1,184 @@
+{
+  "baseline_E70": {
+    "functions": {
+      "Px4Lite_SensorTask": {
+        "own_stack_bytes": 40,
+        "known_max_depth_bytes": 436,
+        "chain": "Px4Lite_SensorTask ⇒ Px4Lite_StartupToneRun ⇒ StartupRgb_Run ⇒ Px4Lite_PlatformRgbSetColor ⇒ BSP_RGB_Send ⇒ HAL_DMA_Start_IT ⇒ DMA_SetConfig"
+      },
+      "Px4Lite_WorkRunDue": {
+        "own_stack_bytes": 24,
+        "known_max_depth_bytes": 48,
+        "chain": "Px4Lite_WorkRunDue ⇒ Px4Lite_PlatformGetUs"
+      },
+      "Px4Lite_SensorWorkRun": {
+        "own_stack_bytes": 280,
+        "known_max_depth_bytes": 1464,
+        "chain": "Px4Lite_SensorWorkRun ⇒ Px4Lite_GnssRead ⇒ Sensor_GNSS_Service ⇒ Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "Px4Lite_GnssRead": {
+        "own_stack_bytes": 256,
+        "known_max_depth_bytes": 1184,
+        "chain": "Px4Lite_GnssRead ⇒ Sensor_GNSS_Service ⇒ Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "Sensor_GNSS_Service": {
+        "own_stack_bytes": 104,
+        "known_max_depth_bytes": 928,
+        "chain": "Sensor_GNSS_Service ⇒ Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "Gnss_FeedAndParse": {
+        "own_stack_bytes": 336,
+        "known_max_depth_bytes": 824,
+        "chain": "Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "DebugService_Task": {
+        "own_stack_bytes": 8,
+        "known_max_depth_bytes": 948,
+        "chain": "DebugService_Task ⇒ DebugService_ReportGnss ⇒ DebugService_ReportGnssRaw ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugService_ReportGnss": {
+        "own_stack_bytes": 336,
+        "known_max_depth_bytes": 940,
+        "chain": "DebugService_ReportGnss ⇒ DebugService_ReportGnssRaw ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugConsole_Printf": {
+        "own_stack_bytes": 288,
+        "known_max_depth_bytes": 468,
+        "chain": "DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      }
+    },
+    "sensor_callback_chain_known_bytes": 1528,
+    "sensor_configured_bytes": 2048,
+    "nominal_remaining_before_unknown_context_bytes": 520,
+    "warning": "Indirect callback depth is manually joined; unknown library/function-pointer paths plus RTOS, exception and FPU context still require measured watermarks."
+  },
+  "quiet": {
+    "functions": {
+      "Px4Lite_SensorTask": {
+        "own_stack_bytes": 40,
+        "known_max_depth_bytes": 436,
+        "chain": "Px4Lite_SensorTask ⇒ Px4Lite_StartupToneRun ⇒ StartupRgb_Run ⇒ Px4Lite_PlatformRgbSetColor ⇒ BSP_RGB_Send ⇒ HAL_DMA_Start_IT ⇒ DMA_SetConfig"
+      },
+      "Px4Lite_WorkRunDue": {
+        "own_stack_bytes": 24,
+        "known_max_depth_bytes": 48,
+        "chain": "Px4Lite_WorkRunDue ⇒ Px4Lite_PlatformGetUs"
+      },
+      "Px4Lite_SensorWorkRun": {
+        "own_stack_bytes": 24,
+        "known_max_depth_bytes": 928,
+        "chain": "Px4Lite_SensorWorkRun ⇒ Px4Lite_GnssRead ⇒ Sensor_GNSS_Service ⇒ Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "Px4Lite_GnssRead": {
+        "own_stack_bytes": 56,
+        "known_max_depth_bytes": 904,
+        "chain": "Px4Lite_GnssRead ⇒ Sensor_GNSS_Service ⇒ Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "Sensor_GNSS_Service": {
+        "own_stack_bytes": 24,
+        "known_max_depth_bytes": 848,
+        "chain": "Sensor_GNSS_Service ⇒ Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "Gnss_FeedAndParse": {
+        "own_stack_bytes": 336,
+        "known_max_depth_bytes": 824,
+        "chain": "Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "DebugService_Task": {
+        "own_stack_bytes": 8,
+        "known_max_depth_bytes": 748,
+        "chain": "DebugService_Task ⇒ DebugService_ReportGnss ⇒ DebugService_ReportGnssRaw ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugService_ReportGnss": {
+        "own_stack_bytes": 136,
+        "known_max_depth_bytes": 740,
+        "chain": "DebugService_ReportGnss ⇒ DebugService_ReportGnssRaw ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugConsole_Printf": {
+        "own_stack_bytes": 288,
+        "known_max_depth_bytes": 468,
+        "chain": "DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      }
+    },
+    "sensor_callback_chain_known_bytes": 992,
+    "sensor_configured_bytes": 2048,
+    "nominal_remaining_before_unknown_context_bytes": 1056,
+    "warning": "Indirect callback depth is manually joined; unknown library/function-pointer paths plus RTOS, exception and FPU context still require measured watermarks."
+  },
+  "sensor_diagnostics": {
+    "functions": {
+      "Px4Lite_SensorTask": {
+        "own_stack_bytes": 40,
+        "known_max_depth_bytes": 436,
+        "chain": "Px4Lite_SensorTask ⇒ Px4Lite_StartupToneRun ⇒ StartupRgb_Run ⇒ Px4Lite_PlatformRgbSetColor ⇒ BSP_RGB_Send ⇒ HAL_DMA_Start_IT ⇒ DMA_SetConfig"
+      },
+      "Px4Lite_WorkRunDue": {
+        "own_stack_bytes": 24,
+        "known_max_depth_bytes": 48,
+        "chain": "Px4Lite_WorkRunDue ⇒ Px4Lite_PlatformGetUs"
+      },
+      "Px4Lite_SensorWorkRun": {
+        "own_stack_bytes": 24,
+        "known_max_depth_bytes": 928,
+        "chain": "Px4Lite_SensorWorkRun ⇒ Px4Lite_GnssRead ⇒ Sensor_GNSS_Service ⇒ Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "Px4Lite_GnssRead": {
+        "own_stack_bytes": 56,
+        "known_max_depth_bytes": 904,
+        "chain": "Px4Lite_GnssRead ⇒ Sensor_GNSS_Service ⇒ Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "Sensor_GNSS_Service": {
+        "own_stack_bytes": 24,
+        "known_max_depth_bytes": 848,
+        "chain": "Sensor_GNSS_Service ⇒ Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "Gnss_FeedAndParse": {
+        "own_stack_bytes": 336,
+        "known_max_depth_bytes": 824,
+        "chain": "Gnss_FeedAndParse ⇒ Gnss_ParseGga ⇒ Gnss_CoordinateValid ⇒ Gnss_ReadDecimal ⇒ __hardfp_strtod ⇒ __strtod_int ⇒ _local_sscanf ⇒ _scanf_real"
+      },
+      "DebugService_Task": {
+        "own_stack_bytes": 16,
+        "known_max_depth_bytes": 756,
+        "chain": "DebugService_Task ⇒ DebugService_ReportGnss ⇒ DebugService_ReportGnssRaw ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugService_ReportGnss": {
+        "own_stack_bytes": 136,
+        "known_max_depth_bytes": 740,
+        "chain": "DebugService_ReportGnss ⇒ DebugService_ReportGnssRaw ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugService_ReportImu": {
+        "own_stack_bytes": 112,
+        "known_max_depth_bytes": 580,
+        "chain": "DebugService_ReportImu ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugService_ReportBaro": {
+        "own_stack_bytes": 112,
+        "known_max_depth_bytes": 580,
+        "chain": "DebugService_ReportBaro ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugService_ReportSensorStates": {
+        "own_stack_bytes": 160,
+        "known_max_depth_bytes": 628,
+        "chain": "DebugService_ReportSensorStates ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugTaskMonitor_Report": {
+        "own_stack_bytes": 24,
+        "known_max_depth_bytes": 492,
+        "chain": "DebugTaskMonitor_Report ⇒ DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      },
+      "DebugConsole_Printf": {
+        "own_stack_bytes": 288,
+        "known_max_depth_bytes": 468,
+        "chain": "DebugConsole_Printf ⇒ DebugConsole_WriteLocked ⇒ DebugConsole_Unlock ⇒ xQueueGenericSend ⇒ xTaskResumeAll ⇒ xTaskIncrementTick ⇒ Core_FatalHalt ⇒ BSP_EmergencyStopDma ⇒ BSP_GNSS_DeInit ⇒ BspGnss_Stop ⇒ HAL_UART_DeInit ⇒ HAL_UART_MspDeInit ⇒ HAL_GPIO_DeInit"
+      }
+    },
+    "sensor_callback_chain_known_bytes": 992,
+    "sensor_configured_bytes": 2048,
+    "nominal_remaining_before_unknown_context_bytes": 1056,
+    "warning": "Indirect callback depth is manually joined; unknown library/function-pointer paths plus RTOS, exception and FPU context still require measured watermarks."
+  },
+  "known_sensor_chain_reduction_bytes": 536,
+  "hardware_stack_overflow_proven": false,
+  "runtime_watermarks_captured": false
+}

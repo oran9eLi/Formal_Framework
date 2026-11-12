@@ -10,9 +10,19 @@ typedef struct { int unused; } UART_HandleTypeDef;
 static uint32_t BSP_Critical_Enter(void) { return 0U; }
 static void BSP_Critical_Exit(uint32_t value) { (void)value; }
 #include "../../Sensor/Src/sensor_nmea.c"
+#include "../../Sensor/Src/sensor_ubx.c"
 #include "../../Sensor/Src/sensor_gnss.c"
 static uint8_t input[512];
 static uint16_t input_len;
+/** @brief 该测试隔离真实串口，配置命令只记为已接受，不伪造任何接收字节。 */
+BSP_Status_t BSP_GNSS_Transmit(const uint8_t *bytes, uint16_t length) { (void)bytes; (void)length; return BSP_STATUS_OK; }
+/** @brief 本夹具发送从不卡住；TX中止不改变接收字节队列。 */
+BSP_Status_t BSP_GNSS_AbortTx(void) { return BSP_STATUS_OK; }
+BSP_Status_t BSP_GNSS_SetBaudRate(uint32_t baud) { (void)baud; return BSP_STATUS_OK; }
+uint32_t BSP_GNSS_GetDropCount(void) { return 0U; }
+void BSP_GNSS_RequestRecoverRx(void) { }
+BSP_Status_t BSP_GNSS_CopyTransportInfo(BSP_GNSS_TransportInfo_t *out)
+{ memset(out,0,sizeof(*out)); out->initialized=1U; out->baud_bps=115200U; return BSP_STATUS_OK; }
 uint8_t BSP_GNSS_ConsumeRecoverRxRequest(void) { return 0U; }
 BSP_Status_t BSP_GNSS_RecoverRx(void) { return BSP_STATUS_OK; }
 void BSP_GNSS_RxIdleCallback(uint16_t unused) { (void)unused; }
@@ -37,14 +47,17 @@ int main(void)
   assert(Sensor_GNSS_CopySnapshot(&snap) == GNSS_RESULT_OK);
   assert(snap.last_fix_ms == 100U);
   assert(snap.position_update_ms==100U && snap.altitude_update_ms==100U);
+  assert((snap.valid_mask&GNSS_VALID_NAV_STATUS) && snap.status_update_ms==100U && snap.satellites==8U);
   Feed("GPRMC,000001.00,A,2230.0000,N,11330.0000,E,10.0,90.0,280926,,,A", 200U);
   assert(Sensor_GNSS_CopySnapshot(&snap) == GNSS_RESULT_OK);
   assert(snap.last_fix_ms == 100U);
   assert(snap.velocity_update_ms==200U && snap.time_update_ms==200U);
+  assert(snap.status_update_ms==100U && snap.satellites==8U);
   Feed("GPGSV,1,1,08",1000U);
   Feed("GPGSA,A,3,01,02,03,,,,,,,,,,1.0,1.0,1.0",1100U);
   assert(Sensor_GNSS_CopySnapshot(&snap)==GNSS_RESULT_OK);
   assert(snap.last_rx_ms==1100U && snap.position_update_ms==100U && snap.velocity_update_ms==200U);
+  assert(snap.status_update_ms==100U);
   Feed("GPGGA,000002.00,2230.0000,N,11330.0000,E,1,08,1.0,26.0,M,0.0,M,,",2000U);
   assert(Sensor_GNSS_CopySnapshot(&snap)==GNSS_RESULT_OK);
   assert(snap.position_update_ms==2000U && snap.altitude_update_ms==2000U);
@@ -60,17 +73,22 @@ int main(void)
   assert(Sensor_GNSS_CopySnapshot(&snap)==GNSS_RESULT_NO_FIX);
   assert((snap.valid_mask&(GNSS_VALID_POSITION|GNSS_VALID_ALTITUDE))==0U);
   assert(snap.position_update_ms==2000U);
+  assert((snap.valid_mask&GNSS_VALID_NAV_STATUS) && snap.status_update_ms==2300U && snap.satellites==8U);
   Feed("GPGGA,000002.00,2230.0000,N,11330.0000,E,1,08,1.0,26.0,M,0.0,M,,",2400U);
   Feed("GPRMC,000002.00,V,,,,,,,280926,,,N",2500U);
   assert(Sensor_GNSS_CopySnapshot(&snap)==GNSS_RESULT_NO_FIX && snap.fix_valid==0U);
+  assert((snap.valid_mask&GNSS_VALID_NAV_STATUS) && snap.status_update_ms==2400U && snap.satellites==8U);
   /* 校验错误只消耗字节，不能延长链路或测量计时。 */
   input_len=(uint16_t)sprintf((char*)input,"$GPGGA,000002.00,2230.0000,N,11330.0000,E,1,08,1.0,26.0,M,0.0,M,,*00\r\n");
   assert(Sensor_GNSS_Service(2600U)==GNSS_RESULT_OK);
   (void)Sensor_GNSS_CopySnapshot(&snap);
   assert(snap.last_rx_ms==2500U && snap.position_update_ms==2400U);
+  assert(snap.status_update_ms==2400U);
   Feed("GPGGA,000002.00,2230.0000,N,11330.0000,E,1,08,1.0,26.0,M,0.0,M,,",2700U);
   Feed("GPGSA,A,1,,,,,,,,,,,,,1.0,1.0,1.0",2800U);
-  assert(Sensor_GNSS_CopySnapshot(&snap)==GNSS_RESULT_NO_FIX);
-  assert((snap.valid_mask&GNSS_VALID_POSITION)==0U && snap.position_update_ms==2700U);
+  /* 单星座GSA无解不应撤销仍有效的GGA全局位置。 */
+  assert(Sensor_GNSS_CopySnapshot(&snap)==GNSS_RESULT_OK);
+  assert((snap.valid_mask&GNSS_VALID_POSITION)!=0U && snap.position_update_ms==2700U);
+  assert((snap.valid_mask&GNSS_VALID_NAV_STATUS) && snap.status_update_ms==2700U);
   puts("gnss measurement tests passed"); return 0;
 }

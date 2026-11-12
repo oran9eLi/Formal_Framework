@@ -137,6 +137,29 @@ typedef struct {
 #define PX4LITE_GNSS_VALID_VELOCITY (1UL << 1) /**< 地速和地面航迹角有效。 */
 #define PX4LITE_GNSS_VALID_TIME (1UL << 2) /**< 完整 UTC 日期和当日秒有效，午夜秒数可为 0。 */
 #define PX4LITE_GNSS_VALID_ALTITUDE (1UL << 3) /**< GNSS 海拔高度有效。 */
+#define PX4LITE_GNSS_VALID_NAV_STATUS (1UL << 4) /**< 完整PVT/GGA的定位状态与总使用卫星数有效；无定位及0颗也合法。 */
+
+/** @brief Framework统一GNSS事实来源，与Driver独立定义并由Adapter逐字段映射。 */
+#define PX4LITE_GNSS_SOURCE_NONE 0U
+#define PX4LITE_GNSS_SOURCE_UBX_PVT 1U
+#define PX4LITE_GNSS_SOURCE_NMEA_GGA 2U
+#define PX4LITE_GNSS_SOURCE_NMEA_RMC 3U
+#define PX4LITE_GNSS_SOURCE_NMEA_GSA 4U
+#define PX4LITE_GNSS_SOURCE_NMEA_GSV 5U
+#define PX4LITE_GNSS_SOURCE_UBX_DOP 6U
+#define PX4LITE_GNSS_DOP_COUNT 7U /**< DOP索引G/P/T/V/H/N/E。 */
+#define PX4LITE_GNSS_DOP_G 0U
+#define PX4LITE_GNSS_DOP_P 1U
+#define PX4LITE_GNSS_DOP_T 2U
+#define PX4LITE_GNSS_DOP_V 3U
+#define PX4LITE_GNSS_DOP_H 4U
+#define PX4LITE_GNSS_DOP_N 5U
+#define PX4LITE_GNSS_DOP_E 6U
+#define PX4LITE_GNSS_COUNTS_COUNT 4U /**< 计数索引GPS可见/北斗可见/GPS使用/北斗使用。 */
+#define PX4LITE_GNSS_COUNT_GPS_VISIBLE 0U
+#define PX4LITE_GNSS_COUNT_BDS_VISIBLE 1U
+#define PX4LITE_GNSS_COUNT_GPS_USED 2U
+#define PX4LITE_GNSS_COUNT_BDS_USED 3U
 
 /**
  * @brief GNSS 传感器测量 topic；链路活动不得替代各字段测量年龄。
@@ -148,7 +171,7 @@ typedef struct {
   uint32_t velocity_update_ms;  /**< 最近有效地速和航迹角时间，单位：ms。 */
   uint32_t time_update_ms;      /**< 最近有效完整 UTC 时间测量时刻，单位：ms。 */
   uint32_t altitude_update_ms;  /**< 最近有效 GNSS 海拔测量时间，单位：ms。 */
-  uint32_t last_rx_ms;          /**< 最近校验有效 NMEA 链路活动时间，单位：ms，不代表测量更新。 */
+  uint32_t last_rx_ms;          /**< 最近校验有效 GNSS 协议链路活动时间，单位：ms，不代表各域更新。 */
   int32_t latitude_e7;          /**< 纬度，单位：degree * 1e7。 */
   int32_t longitude_e7;         /**< 经度，单位：degree * 1e7。 */
   int32_t altitude_mm;          /**< 海拔高度，单位：mm。 */
@@ -159,13 +182,32 @@ typedef struct {
   uint16_t hdop_x100;           /**< 水平精度因子，单位：HDOP * 100。 */
   uint8_t fix_type;             /**< 定位类型，沿用 GNSS 驱动定义。 */
   uint8_t fix_dimension;        /**< 定位维度，0/2D/3D 按驱动解析结果填写。 */
-  uint8_t satellites_used;      /**< 当前定位使用的总卫星数。 */
+  uint8_t satellites_used;      /**< 最近完整PVT/GGA的总使用卫星数；以NAV_STATUS及其时间授权，0颗合法。 */
   uint8_t gps_visible;          /**< GPS 可见卫星数。 */
   uint8_t bds_visible;          /**< 北斗可见卫星数。 */
   uint8_t gps_used;             /**< GPS 参与解算卫星数。 */
   uint8_t bds_used;             /**< 北斗参与解算卫星数。 */
   uint8_t antenna_state;        /**< 天线状态，含义由 GNSS 驱动定义。 */
   uint8_t reserved;             /**< 保留字段，保持结构体对齐。 */
+  uint32_t status_update_ms;    /**< 最近完整PVT/GGA导航状态时间，单位ms；0也合法，不续期位置等其他域。 */
+  uint8_t position_source; /**< 最近有效位置的PX4LITE_GNSS_SOURCE_*。 */
+  uint8_t velocity_source; /**< 最近有效地速/航迹来源。 */
+  uint8_t time_source; /**< 最近有效完整UTC来源。 */
+  uint8_t altitude_source; /**< 最近有效海拔来源。 */
+  uint8_t status_source; /**< 最近完整导航状态来源。 */
+  uint8_t raw_status_type; /**< 原PVT.fixType或GGA质量码，按status_source解释。 */
+  uint8_t dimension_source; /**< 维度来源；NONE表示未提供。 */
+  uint32_t dimension_update_ms; /**< 最近维度事实时刻，单位ms，0合法。 */
+  uint8_t dop_present_mask; /**< bit0..6分别授权G/P/T/V/H/N/E报告值，年龄单独判断。 */
+  uint8_t dop_source[PX4LITE_GNSS_DOP_COUNT]; /**< 每项DOP来源。 */
+  uint16_t dop_x100[PX4LITE_GNSS_DOP_COUNT]; /**< 每项DOP乘100，有效1..65534，不是米误差。 */
+  uint32_t dop_update_ms[PX4LITE_GNSS_DOP_COUNT]; /**< 每项DOP消费时刻，单位ms。 */
+  uint32_t dop_itow_ms[PX4LITE_GNSS_DOP_COUNT]; /**< 每项UBX iTOW，单位ms，仅known位授权。 */
+  uint8_t dop_itow_known_mask; /**< bit0..6标记各DOP的iTOW已提供，NMEA对应位为0。 */
+  uint8_t counts_present_mask; /**< bit0..3授权四项计数，0合法；年龄分别判断。 */
+  uint8_t counts_source[PX4LITE_GNSS_COUNTS_COUNT]; /**< 四项计数来源，未知为NONE。 */
+  uint32_t counts_update_ms[PX4LITE_GNSS_COUNTS_COUNT]; /**< 四项计数完整报告时刻，单位ms。 */
+  uint8_t dop_solution_mask; /**< bit0..6标记该DOP来源导航解/同iTOW PVT成立，不能替代present/年龄。 */
 } Px4Lite_SensorGnss_t;
 
 /**
@@ -215,7 +257,8 @@ typedef enum {
   PX4LITE_MOTOR_OP_MANUAL_RUNNING = 2,/**< 手动目标正在输出。 */
   PX4LITE_MOTOR_OP_SYNC_RAMP_UP = 3,  /**< 四路同步升速曲线执行中。 */
   PX4LITE_MOTOR_OP_RAMP_DOWN = 4,     /**< 缓降停机曲线执行中。 */
-  PX4LITE_MOTOR_OP_INHIBITED = 5      /**< 动力电池条件不满足，输出闭锁。 */
+  PX4LITE_MOTOR_OP_INHIBITED = 5,     /**< 启用的电压门禁不满足，输出闭锁。 */
+  PX4LITE_MOTOR_OP_LOCKED = 6         /**< 人工锁定，目标已清除，禁止非零油门。 */
 } Px4Lite_MotorOperationState_t;
 
 /**
@@ -595,5 +638,51 @@ static __inline uint8_t Px4Lite_IsFresh(const Px4Lite_TopicHeader_t *header, uin
 
   return (Px4Lite_ElapsedMs(now_ms, header->sample_time_ms) <= max_age_ms) ? 1U : 0U;
 }
+
+/** @brief 通用串口校验方式；不向应用暴露 HAL 编码。 */
+typedef enum {
+  PX4LITE_SERIAL_PARITY_NONE = 0, /**< 无校验。 */
+  PX4LITE_SERIAL_PARITY_EVEN,     /**< 偶校验。 */
+  PX4LITE_SERIAL_PARITY_ODD,      /**< 奇校验。 */
+  PX4LITE_SERIAL_PARITY_UNKNOWN  /**< 当前配置不能识别。 */
+} Px4Lite_SerialParity_t;
+
+/** @brief 通用串口硬件流控方式；不包括应用协议确认。 */
+typedef enum {
+  PX4LITE_SERIAL_FLOW_NONE = 0, /**< 无硬件流控。 */
+  PX4LITE_SERIAL_FLOW_RTS,      /**< RTS。 */
+  PX4LITE_SERIAL_FLOW_CTS,      /**< CTS。 */
+  PX4LITE_SERIAL_FLOW_RTS_CTS,  /**< RTS/CTS。 */
+  PX4LITE_SERIAL_FLOW_UNKNOWN  /**< 当前配置不能识别。 */
+} Px4Lite_SerialFlow_t;
+
+/**
+ * @brief UART6 通用监视快照；Comm 单写发布，Business 只读复制。
+ * @details 计数自端口初始化累计，按 uint32_t 自然回绕，切速率/捕获/清屏不复位。
+ * TX 完成只证明本机整帧发完；超时可能已有部分字节出线，不计入完成字节数。
+ */
+typedef struct {
+  uint32_t baud_bps;                /**< 实际生效波特率，单位 bit/s；config_valid=0 时不可用。 */
+  uint32_t rx_byte_count;           /**< RX 完成回调交付的字节数，含后续入环失败的字节。 */
+  uint32_t tx_complete_byte_count;  /**< 整次发送成功的字节数，不包含失败发送的部分字节。 */
+  uint32_t rx_valid_frame_count;    /**< 解析器返回FRAMING_OK的帧数，不要求业务接受；签名按现有解析器配置处理。 */
+  uint32_t tx_complete_frame_count; /**< 本机 UART 整帧发送完成次数，不证明对端接收。 */
+  uint32_t tx_failure_count;        /**< 有效发送请求返回非 OK 次数，包括 BUSY/超时/错误。 */
+  uint32_t rx_frame_error_count;    /**< MAVLink BAD_CRC/BAD_SIGNATURE 结果次数。 */
+  uint32_t rx_uart_error_count;     /**< USART6 IRQ 入口含 ORE/NE/FE/PE 标志的次数，多标志合计一次。 */
+  uint32_t rx_drop_count;           /**< RX 环满而未能入环的字节数，不等同协议丢帧。 */
+  uint32_t rx_rearm_failure_count;  /**< 接收回调/错误回调中重新挂接单字节接收失败次数。 */
+  uint32_t last_rx_ms;              /**< 最近 RX 完成回调的真实毫秒时间，rx_seen=1 时有效。 */
+  uint32_t last_tx_ms;              /**< 最近完整发送成功的真实毫秒时间，tx_seen=1 时有效。 */
+  uint32_t measured_ms;             /**< 本快照采集结束的真实毫秒时间。 */
+  uint8_t data_bits;               /**< 实际数据位数 7/8/9，不包括校验位；0 表示未知。 */
+  uint8_t stop_bits_x2;            /**< 停止位数乘 2；2=1 位，4=2 位，0=未知。 */
+  uint8_t parity;                  /**< Px4Lite_SerialParity_t。 */
+  uint8_t flow_control;            /**< Px4Lite_SerialFlow_t。 */
+  uint8_t config_valid;            /**< 1 表示端口已初始化且不处于重新配置中。 */
+  uint8_t rx_seen;                 /**< 1 表示曾收到字节，独立于计数回绕与页面清零。 */
+  uint8_t tx_seen;                 /**< 1 表示曾完整发送成功，独立于计数回绕与页面清零。 */
+  uint8_t available;               /**< 1 表示此构建启用并已发布 UART6 监视事实。 */
+} Px4Lite_SerialMonitor_t;
 
 #endif

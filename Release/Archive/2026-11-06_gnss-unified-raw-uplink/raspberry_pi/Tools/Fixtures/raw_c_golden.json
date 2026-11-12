@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "test": "Tests/Unit/test_gnss_raw_uplink.c",
+  "description": "Real C RAW producer, MAVLink2 TUNNEL encoder and CRC parser; host-only, not real GPS UART traffic",
+  "sysid": 42,
+  "compid": 193,
+  "frame_id": 1,
+  "received_uptime_ms": 1000,
+  "frame_length": 100,
+  "protocol": 2,
+  "ubx_class": 1,
+  "ubx_id": 7,
+  "checksum_valid": 0,
+  "wire_crc16_ccitt_false": 3025,
+  "original_wire_hex": "B56201075C0066778899AABBCCDDEEFF102132435465768798A9BACBDCEDFE0F2031425364758697A8B9CADBECFD0E1F30415263748596A7B8C9DAEBFC0D1E2F405162738495A6B7C8D9EAFB0C1D2E3F5061728394A5B6C7D8E9FA0B1C2D3E4F6071060B",
+  "stats_snapshot_uptime_ms": 2000,
+  "stats_expected": {
+    "input_events": 1,
+    "enqueued_frames": 1,
+    "uart_completed_frames": 1,
+    "queue_full_drop_frames": 0,
+    "source_reject_events": 0,
+    "aborted_frames": 0,
+    "uart_completed_parts": 3,
+    "tx_error_attempts": 0,
+    "depth": 0,
+    "capacity": 4,
+    "active_protocol": 0,
+    "flags": 1,
+    "last_input_age_ms": 1000,
+    "last_completed_age_ms": 980,
+    "oldest_pending_age_ms": 4294967295,
+    "max_frame_bytes": 1024,
+    "max_data_bytes": 40
+  },
+  "vectors": [
+    {
+      "name": "FRAME_0",
+      "wire_hex": "FD450000002AC181010020800000400102021801000000E803000064000000000328000107D10BB56201075C0066778899AABBCCDDEEFF102132435465768798A9BACBDCEDFE0F203142536475869732C9",
+      "wire_bytes": 81
+    },
+    {
+      "name": "FRAME_1",
+      "wire_hex": "FD450000012AC181010020800000400102021801000000E803000064002800010328000107D10BA8B9CADBECFD0E1F30415263748596A7B8C9DAEBFC0D1E2F405162738495A6B7C8D9EAFB0C1D2E3FE053",
+      "wire_bytes": 81
+    },
+    {
+      "name": "FRAME_2",
+      "wire_hex": "FD310000022AC1810100208000002C0102021801000000E803000064005000020314000107D10B5061728394A5B6C7D8E9FA0B1C2D3E4F6071060BA426",
+      "wire_bytes": 61
+    },
+    {
+      "name": "STATS",
+      "wire_hex": "FD440000032AC181010021800000400121000101000000D0070000010000000100000001000000000000000000000000000000030000000000000000040001E8030000D4030000FFFFFFFF0004286553",
+      "wire_bytes": 80
+    }
+  ]
+}

@@ -18,6 +18,7 @@
 #include "px4lite_time.h"
 #include "px4lite_work.h"
 #include "px4lite_storage.h"
+#include "px4lite_startup_tone.h"
 
 #include <stddef.h>
 #include "debug_console.h"
@@ -289,10 +290,12 @@ static void Px4Lite_SensorTask(void *argument)
   (void)Px4Lite_RegistryStart(PX4LITE_MODULE_BATTERY, now_ms);
 #endif
   (void)Px4Lite_WorkInit(&work, "sensor_work", PX4LITE_SENSOR_WORK_PERIOD_MS, now_ms, Px4Lite_SensorWorkRun);
+  Px4Lite_StartupToneInit(Px4Lite_PlatformGetUs());
   last_wake = xTaskGetTickCount();
 
   for (;;) {
     now_ms = Px4Lite_PlatformGetMs();
+    Px4Lite_StartupToneRun(Px4Lite_PlatformGetUs());
     (void)Px4Lite_WorkRunDue(&work, now_ms);
     Px4Lite_PlatformHeartbeat(PX4LITE_HEARTBEAT_SENSOR, Px4Lite_PlatformGetMs());
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(PX4LITE_SENSOR_WORK_PERIOD_MS));
