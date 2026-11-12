@@ -6,7 +6,7 @@
 
 | 要找什么 | 当前入口 |
 |---|---|
-| 当前源码Git提交与main集成记录 | [提交与合入日志](../Development_Guide/Change_History/2026-11-12_当前版本提交与main合入.md)，独立检出37组host/Keil全量0/0；最终远端结果见该记录 |
+| 当前源码Git提交与main集成记录 | [提交与合入日志](../Development_Guide/Change_History/2026-11-12_当前版本提交与main合入.md)，已公开推送GNSS并经[PR #2](https://github.com/oran9eLi/Formal_Framework/pull/2)合入远端main；授权续作生产输入复核不变，原37组host/Keil0/0证据及实板边界见日志 |
 | 当前树莓派控制/配置声光提示候选（继承E73传感器诊断） | [固件及说明](Archive/2026-11-12_rpi-command-feedback/MANIFEST.md)，27组相关回归、最终三配置Keil全量0/0；实际双鸣双闪待验，GNSS等原问题保持 |
 | 声光提示前的三传感器共红诊断父候选（公共栈收紧＋只读状态/ID/水位） | [固件及说明](Archive/2026-11-11_sensor-stack-diagnostics/MANIFEST.md)，58组选定host/Quiet与诊断Keil全量0/0，尚未认定现场根因；本包有额外Debug负载 |
 | 三模块共红排查前GNSS重连父候选（继承HUD/BMI双流/GPS/RGB） | [固件及说明](Archive/2026-11-11_gnss-reconnect/MANIFEST.md)，重开状态校验、6s字节静默自愈及异常Debug；45组host/Keil全量0/0，实板待复测 |
