@@ -3,12 +3,19 @@
  */
 #include <assert.h>
 #include <stdio.h>
+/** @brief 单线程主机夹具所需FreeRTOS公开类型，不创建调度器任务。 */
+typedef int BaseType_t;
+typedef void *TaskHandle_t;
 #include "../../Framework/Src/px4lite_modules.c"
 static uint32_t now, start_ms;
 static unsigned services, triggers, publishes;
 static uint8_t waiting, fail_trigger;
 static Px4Lite_SensorBaro_t latest;
 uint32_t Px4Lite_PlatformGetMs(void) { return now; }
+/** @brief 调度测试不推进执行耗时，提供同一受控时基的微秒表达。 */
+uint32_t Px4Lite_PlatformGetUs(void) { return now * 1000U; }
+/** @brief 运行统计边界替身；不改变Baro触发与发布状态。 */
+void Px4Lite_RuntimeReportSensorWork(uint32_t elapsed_us) { (void)elapsed_us; }
 Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *out) { (void)out; return PX4LITE_IDLE; }
 Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *out) { (void)out; return PX4LITE_IDLE; }
 Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *out) { (void)out; return PX4LITE_IDLE; }

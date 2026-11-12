@@ -1,6 +1,6 @@
 /**
  * @file bsp_adc_current.c
- * @brief 实现 PC0/PC1 两路电流计模拟输出采样。
+ * @brief BSP 层可选 PC0/PC1 电流计模拟输出采样，当前仅 PC1 测整机主回路。
  * @details
  * 本文件属于 BSP 层，只负责 ADC3 初始化、通道切换、轮询采样、平均采样和 ADC 引脚
  * 电压换算。不得在本层解释电流计比例、零点或电池状态。
@@ -19,6 +19,14 @@ static ADC_HandleTypeDef s_hadc_current;
 /** @brief 最近成功采样的诊断缓存；下标 0/1 对应 PC0/PC1，不触发额外采样。 */
 static uint32_t s_diag_adc_mv[2];
 static uint8_t  s_diag_floating[2];
+
+/** @brief 判断逻辑电流通道是否启用；禁用通道不得触发惰性初始化或采样。 */
+static uint8_t BSP_ADC_Current_ChannelEnabled(BSP_ADC_CurrentChannel_t channel)
+{
+  if (channel == BSP_ADC_CURRENT_BATTERY1) { return (BSP_ENABLE_POWER1 != 0U) ? 1U : 0U; }
+  if (channel == BSP_ADC_CURRENT_BATTERY2) { return (BSP_ENABLE_POWER2 != 0U) ? 1U : 0U; }
+  return 0U;
+}
 
 /**
  * @brief 将 HAL ADC 返回状态映射为 BSP 通用返回码。
@@ -79,6 +87,7 @@ static void BSP_ADC_Current_PrechargePin(BSP_ADC_CurrentChannel_t channel, uint8
 
 BSP_Status_t BSP_ADC_Current_Init(void)
 {
+#if BSP_ENABLE_ADC_CURRENT
   s_hadc_current.Instance                   = BSP_ADC_CURRENT_INS;
   s_hadc_current.Init.ClockPrescaler        = ADC_CLOCK_SYNC_PCLK_DIV4;
   s_hadc_current.Init.Resolution            = ADC_RESOLUTION_12B;
@@ -93,6 +102,9 @@ BSP_Status_t BSP_ADC_Current_Init(void)
   s_hadc_current.Init.EOCSelection          = ADC_EOC_SINGLE_CONV;
 
   return (HAL_ADC_Init(&s_hadc_current) == HAL_OK) ? BSP_STATUS_OK : BSP_STATUS_ERROR;
+#else
+  return BSP_STATUS_ERROR;
+#endif
 }
 
 BSP_Status_t BSP_ADC_Current_DeInit(void)
@@ -119,7 +131,7 @@ BSP_Status_t BSP_ADC_Current_ReadRaw(BSP_ADC_CurrentChannel_t channel, uint32_t 
   HAL_StatusTypeDef result;
 
   if (raw == 0) { return BSP_STATUS_ERROR; }
-  if ((channel != BSP_ADC_CURRENT_BATTERY1) && (channel != BSP_ADC_CURRENT_BATTERY2)) { return BSP_STATUS_ERROR; }
+  if (BSP_ADC_Current_ChannelEnabled(channel) == 0U) { return BSP_STATUS_ERROR; }
 
   if (s_hadc_current.Instance == 0) {
     if (BSP_ADC_Current_Init() != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
@@ -214,7 +226,7 @@ BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uin
   uint8_t  idx = (channel == BSP_ADC_CURRENT_BATTERY2) ? 1U : 0U;
 
   if (voltage_mv == 0) { return BSP_STATUS_ERROR; }
-  if ((channel != BSP_ADC_CURRENT_BATTERY1) && (channel != BSP_ADC_CURRENT_BATTERY2)) { return BSP_STATUS_ERROR; }
+  if (BSP_ADC_Current_ChannelEnabled(channel) == 0U) { return BSP_STATUS_ERROR; }
 
 #if BSP_ADC_CURRENT_FLOAT_CHECK_ENABLE
   if (BSP_ADC_Current_PinFloating(channel, &floating) != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }

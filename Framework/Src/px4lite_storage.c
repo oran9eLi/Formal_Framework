@@ -226,8 +226,12 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
   Px4Lite_VehicleNavigation_t navigation;
   Px4Lite_SensorGnss_t gnss;
   Px4Lite_SensorBaro_t baro;
+#if PX4LITE_ENABLE_BATTERY1
   Px4Lite_BatteryStatus_t battery;
+#endif
+#if PX4LITE_ENABLE_BATTERY2
   Px4Lite_BatteryStatus_t battery2;
+#endif
   Px4Lite_TimeSnapshot_t time;
   Px4Lite_MotorOutputs_t motor;
   Px4Lite_AlarmSnapshot_t alarm;
@@ -291,6 +295,7 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
     Storage_EnqueueError(now_ms, "BARO", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, 0U, "baro_not_ready");
   }
 
+#if PX4LITE_ENABLE_BATTERY1
   memset(&battery, 0, sizeof(battery));
   copied = Px4Lite_CopyBattery(&battery);
   if (Storage_ClassifySample(&data.battery_sample, copied, &battery.header, 1U, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) != 0U) {
@@ -304,20 +309,29 @@ static void Storage_ProduceDataRecord(uint32_t now_ms)
   } else {
     Storage_EnqueueError(now_ms, "BATTERY", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, 0U, "battery_not_ready");
   }
+#else
+  /* schema2 保留第一组列；禁用属于缺测占位，不读取旧 topic，也不产生缺电故障。 */
+  data.battery_sample.state = STORAGE_SAMPLE_MISSING;
+#endif
 
+#if PX4LITE_ENABLE_BATTERY2
   memset(&battery2, 0, sizeof(battery2));
   copied = Px4Lite_CopyBattery2(&battery2);
   if (Storage_ClassifySample(&data.battery2_sample, copied, &battery2.header, 1U, now_ms, PX4LITE_BATTERY_MAX_AGE_MS) != 0U) {
     data.voltage2_mv  = battery2.voltage_mv;
     data.current2_ma  = battery2.current_ma;
     data.power2_mw    = (battery2.current_ma > 0) ? (uint32_t)((((uint64_t)battery2.voltage_mv) * (uint32_t)battery2.current_ma) / 1000ULL) : 0U;
-    data.battery2_pct = battery2.percent;
+    /* 本组为通用供电测量；255 表示不提供 SOC，不能把可调电源电压解释为电量。 */
+    data.battery2_pct = UINT8_MAX;
     data.low_voltage2 = battery2.low_voltage;
     Storage_ReportEventState(now_ms, "BATTERY2", PX4LITE_STATE_ONLINE, PX4LITE_FAULT_SENSOR_INVALID, 0U, 0U, "battery2_not_ready");
     Storage_ReportEventState(now_ms, "BATTERY2", (battery2.low_voltage != 0U) ? PX4LITE_STATE_DEGRADED : PX4LITE_STATE_ONLINE, PX4LITE_FAULT_SENSOR_INVALID, 0U, battery2.low_voltage, "low_voltage2");
   } else {
     Storage_EnqueueError(now_ms, "BATTERY2", PX4LITE_STATE_DEGRADED, PX4LITE_FAULT_SENSOR_INVALID, 0U, "battery2_not_ready");
   }
+#else
+  data.battery2_sample.state = STORAGE_SAMPLE_MISSING;
+#endif
 
   memset(&motor, 0, sizeof(motor));
   copied = Px4Lite_CopyMotor(&motor);

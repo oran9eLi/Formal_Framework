@@ -12,6 +12,22 @@
 #define PX4LITE_PLATFORM_H
 
 #include "px4lite_types.h"
+#include "px4lite_gnss_diagnostics.h"
+#include "px4lite_imu_diagnostics.h"
+
+/** @brief sensor所有者初始化可选蜂鸣器；失败不扩大关键启动门禁。 */
+Px4Lite_Result_t Px4Lite_PlatformBuzzerInit(void);
+/** @brief sensor设置PWM频率，单位Hz，0表示低电平静音；不等待播放。 */
+Px4Lite_Result_t Px4Lite_PlatformBuzzerSetFrequency(uint16_t frequency_hz);
+
+/** @brief sensor初始化PC9单线RGB原始输出，失败不影响蜂鸣器或关键启动门禁。 */
+Px4Lite_Result_t Px4Lite_PlatformRgbInit(void);
+/** @brief sensor释放RGB硬件资源，不代表已向灯珠发送黑帧。 */
+void Px4Lite_PlatformRgbDeInit(void);
+/** @brief RGB各通道0～255，异步copy提交GRB帧；BUSY时调用者保留最新目标重试。 */
+Px4Lite_Result_t Px4Lite_PlatformRgbSetColor(uint8_t red, uint8_t green, uint8_t blue);
+/** @brief sensor持续推进DMA完成与有界超时；now_ms必须为平台真实毫秒。 */
+Px4Lite_Result_t Px4Lite_PlatformRgbService(uint32_t now_ms);
 
 /**
  * @brief 必须参与 watchdog 门控的任务心跳编号。
@@ -142,20 +158,42 @@ Px4Lite_Result_t Px4Lite_GnssInit(void);
 Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement);
 
 /**
- * @brief 初始化 MPU6050 IMU 驱动。
+ * @brief 只读复制 GNSS 协议、配置及原始传输诊断，不消费数据或触发收发。
+ * @param[out] out 输出副本，不能为 NULL。
+ * @return Driver 尚无服务副本时返回 NOT_READY；传输读取失败不抹掉已有 Driver 事实。
+ * @note measured_ms 来自 sensor，读取实时 BSP 状态不能续期软件诊断。
+ */
+Px4Lite_Result_t Px4Lite_GnssCopyDiagnostics(Px4Lite_GnssDiagnostics_t *out);
+
+/** @brief 复制最近UBX NAV-SAT的一页事实；只读缓存，不触发接收或协议配置。 */
+Px4Lite_Result_t Px4Lite_GnssCopySatellitePage(uint8_t page, Px4Lite_GnssSatellitePage_t *out);
+
+/**
+ * @brief 只读复制某类最新完整GNSS原帧，不消费队列、触发Service或执行硬件I/O。
+ * @param slot 0=NAV-PVT，1=NAV-DOP，2=其他UBX/NMEA。
+ * @param out 调用者持有的原帧副本；不能为NULL，较大副本应静态持有。
+ * @return 无样本或GNSS禁用为NOT_READY，参数错误为INVALID_PARAM，复制成功为OK。
+ */
+Px4Lite_Result_t Px4Lite_GnssCopyRawFrame(uint8_t slot, Px4Lite_GnssRawFrame_t *out);
+
+/**
+ * @brief 启动已配置IMU的初始化；BMI088由sensor周期继续推进配置与验证。
  *
  * @return 初始化结果。
  */
 Px4Lite_Result_t Px4Lite_ImuInit(void);
 
 /**
- * @brief 将最新 MPU6050 快照转换为 Framework IMU 测量。
+ * @brief 将所选IMU新鲜完整样本转换为Framework统一单位及机体系轴向。
  *
  * @param[out] measurement 输出缓冲区，不能为 NULL。
  *
  * @return 转换结果。
  */
 Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *measurement);
+
+/** @brief 只读复制sensor缓存的IMU诊断；不调用驱动Service或访问总线。 */
+Px4Lite_Result_t Px4Lite_ImuCopyDiagnostics(Px4Lite_ImuDiagnostics_t *out);
 
 /**
  * @brief 初始化 BME280 气压计/环境驱动。
@@ -198,6 +236,48 @@ Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement);
  * @return 转换结果。
  */
 Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement);
+
+/** @brief 电压参考换算状态；非实测状态使用标称参考并保留具体回退原因。 */
+typedef enum {
+  PX4LITE_POWER_REF_UNAVAILABLE = 0, /**< 尚无采样。 */
+  PX4LITE_POWER_REF_MEASURED,        /**< 工厂校准与内部参考换算通过检查。 */
+  PX4LITE_POWER_REF_CAL_INVALID,     /**< 工厂校准码为零、全一或超出12位范围。 */
+  PX4LITE_POWER_REF_READ_FAILED,     /**< 内部参考ADC转换失败。 */
+  PX4LITE_POWER_REF_RAW_INVALID,     /**< 内部参考原码为零或超出12位范围。 */
+  PX4LITE_POWER_REF_VDDA_INVALID     /**< 估算参考电压超出当前ADC时钟允许的供电范围。 */
+} Px4Lite_PowerReferenceStatus_t;
+
+/**
+ * @brief 第二组主回路同次采样的只读诊断，单位与有效性不依赖Debug开关。
+ * @details sensor所有者在采样完成后发布；消费者只能复制，不触发ADC转换。
+ *          本结构不作为MAVLink消息或SD列布局，不得直接发送其内存。
+ */
+typedef struct {
+  uint32_t sequence;           /**< 电压采样尝试序号，自然回绕；是否有缓存以Copy返回值判断。 */
+  uint32_t sample_time_ms;     /**< sensor采样时刻，单位ms。 */
+  uint32_t voltage_raw;        /**< PA4平均ADC原码；有效时0..4095，失败记录不得作为电压解释。 */
+  uint32_t voltage_pin_mv;     /**< PA4换算电压，单位mV。 */
+  uint32_t voltage_bsp_mv;     /**< 按分压系数还原的主回路电压，单位mV。 */
+  uint32_t voltage_mv;         /**< Driver校准后发布的主回路电压，单位mV。 */
+  uint32_t vref_raw;           /**< 同次VREFINT原码；有效时0..4095，非法时保留异常值。 */
+  uint32_t vref_cal_raw;       /**< 工厂参考校准原字，保留非法值便于排查。 */
+  uint32_t vdda_mv;            /**< 实际参与换算的VDDA，单位mV；可能为回退值。 */
+  uint32_t vdda_calculated_mv; /**< 参考原码计算的VDDA，单位mV；尚不能计算时为0。 */
+  uint32_t current_pin_mv;     /**< 本轮PC1信号电压，单位mV；仅current_valid为1时有效。 */
+  int32_t current_ma;          /**< 本轮Driver输出电流，单位mA。 */
+  uint8_t reference_status;    /**< Px4Lite_PowerReferenceStatus_t；不能将回退值冒充实测值。 */
+  uint8_t current_valid;       /**< 本轮电流采样成功为1，失败为0。 */
+  uint8_t voltage_valid;       /**< 本轮ADC与Driver电压均成功为1；失败的final值不得使用。 */
+  uint8_t reserved;            /**< 保留为0。 */
+} Px4Lite_PowerDiagnostics_t;
+
+/**
+ * @brief 原子复制第二组主回路最近采样尝试诊断，不访问ADC或Driver私有变量。
+ * @param[out] out 输出副本，不能为NULL。
+ * @return 尚无样本或第二组关闭返回NOT_READY；空指针返回INVALID_PARAM。
+ * @note 数据年龄由调用者用当前毫秒时间减sample_time_ms判断，读取不续期。
+ */
+Px4Lite_Result_t Px4Lite_Battery2CopyDiagnostics(Px4Lite_PowerDiagnostics_t *out);
 
 /**
  * @brief 初始化电机 PWM 输出并强制进入安全脉宽。
@@ -334,7 +414,10 @@ void Px4Lite_RemoteIdAbortTx(void);
  */
 Px4Lite_Result_t Px4Lite_RemoteIdSend(const uint8_t *data, uint16_t len);
 
+/** @brief Comm 初始化 UART6 及其通用累计统计；不在页面切换时调用。 */
 Px4Lite_Result_t Px4Lite_RpiMavlinkInit(void);
+/** @brief 仅由 Comm 复制 UART6 配置/原始收发/解析事实，不消费 RX 或触发总线 I/O。 */
+Px4Lite_Result_t Px4Lite_RpiMavlinkCopyMonitor(Px4Lite_SerialMonitor_t *out);
 Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len);
 Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms);
 Px4Lite_Result_t Px4Lite_RpiMavlinkCopyRxFrame(Px4Lite_CommRxFrame_t *out);

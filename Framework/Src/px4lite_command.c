@@ -9,6 +9,7 @@
  */
 
 #include "px4lite_command.h"
+#include "px4lite_startup_tone.h"
 
 #include "px4lite_config.h"
 #include "px4lite_control.h"
@@ -196,11 +197,19 @@ static uint8_t Command_HandleAutoTakeoff(uint32_t now_ms)
   return Command_MapControlResult(result);
 }
 
+/**
+ * @brief 唯一控制命令执行入口；本机/广播RPi请求登记收包提示，执行结果仍由ACK说明。
+ * @details 通信层已完成MAVLink校验与补零解码；MAVLink2合法尾零裁剪不另加长度门槛。
+ *          提示只跨任务登记，不在Comm驱动蜂鸣器/RGB，也不将拒绝参数解释成执行成功。
+ */
 Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t source_system, uint8_t source_component, uint8_t target_system, uint8_t target_component, float param1, float param2, float param3, float param4, Px4Lite_MavlinkLink_t link, uint32_t now_ms)
 {
   uint8_t ack_result;
 
   if (Command_IsForThisSystem(target_system, target_component) == 0U) { return PX4LITE_IDLE; }
+#if PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK
+  if (link == PX4LITE_MAVLINK_LINK_RPI) { Px4Lite_StartupToneNotifyRpiCommand(); }
+#endif
 
   switch (command) {
     case PX4LITE_CMD_SET_MOTOR_THROTTLE_PERCENT:

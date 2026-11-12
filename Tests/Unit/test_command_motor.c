@@ -1,6 +1,7 @@
 /**
  * @file test_command_motor.c
  * @brief 使用真实 Command 与 Control 实现验证四路电机命令的事务语义。
+ * @details 原电压保护断言使用 PX4LITE_CONTROL_POWER_GATE_ENABLE=1 的 host 配置执行。
  */
 
 #include <stdint.h>
@@ -77,8 +78,12 @@ void Px4Lite_SetExternalModuleState(Px4Lite_ModuleId_t module_id, Px4Lite_State_
 Px4Lite_Result_t Px4Lite_GetModuleStatus(Px4Lite_ModuleId_t module_id, Px4Lite_ModuleStatus_t *out)
 { (void)module_id; (void)out; return PX4LITE_NOT_READY; }
 uint8_t Px4Lite_IdentityGetMavlinkSystemId(void) { return 1U; }
-void Px4Lite_LocalMsgLogPush(uint16_t message_id, uint32_t time_hhmmss, uint16_t fault_code, uint8_t severity, uint8_t source_id, uint8_t active)
-{ (void)message_id; (void)time_hhmmss; (void)fault_code; (void)severity; (void)source_id; (void)active; }
+/** @brief 命令事务测试隔离事件存储；事件目录和严重度由日志专项回归验证。 */
+void Px4Lite_LocalMsgLogEvent(uint16_t message_id, uint32_t now_ms, uint16_t fault_code, uint8_t source_id, uint8_t active)
+{ (void)message_id; (void)now_ms; (void)fault_code; (void)source_id; (void)active; }
+/** @brief 日志严重度替身；本用例只验证命令、目标和物理输出的事务边界。 */
+uint8_t Px4Lite_LogMessageSeverity(uint16_t message_id)
+{ (void)message_id; return 0U; }
 void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component, Px4Lite_MavlinkLink_t link)
 { (void)command; (void)target_system; (void)target_component; (void)link; g_last_ack_result = result; }
 void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result, uint32_t now_ms)
@@ -86,9 +91,13 @@ void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result, uint32_t 
 
 #include "../../Framework/Src/px4lite_control.c"
 #include "../../Framework/Src/px4lite_command.c"
+/** @brief 电机事务夹具隔离声光消费者，收包提示不得访问本测试的硬件边界。 */
+void Px4Lite_StartupToneNotifyRpiCommand(void) {}
 
-static void ResetHarness(void)
+/** @brief 初始化并显式解锁；同步计数从命令测试开始计算，不包含准备阶段。 */
+static int ResetHarness(void)
 {
+  int failures = 0;
   memset(g_pulse_us, 0, sizeof(g_pulse_us));
   memset(&g_last_motor, 0, sizeof(g_last_motor));
   g_now_ms = 4000U;
@@ -102,7 +111,13 @@ static void ResetHarness(void)
   g_require_cycle_lock = 0U;
   g_unprotected_write = 0U;
   ResetBatteryFixture();
-  (void)Px4Lite_ControlModuleInit();
+  failures += ExpectU32("command setup init", Px4Lite_ControlModuleInit(), PX4LITE_OK);
+  failures += ExpectU32("command setup explicit unlock", Px4Lite_ControlSetMotorLocked(0U), PX4LITE_OK);
+  failures += ExpectU32("command setup critical balanced", g_critical_depth, 0U);
+  failures += ExpectU32("command setup scheduler balanced", g_scheduler_depth, 0U);
+  g_critical_enter_count = 0U;
+  g_scheduler_enter_count = 0U;
+  return failures;
 }
 
 static void SendMotorCommand(uint16_t command, float p1, float p2, float p3, float p4)
@@ -120,7 +135,7 @@ static int TestRejectedPulseCommandIsAtomic(void)
   uint16_t old_pulse[PX4LITE_MOTOR_COUNT];
   int failures = 0;
 
-  ResetHarness();
+  failures += ResetHarness();
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) { (void)Px4Lite_ControlSetMotorThrottlePercent(i, 60U); }
   (void)Px4Lite_ControlSetAttitudeTarget(0, 0, 0);
   (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
@@ -162,7 +177,7 @@ static int TestRejectedBatchLeavesAllTargets(void)
   uint8_t i;
   static const float bad[] = {-1.0f, 101.0f, NAN, INFINITY};
   int failures = 0;
-  ResetHarness();
+  failures += ResetHarness();
   (void)SetFixturePowerInhibit(1U);
   g_now_ms += 10U;
   SendMotorCommand(31011U, 0.0f, 0.0f, 20.0f, 0.0f);
@@ -191,7 +206,7 @@ static int TestAcceptedPulseCommandCommitsOnce(void)
   uint8_t i;
   int failures = 0;
 
-  ResetHarness();
+  failures += ResetHarness();
   SendMotorCommand(31013U, 1200.0f, 1300.0f, 1400.0f, 1500.0f);
   failures += ExpectU32("pulse accepted", g_last_ack_result, MAV_RESULT_ACCEPTED);
   failures += ExpectU32("pulse direct mode", s_control_mode, PX4LITE_CONTROL_MODE_DIRECT);
@@ -211,7 +226,7 @@ static int TestThrottleCommandValidationAndCommit(void)
   uint8_t i;
   int failures = 0;
 
-  ResetHarness();
+  failures += ResetHarness();
   SendMotorCommand(31011U, 10.0f, 20.0f, 101.0f, 40.0f);
   failures += ExpectU32("invalid throttle denied", g_last_ack_result, MAV_RESULT_DENIED);
   failures += ExpectU32("invalid no commit", g_critical_enter_count, 0U);
@@ -232,7 +247,7 @@ static int TestThrottleCommandValidationAndCommit(void)
 static int TestPowerGateTimeCapturedInsideLock(void)
 {
   int failures = 0;
-  ResetHarness();
+  failures += ResetHarness();
   g_battery_live = 0U;
   g_battery_sample_ms = g_now_ms - PX4LITE_BATTERY_MAX_AGE_MS;
   g_suspend_advance_ms = 1U;
@@ -242,7 +257,7 @@ static int TestPowerGateTimeCapturedInsideLock(void)
   Px4Lite_ControlRun(g_now_ms);
   failures += ExpectU32("recovery cannot revive refused target", s_target_valid[0], 0U);
 
-  ResetHarness();
+  failures += ResetHarness();
   SendMotorCommand(31011U, 20.0f, 20.0f, 20.0f, 20.0f);
   g_battery_live = 0U;
   g_battery_sample_ms = g_now_ms - PX4LITE_BATTERY_MAX_AGE_MS;
@@ -251,13 +266,13 @@ static int TestPowerGateTimeCapturedInsideLock(void)
   failures += ExpectU32("cycle stale after preemption inhibited", Px4Lite_ControlIsPowerInhibited(), 1U);
   failures += ExpectU32("cycle stale clears old target", s_target_valid[0], 0U);
 
-  ResetHarness();
+  failures += ResetHarness();
   g_suspend_advance_ms = 1U; /* live 夹具在新时刻返回 sensor 刚发布的样本。 */
   SendMotorCommand(31011U, 20.0f, 20.0f, 20.0f, 20.0f);
   failures += ExpectU32("batch accepts new sample after preemption", g_last_ack_result, MAV_RESULT_ACCEPTED);
   failures += ExpectU32("batch uses current timestamp", s_target_update_ms[0], g_now_ms);
 
-  ResetHarness();
+  failures += ResetHarness();
   SendMotorCommand(31011U, 20.0f, 20.0f, 20.0f, 20.0f);
   g_suspend_advance_ms = 1U;
   Px4Lite_ControlRun(g_now_ms);

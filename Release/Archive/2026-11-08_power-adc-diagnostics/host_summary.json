@@ -1,0 +1,95 @@
+{
+  "passed": 22,
+  "failed": 0,
+  "groups": [
+    {
+      "name": "adc_current_probe",
+      "run_log": "build/20261108_power_diag/host_tests/adc_current_probe.run.log"
+    },
+    {
+      "name": "adc_current_sampling",
+      "run_log": "build/20261108_power_diag/host_tests/adc_current_sampling.run.log"
+    },
+    {
+      "name": "power",
+      "run_log": "build/20261108_power_diag/host_tests/power.run.log"
+    },
+    {
+      "name": "power2_conversion_audit",
+      "run_log": "build/20261108_power_diag/host_tests/power2_conversion_audit.run.log"
+    },
+    {
+      "name": "power_adc_reference",
+      "run_log": "build/20261108_power_diag/host_tests/power_adc_reference.run.log"
+    },
+    {
+      "name": "power_current_valid",
+      "run_log": "build/20261108_power_diag/host_tests/power_current_valid.run.log"
+    },
+    {
+      "name": "single_supply_adc",
+      "run_log": "build/20261108_power_diag/host_tests/single_supply_adc.run.log"
+    },
+    {
+      "name": "power_diagnostics_mapping",
+      "run_log": "build/20261108_power_diag/host_pipeline/power_diagnostics_mapping.run.log"
+    },
+    {
+      "name": "power_diagnostics_mapping_off",
+      "run_log": "build/20261108_power_diag/host_pipeline/power_diagnostics_mapping_off.run.log"
+    },
+    {
+      "name": "sensor_debug_dual",
+      "run_log": "build/20261108_power_diag/host_pipeline/sensor_debug_dual.run.log"
+    },
+    {
+      "name": "sensor_debug_off",
+      "run_log": "build/20261108_power_diag/host_pipeline/sensor_debug_off.run.log"
+    },
+    {
+      "name": "sensor_debug_ownership",
+      "run_log": "build/20261108_power_diag/host_pipeline/sensor_debug_ownership.run.log"
+    },
+    {
+      "name": "single_supply_service",
+      "run_log": "build/20261108_power_diag/host_service/single_supply_service.run.log"
+    },
+    {
+      "name": "single_supply_service_alloff",
+      "run_log": "build/20261108_power_diag/host_service/single_supply_service_alloff.run.log"
+    },
+    {
+      "name": "single_supply_service_dual",
+      "run_log": "build/20261108_power_diag/host_service/single_supply_service_dual.run.log"
+    },
+    {
+      "name": "single_supply_service_only1",
+      "run_log": "build/20261108_power_diag/host_service/single_supply_service_only1.run.log"
+    },
+    {
+      "name": "display_field_validity",
+      "run_log": "build/20261108_power_diag/host_regression/display_field_validity.run.log"
+    },
+    {
+      "name": "display_motor_lock",
+      "run_log": "build/20261108_power_diag/host_regression/display_motor_lock.run.log"
+    },
+    {
+      "name": "motor_manual_lock",
+      "run_log": "build/20261108_power_diag/host_regression/motor_manual_lock.run.log"
+    },
+    {
+      "name": "motor_manual_lock_gate",
+      "run_log": "build/20261108_power_diag/host_regression/motor_manual_lock_gate.run.log"
+    },
+    {
+      "name": "single_supply_csv",
+      "run_log": "build/20261108_power_diag/host_regression/single_supply_csv.run.log"
+    },
+    {
+      "name": "single_supply_mavlink",
+      "run_log": "build/20261108_power_diag/host_regression/single_supply_mavlink.run.log"
+    }
+  ],
+  "scope": "Selected host regressions; no hardware validation."
+}

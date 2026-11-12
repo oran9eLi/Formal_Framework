@@ -1,0 +1,22 @@
+{
+  "production_inputs": 1047,
+  "source_zip_verified": true,
+  "changed_production": 8,
+  "hex_sha256": "5d042012c4617bb04815ac9b962ed3c05fd18b58488d5ac2c662168620d1a5d1",
+  "main_sram_bytes": 126008,
+  "main_sram_free_bytes": 5064,
+  "main_sram_delta_from_e65_bytes": 216,
+  "ccm_reserved_bytes": 65536,
+  "ccm_lvgl_bytes": 40960,
+  "ccm_rle_bytes": 24576,
+  "max_host_rle_bytes": 15016,
+  "rom_size_bytes": 490804,
+  "rom_delta_from_e65_bytes": 1932,
+  "hex_data_start": "0x8000000",
+  "hex_data_end_exclusive": "0x8077d34",
+  "ccm_uninit_no_hex_data": true,
+  "pixel_exact_goldens": 9,
+  "board_flashed": false,
+  "board_fps_measured": false,
+  "hud_present_soft_budget_exception": "Full HUD commit is one bounded preemptible 258-row synchronous unit; duration must be measured on board, not asserted <=2ms."
+}

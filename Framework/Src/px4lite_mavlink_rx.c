@@ -370,7 +370,6 @@ static uint8_t MavRx_DecodeRpiH1EchoTunnel(const mavlink_message_t *message)
 {
   mavlink_tunnel_t packet;
   Px4Lite_Result_t result;
-  Px4Lite_RpiH1EchoResponseView_t pending_echo;
   uint8_t wire_payload_length;
 
   if (message == 0) { return 0U; }
@@ -383,8 +382,7 @@ static uint8_t MavRx_DecodeRpiH1EchoTunnel(const mavlink_message_t *message)
 #if PX4LITE_RPI_BAUD_SWITCH_ENABLE
   if ((packet.payload_length >= 2U) &&
       (packet.payload[1] == PX4LITE_RPI_BAUD_REQUEST_TYPE)) {
-    /* 两种实验事务共用单个 CommTask 发送口；不让切速率响应越过已排队的 H1 回显。 */
-    if (Px4Lite_RpiH1EchoPeekResponse(&pending_echo) == PX4LITE_OK) { return 1U; }
+    /* 完整配置校验和H1发送仲裁统一由切速率模块处理，合法收包提示不因业务忙丢失。 */
     result = Px4Lite_RpiBaudSwitchHandleTunnel(message->sysid,
                                                message->compid,
                                                packet.target_system,

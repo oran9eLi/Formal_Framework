@@ -1,0 +1,32 @@
+[
+  {
+    "path": "Framework/Inc/px4lite_config.h",
+    "previous_sha256": "a2cdb0b8dcbcc0b5b351b04681d66f85f3fe15829b5e4c196d4e099d7bd232f5",
+    "sha256": "0da7fba9204b5cf700f7fee29af7c74d3ce24a7e48740beb5172aa60de93e668"
+  },
+  {
+    "path": "Framework/Inc/px4lite_startup_tone.h",
+    "previous_sha256": "f554ddce4b06ee4edd04c263009e99eb57c591441a72508edf1ea6a9dcf77583",
+    "sha256": "92bd2333b8a204cf5dbcd7de3801a47455517c4aed0b5d0ab29d096e25686408"
+  },
+  {
+    "path": "Framework/Src/px4lite_command.c",
+    "previous_sha256": "cb568a801d31d8a1831ba4ace07717af8fcd21da3624439d0bf778f118b4e96c",
+    "sha256": "61ac783322de221c284324dd8e46e25b767c33ee17090a8742752b9ff7486dff"
+  },
+  {
+    "path": "Framework/Src/px4lite_mavlink_rx.c",
+    "previous_sha256": "70ec051d8f78bd593b56b952021372294b9f2eddf9c807250f014ab32b5dc8e5",
+    "sha256": "a16172fe4db1675d7330d088c19f7c6f12dec37db99d0f9ce069066bf35295ef"
+  },
+  {
+    "path": "Framework/Src/px4lite_rpi_baud_switch.c",
+    "previous_sha256": "3291274cadf31ef498eb38655f980dfde4312b3992d404df5a8d7e3711e0dd6d",
+    "sha256": "b1b5d7c4681fa3e052322b323bbbaaa140c2d86ddfd2b07087eefc6e0863f045"
+  },
+  {
+    "path": "Framework/Src/px4lite_startup_tone.c",
+    "previous_sha256": "149db3be1458d18a55cff23310f80c8182b3391b3191fdf0ae18fdc7e496e51b",
+    "sha256": "cd2f8c720b338e0cacd070f96f0eca7206279d5524b277abccdfb379e735a107"
+  }
+]

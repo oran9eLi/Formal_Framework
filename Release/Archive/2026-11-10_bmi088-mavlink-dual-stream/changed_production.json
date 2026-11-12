@@ -1,0 +1,34 @@
+[
+  {
+    "path": "Framework/Inc/px4lite_bmi088_uplink.h",
+    "kind": "added"
+  },
+  {
+    "path": "Framework/Inc/px4lite_config.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Src/px4lite_bmi088_uplink.c",
+    "kind": "added"
+  },
+  {
+    "path": "Framework/Src/px4lite_mavlink_tx.c",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Src/px4lite_platform_f407.c",
+    "kind": "modified"
+  },
+  {
+    "path": "MDK-ARM/formal_framework.uvprojx",
+    "kind": "modified"
+  },
+  {
+    "path": "Sensor/Inc/sensor_bmi088.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Sensor/Src/sensor_bmi088.c",
+    "kind": "modified"
+  }
+]

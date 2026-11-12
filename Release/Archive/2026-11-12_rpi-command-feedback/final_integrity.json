@@ -1,0 +1,21 @@
+{
+  "ledger": "R79/V1-E75",
+  "production_inputs": 1047,
+  "source_zip_verified": true,
+  "changed_production": 6,
+  "all_other_inputs_unchanged": 1041,
+  "hex_sha256": "44504ff9fa769645b4d4ecf0026cf3aa9b57c1cc14756871249c12f5a099e3d9",
+  "main_sram_bytes": 127168,
+  "main_sram_free_bytes": 3904,
+  "main_sram_delta_from_e73_bytes": 88,
+  "rom_size_bytes": 495468,
+  "rom_delta_from_e73_bytes": 832,
+  "gnss_dma_address": "0x2000933c",
+  "gnss_dma_bytes": 1024,
+  "ccm_uninit_bytes": 65536,
+  "freertos_heap_bytes_unchanged": 40960,
+  "hex_data_start": "0x8000000",
+  "hex_data_end_exclusive": "0x8078f6c",
+  "board_flashed": false,
+  "physical_sound_light_verified": false
+}

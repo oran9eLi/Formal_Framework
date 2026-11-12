@@ -1,0 +1,33 @@
+{
+  "changes": [
+    {
+      "path": "Bsp/Inc/bsp_gnss.h",
+      "after_sha256": "c227d471aa4bf970479f1831547af8f4ddc8e1142619f755ec3383536eb23256",
+      "before_sha256": "cb57cb982a10ec0dda422c6c57b65ba102a7f02dbb0034ac75858066750f50d1"
+    },
+    {
+      "path": "Bsp/Src/bsp_gnss.c",
+      "after_sha256": "2806b3796cc251122efe2857cfb809751679a42a97ab1d7fb9cac4a0b198e4f4",
+      "before_sha256": "0c9e57d7fadea12e5a1e2f7eabd587b79534e4dece758b8eca0e2a4974962a63"
+    },
+    {
+      "path": "Framework/Inc/px4lite_platform.h",
+      "after_sha256": "4666ac63b85f96259d540d45ffbf3aa26f241884827941b186cbb3c1a2a686d8",
+      "before_sha256": "1e2b3f5b890084fc0c47a1784dfc83c017d2b65da42ba198729491a981cc7d11"
+    },
+    {
+      "path": "Framework/Src/px4lite_platform_f407.c",
+      "after_sha256": "a1116e68be25345ec56c836344d737199042b1b5610ca921b6ef0e87f5a8e9ca",
+      "before_sha256": "190033466f1c5401e969ef842e977695701f989a65ac1a5980b187284243efaf"
+    },
+    {
+      "path": "Debug/Src/debug_service.c",
+      "after_sha256": "8ebdb14166b5ce6a63ec859957b9cb25de7b75cf024d9b5049fa695f57340c09",
+      "before_sha256": "81d1747a6e82b1229416120d3a071337a3bcd7a8b30d904e2d3dd6ff24d1fe8b"
+    }
+  ],
+  "variant_diff": [
+    "Debug/Inc/debug_config.h"
+  ],
+  "baseline": "Release/Archive/2026-11-05_gnss-rx-fix/normal/inputs_after.json"
+}

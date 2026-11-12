@@ -1,0 +1,10 @@
+[
+  "Business/Inc/app_data_api.h",
+  "Business/Src/app_data_api.c",
+  "Display/Src/display_lvgl.c",
+  "Framework/Inc/px4lite_gnss_diagnostics.h",
+  "Framework/Inc/px4lite_platform.h",
+  "Framework/Src/px4lite_platform_f407.c",
+  "Sensor/Inc/sensor_gnss.h",
+  "Sensor/Src/sensor_gnss.c"
+]

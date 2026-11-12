@@ -1,0 +1,53 @@
+{
+  "baseline": "Release/Archive/2026-11-04_p25-gnss-trial/normal/inputs_after.json",
+  "variant_diff": [
+    "Debug/Inc/debug_config.h"
+  ],
+  "changes": [
+    {
+      "path": "Core/Src/stm32f4xx_hal_msp.c",
+      "before_sha256": "f1add294b0be389200b6292bc8dbf904ad3188bd8ed2d7c8293d3cd2b4c37da6",
+      "after_sha256": "b8e71609410b33905a6243bf42fee3d8246a2db09b95e0d52f2aa2b46ecfd112"
+    },
+    {
+      "path": "Core/Src/stm32f4xx_it.c",
+      "before_sha256": "ed7910fb50e591d8e967307be8500acef1109c74215a478e9070f7668b436978",
+      "after_sha256": "0b6c14131324684718a511c6d0ce873416de774446695a147aff6802bb68926e"
+    },
+    {
+      "path": "Bsp/Inc/bsp_gnss.h",
+      "before_sha256": "d9d442d3a4da76bfd23ffb0a4733338df1ed8a18970c1fa53ad09c1e4374eaf7",
+      "after_sha256": "cb57cb982a10ec0dda422c6c57b65ba102a7f02dbb0034ac75858066750f50d1"
+    },
+    {
+      "path": "Bsp/Src/bsp_gnss.c",
+      "before_sha256": "ca268d65bbb61a8e8ad12029fd99ce0f968e272d4f7b15b470eadc30238915db",
+      "after_sha256": "0c9e57d7fadea12e5a1e2f7eabd587b79534e4dece758b8eca0e2a4974962a63"
+    },
+    {
+      "path": "Sensor/Inc/sensor_gnss.h",
+      "before_sha256": "0560181113ba6bb4b6915c7aef14ea957190da6ee9751c87ebe9e23ad15d6000",
+      "after_sha256": "4ff26bf10e335e3b21e245c249289b2a24c600f6e53aaa6de8152377659d9856"
+    },
+    {
+      "path": "Sensor/Src/sensor_gnss.c",
+      "before_sha256": "b413370999fb573f8e47f9403b6d1f0ad574871a50a55946a64ee1205d4292ff",
+      "after_sha256": "74bb79b617f642a3e6bad5189617da8311855e5e3bac2acc245d35d1dd70bf45"
+    },
+    {
+      "path": "Framework/Inc/px4lite_platform.h",
+      "before_sha256": "9228372f96f2c1828876f26f704e59ce67be45d2d90c2f024006c2496db35dd6",
+      "after_sha256": "1e2b3f5b890084fc0c47a1784dfc83c017d2b65da42ba198729491a981cc7d11"
+    },
+    {
+      "path": "Framework/Src/px4lite_platform_f407.c",
+      "before_sha256": "901e2b1330f434d0e6020eb8ff5351e123bfd49615e1c18694ee9985509bf615",
+      "after_sha256": "190033466f1c5401e969ef842e977695701f989a65ac1a5980b187284243efaf"
+    },
+    {
+      "path": "Debug/Src/debug_service.c",
+      "before_sha256": "e1451b9e08cb3e1b6fef6999e220102d7cebf3a9de7a14f300beb96f30dc5169",
+      "after_sha256": "81d1747a6e82b1229416120d3a071337a3bcd7a8b30d904e2d3dd6ff24d1fe8b"
+    }
+  ]
+}

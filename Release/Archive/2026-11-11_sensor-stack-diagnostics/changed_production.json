@@ -1,0 +1,32 @@
+[
+  {
+    "path": "Debug/Inc/debug_config.h",
+    "previous_sha256": "fbd670bcc49a12a9823b99f3cc6af8886348cce5a94d1e62e328a472eccf75cd",
+    "sha256": "b4bc517c917876c234bb0eb94724721dc1b99b666f55a96834f8d4bdaebdb184"
+  },
+  {
+    "path": "Debug/Src/debug_service.c",
+    "previous_sha256": "06ff90703244675e510e27e9d2c946ed711d76d28bc3a8b805ee748f42447d46",
+    "sha256": "605681c35c78dcdf9d6c6a8fa8bf153b66a302a1233933d8d57aae9f470330d2"
+  },
+  {
+    "path": "Debug/Src/debug_task_monitor.c",
+    "previous_sha256": "d4e3c1865ee06b85d131f287eb8cd6605012b4f17854f6c46199f74dc880d580",
+    "sha256": "9864363a1547a6429e1308989c2f816065cf391d9dff06e14c480f4f40a26142"
+  },
+  {
+    "path": "Framework/Src/px4lite_modules.c",
+    "previous_sha256": "4334e58042ae8237dde32430560919b19a8b812d3242b4cec966a48812628851",
+    "sha256": "dd02826d63a162a6bc8c5d3aa99ab1dfd8b49d1305532ecbb23dbf66e952976c"
+  },
+  {
+    "path": "Framework/Src/px4lite_platform_f407.c",
+    "previous_sha256": "ad912bdcb668122bf5669f2eac1a28599adcd1a18c9e76123551e54a15ba8e60",
+    "sha256": "8171acd171e81f1ca40ce534e68119f1cae62cf245da1971dbb253b5de161b0d"
+  },
+  {
+    "path": "Sensor/Src/sensor_gnss.c",
+    "previous_sha256": "c58983a94c652e194644d77a4893fd23d280fae09479d42a39bbd1bc413f4535",
+    "sha256": "50db3f032a806295bc81f7f476efcbbb28c4a47243af477765d511453a770a7d"
+  }
+]

@@ -14,25 +14,36 @@
 #include "px4lite_heartbeat_policy.h"
 #include "px4lite_config.h"
 #include "px4lite_diagnostic_capture.h"
+#include "px4lite_gnss_raw_uplink.h"
+#include "px4lite_bmi088_uplink.h"
 #include "px4lite_imu_axis_map.h"
 #include "bsp_gnss.h"
 #include "bsp_lora.h"
 #include "bsp_remoteid.h"
 #include "bsp_button.h"
 #include "bsp_pwm.h"
+#include "bsp_buzzer.h"
+#include "bsp_rgb.h"
 #include "bsp_rtc.h"
 #include "bsp_uart.h"
 #include "bsp_watchdog.h"
 #include "lora_e22.h"
 #include "bsp_time.h"
+#include "bsp_adc2.h"
+#include "bsp_adc_current.h"
 #include "sensor_bme280.h"
 #include "sensor_gnss.h"
 #include "sensor_mpu6050.h"
+#include "sensor_bmi088.h"
 #include "sensor_power.h"
 #include "sensor_power2.h"
 #include "stm32f4xx_hal.h"
 #include "FreeRTOS.h"
 #include "task.h"
+
+#if GNSS_RAW_FORWARD_MAX_BYTES != PX4LITE_GNSS_RAW_UPLINK_FRAME_MAX
+#error "Driver and Framework RAW forwarding capacities must match"
+#endif
 
 #if defined(__CC_ARM)
 #define MAVLINK_ALIGNED_FIELDS   0
@@ -64,6 +75,40 @@ static int32_t s_baro_last_altitude_mm;
 static int32_t s_baro_vertical_speed_cms;
 static uint8_t s_baro_altitude_valid;
 
+/** @brief IMU状态仅由sensor写入，Debug/自检只读缓存，不接触设备总线。 */
+static Px4Lite_ImuDiagnostics_t s_imu_diagnostics;
+static uint8_t s_imu_diagnostics_ready;
+static uint32_t s_imu_last_rx_sequence; /**< Adapter已消费的完整样本序号。 */
+static uint32_t s_imu_last_reinit_count; /**< 用于重新初始化后的稳定帧门控。 */
+static uint32_t s_imu_last_sample_ms; /**< 上一发布样本时间，单位ms。 */
+static uint8_t s_imu_stable_valid_count; /**< 本次初始化后的连续有效样本数。 */
+
+#if PX4LITE_IMU_DRIVER == PX4LITE_IMU_DRIVER_BMI088
+typedef Bmi088_Snapshot_t PlatformImuSnapshot_t;
+typedef Bmi088_Status_t PlatformImuStatus_t;
+typedef Bmi088_Result_t PlatformImuResult_t;
+#define PLATFORM_IMU_OK BMI088_RESULT_OK
+#define PLATFORM_IMU_NO_DATA BMI088_RESULT_NO_DATA
+#define PlatformImu_Service Sensor_BMI088_Service
+#define PlatformImu_CopySnapshot Sensor_BMI088_CopySnapshot
+#define PlatformImu_GetStatus Sensor_BMI088_GetStatus
+#else
+typedef Mpu6050_Snapshot_t PlatformImuSnapshot_t;
+typedef Mpu6050_Status_t PlatformImuStatus_t;
+typedef Mpu6050_Result_t PlatformImuResult_t;
+#define PLATFORM_IMU_OK MPU6050_RESULT_OK
+#define PLATFORM_IMU_NO_DATA MPU6050_RESULT_NO_DATA
+#define PlatformImu_Service Sensor_MPU6050_Service
+#define PlatformImu_CopySnapshot Sensor_MPU6050_CopySnapshot
+#define PlatformImu_GetStatus Sensor_MPU6050_GetStatus
+#endif
+
+#if PX4LITE_ENABLE_BATTERY2
+/** @brief sensor单写、Debug只读的主回路采样诊断；临界区内只复制。 */
+static Px4Lite_PowerDiagnostics_t s_power2_diagnostics;
+static uint8_t s_power2_diagnostics_ready;
+#endif
+
 #if PX4LITE_ENABLE_RPI_MAVLINK
 #define PX4LITE_RPI_RX_SERVICE_BYTE_BUDGET 128U
 #define PX4LITE_RPI_RX_IDLE_RESET_MS 200U /**< 半帧最大字节间隔，单位 ms。 */
@@ -75,6 +120,17 @@ static uint32_t s_rpi_last_byte_ms; /**< 最近消费字节时刻；解析状态
 static uint8_t s_rpi_pending_frame;
 static uint8_t s_rpi_diagnostic_raw[PX4LITE_CAPTURE_FRAME_BYTES];
 static uint16_t s_rpi_diagnostic_length;
+/** @brief Comm 独占的协议收发累计事实；不随半帧重置或波特率切换清零。 */
+static struct {
+  uint32_t rx_valid_frames;  /**< MAVLink 解析器返回 FRAMING_OK 的帧数。 */
+  uint32_t rx_frame_errors;  /**< BAD_CRC/BAD_SIGNATURE 次数。 */
+  uint32_t tx_bytes;         /**< 完整发送成功的字节数。 */
+  uint32_t tx_frames;        /**< 完整发送成功的帧数。 */
+  uint32_t tx_failures;      /**< 非 OK 发送结果次数。 */
+  uint32_t last_tx_ms;       /**< 最近完整发送时间，ms。 */
+  uint8_t tx_seen;           /**< 是否有过完整发送。 */
+} s_rpi_monitor;
+
 #endif
 
 /** @brief Driver原字节事实经Adapter转换，捕获不接触生产队列。 */
@@ -166,6 +222,82 @@ static int32_t Px4Lite_BaroUpdateVerticalSpeed(int32_t altitude_mm, uint32_t sam
 }
 
 
+/** @brief 可选声输出的初始化适配，BSP错误仅返回给试听服务。 */
+Px4Lite_Result_t Px4Lite_PlatformBuzzerInit(void)
+{
+  return (BSP_Buzzer_Init() == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+}
+
+/** @brief 原始PWM适配，频率和旋律策略由调用者负责。 */
+Px4Lite_Result_t Px4Lite_PlatformBuzzerSetFrequency(uint16_t frequency_hz)
+{
+  return (BSP_Buzzer_SetFrequency(frequency_hz) == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+}
+
+/** @brief 原始输出结果转换，不将DMA提交成功解释为灯珠在位或已发光。 */
+static Px4Lite_Result_t PlatformRgb_Result(BSP_Status_t result)
+{
+  if (result == BSP_STATUS_OK) { return PX4LITE_OK; }
+  if (result == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
+  return PX4LITE_IO_ERROR;
+}
+
+/** @brief RGB是可选输出，初始化结果仅由声光服务诊断和恢复。 */
+Px4Lite_Result_t Px4Lite_PlatformRgbInit(void)
+{
+  return PlatformRgb_Result(BSP_RGB_Init());
+}
+
+/** @brief 仅释放RGB资源；正常熄灯需先发送完整黑帧。 */
+void Px4Lite_PlatformRgbDeInit(void)
+{
+  (void)BSP_RGB_DeInit();
+}
+
+/** @brief 在适配层编码GRB高位优先，BSP仅copy并发送原始比较值。 */
+Px4Lite_Result_t Px4Lite_PlatformRgbSetColor(uint8_t red, uint8_t green, uint8_t blue)
+{
+  uint16_t duty[124];
+  uint16_t period, zero, one;
+  uint32_t grb = ((uint32_t)green << 16U) | ((uint32_t)red << 8U) | blue;
+  uint16_t index;
+  if (BSP_RGB_GetTiming(&period, &zero, &one) != BSP_STATUS_OK) { return PX4LITE_NOT_READY; }
+  if ((zero == 0U) || (one >= period)) { return PX4LITE_IO_ERROR; }
+  for (index = 0U; index < 24U; ++index) {
+    duty[index] = ((grb & (1UL << (23U - index))) != 0U) ? one : zero;
+  }
+  /* 100个零占空比槽约125us；DMA完成前已包含至少120us连续低电平。 */
+  for (; index < 124U; ++index) { duty[index] = 0U; }
+  return PlatformRgb_Result(BSP_RGB_Send(duty, 124U));
+}
+
+/** @brief 每10ms调用，包含旋律结束之后的黑帧完成、超时和恢复观察。 */
+Px4Lite_Result_t Px4Lite_PlatformRgbService(uint32_t now_ms)
+{
+  return PlatformRgb_Result(BSP_RGB_Service(now_ms));
+}
+
+/** @brief 保留屏幕NMEA捕获，并将完整原句独立复制给RAW上行；NULL超长通知不重复入Raw统计。 */
+static void PlatformCaptureGnssNmea(const uint8_t *bytes, uint16_t length, uint8_t type, uint8_t checksum_valid, uint32_t now)
+{
+  Px4Lite_CaptureNmea(bytes, length, type, checksum_valid, now);
+  if (bytes != NULL && length != 0U) { Px4Lite_GnssRawEnqueue(bytes, length, 1U, type, 0U, 0U, checksum_valid, now); }
+}
+
+/**
+ * @brief 屏幕与独立RAW出口共用一次完整UBX借用视图，不读取三槽采样代替原帧事件流。
+ * @details 屏幕/Debug仍为392B，较长帧可记录屏幕drop；独立RAW接收完整1024B，不截断。
+ */
+static void PlatformCaptureGnssUbx(const uint8_t *bytes, uint16_t length, uint8_t cls, uint8_t id, uint8_t checksum_valid, uint32_t now)
+{
+  Px4Lite_CaptureUbx(bytes, length, cls, id, checksum_valid, now);
+  if (bytes != NULL && length != 0U) { Px4Lite_GnssRawEnqueue(bytes, length, 2U, 0U, cls, id, checksum_valid, now); }
+}
+
+/** @brief 独立记录来源拒绝软件事件，计数不冒充物理空口丢帧。 */
+static void PlatformRejectGnssRaw(uint8_t protocol, uint32_t length, uint8_t reason, uint32_t now)
+{ Px4Lite_GnssRawSourceReject(protocol, length, reason, now); }
+
 /**
  * @brief 复位平台心跳状态并初始化适配层拥有的服务。
  *
@@ -175,7 +307,9 @@ Px4Lite_Result_t Px4Lite_PlatformInit(void)
 {
   Px4Lite_CaptureInit();
   Lora_E22_SetDiagnosticCallbacks(PlatformCaptureLoRaRx, PlatformCaptureLoRaTx);
-  Gnss_SetDiagnosticCallback(Px4Lite_CaptureNmea);
+  Gnss_SetDiagnosticCallback(PlatformCaptureGnssNmea);
+  Gnss_SetUbxDiagnosticCallback(PlatformCaptureGnssUbx);
+  Gnss_SetRawRejectCallback(PlatformRejectGnssRaw);
   memset(s_heartbeat_ms, 0, sizeof(s_heartbeat_ms));
   s_heartbeat_seen_mask = 0U;
   s_heartbeat_required_mask = 0U;
@@ -400,8 +534,27 @@ void Px4Lite_GnssRequestReinit(void)
   s_gnss_reinit_pending = 1U;
 }
 
+/** @brief 将Driver来源编码显式转换为Framework独立编码，未知值不得冒充已识别协议来源。 */
+static uint8_t PlatformGnssSource(uint8_t source)
+{
+  switch (source) {
+    case GNSS_SOURCE_UBX_PVT: return PX4LITE_GNSS_SOURCE_UBX_PVT;
+    case GNSS_SOURCE_NMEA_GGA: return PX4LITE_GNSS_SOURCE_NMEA_GGA;
+    case GNSS_SOURCE_NMEA_RMC: return PX4LITE_GNSS_SOURCE_NMEA_RMC;
+    case GNSS_SOURCE_NMEA_GSA: return PX4LITE_GNSS_SOURCE_NMEA_GSA;
+    case GNSS_SOURCE_NMEA_GSV: return PX4LITE_GNSS_SOURCE_NMEA_GSV;
+    case GNSS_SOURCE_UBX_DOP: return PX4LITE_GNSS_SOURCE_UBX_DOP;
+    default: return PX4LITE_GNSS_SOURCE_NONE;
+  }
+}
+
 /**
- * @brief 将一个最新 GNSS 驱动快照转换为 Framework 测量格式。
+ * @brief 逐字段转换GNSS五个基础域及独立DOP/计数事实，不跨层发送Driver结构体内存。
+ * @details 基础聚合时间保持五域语义；追加事实只由各自present/source/时间授权，不续期位置。
+ *          Service的TX/恢复错误不能遮住本次尚未发布的有效RX；无新RX时仍返回错误，
+ *          不允许重复使用旧快照给在线心跳续期。
+ *          只由sensor采集链调用，不可重入；Driver快照使用owner静态暂存，
+ *          每轮清零并逐字段复制到调用者输出，不将暂存地址交给其他任务。
  */
 Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
 {
@@ -409,13 +562,16 @@ Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
   uint8_t reinit;
   uint32_t best_age = UINT32_MAX;
   uint32_t age;
-  uint32_t times[4];
+  uint32_t times[5];
   uint32_t i;
-  static const uint32_t bits[4] = {GNSS_VALID_POSITION, GNSS_VALID_VELOCITY, GNSS_VALID_TIME, GNSS_VALID_ALTITUDE};
-  Gnss_Snapshot_t snapshot;
+  static const uint32_t bits[5] = {GNSS_VALID_POSITION, GNSS_VALID_VELOCITY, GNSS_VALID_TIME, GNSS_VALID_ALTITUDE, GNSS_VALID_NAV_STATUS};
+  /** @brief sensor所有者独占的Driver快照，避免在嵌套解析路径上保留200B栈对象。 */
+  static Gnss_Snapshot_t snapshot;
   Gnss_Result_t result;
+  Gnss_Result_t service_result;
 
   if (measurement == 0) { return PX4LITE_INVALID_PARAM; }
+  memset(&snapshot,0,sizeof(snapshot));
 
   taskENTER_CRITICAL();
   reinit = s_gnss_reinit_pending;
@@ -426,11 +582,16 @@ Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
     Sensor_GNSS_RequestReinit();
   }
   now_ms = Px4Lite_PlatformGetMs();
-  if (Sensor_GNSS_Service(now_ms) == GNSS_RESULT_IO_ERROR) { return PX4LITE_IO_ERROR; }
+  service_result = Sensor_GNSS_Service(now_ms);
   result = Sensor_GNSS_CopySnapshot(&snapshot);
-  if (result == GNSS_RESULT_INVALID_PARAM) { return PX4LITE_IO_ERROR; }
+  if (result == GNSS_RESULT_NO_DATA) {
+    return service_result == GNSS_RESULT_IO_ERROR ? PX4LITE_IO_ERROR : PX4LITE_IDLE;
+  }
+  if (result != GNSS_RESULT_OK && result != GNSS_RESULT_NO_FIX) { return PX4LITE_IO_ERROR; }
 
-  if ((snapshot.rx_sequence == 0U) || (snapshot.rx_sequence == s_gnss_last_rx_sequence)) { return PX4LITE_IDLE; }
+  if ((snapshot.rx_sequence == 0U) || (snapshot.rx_sequence == s_gnss_last_rx_sequence)) {
+    return service_result == GNSS_RESULT_IO_ERROR ? PX4LITE_IO_ERROR : PX4LITE_IDLE;
+  }
 
   memset(measurement, 0, sizeof(*measurement));
   measurement->last_rx_ms = snapshot.last_rx_ms;
@@ -438,13 +599,16 @@ Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
   measurement->velocity_update_ms = snapshot.velocity_update_ms;
   measurement->time_update_ms = snapshot.time_update_ms;
   measurement->altitude_update_ms = snapshot.altitude_update_ms;
+  measurement->status_update_ms = snapshot.status_update_ms;
   if ((snapshot.valid_mask & GNSS_VALID_POSITION) != 0U) { measurement->valid_mask |= PX4LITE_GNSS_VALID_POSITION; }
   if ((snapshot.valid_mask & GNSS_VALID_VELOCITY) != 0U) { measurement->valid_mask |= PX4LITE_GNSS_VALID_VELOCITY; }
   if ((snapshot.valid_mask & GNSS_VALID_TIME) != 0U) { measurement->valid_mask |= PX4LITE_GNSS_VALID_TIME; }
   if ((snapshot.valid_mask & GNSS_VALID_ALTITUDE) != 0U) { measurement->valid_mask |= PX4LITE_GNSS_VALID_ALTITUDE; }
+  if ((snapshot.valid_mask & GNSS_VALID_NAV_STATUS) != 0U) { measurement->valid_mask |= PX4LITE_GNSS_VALID_NAV_STATUS; }
   times[0] = snapshot.position_update_ms; times[1] = snapshot.velocity_update_ms;
   times[2] = snapshot.time_update_ms; times[3] = snapshot.altitude_update_ms;
-  for (i = 0U; i < 4U; ++i) {
+  times[4] = snapshot.status_update_ms;
+  for (i = 0U; i < 5U; ++i) {
     age = Px4Lite_ElapsedMs(now_ms, times[i]);
     if (((snapshot.valid_mask & bits[i]) != 0U) && (age < best_age)) { best_age = age; measurement->header.sample_time_ms = times[i]; }
   }
@@ -456,66 +620,323 @@ Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
   measurement->utc_date              = snapshot.utc_date;
   measurement->heading_deg100        = (uint16_t)snapshot.heading_deg100;
   measurement->hdop_x100             = snapshot.hdop_cm;
-  measurement->fix_type              = ((snapshot.fix_valid != 0U) && (Px4Lite_ElapsedMs(now_ms, snapshot.position_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS)) ? snapshot.fix_quality : 0U;
+  if ((snapshot.valid_mask & GNSS_VALID_NAV_STATUS) != 0U) {
+    measurement->fix_type = (Px4Lite_ElapsedMs(now_ms, snapshot.status_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS) ? snapshot.fix_quality : 0U;
+  } else {
+    /* 未提供新状态域的旧来源仍保持原位置有效性语义，不凭ACK构造新定位状态。 */
+    measurement->fix_type = ((snapshot.fix_valid != 0U) && (Px4Lite_ElapsedMs(now_ms, snapshot.position_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS)) ? snapshot.fix_quality : 0U;
+  }
   measurement->fix_dimension         = snapshot.fix_dimension;
   measurement->satellites_used       = snapshot.satellites;
   measurement->gps_visible           = snapshot.gps_visible_sats;
   measurement->bds_visible           = snapshot.bds_visible_sats;
   measurement->gps_used              = snapshot.gps_used_sats;
   measurement->bds_used              = snapshot.bds_used_sats;
+  measurement->position_source = PlatformGnssSource(snapshot.position_source);
+  measurement->velocity_source = PlatformGnssSource(snapshot.velocity_source);
+  measurement->time_source = PlatformGnssSource(snapshot.time_source);
+  measurement->altitude_source = PlatformGnssSource(snapshot.altitude_source);
+  measurement->status_source = PlatformGnssSource(snapshot.status_source);
+  measurement->raw_status_type = snapshot.raw_status_type;
+  measurement->dimension_source = PlatformGnssSource(snapshot.dimension_source);
+  measurement->dimension_update_ms = snapshot.dimension_update_ms;
+  measurement->dop_present_mask = snapshot.dop_present_mask & 0x7FU;
+  measurement->dop_itow_known_mask = snapshot.dop_itow_known_mask & measurement->dop_present_mask;
+  measurement->dop_solution_mask = snapshot.dop_solution_mask & measurement->dop_present_mask;
+  for (i = 0U; i < PX4LITE_GNSS_DOP_COUNT; ++i) {
+    measurement->dop_source[i] = PlatformGnssSource(snapshot.dop_source[i]);
+    measurement->dop_x100[i] = snapshot.dop_x100[i];
+    measurement->dop_update_ms[i] = snapshot.dop_update_ms[i];
+    measurement->dop_itow_ms[i] = snapshot.dop_itow_ms[i];
+  }
+  measurement->counts_present_mask = snapshot.counts_present_mask & 0x0FU;
+  for (i = 0U; i < PX4LITE_GNSS_COUNTS_COUNT; ++i) {
+    measurement->counts_source[i] = PlatformGnssSource(snapshot.counts_source[i]);
+    measurement->counts_update_ms[i] = snapshot.counts_update_ms[i];
+  }
 
   s_gnss_last_rx_sequence = snapshot.rx_sequence;
   return PX4LITE_OK;
 }
 
+/**
+ * @brief 复制完整线帧到调用者缓冲区，仅用小元数据局部变量，避免大栈副本。
+ */
+Px4Lite_Result_t Px4Lite_GnssCopyRawFrame(uint8_t slot, Px4Lite_GnssRawFrame_t *out)
+{
+  if ((out == NULL) || (slot >= PX4LITE_GNSS_RAW_SLOT_COUNT)) { return PX4LITE_INVALID_PARAM; }
+  memset(out, 0, sizeof(*out));
+#if PX4LITE_ENABLE_GNSS
+  {
+    Gnss_RawFrameInfo_t info;
+    Gnss_Result_t result;
+    memset(&info, 0, sizeof(info));
+    result = Sensor_GNSS_CopyRawFrame(slot, out->bytes, sizeof(out->bytes), &info);
+    if (result != GNSS_RESULT_OK) { return PX4LITE_NOT_READY; }
+    if ((info.length == 0U) || (info.length > sizeof(out->bytes))) { return PX4LITE_NOT_READY; }
+    out->sequence = info.sequence;
+    out->received_ms = info.received_ms;
+    out->length = info.length;
+    out->protocol = info.protocol;
+    out->class_id = info.class_id;
+    out->message_id = info.message_id;
+    out->checksum_valid = info.checksum_valid;
+  }
+  return PX4LITE_OK;
+#else
+  return PX4LITE_NOT_READY;
+#endif
+}
+
+/**
+ * @brief 将Driver固定5星页逐字段转换；不复制整张64星表，不触发接收服务。
+ * @details 局部副本80B，适配后由App独立判断逐星消息年龄，不借定位帧续期。
+ */
+Px4Lite_Result_t Px4Lite_GnssCopySatellitePage(uint8_t page, Px4Lite_GnssSatellitePage_t *out)
+{
+  if (out == NULL) { return PX4LITE_INVALID_PARAM; }
+  memset(out, 0, sizeof(*out));
+#if PX4LITE_ENABLE_GNSS
+  {
+    Gnss_SatellitePage_t source;
+    Gnss_Result_t result;
+    uint8_t i;
+#if GNSS_SAT_PAGE_CAPACITY != PX4LITE_GNSS_SAT_PAGE_CAPACITY
+#error "Driver and Framework satellite page capacities must match"
+#endif
+    result = Sensor_GNSS_CopySatellitePage(page, &source);
+    if (result == GNSS_RESULT_INVALID_PARAM) { return PX4LITE_INVALID_PARAM; }
+    if (result != GNSS_RESULT_OK) { return result == GNSS_RESULT_NO_DATA ? PX4LITE_NOT_READY : PX4LITE_IO_ERROR; }
+    if (!source.available) { return PX4LITE_NOT_READY; }
+    if (source.count > PX4LITE_GNSS_SAT_PAGE_CAPACITY || source.stored > GNSS_SAT_CAPACITY ||
+        source.stored > source.total || source.page != page) { return PX4LITE_IO_ERROR; }
+    out->sequence = source.sequence; out->received_ms = source.received_ms; out->itow_ms = source.itow_ms;
+    out->total = source.total; out->stored = source.stored; out->page = source.page; out->count = source.count;
+    out->truncated = source.truncated; out->available = source.available; out->used_count = source.used_count;
+    for (i = 0U; i < source.count; ++i) {
+      const Gnss_Satellite_t *s = &source.entries[i];
+      Px4Lite_GnssSatellite_t *d = &out->entries[i];
+      d->gnss_id = s->gnss_id; d->sv_id = s->sv_id; d->cno_dbhz = s->cno_dbhz;
+      d->quality = s->quality; d->used = s->used;
+      d->elevation_deg = s->elevation_deg; d->azimuth_deg = s->azimuth_deg;
+      if (s->valid_mask & GNSS_SAT_VALID_ELEVATION) { d->valid_mask |= PX4LITE_GNSS_SAT_VALID_ELEVATION; }
+      if (s->valid_mask & GNSS_SAT_VALID_AZIMUTH) { d->valid_mask |= PX4LITE_GNSS_SAT_VALID_AZIMUTH; }
+    }
+    return PX4LITE_OK;
+  }
+#else
+  (void)page;
+  return PX4LITE_NOT_READY;
+#endif
+}
+
+/**
+ * @brief 逐字段转换Driver和BSP诊断，不消费接收队列、不启动发送或修复外设。
+ * @details 软件副本只使用sensor服务时间；传输读取失败不抹掉Driver事实。
+ *          两侧分别复制而非同一原子时刻，因此不能把字节差额直接宣称为丢失。
+ */
+Px4Lite_Result_t Px4Lite_GnssCopyDiagnostics(Px4Lite_GnssDiagnostics_t *out)
+{
+  if (out == NULL) { return PX4LITE_INVALID_PARAM; }
+  memset(out, 0, sizeof(*out));
+#if PX4LITE_ENABLE_GNSS
+  {
+    Gnss_Diagnostics_t source;
+    BSP_GNSS_TransportInfo_t transport;
+    Gnss_Result_t result;
+    memset(&source, 0, sizeof(source));
+    memset(&transport, 0, sizeof(transport));
+    result = Sensor_GNSS_CopyDiagnostics(&source);
+    if (BSP_GNSS_CopyTransportInfo(&transport) == BSP_STATUS_OK) {
+      out->transport_baud_bps = transport.baud_bps;
+      out->transport_rx_bytes = transport.rx_bytes;
+      out->rx_drop_bytes = transport.rx_drop_bytes;
+      out->uart_errors = transport.uart_errors;
+      out->dma_errors = transport.dma_errors;
+      out->tx_packets = transport.tx_packets;
+      out->tx_failures = transport.tx_failures;
+      out->recoveries = transport.recoveries;
+      out->ndtr = transport.ndtr;
+      out->queued_bytes = transport.queued_bytes;
+      out->initialized = (uint8_t)(transport.initialized != 0U);
+      out->tx_busy = (uint8_t)(transport.tx_busy != 0U);
+      out->transport_available = 1U;
+    }
+    if (result != GNSS_RESULT_OK) {
+      return result == GNSS_RESULT_NO_DATA ? PX4LITE_NOT_READY : PX4LITE_IO_ERROR;
+    }
+    out->measured_ms = source.measured_ms;
+    out->service_count = source.service_count;
+    out->rx_bytes = source.rx_bytes;
+    out->valid_nmea = source.valid_nmea;
+    out->valid_ubx = source.valid_ubx;
+    out->checksum_errors = source.checksum_errors;
+    out->framing_resets = source.framing_resets;
+    out->tx_commands = source.tx_commands;
+    out->ack_count = source.ack_count;
+    out->nak_count = source.nak_count;
+    out->timeout_count = source.timeout_count;
+    out->baud_changes = source.baud_changes;
+    out->last_rx_ms = source.last_rx_ms;
+    out->last_frame_ms = source.last_frame_ms;
+    out->baud_bps = source.baud_bps;
+    out->protocol_version_x100 = source.protocol_version_x100;
+    out->rx_seen = (uint8_t)(source.rx_seen != 0U);
+    out->frame_seen = (uint8_t)(source.frame_seen != 0U);
+    switch (source.protocol) {
+      case GNSS_PROTOCOL_NMEA: out->protocol = PX4LITE_GNSS_PROTOCOL_NMEA; break;
+      case GNSS_PROTOCOL_UBX: out->protocol = PX4LITE_GNSS_PROTOCOL_UBX; break;
+      default: out->protocol = PX4LITE_GNSS_PROTOCOL_UNKNOWN; break;
+    }
+    switch (source.state) {
+      case GNSS_LINK_SCAN: out->state = PX4LITE_GNSS_LINK_DETECTING; break;
+      case GNSS_LINK_VERSION: out->state = PX4LITE_GNSS_LINK_VERSION; break;
+      case GNSS_LINK_CONFIGURE: out->state = PX4LITE_GNSS_LINK_CONFIGURING; break;
+      case GNSS_LINK_RECEIVING: out->state = PX4LITE_GNSS_LINK_RECEIVING; break;
+      case GNSS_LINK_UNCONFIRMED: out->state = PX4LITE_GNSS_LINK_UNCONFIRMED; break;
+      case GNSS_LINK_IO_ERROR: out->state = PX4LITE_GNSS_LINK_IO_ERROR; break;
+      default: out->state = PX4LITE_GNSS_LINK_UNKNOWN; break;
+    }
+    out->config_step = source.config_step;
+    out->config_total = source.config_total;
+    out->config_confirmed = (uint8_t)(source.config_confirmed != 0U);
+    out->version_seen = (uint8_t)(source.version_seen != 0U);
+    out->available = 1U;
+    return PX4LITE_OK;
+  }
+#else
+  return PX4LITE_NOT_READY;
+#endif
+}
+
+/** @brief 将驱动只读状态转换为公共诊断；计算在临界区外，临界区只复制。 */
+static void Px4Lite_ImuPublishDiagnostics(const PlatformImuStatus_t *status)
+{
+  Px4Lite_ImuDiagnostics_t diag;
+  memset(&diag, 0, sizeof(diag));
+  diag.driver = (uint8_t)PX4LITE_IMU_DRIVER;
+  diag.rx_sequence = status->rx_sequence;
+  diag.sample_time_ms = status->sample_time_ms;
+  diag.error_count = status->error_count;
+  diag.reinit_count = status->reinit_count;
+  diag.last_stage = (uint8_t)status->last_stage;
+  diag.last_result = (uint8_t)status->last_result;
+  diag.last_bsp_status = status->last_bsp_status;
+#if PX4LITE_IMU_DRIVER == PX4LITE_IMU_DRIVER_BMI088
+  diag.bus = (uint8_t)status->bus;
+  diag.accel_chip_id = status->accel_chip_id;
+  diag.gyro_chip_id = status->gyro_chip_id;
+  diag.accel_addr_7bit = status->accel_addr_7bit;
+  diag.gyro_addr_7bit = status->gyro_addr_7bit;
+  diag.fifo_drop_count = status->fifo_drop_count;
+  diag.device_ready = status->initialized;
+#else
+  diag.bus = 1U;
+  diag.accel_chip_id = status->last_chip_id;
+  diag.gyro_chip_id = status->last_chip_id;
+  diag.accel_addr_7bit = status->i2c_addr_7bit;
+  diag.gyro_addr_7bit = status->i2c_addr_7bit;
+  diag.device_ready = (status->last_result == MPU6050_RESULT_OK) ? 1U : 0U;
+#endif
+  taskENTER_CRITICAL();
+  s_imu_diagnostics = diag;
+  s_imu_diagnostics_ready = 1U;
+  taskEXIT_CRITICAL();
+}
+
+/** @brief 启动选定IMU并清除Adapter门控；BMI初始化接受与设备验证分别记录。 */
 Px4Lite_Result_t Px4Lite_ImuInit(void)
 {
-  return (Sensor_MPU6050_Init() == MPU6050_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+  PlatformImuResult_t result;
+  PlatformImuStatus_t status;
+  s_imu_last_rx_sequence = 0U;
+  s_imu_last_reinit_count = 0U;
+  s_imu_last_sample_ms = 0U;
+  s_imu_stable_valid_count = 0U;
+#if PX4LITE_ENABLE_RPI_BMI088_UPLINK
+  Px4Lite_Bmi088UplinkInvalidate();
+#endif
+#if PX4LITE_IMU_DRIVER == PX4LITE_IMU_DRIVER_BMI088
+  result = Sensor_BMI088_Init((Bmi088_Bus_t)PX4LITE_IMU_BMI088_BUS);
+#else
+  result = Sensor_MPU6050_Init();
+#endif
+  memset(&status, 0, sizeof(status));
+  (void)PlatformImu_GetStatus(&status);
+  Px4Lite_ImuPublishDiagnostics(&status);
+  return (result == PLATFORM_IMU_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
 }
 
+/** @brief Health只发送请求；总线操作由下一轮sensor服务执行。 */
 void Px4Lite_ImuRequestReinit(void)
 {
+#if PX4LITE_IMU_DRIVER == PX4LITE_IMU_DRIVER_BMI088
+  Sensor_BMI088_RequestReinit();
+#else
   Sensor_MPU6050_RequestReinit();
+#endif
 }
 
+/** @brief 复制缓存诊断，不读时钟、不采样、不推进初始化或恢复。 */
+Px4Lite_Result_t Px4Lite_ImuCopyDiagnostics(Px4Lite_ImuDiagnostics_t *out)
+{
+  uint8_t ready;
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+  taskENTER_CRITICAL();
+  *out = s_imu_diagnostics;
+  ready = s_imu_diagnostics_ready;
+  taskEXIT_CRITICAL();
+  return (ready != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
+}
+
+/** @brief 在sensor推进驱动并发布统一单位；重初始化后第三个连续有效样本开始可用。 */
 Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *measurement)
 {
-  static uint32_t last_rx_sequence;
-  static uint32_t last_reinit_count;
-  static uint8_t stable_valid_count;
-  Mpu6050_Snapshot_t snapshot;
-  Mpu6050_Status_t status;
-  Mpu6050_Result_t result;
+  PlatformImuSnapshot_t snapshot;
+  PlatformImuStatus_t status;
+  PlatformImuResult_t result;
   uint32_t now_ms;
+  uint32_t delta_ms;
   uint8_t i;
 
   if (measurement == 0) { return PX4LITE_INVALID_PARAM; }
 
   now_ms = Px4Lite_PlatformGetMs();
-  result = Sensor_MPU6050_Service(now_ms);
-  if (result != MPU6050_RESULT_OK) {
-    /* 单帧采样失败只代表"本轮没有新样本"，不重置稳定计数：稳定计数的唯一用途是
-       在重初始化之后等待若干帧再发布(见下方 reinit_count 判定)。若在这里一并清零，
-       任何一次瞬时拒绝都会让计数在 0..MIN-1 之间反复横跳而永远到不了门限，
-       last_rx_ms 随之冻结，Health 在 PX4LITE_IMU_OFFLINE_MS 后误判 IMU 离线。 */
-    return (result == MPU6050_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR;
-  }
-
-  result = Sensor_MPU6050_CopySnapshot(&snapshot);
-  if (result != MPU6050_RESULT_OK) { return (result == MPU6050_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
-
-  if ((snapshot.rx_sequence == 0U) || (snapshot.rx_sequence == last_rx_sequence)) { return PX4LITE_IDLE; }
-
+  result = PlatformImu_Service(now_ms);
   memset(&status, 0, sizeof(status));
-  (void)Sensor_MPU6050_GetStatus(&status);
-  if (status.reinit_count != last_reinit_count) {
-    last_reinit_count  = status.reinit_count;
-    stable_valid_count = 0U;
+  (void)PlatformImu_GetStatus(&status);
+  Px4Lite_ImuPublishDiagnostics(&status);
+  if (status.reinit_count != s_imu_last_reinit_count) {
+    s_imu_last_reinit_count = status.reinit_count;
+    s_imu_stable_valid_count = 0U;
+    s_imu_last_sample_ms = 0U;
+#if PX4LITE_ENABLE_RPI_BMI088_UPLINK
+    Px4Lite_Bmi088UplinkInvalidate();
+#endif
   }
-  if (stable_valid_count < PX4LITE_IMU_STABLE_VALID_MIN) {
-    stable_valid_count++;
-    last_rx_sequence = snapshot.rx_sequence;
-    return PX4LITE_IDLE;
+#if PX4LITE_ENABLE_RPI_BMI088_UPLINK && (PX4LITE_IMU_DRIVER == PX4LITE_IMU_DRIVER_BMI088)
+  if (!status.initialized) { Px4Lite_Bmi088UplinkInvalidate(); }
+#endif
+  if (result != PLATFORM_IMU_OK) {
+    /* 初始化门控要求连续有效帧，真实I/O错误仅在门控未完成时清零；
+       NO_DATA不表示错误，已完成门控后单次瞬态也不重启整个等待窗口。 */
+    if ((result != PLATFORM_IMU_NO_DATA) && (s_imu_stable_valid_count < PX4LITE_IMU_STABLE_VALID_MIN)) {
+      s_imu_stable_valid_count = 0U;
+    }
+    return (result == PLATFORM_IMU_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR;
+  }
+
+  result = PlatformImu_CopySnapshot(&snapshot);
+  if (result != PLATFORM_IMU_OK) { return (result == PLATFORM_IMU_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
+
+  if ((snapshot.rx_sequence == 0U) || (snapshot.rx_sequence == s_imu_last_rx_sequence)) { return PX4LITE_IDLE; }
+
+  if (s_imu_stable_valid_count < PX4LITE_IMU_STABLE_VALID_MIN) {
+    s_imu_stable_valid_count++;
+    if (s_imu_stable_valid_count < PX4LITE_IMU_STABLE_VALID_MIN) {
+      s_imu_last_rx_sequence = snapshot.rx_sequence;
+      return PX4LITE_IDLE;
+    }
   }
 
   memset(measurement, 0, sizeof(*measurement));
@@ -524,11 +945,52 @@ Px4Lite_Result_t Px4Lite_ImuRead(Px4Lite_SensorImu_t *measurement)
     measurement->accel_mg[i]  = Px4Lite_RoundFloatToI32(snapshot.accel_g[i] * 1000.0f);
     measurement->gyro_mdps[i] = Px4Lite_RoundFloatToI32(snapshot.gyro_dps[i] * 1000.0f);
   }
+#if PX4LITE_IMU_DRIVER == PX4LITE_IMU_DRIVER_BMI088
+  Px4Lite_MapBmi088Axes(measurement->accel_mg, measurement->gyro_mdps);
+#else
   Px4Lite_MapImuAxes(measurement->accel_mg, measurement->gyro_mdps);
+#endif
   measurement->temperature_cdeg = (int16_t)Px4Lite_RoundFloatToI32(snapshot.temperature_c * 100.0f);
   measurement->sample_period_us = (uint16_t)(PX4LITE_IMU_WORK_PERIOD_MS * 1000U);
+  delta_ms = snapshot.sample_time_ms - s_imu_last_sample_ms;
+  if ((s_imu_last_sample_ms != 0U) && (delta_ms > 0U) && (delta_ms <= 65U)) {
+    measurement->sample_period_us = (uint16_t)(delta_ms * 1000U);
+  }
 
-  last_rx_sequence = snapshot.rx_sequence;
+#if PX4LITE_ENABLE_RPI_BMI088_UPLINK && (PX4LITE_IMU_DRIVER == PX4LITE_IMU_DRIVER_BMI088)
+  {
+    Px4Lite_Bmi088Sample_t pair;
+    /* 只在完整新样本通过既有稳定门控后发布；原字节与解析值来自同一次Driver副本。 */
+    memset(&pair,0,sizeof(pair));
+    pair.sample_sequence=snapshot.rx_sequence;
+    pair.sample_time_ms=snapshot.sample_time_ms;
+    pair.reinit_count=snapshot.reinit_count;
+    pair.driver_error_count=snapshot.error_count;
+    pair.fifo_drop_count=snapshot.fifo_drop_count;
+    memcpy(pair.accel_mg,measurement->accel_mg,sizeof(pair.accel_mg));
+    memcpy(pair.gyro_mdps,measurement->gyro_mdps,sizeof(pair.gyro_mdps));
+    pair.temperature_cdeg=measurement->temperature_cdeg;
+    pair.sample_period_us=measurement->sample_period_us;
+    pair.bus=snapshot.raw.bus;
+    pair.accel_addr_7bit=snapshot.raw.accel_addr_7bit;
+    pair.gyro_addr_7bit=snapshot.raw.gyro_addr_7bit;
+    pair.accel_chip_id=snapshot.raw.accel_chip_id;
+    pair.gyro_chip_id=snapshot.raw.gyro_chip_id;
+    pair.accel_status=snapshot.raw.accel_status;
+    pair.gyro_fifo_status=snapshot.raw.gyro_fifo_status;
+    pair.gyro_frame_count=snapshot.raw.gyro_frame_count;
+    memcpy(pair.raw_accel,snapshot.raw.accel,sizeof(pair.raw_accel));
+    memcpy(pair.raw_temperature,snapshot.raw.temperature,sizeof(pair.raw_temperature));
+    memcpy(pair.raw_gyro,snapshot.raw.gyro,sizeof(pair.raw_gyro));
+    pair.axis_map[0]=PX4LITE_BMI088_AXIS_X;
+    pair.axis_map[1]=PX4LITE_BMI088_AXIS_Y;
+    pair.axis_map[2]=PX4LITE_BMI088_AXIS_Z;
+    Px4Lite_Bmi088UplinkPublish(&pair);
+  }
+#endif
+
+  s_imu_last_sample_ms = snapshot.sample_time_ms;
+  s_imu_last_rx_sequence = snapshot.rx_sequence;
   return PX4LITE_OK;
 }
 
@@ -581,21 +1043,33 @@ Px4Lite_Result_t Px4Lite_BaroRead(Px4Lite_SensorBaro_t *measurement, uint8_t sta
   return PX4LITE_OK;
 }
 
+/** @brief 初始化已启用的电源驱动；第二组为当前整机主回路，禁用组不建立样本。 */
 Px4Lite_Result_t Px4Lite_BatteryInit(void)
 {
-  /* 第二块电池(ADC2/PA4)与电池 1 同周期采样，独立缓存电压与电量；缺装时不阻塞电池 1。 */
-  (void)Sensor_Power2_Init();
-  return (Sensor_Power_Init() == POWER_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+#if PX4LITE_ENABLE_BATTERY1
+  if (Sensor_Power_Init() != POWER_RESULT_OK) { return PX4LITE_IO_ERROR; }
+#endif
+#if PX4LITE_ENABLE_BATTERY2
+  if (Sensor_Power2_Init() != POWER_RESULT_OK) { return PX4LITE_IO_ERROR; }
+#endif
+  return PX4LITE_OK;
 }
 
+/** @brief Health 只请求已启用驱动恢复；实际重新初始化由 sensor 服务执行。 */
 void Px4Lite_BatteryRequestReinit(void)
 {
+#if PX4LITE_ENABLE_BATTERY1
   Sensor_Power_RequestReinit();
+#endif
+#if PX4LITE_ENABLE_BATTERY2
   Sensor_Power2_RequestReinit();
+#endif
 }
 
+/** @brief 读取第一组真实测量；停用时返回 NOT_READY，绝不借用第二组填充。 */
 Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement)
 {
+#if PX4LITE_ENABLE_BATTERY1
   static uint32_t last_rx_sequence;
   Power_Snapshot_t snapshot;
   Power_Result_t result;
@@ -622,10 +1096,89 @@ Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *measurement)
 
   last_rx_sequence = snapshot.rx_sequence;
   return PX4LITE_OK;
+#else
+  (void)measurement;
+  return PX4LITE_NOT_READY;
+#endif
 }
 
+#if PX4LITE_ENABLE_BATTERY2
+/** @brief 将BSP参考事实显式转换为Framework枚举，不向消费者暴露BSP类型。 */
+static uint8_t PlatformPowerReferenceStatus(uint8_t status)
+{
+  switch (status) {
+    case BSP_ADC_REF_MEASURED: return PX4LITE_POWER_REF_MEASURED;
+    case BSP_ADC_REF_FALLBACK_CAL_ZERO:
+    case BSP_ADC_REF_FALLBACK_CAL_ERASED:
+    case BSP_ADC_REF_FALLBACK_CAL_RANGE: return PX4LITE_POWER_REF_CAL_INVALID;
+    case BSP_ADC_REF_FALLBACK_READ: return PX4LITE_POWER_REF_READ_FAILED;
+    case BSP_ADC_REF_FALLBACK_RAW: return PX4LITE_POWER_REF_RAW_INVALID;
+    case BSP_ADC_REF_FALLBACK_VDDA_RANGE: return PX4LITE_POWER_REF_VDDA_INVALID;
+    default: return PX4LITE_POWER_REF_UNAVAILABLE;
+  }
+}
+
+/**
+ * @brief sensor在Service之后发布同轮只读诊断，失败尝试明确标为无效。
+ * @param[in] now_ms 本轮采样时刻，单位ms。
+ * @param[in] snapshot 成功的Driver副本；采集失败时为NULL。
+ * @details 仅复制ADC缓存，不启动转换；ADC2内嵌参考不受后续电流参考采样覆盖。
+ */
+static void PlatformPower2PublishDiagnostics(uint32_t now_ms, const Power_Snapshot_t *snapshot)
+{
+  BSP_ADC2_Diag_t source;
+  Px4Lite_PowerDiagnostics_t converted;
+  uint8_t floating;
+
+  if (BSP_ADC2_GetDiag(&source) != BSP_STATUS_OK) { return; }
+  if (s_power2_diagnostics_ready && (source.sequence == s_power2_diagnostics.sequence)) { return; }
+  memset(&converted, 0, sizeof(converted));
+  converted.sequence = source.sequence;
+  converted.sample_time_ms = now_ms;
+  converted.voltage_raw = source.raw_average;
+  converted.voltage_pin_mv = source.pin_mv;
+  converted.voltage_bsp_mv = source.input_mv;
+  converted.vref_raw = source.reference.vref_raw;
+  converted.vref_cal_raw = source.reference.calibration_raw;
+  converted.vdda_mv = source.reference.vdda_mv;
+  converted.vdda_calculated_mv = source.reference.calculated_vdda_mv;
+  converted.reference_status = source.reference.ready ? PlatformPowerReferenceStatus(source.reference.status) : PX4LITE_POWER_REF_UNAVAILABLE;
+  if ((snapshot != 0) && source.sample_valid) {
+    converted.voltage_valid = 1U;
+    converted.voltage_mv = (uint32_t)(snapshot->voltage_v * 1000.0f + 0.5f);
+    converted.current_ma = snapshot->current_ma;
+    converted.current_valid = snapshot->current_valid;
+    if (snapshot->current_valid) {
+      BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY2, &converted.current_pin_mv, &floating);
+    }
+  }
+  taskENTER_CRITICAL();
+  s_power2_diagnostics = converted;
+  s_power2_diagnostics_ready = 1U;
+  taskEXIT_CRITICAL();
+}
+#endif
+
+/** @brief 只复制sensor已发布的主回路诊断；关闭第二组时不读取任何底层缓存。 */
+Px4Lite_Result_t Px4Lite_Battery2CopyDiagnostics(Px4Lite_PowerDiagnostics_t *out)
+{
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+#if PX4LITE_ENABLE_BATTERY2
+  taskENTER_CRITICAL();
+  if (s_power2_diagnostics_ready) {
+    *out = s_power2_diagnostics;
+    taskEXIT_CRITICAL();
+    return PX4LITE_OK;
+  }
+  taskEXIT_CRITICAL();
+#endif
+  return PX4LITE_NOT_READY;
+}
+
+/** @brief 读取第二组主回路测量，保持原topic身份；参考回退作为降级事实交给Framework。 */
 Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement)
 {
+#if PX4LITE_ENABLE_BATTERY2
   static uint32_t last_rx_sequence;
   Power_Snapshot_t snapshot;
   Power_Result_t result;
@@ -635,10 +1188,14 @@ Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement)
 
   now_ms = Px4Lite_PlatformGetMs();
   result = Sensor_Power2_Service(now_ms);
-  if (result != POWER_RESULT_OK) { return (result == POWER_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
+  if (result != POWER_RESULT_OK) {
+    if (result != POWER_RESULT_NO_DATA) { PlatformPower2PublishDiagnostics(now_ms, 0); }
+    return (result == POWER_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR;
+  }
 
   result = Sensor_Power2_CopySnapshot(&snapshot);
   if (result != POWER_RESULT_OK) { return (result == POWER_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
+  PlatformPower2PublishDiagnostics(now_ms, &snapshot);
 
   if ((snapshot.rx_sequence == 0U) || (snapshot.rx_sequence == last_rx_sequence)) { return PX4LITE_IDLE; }
 
@@ -650,8 +1207,17 @@ Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement)
   measurement->percent               = snapshot.percent;
   measurement->low_voltage           = snapshot.low_voltage;
 
+  if (s_power2_diagnostics_ready &&
+      (s_power2_diagnostics.reference_status != PX4LITE_POWER_REF_MEASURED)) {
+    measurement->header.flags |= PX4LITE_DATA_DEGRADED;
+  }
+
   last_rx_sequence = snapshot.rx_sequence;
   return PX4LITE_OK;
+#else
+  (void)measurement;
+  return PX4LITE_NOT_READY;
+#endif
 }
 
 Px4Lite_Result_t Px4Lite_MotorInit(void)
@@ -774,21 +1340,36 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkInit(void)
 #if PX4LITE_ENABLE_RPI_MAVLINK
   /* 树莓派链路走独立的 USART6(PC6/PC7)，与调试口 USART1 物理分离。 */
   Px4Lite_RpiMavlinkResetRxState();
+  memset(&s_rpi_monitor, 0, sizeof(s_rpi_monitor));
   return (BSP_RpiUART_Init() == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
 #else
   return PX4LITE_OK;
 #endif
 }
 
+/**
+ * @brief Comm 沿既有阻塞路径发送 UART6 原始帧，并独立累计本机完成/失败事实。
+ * @details 返回码、捕获提交和超时保持既有语义；不推断对端是否收到，不改变实验事务。
+ */
 Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
 {
 #if PX4LITE_ENABLE_RPI_MAVLINK
   BSP_Status_t status;
+  uint32_t completed_ms;
 
   if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
 
   status = BSP_RpiUART_Send(data, len, PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS);
-  Px4Lite_CaptureRpiTx(data, len, Px4Lite_PlatformGetMs(), status == BSP_STATUS_OK ? PX4LITE_CAPTURE_UART_DONE : (status == BSP_STATUS_TIMEOUT ? PX4LITE_CAPTURE_TIMEOUT : PX4LITE_CAPTURE_ERROR));
+  completed_ms = Px4Lite_PlatformGetMs();
+  if (status == BSP_STATUS_OK) {
+    s_rpi_monitor.tx_bytes += len;
+    s_rpi_monitor.tx_frames++;
+    s_rpi_monitor.last_tx_ms = completed_ms;
+    s_rpi_monitor.tx_seen = 1U;
+  } else {
+    s_rpi_monitor.tx_failures++;
+  }
+  Px4Lite_CaptureRpiTx(data, len, completed_ms, status == BSP_STATUS_OK ? PX4LITE_CAPTURE_UART_DONE : (status == BSP_STATUS_TIMEOUT ? PX4LITE_CAPTURE_TIMEOUT : PX4LITE_CAPTURE_ERROR));
   if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
   if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
   return PX4LITE_IO_ERROR;
@@ -796,6 +1377,54 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
   (void)data;
   (void)len;
   return PX4LITE_OK;
+#endif
+}
+
+/**
+ * @brief Comm 复制通用 UART6 监视事实，并把 HAL 配置转换为与平台无关的值。
+ * @details BSP 只复制原始事实；本函数不改变解析、发送、捕获或实验事务。
+ */
+Px4Lite_Result_t Px4Lite_RpiMavlinkCopyMonitor(Px4Lite_SerialMonitor_t *out)
+{
+  if (out == 0) { return PX4LITE_INVALID_PARAM; }
+  memset(out, 0, sizeof(*out));
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  {
+    BSP_RpiUART_Diagnostics_t raw;
+    BSP_RpiUART_CopyDiagnostics(&raw);
+    out->baud_bps = raw.baud_rate;
+    out->data_bits = raw.word_length == UART_WORDLENGTH_8B ? 8U :
+                     (raw.word_length == UART_WORDLENGTH_9B ? 9U : 0U);
+    out->parity = raw.parity == UART_PARITY_NONE ? PX4LITE_SERIAL_PARITY_NONE :
+                  (raw.parity == UART_PARITY_EVEN ? PX4LITE_SERIAL_PARITY_EVEN :
+                  (raw.parity == UART_PARITY_ODD ? PX4LITE_SERIAL_PARITY_ODD : PX4LITE_SERIAL_PARITY_UNKNOWN));
+    if (out->data_bits != 0U && out->parity != PX4LITE_SERIAL_PARITY_NONE &&
+        out->parity != PX4LITE_SERIAL_PARITY_UNKNOWN) { out->data_bits--; }
+    out->stop_bits_x2 = raw.stop_bits == UART_STOPBITS_1 ? 2U : (raw.stop_bits == UART_STOPBITS_2 ? 4U : 0U);
+    out->flow_control = raw.hw_flow_ctl == UART_HWCONTROL_NONE ? PX4LITE_SERIAL_FLOW_NONE :
+                        (raw.hw_flow_ctl == UART_HWCONTROL_RTS ? PX4LITE_SERIAL_FLOW_RTS :
+                        (raw.hw_flow_ctl == UART_HWCONTROL_CTS ? PX4LITE_SERIAL_FLOW_CTS :
+                        (raw.hw_flow_ctl == UART_HWCONTROL_RTS_CTS ? PX4LITE_SERIAL_FLOW_RTS_CTS : PX4LITE_SERIAL_FLOW_UNKNOWN)));
+    out->rx_byte_count = raw.rx_byte_count;
+    out->rx_uart_error_count = raw.rx_uart_error_count;
+    out->rx_drop_count = raw.rx_drop_count;
+    out->rx_rearm_failure_count = raw.rx_rearm_failure_count;
+    out->last_rx_ms = raw.last_rx_ms;
+    out->rx_seen = raw.rx_seen;
+    out->config_valid = raw.config_valid;
+    out->rx_valid_frame_count = s_rpi_monitor.rx_valid_frames;
+    out->rx_frame_error_count = s_rpi_monitor.rx_frame_errors;
+    out->tx_complete_byte_count = s_rpi_monitor.tx_bytes;
+    out->tx_complete_frame_count = s_rpi_monitor.tx_frames;
+    out->tx_failure_count = s_rpi_monitor.tx_failures;
+    out->last_tx_ms = s_rpi_monitor.last_tx_ms;
+    out->tx_seen = s_rpi_monitor.tx_seen;
+    out->available = 1U;
+    out->measured_ms = Px4Lite_PlatformGetMs();
+    return PX4LITE_OK;
+  }
+#else
+  return PX4LITE_NOT_READY;
 #endif
 }
 
@@ -870,11 +1499,13 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms)
     if (framing == MAVLINK_FRAMING_BAD_CRC || framing == MAVLINK_FRAMING_BAD_SIGNATURE) {
       mavlink_status_t *parser = mavlink_get_channel_status(MAVLINK_COMM_0);
       mavlink_message_t *message = mavlink_get_channel_buffer(MAVLINK_COMM_0);
+      s_rpi_monitor.rx_frame_errors++;
       Px4Lite_CaptureReject(PX4LITE_CAPTURE_RPI_RX);
       s_rpi_diagnostic_length = 0U; parser->msg_received = MAVLINK_FRAMING_INCOMPLETE; parser->parse_state = MAVLINK_PARSE_STATE_IDLE;
       if (byte == MAVLINK_STX) { parser->parse_state = MAVLINK_PARSE_STATE_GOT_STX; message->len = 0U; mavlink_start_checksum(message); s_rpi_diagnostic_raw[0] = byte; s_rpi_diagnostic_length = 1U; }
     }
     if (framing == MAVLINK_FRAMING_OK) {
+      s_rpi_monitor.rx_valid_frames++;
       Px4Lite_CaptureRx(PX4LITE_CAPTURE_RPI_RX, s_rpi_diagnostic_raw, s_rpi_diagnostic_length, now_ms);
       s_rpi_diagnostic_length = 0U;
       s_rpi_pending_rx_ms = now_ms;

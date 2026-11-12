@@ -1,0 +1,50 @@
+{
+  "revision": 67,
+  "evidence": 63,
+  "archive": "D:\\1\\OneDrive\\Desktop\\Formal_Framework\\Release\\Archive\\2026-11-10_bmi088-mavlink-dual-stream",
+  "hex_sha256": "7df99dae989b17d5fcb15cb73f7d6445c93b4994c507c5553ecf150951bc6f11",
+  "input_count": 1043,
+  "production_changes": [
+    {
+      "path": "Framework/Inc/px4lite_bmi088_uplink.h",
+      "kind": "added"
+    },
+    {
+      "path": "Framework/Inc/px4lite_config.h",
+      "kind": "modified"
+    },
+    {
+      "path": "Framework/Src/px4lite_bmi088_uplink.c",
+      "kind": "added"
+    },
+    {
+      "path": "Framework/Src/px4lite_mavlink_tx.c",
+      "kind": "modified"
+    },
+    {
+      "path": "Framework/Src/px4lite_platform_f407.c",
+      "kind": "modified"
+    },
+    {
+      "path": "MDK-ARM/formal_framework.uvprojx",
+      "kind": "modified"
+    },
+    {
+      "path": "Sensor/Inc/sensor_bmi088.h",
+      "kind": "modified"
+    },
+    {
+      "path": "Sensor/Src/sensor_bmi088.c",
+      "kind": "modified"
+    }
+  ],
+  "source_zip_matches": true,
+  "hud_source_unchanged": true,
+  "c_groups_passed": 32,
+  "python_tests_passed": 17,
+  "keil_configurations_passed": 3,
+  "default_main_sram_used": 125280,
+  "default_main_sram_free": 5792,
+  "default_rom_bytes": 485624,
+  "hardware_tested": false
+}

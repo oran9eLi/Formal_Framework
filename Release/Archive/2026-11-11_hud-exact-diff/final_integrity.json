@@ -1,0 +1,21 @@
+{
+  "production_inputs": 1045,
+  "source_zip_verified": true,
+  "changed_production": 5,
+  "hex_sha256": "f43c8fa763d8d535fb5caecc47c28bd9695826542837acea5dbeb76e7fefb29b",
+  "main_sram_bytes": 125792,
+  "main_sram_free_bytes": 5280,
+  "main_sram_delta_bytes": 496,
+  "ccm_reserved_bytes": 65536,
+  "ccm_lvgl_bytes": 40960,
+  "ccm_hud_cache_bytes": 24576,
+  "hud_main_tail_bytes": 481,
+  "rom_size_bytes": 488872,
+  "rom_delta_bytes": 2904,
+  "hex_data_start": "0x8000000",
+  "hex_data_end_exclusive": "0x80775a8",
+  "ccm_uninit_no_hex_data": true,
+  "pixel_helpers_inlined": true,
+  "board_flashed": false,
+  "board_fps_measured": false
+}

@@ -1,6 +1,7 @@
 ﻿/**
  * @file test_control_motor_logic.c
  * @brief 验证 Control 模块的电机油门映射、急停和失效保护逻辑。
+ * @details 原电压保护断言使用 PX4LITE_CONTROL_POWER_GATE_ENABLE=1 的 host 配置执行。
  */
 
 #include <stdint.h>
@@ -124,15 +125,19 @@ Px4Lite_Result_t Px4Lite_GetModuleStatus(Px4Lite_ModuleId_t module_id, Px4Lite_M
 
 #include "../../Framework/Src/px4lite_control.c"
 
-static void ArmControl(void)
+/** @brief 显式解锁并完成 ESC 预备；记录初始化或解锁失败，不靠油门隐式解锁。 */
+static int ArmControl(void)
 {
   uint32_t elapsed;
+  int failures = 0;
 
-  (void)Px4Lite_ControlModuleInit();
+  failures += ExpectU32("control setup init", Px4Lite_ControlModuleInit(), PX4LITE_OK);
+  failures += ExpectU32("control setup explicit unlock", Px4Lite_ControlSetMotorLocked(0U), PX4LITE_OK);
   for (elapsed = 0U; elapsed <= PX4LITE_CONTROL_ESC_ARM_TIME_MS; elapsed += PX4LITE_CONTROL_PERIOD_MS) {
     Px4Lite_ControlRun(g_now_ms);
     g_now_ms += PX4LITE_CONTROL_PERIOD_MS;
   }
+  return failures;
 }
 
 static void SeedAttitude(uint32_t sample_time_ms, int32_t roll_deg100, int32_t pitch_deg100, int32_t roll_rate_dps100, int32_t pitch_rate_dps100)
@@ -185,7 +190,7 @@ static int TestThrottleMappingAndPublish(void)
   int failures          = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   failures += ExpectU32("set motor0 50", Px4Lite_ControlSetMotorThrottlePercent(0U, 50U), PX4LITE_OK);
   Px4Lite_ControlRun(g_now_ms);
   failures += ExpectU32("motor0 pulse", g_pulse_us[0], expected_mid);
@@ -207,6 +212,7 @@ static int TestThrottleTargetPublishesDuringArm(void)
 
   ResetHarness();
   (void)Px4Lite_ControlModuleInit();
+  failures += ExpectU32("unlock before arming target", Px4Lite_ControlSetMotorLocked(0U), PX4LITE_OK);
   failures += ExpectU32("set motor0 while arming", Px4Lite_ControlSetMotorThrottlePercent(0U, 40U), PX4LITE_OK);
   Px4Lite_ControlRun(g_now_ms);
   failures += ExpectU32("arming pulse stays min", g_pulse_us[0], PX4LITE_CONTROL_ESC_MIN_PULSE_US);
@@ -223,7 +229,7 @@ static int TestThrottleClampAndInvalidIndex(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   failures += ExpectU32("invalid index", Px4Lite_ControlSetMotorThrottlePercent(PX4LITE_MOTOR_COUNT, 10U), PX4LITE_INVALID_PARAM);
   failures += ExpectU32("clamp motor1", Px4Lite_ControlSetMotorThrottlePercent(1U, 120U), PX4LITE_OK);
   Px4Lite_ControlRun(g_now_ms);
@@ -237,7 +243,7 @@ static int TestAttitudeAssistMixesFreshRoll(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 40U);
@@ -260,7 +266,7 @@ static int TestDirectControlIsDefaultForSingleActiveOutput(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 40U);
   SeedAttitude(g_now_ms, 1000, 0, 0, 0);
   Px4Lite_ControlRun(g_now_ms);
@@ -277,7 +283,7 @@ static int TestAttitudeAssistAdjustsPulseForSmallWindDisturbance(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 40U);
@@ -315,7 +321,7 @@ static int TestAttitudeAssistKeepsBaseThrottleStable(void)
   uint8_t cycle;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 30U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 30U);
@@ -341,6 +347,7 @@ static int TestAttitudeAssistKeepsBaseThrottleStable(void)
   /* 预解锁期间硬件停在 1000us，但 base 仍须反映已接受的目标，不能被当成掉档。 */
   ResetHarness();
   (void)Px4Lite_ControlModuleInit();
+  failures += ExpectU32("unlock before arming base", Px4Lite_ControlSetMotorLocked(0U), PX4LITE_OK);
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 45U);
   Px4Lite_ControlRun(g_now_ms);
   failures += ExpectU32("base kept while esc arming", g_last_motor.base_percent[0], 45U);
@@ -353,7 +360,7 @@ static int TestAttitudeAssistPreservesUnequalBaseThrottle(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 20U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 30U);
@@ -374,7 +381,7 @@ static int TestAttitudeAssistCorrectsPositivePitch(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 40U);
@@ -395,7 +402,7 @@ static int TestAttitudeAssistCorrectsPositiveYaw(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 40U);
@@ -418,7 +425,7 @@ static int TestAttitudeTargetRejectsUnsafeRange(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   failures += ExpectU32("target positive limit", Px4Lite_ControlSetAttitudeTarget(PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100, 0, 0), PX4LITE_OK);
   failures += ExpectU32("target roll overflow", Px4Lite_ControlSetAttitudeTarget(PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 + 1, 0, 0), PX4LITE_INVALID_PARAM);
   failures += ExpectU32("target pitch overflow", Px4Lite_ControlSetAttitudeTarget(0, -PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 - 1, 0), PX4LITE_INVALID_PARAM);
@@ -431,7 +438,7 @@ static int TestAttitudeAssistClampsCorruptNavigation(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 40U);
@@ -452,7 +459,7 @@ static int TestAttitudeAssistStaleFallsBackToDirect(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 40U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 40U);
@@ -474,7 +481,7 @@ static int TestAttitudeAssistBridgesTransientNavigationGap(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST);
   for (i = 0U; i < PX4LITE_MOTOR_COUNT; i++) {
     (void)Px4Lite_ControlSetMotorThrottlePercent(i, 40U);
@@ -501,7 +508,7 @@ static int TestKey1EmergencyStopClearsTargets(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 60U);
   Px4Lite_ControlRun(g_now_ms);
   g_button_pressed[PX4LITE_BUTTON_KEY1] = 1U;
@@ -514,13 +521,14 @@ static int TestKey1EmergencyStopClearsTargets(void)
   return failures;
 }
 
-static int TestManualThrottleReleasesEmergencyStop(void)
+/** @brief 急停后普通油门仍被拒，松开按键并显式解锁后才能重新预备和接受目标。 */
+static int TestExplicitUnlockReleasesEmergencyStop(void)
 {
   uint32_t elapsed;
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(2U, 60U);
   Px4Lite_ControlRun(g_now_ms);
   g_button_pressed[PX4LITE_BUTTON_KEY1] = 1U;
@@ -531,6 +539,9 @@ static int TestManualThrottleReleasesEmergencyStop(void)
   failures += ExpectU32("estop clears before release", g_last_motor.duty_percent[2], 0U);
 
   g_button_pressed[PX4LITE_BUTTON_KEY1] = 0U;
+  failures += ExpectU32("manual throttle cannot release estop", Px4Lite_ControlSetMotorThrottlePercent(2U, 35U), PX4LITE_NOT_READY);
+  failures += ExpectU32("ordinary throttle preserves estop", s_estop_latched, 1U);
+  failures += ExpectU32("explicit unlock after estop", Px4Lite_ControlSetMotorLocked(0U), PX4LITE_OK);
   failures += ExpectU32("manual throttle after estop", Px4Lite_ControlSetMotorThrottlePercent(2U, 35U), PX4LITE_OK);
   for (elapsed = 0U; elapsed <= PX4LITE_CONTROL_ESC_ARM_TIME_MS; elapsed += PX4LITE_CONTROL_PERIOD_MS) {
     g_now_ms += PX4LITE_CONTROL_PERIOD_MS;
@@ -542,20 +553,25 @@ static int TestManualThrottleReleasesEmergencyStop(void)
   return failures;
 }
 
-static int TestFailsafeGapRearmsAtMinimum(void)
+/** @brief 控制超时清零并重新上锁；显式解锁后重新经过最小脉宽预备。 */
+static int TestFailsafeGapLocksAtMinimum(void)
 {
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(3U, 80U);
   Px4Lite_ControlRun(g_now_ms);
   g_now_ms += PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS + 1U;
   Px4Lite_ControlRun(g_now_ms);
   failures += ExpectU32("failsafe pulse", g_pulse_us[3], PX4LITE_CONTROL_ESC_MIN_PULSE_US);
   failures += ExpectU32("failsafe duty", g_last_motor.duty_percent[3], 0U);
-  failures += ExpectU32("failsafe state", g_control_state, PX4LITE_STATE_STARTING);
+  failures += ExpectU32("failsafe locked state", g_control_state, PX4LITE_STATE_ONLINE);
+  failures += ExpectU32("failsafe refuses ordinary throttle", Px4Lite_ControlSetMotorThrottlePercent(3U, 20U), PX4LITE_NOT_READY);
+  failures += ExpectU32("failsafe explicit unlock", Px4Lite_ControlSetMotorLocked(0U), PX4LITE_OK);
   failures += ExpectU32("failsafe accepts new throttle", Px4Lite_ControlSetMotorThrottlePercent(3U, 20U), PX4LITE_OK);
+  Px4Lite_ControlRun(g_now_ms);
+  failures += ExpectU32("failsafe unlock keeps prearm minimum", g_pulse_us[3], PX4LITE_CONTROL_ESC_MIN_PULSE_US);
   return failures;
 }
 
@@ -565,7 +581,7 @@ static int TestManualThrottleIgnoresAttitudeOffline(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   g_imu_state = PX4LITE_STATE_OFFLINE;
   g_navigation_ready = 0U;
   failures += ExpectU32("manual attitude offline set", Px4Lite_ControlSetMotorThrottlePercent(0U, 45U), PX4LITE_OK);
@@ -580,7 +596,7 @@ static int TestAutoTakeoffDropsToLandingOnAttitudeLoss(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("auto takeoff start", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
   Px4Lite_ControlRun(g_now_ms);
@@ -612,7 +628,7 @@ static int TestAutoTakeoffCompletesAndHoldsTarget(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   failures += ExpectU32("set direct before takeoff", Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_DIRECT), PX4LITE_OK);
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("completed takeoff start", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
@@ -637,48 +653,48 @@ static int TestAutoTakeoffRequiresAttitudeAndEnvironmentOnline(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("takeoff sensors online", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   g_imu_state = PX4LITE_STATE_DEGRADED;
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("takeoff degraded imu with fresh attitude", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   Px4Lite_ControlRun(g_now_ms);
   g_navigation_ready = 0U;
   failures += ExpectU32("takeoff uses periodically cached attitude", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   failures += ExpectU32("takeoff attitude not fresh", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_NOT_READY);
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   g_imu_state = PX4LITE_STATE_OFFLINE;
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("takeoff attitude offline", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_NOT_READY);
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   g_baro_state = PX4LITE_STATE_DEGRADED;
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("takeoff environment not online", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_NOT_READY);
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   (void)Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_DIRECT);
   failures += ExpectU32("landing attitude online", Px4Lite_ControlStartAutoLanding(), PX4LITE_OK);
   failures += ExpectU32("landing preserves explicit direct mode", s_control_mode, PX4LITE_CONTROL_MODE_DIRECT);
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   g_imu_state = PX4LITE_STATE_STARTING;
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("landing starting imu with fresh attitude", Px4Lite_ControlStartAutoLanding(), PX4LITE_OK);
@@ -686,16 +702,16 @@ static int TestAutoTakeoffRequiresAttitudeAndEnvironmentOnline(void)
   /* 撤收动作不设姿态准入：姿态过期或 IMU 离线时更需要能把油门收回 0，
      否则飞机会卡在当前油门上。 */
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   failures += ExpectU32("landing without any attitude", Px4Lite_ControlStartAutoLanding(), PX4LITE_OK);
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   g_imu_state = PX4LITE_STATE_OFFLINE;
   failures += ExpectU32("landing with imu offline", Px4Lite_ControlStartAutoLanding(), PX4LITE_OK);
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 60U);
   g_imu_state = PX4LITE_STATE_FAILED;
   failures += ExpectU32("landing with imu failed", Px4Lite_ControlStartAutoLanding(), PX4LITE_OK);
@@ -711,7 +727,7 @@ static int TestAutoLandingBlocksTakeoffAndEmergencyStopsImmediately(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("auto takeoff start for transition", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
   Px4Lite_ControlRun(g_now_ms);
@@ -749,7 +765,7 @@ static int TestPowerInhibitClearsAndRefusesThrottle(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 30U);
   (void)Px4Lite_ControlSetMotorThrottlePercent(1U, 30U);
   Px4Lite_ControlRun(g_now_ms);
@@ -772,9 +788,9 @@ static int TestPowerInhibitClearsAndRefusesThrottle(void)
   failures += ExpectU32("inhibit refuses takeoff", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_NOT_READY);
   failures += ExpectU32("inhibit allows landing", Px4Lite_ControlStartAutoLanding(), PX4LITE_OK);
 
-  /* 被拒的油门命令不能顺带解锁急停：拒绝发生在解锁之前。 */
+  /* 急停与电压闭锁叠加时，普通油门不能接受，也不能解除急停。 */
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)SetFixturePowerInhibit(1U);
   (void)Px4Lite_ControlEmergencyStop(g_now_ms);
   failures += ExpectU32("refused throttle keeps estop", Px4Lite_ControlSetMotorThrottlePercent(0U, 30U), PX4LITE_NOT_READY);
@@ -782,7 +798,7 @@ static int TestPowerInhibitClearsAndRefusesThrottle(void)
 
   /* 解除闭锁只是允许输出，不自动恢复任何油门；必须用户重新下发。 */
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 30U);
   (void)SetFixturePowerInhibit(1U);
   (void)SetFixturePowerInhibit(0U);
@@ -811,7 +827,7 @@ static int TestLandingRefusesNonZeroManualThrottle(void)
   int failures = 0;
 
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   (void)Px4Lite_ControlSetMotorThrottlePercent(0U, 60U);
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("landing started", Px4Lite_ControlStartAutoLanding(), PX4LITE_OK);
@@ -835,7 +851,7 @@ static int TestLandingRefusesNonZeroManualThrottle(void)
 
   /* 一键起飞相反：手动接管可以随时打断上升。 */
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("takeoff started", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
   RunControlWithLevelAttitude(PX4LITE_CONTROL_AUTO_TAKEOFF_RAMP_MS / 2U);
@@ -844,7 +860,7 @@ static int TestLandingRefusesNonZeroManualThrottle(void)
 
   /* 强制降落(姿态丢失)同样不设限制：这是内部保护，不能把操作员锁在外面。 */
   ResetHarness();
-  ArmControl();
+  failures += ArmControl();
   SeedAttitude(g_now_ms, 0, 0, 0, 0);
   failures += ExpectU32("takeoff for forced landing", Px4Lite_ControlStartAutoTakeoff(), PX4LITE_OK);
   RunControlWithLevelAttitude(PX4LITE_CONTROL_AUTO_TAKEOFF_RAMP_MS / 2U);
@@ -869,9 +885,11 @@ static int TestPowerGateStartupAndLimits(void)
   ResetHarness();
   g_battery_ready = 0U;
   (void)Px4Lite_ControlModuleInit();
+  failures += ExpectU32("startup missing battery refuses unlock", Px4Lite_ControlSetMotorLocked(0U), PX4LITE_NOT_READY);
   failures += ExpectU32("startup missing battery refused", Px4Lite_ControlSetMotorThrottlePercent(0U, 25U), PX4LITE_NOT_READY);
   g_battery_ready = 1U;
   g_battery_valid = 0U;
+  failures += ExpectU32("invalid battery refuses unlock", Px4Lite_ControlSetMotorLocked(0U), PX4LITE_NOT_READY);
   failures += ExpectU32("invalid battery refused", Px4Lite_ControlSetMotorPulseUs(0U, 1500U), PX4LITE_NOT_READY);
   g_battery_valid = 1U;
   for (i = 0U; i < sizeof(mv) / sizeof(mv[0]); ++i) {
@@ -883,6 +901,7 @@ static int TestPowerGateStartupAndLimits(void)
   g_battery_live = 0U;
   g_now_ms = 1500U;
   g_battery_sample_ms = (uint32_t)(1500U - 2500U);
+  failures += ExpectU32("explicit unlock at valid age boundary", Px4Lite_ControlSetMotorLocked(0U), PX4LITE_OK);
   failures += ExpectU32("age 2500 across wrap", Px4Lite_ControlSetMotorThrottlePercent(0U, 25U), PX4LITE_OK);
   g_now_ms++;
   failures += ExpectU32("age 2501 refused before cycle", Px4Lite_ControlSetMotorThrottlePercent(0U, 25U), PX4LITE_NOT_READY);
@@ -915,8 +934,8 @@ int main(void)
   failures += TestAttitudeAssistStaleFallsBackToDirect();
   failures += TestAttitudeAssistBridgesTransientNavigationGap();
   failures += TestKey1EmergencyStopClearsTargets();
-  failures += TestManualThrottleReleasesEmergencyStop();
-  failures += TestFailsafeGapRearmsAtMinimum();
+  failures += TestExplicitUnlockReleasesEmergencyStop();
+  failures += TestFailsafeGapLocksAtMinimum();
   failures += TestManualThrottleIgnoresAttitudeOffline();
   failures += TestAutoTakeoffDropsToLandingOnAttitudeLoss();
   failures += TestAutoTakeoffCompletesAndHoldsTarget();

@@ -14,6 +14,8 @@
 
 #include "px4lite_config.h"
 #include "px4lite_platform.h"
+#include "px4lite_rpi_h1_echo.h"
+#include "px4lite_startup_tone.h"
 
 #define RPI_BAUD_B0_BPS 115200U
 #define RPI_BAUD_B1_BPS 57600U
@@ -101,6 +103,7 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchHandleTunnel(uint8_t source_system,
   uint32_t current_baud_bps = 0U;
   uint8_t i;
   Px4Lite_Result_t result;
+  Px4Lite_RpiH1EchoResponseView_t pending_echo;
 
   if (payload_type != PX4LITE_RPI_BAUD_TUNNEL_TYPE) { return PX4LITE_IDLE; }
   if ((source_system == 0U) || (source_component == 0U) || (local_system == 0U) ||
@@ -130,6 +133,16 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchHandleTunnel(uint8_t source_system,
   if (target_baud_bps != RPI_BAUD_B1_BPS) {
     s_stats.rejected_count++;
     return PX4LITE_INVALID_PARAM;
+  }
+#if PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK
+  /* 完整结构合法且指向本机的配置收包提示，业务忙/重复仍表示此帧确实已到达。 */
+  Px4Lite_StartupToneNotifyRpiCommand();
+#endif
+
+  /* 两种事务共用Comm发送口：先记录合法收包，仍禁止切速率响应越过已排队的H1回显。 */
+  if (Px4Lite_RpiH1EchoPeekResponse(&pending_echo) == PX4LITE_OK) {
+    s_stats.busy_count++;
+    return PX4LITE_BUSY;
   }
 
   if (s_stats.state == PX4LITE_RPI_BAUD_STATE_PENDING_TX) {

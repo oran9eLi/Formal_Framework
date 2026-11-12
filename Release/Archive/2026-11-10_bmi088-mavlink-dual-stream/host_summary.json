@@ -1,0 +1,199 @@
+{
+  "c_groups_passed": 32,
+  "python_tests_passed": 17,
+  "groups": [
+    {
+      "group": "bmi088_driver",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "3bb78017bea3e7b1ec28a55065b8b48327eca19e299e5fe722c8595f58d88624"
+    },
+    {
+      "group": "bmi088_spi_bus",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "5e5f2815adee64c63c92c54170b0d86be9c036066e427e3a745d25cbfc05fbf1"
+    },
+    {
+      "group": "bmi088_platform",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "bmi088_platform_spi",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "bmi088_platform_uplink_off",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "mpu6050_platform",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "bmi088_uplink",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "a9a3e93d4ec837a94d21c057e445fcf5d1cddd564691f801dde24f0d7e7560f5"
+    },
+    {
+      "group": "bmi088_uplink_off",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "39414b324e44d3774994dfbb231bba9860bad86f8b88f933586124bd382fb995"
+    },
+    {
+      "group": "bmi088_uplink_mpu",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "39414b324e44d3774994dfbb231bba9860bad86f8b88f933586124bd382fb995"
+    },
+    {
+      "group": "gnss_sat_stream",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "61509f94c5fcaf7b1fb93234ea1610bb2230af8ffed727b3b0e7fad4746f5177"
+    },
+    {
+      "group": "gnss_unified_uplink",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "74926ff90873388b5698f6c29fbd840554ab07039b1aa6dda8f83e1adeeccacb"
+    },
+    {
+      "group": "gnss_raw_uplink",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "3a0015de2a56a05950d0539c4aa7f9d033ac8450873bf60412f53b1392d7a56e"
+    },
+    {
+      "group": "gnss_raw_uplink_compat",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "87c79dd17b998e2ee188c16b13c7e35df427036b7fb3056f16946a35c1934f69"
+    },
+    {
+      "group": "gnss_raw_only_policy_guard",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "a7cec3e773e552d2686cf13de70535f6ee1e14c03dc7b084399ea6ab8e9a3306"
+    },
+    {
+      "group": "gnss_raw_uplink_off",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "f64925897cb084a22bfb79369a16b9959a48856689bc86b3a974c2f6abf7100b"
+    },
+    {
+      "group": "gnss_raw_forward_hooks",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "756323aa329bd7abe6e5d794e2090706794e3896e07e6de106af588fd0f727c5"
+    },
+    {
+      "group": "gnss_unified_adapter",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "2ce7b6b76014003d2aa151698f02d4fbd8a9ea792d1f43da9a762beadb53daca"
+    },
+    {
+      "group": "gnss_status_domain",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "eba48425184313b86dd1097b0e60440764dbf72cc2365387ecffc3175ecc4258"
+    },
+    {
+      "group": "hud_refresh",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "c21ae895d7ba9bf4ecdba7c2d547a567d0853472ff96030005bf123c3f78613d"
+    },
+    {
+      "group": "attitude",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "9c202428943d8752fab57716ca7cd9db3e082f25b98676153a939e7163f3a7c7"
+    },
+    {
+      "group": "attitude_ops",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "6efbd97e29ed66e253354ef4f726462717d6857e52b115f2b65f65d1f0d235cf"
+    },
+    {
+      "group": "attitude_roll_wrap",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "f35f1dafce48cfbc47fc7379e9b9b006241062a29beaac789a68d284670af5df"
+    },
+    {
+      "group": "display_gnss_status_utc",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "3ad32d2b488118d2491fb0ac2d4138ae7c568d72b87ae993c2369379d9e71aa3"
+    },
+    {
+      "group": "gnss_clean_display",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "b22bb09adb7b0f4aadfc89e36b98df74416b3f56ec7fd8160d2d33df3601ac35"
+    },
+    {
+      "group": "single_supply_mavlink",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "48ef4330fda010dab573b3723a0399484c3a43e646625788e26851101c06b733"
+    },
+    {
+      "group": "single_supply_mavlink_dual",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "d52f023b6cd8b9c7a5174f60a17fa52c648a9eb73974ba445d88cbe358e62016"
+    },
+    {
+      "group": "single_supply_mavlink_only1",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "eb9abfde8cbc5fe0b640e9834e9948300637718f53844e02528d56013fddccce"
+    },
+    {
+      "group": "single_supply_mavlink_alloff",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "d8e2fb8f331f6e0650712d64c4386c59cae11b3d230f7a28c5ae77f8e8e620fb"
+    },
+    {
+      "group": "power_adc_reference",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "d882aac606100b3745a10351ec0952481c257c4091e2f04e344007fb79c4ca4a"
+    },
+    {
+      "group": "motor_manual_lock",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "63a1aa0773787e99d0f005b31cc45af8aa24f5697bfb62927d94777853ef9ab9"
+    },
+    {
+      "group": "startup_rgb",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "ad93282e76caf944d84fa0751c801844620d84fbb24885b776eac77bc72be63b"
+    },
+    {
+      "group": "storage",
+      "passed": true,
+      "build_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_sha256": "6d1525dfa5d1feb57ff30ae0bfb90ab8760ec03a51102d33a07b0d011c7f09cf"
+    }
+  ],
+  "physical_pi_tested": false
+}

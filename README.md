@@ -17,6 +17,10 @@
 
 ## 目录结构
 
+现有产品手册和汇报文件见 [Reports](Reports/README.md)，扩展板原生工程和静态复核资料见 [Hardware](Hardware/README.md)。各固件候选、校验值和 GitHub 附件说明见 [发布目录](Release/README.md)；候选归档不表示稳定版或整机验收通过。
+
+已落地功能和验证边界见[当前开发日志汇总](Development_Guide/Change_History/2026-11-06_已落地功能与验证状态汇总.md)，按主题查找修改原因和详细记录见[开发日志索引](Development_Guide/Change_History/README.md)。
+
 | 目录 | 说明 |
 |---|---|
 | `Core/` | `main.c`、HAL MSP、IRQ、FreeRTOS hook、系统启动代码 |

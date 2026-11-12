@@ -1,0 +1,54 @@
+[
+  {
+    "path": "Bsp/Inc/bsp_config.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Bsp/Inc/bsp_rgb.h",
+    "kind": "added"
+  },
+  {
+    "path": "Bsp/Src/bsp_rgb.c",
+    "kind": "added"
+  },
+  {
+    "path": "Core/Inc/stm32f4xx_it.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Core/Src/main.c",
+    "kind": "modified"
+  },
+  {
+    "path": "Core/Src/stm32f4xx_hal_msp.c",
+    "kind": "modified"
+  },
+  {
+    "path": "Core/Src/stm32f4xx_it.c",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Inc/px4lite_config.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Inc/px4lite_platform.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Inc/px4lite_startup_tone.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Src/px4lite_platform_f407.c",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Src/px4lite_startup_tone.c",
+    "kind": "modified"
+  },
+  {
+    "path": "MDK-ARM/formal_framework.uvprojx",
+    "kind": "modified"
+  }
+]

@@ -1,0 +1,12 @@
+[
+  {
+    "check": "duplicate_axis",
+    "invalid_configuration_rejected": true,
+    "exit_code": 1
+  },
+  {
+    "check": "reflected_axis",
+    "invalid_configuration_rejected": true,
+    "exit_code": 1
+  }
+]

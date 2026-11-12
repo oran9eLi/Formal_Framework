@@ -61,6 +61,28 @@ void BSP_UART_GetDebugInfo(BSP_UART_DebugInfo_t *out);
 
 #if (BSP_ENABLE_RPI_UART == 1U)
 /**
+ * @brief USART6 原始配置及接收事实；不解析协议，不包含业务或实验状态。
+ * @details HAL 配置编码仅供平台适配层转换；接收字节在 ISR 计数，快照短临界区复制。
+ */
+typedef struct {
+  uint32_t baud_rate;               /**< HAL 句柄的波特率，bit/s。 */
+  uint32_t word_length;             /**< HAL 字长编码，包含可能使用的校验位。 */
+  uint32_t stop_bits;               /**< HAL 停止位编码。 */
+  uint32_t parity;                  /**< HAL 校验编码。 */
+  uint32_t hw_flow_ctl;             /**< HAL 硬件流控编码。 */
+  uint32_t rx_byte_count;           /**< RX 回调交付字节数，含环满舍弃字节。 */
+  uint32_t rx_uart_error_count;     /**< 含接收硬件错误标志的 IRQ 次数。 */
+  uint32_t rx_drop_count;           /**< 环满未能入环的字节数。 */
+  uint32_t rx_rearm_failure_count;  /**< 回调中重新挂接接收失败次数。 */
+  uint32_t last_rx_ms;              /**< 最近 RX 回调的板级毫秒时间。 */
+  uint8_t config_valid;             /**< 1=已初始化且不在重配。 */
+  uint8_t rx_seen;                  /**< 1=曾收到字节，不依赖计数是否回绕。 */
+} BSP_RpiUART_Diagnostics_t;
+
+/** @brief 只复制 USART6 配置和接收计数；不读数据环、不触发 I/O，out 不得为 NULL。 */
+void BSP_RpiUART_CopyDiagnostics(BSP_RpiUART_Diagnostics_t *out);
+
+/**
  * @brief 按 `bsp_config.h` 配置初始化树莓派 MAVLink UART（USART6，PC6/PC7）。
  *
  * @details

@@ -1,0 +1,68 @@
+[
+  {
+    "variant": "power_gate_on",
+    "artifacts": [
+      {
+        "bytes": 1273473,
+        "name": "formal_framework.hex",
+        "sha256": "5311711A2D3EB57224B79E67A5B56570FA9476BB93563872BEC874936D37D883"
+      },
+      {
+        "bytes": 5630536,
+        "name": "formal_framework.axf",
+        "sha256": "9EB33DC2A2AE32B600B207029718250A92808AAFF714A766F35E0DB09A475C1A"
+      },
+      {
+        "bytes": 2289840,
+        "name": "formal_framework.map",
+        "sha256": "8A4921730A2EB23212DF265BAC653563990957E95C21631948E674678DB105F3"
+      },
+      {
+        "bytes": 7822,
+        "name": "formal_framework.build_log.htm",
+        "sha256": "7C1EE35BC130382359992EBEADC03D70A3A452B830118440FD6111D7A0CE11C7"
+      }
+    ],
+    "exit_code": 0,
+    "started_utc": "2026-11-04T09:24:14.8504748Z",
+    "bsp_sha256": "F39FDCFE28496FE680C22E22B628D87EA93B2D9083AF2218164A6C047B67E3CE",
+    "framework_sha256": "C91F92B31F05A45DD96EBF349BEE774742136E9C1FBABA3593ABF3684C9DA2EB",
+    "inputs_unchanged": true,
+    "input_count": 1027,
+    "passed": true,
+    "ended_utc": "2026-11-04T09:24:29.2625412Z"
+  },
+  {
+    "variant": "default",
+    "artifacts": [
+      {
+        "bytes": 1272933,
+        "name": "formal_framework.hex",
+        "sha256": "3CFD631440C51B03B2E1A5727A546C0C9E3E20A28B6ADC66ECF2481D8E4A2DDC"
+      },
+      {
+        "bytes": 5630044,
+        "name": "formal_framework.axf",
+        "sha256": "085FE596C4CDB656A8C59F6A2A0A626A612EAF249B500DBE91EB89ECAA1E292F"
+      },
+      {
+        "bytes": 2289002,
+        "name": "formal_framework.map",
+        "sha256": "256D179B00A5F69624538062CBA7D32146C06018DA86D43BD652933E2ADC642F"
+      },
+      {
+        "bytes": 7822,
+        "name": "formal_framework.build_log.htm",
+        "sha256": "9F767893AEC711B48D454434551BB8E487857CACD574BFCA3A47F0B7C5D923B4"
+      }
+    ],
+    "exit_code": 0,
+    "started_utc": "2026-11-04T09:24:29.2833704Z",
+    "bsp_sha256": "F39FDCFE28496FE680C22E22B628D87EA93B2D9083AF2218164A6C047B67E3CE",
+    "framework_sha256": "E50CBC9656D2BC6ECF490F85596C911FBC97155B903B488A19191A39A46A98BA",
+    "inputs_unchanged": true,
+    "input_count": 1027,
+    "passed": true,
+    "ended_utc": "2026-11-04T09:24:43.5266717Z"
+  }
+]

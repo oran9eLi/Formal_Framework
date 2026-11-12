@@ -1,0 +1,12 @@
+[
+  "Bsp/Inc/bsp_config.h",
+  "Bsp/Src/bsp_gnss.c",
+  "Sensor/Inc/sensor_gnss.h",
+  "Sensor/Inc/sensor_nmea.h",
+  "Sensor/Src/sensor_gnss.c",
+  "Sensor/Src/sensor_nmea.c",
+  "Framework/Inc/px4lite_platform.h",
+  "Framework/Src/px4lite_platform_f407.c",
+  "Debug/Inc/debug_config.h",
+  "Debug/Src/debug_service.c"
+]

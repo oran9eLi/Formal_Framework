@@ -8,6 +8,7 @@
 #include "px4lite_types.h"
 #define APP_OBSERVATION_POINTS 64U /**< 两路共享的固定采样槽数。 */
 #define APP_OBSERVATION_FIELDS 38U /**< 有界已有测量字段数量。 */
+#define APP_OBSERVATION_GROUP_DISABLED 255U /**< 字段编号保留，但本配置禁止选择或采样。 */
 /** @brief 学生手动操作；EDIT必须Stopped，Freeze不停止采样。 */
 typedef enum { APP_OBSERVE_EDIT=0,APP_OBSERVE_START,APP_OBSERVE_STOP,APP_OBSERVE_RESET,
  APP_OBSERVE_FREEZE,APP_OBSERVE_RESUME,APP_OBSERVE_SET_REF } App_ObservationOperation_t;
@@ -56,7 +57,7 @@ typedef struct {
  float east_m; /**< 当前局部东向位移，m。 */
 } App_ObservationStatus_t;
 /** @brief ROM字段描述，不包含可写参数或通用编辑器。 */
-typedef struct { const char *name; /**< 英文名。 */ const char *unit; /**< 物理单位。 */ uint8_t group; /**< 0IMU/1Att/2Baro/3Power/4GNSS/5Motor/6Drift。 */ uint8_t angle; /**< 1度数需局部展开。 */ } App_ObservationFieldInfo_t;
+typedef struct { const char *name; /**< 英文名。 */ const char *unit; /**< 物理单位。 */ uint8_t group; /**< 0IMU/1Att/2Baro/3Power/4GNSS/5Motor/6Drift；255为禁用且不可选择。 */ uint8_t angle; /**< 1度数需局部展开。 */ } App_ObservationFieldInfo_t;
 /** @brief 排队动作；OK不代表已执行。 */
 Px4Lite_Result_t App_RequestObservation(const App_ObservationRequest_t *request);
 /** @brief biz_acq唯一调用，间隔到期采一次，不追赶补点。 */

@@ -1,0 +1,73 @@
+[
+  {
+    "variant": "rgb_disabled",
+    "defines": [
+      "BSP_ENABLE_RGB=0",
+      "PX4LITE_ENABLE_STARTUP_RGB=0"
+    ],
+    "started_utc": "2026-11-11T00:54:03.744386+00:00",
+    "ended_utc": "2026-11-11T00:54:22.440674+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1043,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1357616,
+        "sha256": "a59bbf81cc4f1ede7725f16c4afe993114b8d75fdb1b34cbcb69d9a06a6cc28d"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5846720,
+        "sha256": "3957102e4163d2657531c427d5d41cb354aae222dd799a7e8cebe3f01ec7c23a"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2442159,
+        "sha256": "405cd95535b769d57529eeceee8938c5dbe2b0b583f4cfb9595b4f382ac6d30c"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8045,
+        "sha256": "dd88ba948893ab9712428b65d0d362821bd17faf14af4c7e0670d0ef487c19c8"
+      }
+    ],
+    "passed": true
+  },
+  {
+    "variant": "rgb_tone",
+    "defines": [],
+    "started_utc": "2026-11-11T00:54:22.625135+00:00",
+    "ended_utc": "2026-11-11T00:54:37.185299+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1043,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1366955,
+        "sha256": "ee8e81d6c290820aa86f03eff23d667b12c694bfccd5405cd242ace3802f933d"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5855652,
+        "sha256": "2ff60d27f509a37d4f0284771bdbe5a3c72dc1ff4b3a00bface944091eafbe8c"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2457668,
+        "sha256": "39162d3870c41909a9c19adb4d89a9300f2479f2bde6d34247a5d5152d1e69f4"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8045,
+        "sha256": "ea9f0bc9567e8cfb2e2471f7b000d53bfe1a3fc182de0468bd25b0693efbfaba"
+      }
+    ],
+    "passed": true
+  }
+]

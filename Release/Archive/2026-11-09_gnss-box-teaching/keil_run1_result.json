@@ -1,0 +1,34 @@
+{
+  "passed": true,
+  "inputs_unchanged": true,
+  "warnings": 0,
+  "exit_code": 0,
+  "baseline": "power_adc_diagnostics",
+  "started_utc": "2026-11-09T02:51:16.3777472Z",
+  "ended_utc": "2026-11-09T02:51:33.7988667Z",
+  "artifacts": [
+    {
+      "bytes": 1341919,
+      "name": "formal_framework.hex",
+      "sha256": "68900b56135e67e1a28cd4ee8300fd834999d923637352c243eb687fb8238c22"
+    },
+    {
+      "bytes": 5794060,
+      "name": "formal_framework.axf",
+      "sha256": "722b94024074433edff2083547a44597a1b097c81df30c9bad20d487248fabe5"
+    },
+    {
+      "bytes": 2399893,
+      "name": "formal_framework.map",
+      "sha256": "6f397bf16218e99e30f02c9b7d16325c4ab37baa0ba2b208d5ba717687e234e2"
+    },
+    {
+      "bytes": 7925,
+      "name": "formal_framework.build_log.htm",
+      "sha256": "1aa3ce87b313152afe913bdede32bf7be39c60cd02cbcbc200b28364767d2f31"
+    }
+  ],
+  "errors": 0,
+  "variant": "gnss_box_teaching",
+  "input_count": 1034
+}

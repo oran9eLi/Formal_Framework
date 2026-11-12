@@ -60,6 +60,11 @@ Px4Lite_Result_t App_CopyCapturedFrame(uint32_t session, uint32_t token, App_Cap
 Px4Lite_Result_t App_CopyCapturedStage(uint32_t session, uint32_t token, uint8_t *stage) { return Px4Lite_CaptureCopyStage(session, token, stage); }
 /** @brief 稳定NMEA句复制边界。 */
 Px4Lite_Result_t App_CopyNmeaSentence(uint32_t session, uint32_t token, App_NmeaSentence_t *out) { return Px4Lite_CaptureCopyNmea(session, token, out); }
+/** @brief 通用GNSS原帧只读边界；不把原帧校验/捕获成功解释为定位有效。 */
+Px4Lite_Result_t App_CopyCapturedGnssFrame(uint32_t session, uint32_t token, App_GnssCapturedFrame_t *out)
+{ return Px4Lite_CaptureCopyGnss(session, token, out); }
+/** @brief 通用串口监视只读边界，既不清除底层统计，也不影响实验事务。 */
+Px4Lite_Result_t App_CopySerialMonitor(App_SerialMonitor_t *out) { return Px4Lite_CopySerialMonitor(out); }
 /** @brief 串口实验只读边界。 */
 Px4Lite_Result_t App_CopySerialExperiment(App_SerialExperiment_t *out) { return Px4Lite_CopySerialExperiment(out); }
 
@@ -73,17 +78,66 @@ Px4Lite_Result_t App_CopyImuLatest(App_ImuSnapshot_t *out, uint32_t now_ms)
   if (now_ms - out->header.sample_time_ms > PX4LITE_IMU_MAX_AGE_MS) { out->header.valid = 0U; return PX4LITE_STALE; }
   return PX4LITE_OK;
 }
-/** @brief GNSS逐域有效性取真实源时间，不用NMEA链路活动续期位置。 */
+/**
+ * @brief 复制GNSS并独立裁剪五个域；链路活动不续期位置、UTC或定位状态。
+ * @details 整体结果仍按last_rx_ms判活动；复制后真实时钟若在短窗口内正常前进，
+ *          用它统一检查域年龄，避免sensor抢占产生比入参新1ms的样本被无符号下溢误判。
+ */
 Px4Lite_Result_t App_CopyGnssDetails(App_GnssDetails_t *out, uint32_t now_ms)
 {
+  uint32_t copied_ms;
   if (!out) { return PX4LITE_INVALID_PARAM; }
   memset(out, 0, sizeof(*out));
   if (Px4Lite_CopyGnss(out) != PX4LITE_OK) { return PX4LITE_NOT_READY; }
+  copied_ms = Px4Lite_PlatformGetMs();
+  if ((uint32_t)(copied_ms - now_ms) <= PX4LITE_GNSS_MAX_AGE_MS) { now_ms = copied_ms; }
   if (now_ms - out->position_update_ms > PX4LITE_GNSS_MAX_AGE_MS) { out->valid_mask &= ~PX4LITE_GNSS_VALID_POSITION; }
   if (now_ms - out->velocity_update_ms > PX4LITE_GNSS_MAX_AGE_MS) { out->valid_mask &= ~PX4LITE_GNSS_VALID_VELOCITY; }
   if (now_ms - out->time_update_ms > PX4LITE_GNSS_MAX_AGE_MS) { out->valid_mask &= ~PX4LITE_GNSS_VALID_TIME; }
   if (now_ms - out->altitude_update_ms > PX4LITE_GNSS_MAX_AGE_MS) { out->valid_mask &= ~PX4LITE_GNSS_VALID_ALTITUDE; }
+  if (now_ms - out->status_update_ms > PX4LITE_GNSS_MAX_AGE_MS) { out->valid_mask &= ~PX4LITE_GNSS_VALID_NAV_STATUS; }
   return now_ms - out->last_rx_ms <= PX4LITE_GNSS_MAX_AGE_MS ? PX4LITE_OK : PX4LITE_STALE;
+}
+
+/**
+ * @brief 复制逐星固定小页并按自身接收时刻判新，不借导航状态续期。
+ * @details 只读接口不访问硬件；source为0ms合法，复制时sensor抢占用真实毫秒复核。
+ */
+Px4Lite_Result_t App_CopyGnssSatellitePage(uint8_t page, App_GnssSatellitePage_t *out, uint32_t now_ms)
+{
+  Px4Lite_Result_t result;
+  if (out == NULL) { return PX4LITE_INVALID_PARAM; }
+  memset(out, 0, sizeof(*out));
+  result = Px4Lite_GnssCopySatellitePage(page, out);
+  if (result != PX4LITE_OK || !out->available) { out->available = 0U; return result == PX4LITE_OK ? PX4LITE_NOT_READY : result; }
+  if ((uint32_t)(now_ms - out->received_ms) > APP_GNSS_SAT_MAX_AGE_MS) {
+    uint32_t copied_ms = Px4Lite_PlatformGetMs();
+    if ((uint32_t)(copied_ms - now_ms) <= APP_GNSS_SAT_MAX_AGE_MS &&
+        (uint32_t)(copied_ms - out->received_ms) <= APP_GNSS_SAT_MAX_AGE_MS) { return PX4LITE_OK; }
+    out->available = 0U;
+    return PX4LITE_STALE;
+  }
+  return PX4LITE_OK;
+}
+
+/** @brief 诊断仅依据 sensor 服务时间判新；零字节、无定位和配置未确认都保留真实状态。 */
+Px4Lite_Result_t App_CopyGnssDiagnostics(App_GnssDiagnostics_t *out, uint32_t now_ms)
+{
+  Px4Lite_Result_t result;
+  if (out == NULL) { return PX4LITE_INVALID_PARAM; }
+  memset(out, 0, sizeof(*out));
+  result = Px4Lite_GnssCopyDiagnostics(out);
+  if (result != PX4LITE_OK) { out->available = 0U; return result; }
+  if (out->available == 0U) { return PX4LITE_NOT_READY; }
+  if ((uint32_t)(now_ms - out->measured_ms) > PX4LITE_GNSS_MAX_AGE_MS) {
+    uint32_t copied_ms = Px4Lite_PlatformGetMs();
+    /* sensor可在复制前抢占并发布比调用方now更新的副本；仅用真实时钟复核，不改源时间。 */
+    if ((uint32_t)(copied_ms - now_ms) <= PX4LITE_GNSS_MAX_AGE_MS &&
+        (uint32_t)(copied_ms - out->measured_ms) <= PX4LITE_GNSS_MAX_AGE_MS) { return PX4LITE_OK; }
+    out->available = 0U;
+    return PX4LITE_STALE;
+  }
+  return PX4LITE_OK;
 }
 
 /** @brief 显示任务独占的活动远端及发现摘要转换暂存，禁止用于生产采集。 */
@@ -322,13 +376,19 @@ Px4Lite_Result_t App_CopyAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms)
 }
 
 /**
- * @brief 复制一份新鲜的环境快照。
+ * @brief 复制已启用采样组的新鲜环境、电压和电流事实。
+ * @details 禁用组不访问 topic，字段保持零且有效位不置位；第二组仍保留自己的字段和时间戳，
+ * 不映射到第一组。旧电压模型估算值保留兼容字段，但当前通用输入不声明电量有效。
  */
 Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t now_ms)
 {
   Px4Lite_SensorBaro_t baro;
+#if PX4LITE_ENABLE_BATTERY1
   Px4Lite_BatteryStatus_t battery;
+#endif
+#if PX4LITE_ENABLE_BATTERY2
   Px4Lite_BatteryStatus_t battery2;
+#endif
   uint8_t copied = 0U;
 
   if (out == 0) { return PX4LITE_INVALID_PARAM; }
@@ -344,6 +404,7 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
     copied                     = 1U;
   }
 
+#if PX4LITE_ENABLE_BATTERY1
   if ((Px4Lite_CopyBattery(&battery) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
     if (copied == 0U) { out->header = battery.header; }
     out->voltage_mv      = battery.voltage_mv;
@@ -351,11 +412,14 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
     out->current_ma      = (battery.current_valid != 0U) ? battery.current_ma : 0;
     out->battery_percent = battery.percent;
     out->low_voltage     = battery.low_voltage;
-    out->valid_mask |= APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_PERCENT1;
+    /* 当前通用输入不识别电源类型，不授权旧电压模型估算的 SOC。 */
+    out->valid_mask |= APP_ENV_VALID_VOLTAGE1;
     if (battery.current_valid != 0U) { out->valid_mask |= APP_ENV_VALID_CURRENT1; }
     copied               = 1U;
   }
+#endif
 
+#if PX4LITE_ENABLE_BATTERY2
   if ((Px4Lite_CopyBattery2(&battery2) == PX4LITE_OK) && (Px4Lite_IsFresh(&battery2.header, now_ms, APP_ENVIRONMENT_MAX_AGE_MS) != 0U)) {
     if (copied == 0U) { out->header = battery2.header; }
     out->voltage2_mv      = battery2.voltage_mv;
@@ -363,10 +427,12 @@ Px4Lite_Result_t App_CopyEnvironment(App_EnvironmentSnapshot_t *out, uint32_t no
     out->current2_ma      = (battery2.current_valid != 0U) ? battery2.current_ma : 0;
     out->battery2_percent = battery2.percent;
     out->low_voltage2     = battery2.low_voltage;
-    out->valid_mask |= APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_PERCENT2;
+    /* 内部估算字段保持兼容，但当前通用输入不声明电量有效。 */
+    out->valid_mask |= APP_ENV_VALID_VOLTAGE2;
     if (battery2.current_valid != 0U) { out->valid_mask |= APP_ENV_VALID_CURRENT2; }
     copied                = 1U;
   }
+#endif
 
   return (copied != 0U) ? PX4LITE_OK : PX4LITE_NOT_READY;
 }
@@ -395,6 +461,22 @@ Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
     out->base_percent[i] = source.base_percent[i];
   }
   return PX4LITE_OK;
+}
+
+/** @brief 人工锁只操作本机控制器，远端显示不会把按钮命令发送到其他节点。 */
+Px4Lite_Result_t App_SetMotorLocked(uint8_t locked)
+{
+  if (locked > 1U) { return PX4LITE_INVALID_PARAM; }
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return PX4LITE_NOT_READY; }
+  return Px4Lite_ControlSetMotorLocked(locked);
+}
+
+/** @brief 只返回已初始化的本机控制锁状态，远端状态缺失不推断为上锁或解锁。 */
+Px4Lite_Result_t App_GetMotorLocked(uint8_t *locked)
+{
+  if (locked == 0) { return PX4LITE_INVALID_PARAM; }
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return PX4LITE_NOT_READY; }
+  return Px4Lite_ControlGetMotorLocked(locked);
 }
 
 Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor_index, uint8_t throttle_percent)
@@ -866,7 +948,7 @@ const char *App_GetModuleDisplayName(uint16_t source_id, uint16_t fault_code)
     case PX4LITE_FAULT_MOTOR_POWER_LOW:
     case PX4LITE_FAULT_MOTOR_DEAD:
     case PX4LITE_FAULT_MOTOR_CHARGE:
-      return "MOTOR";
+      return "SUPPLY";
 
     case PX4LITE_FAULT_POWER_CHARGE:
       return "POWER";
@@ -970,15 +1052,15 @@ const char *App_GetFaultReasonText(uint16_t fault_code)
     case PX4LITE_FAULT_ESTIMATOR_DIVERGE:
       return "EST DIVERGE";
     case PX4LITE_FAULT_MOTOR_DISCONNECT:
-      return "MOTOR POWER ABSENT";
+      return "SUPPLY OUT OF RANGE";
     case PX4LITE_FAULT_MOTOR_POWER_LOW:
-      return "MOTOR POWER LOW";
+      return "SUPPLY VOLTAGE LOW";
     case PX4LITE_FAULT_MOTOR_DEAD:
-      return "MOTOR BATTERY CRITICAL";
+      return "SUPPLY VOLTAGE CRITICAL";
     case PX4LITE_FAULT_MOTOR_CHARGE:
-      return "MOTOR BATTERY LOW";
+      return "SUPPLY VOLTAGE WARNING";
     case PX4LITE_FAULT_POWER_CHARGE:
-      return "MAIN BATTERY LOW";
+      return "SUPPLY VOLTAGE WARNING";
     default:
       break;
   }

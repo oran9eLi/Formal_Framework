@@ -1,0 +1,64 @@
+{
+  "baseline": "stage1_gnss_unified_uplink",
+  "files": [
+    {
+      "path": "Framework/Inc/px4lite_config.h",
+      "baseline_sha256": "c6cdafa9e8ce4a6c7fc7fe3887fbb4c606eea7cd21b04573f4de866b7919c429",
+      "sha256": "7e6b9a6e02cef6ec902298f9be4111c905b7133c3aa9e6769967fa7f324dbab5"
+    },
+    {
+      "path": "Framework/Inc/px4lite_diagnostic_capture.h",
+      "baseline_sha256": "589b1afb0a81ebefc59efe6500d9690c798203e09fe9a26f61969a79fc8be322",
+      "sha256": "cb43b2967960cbf3ecbe5382738efda781162978470164f2f066b922e39a7e2a"
+    },
+    {
+      "path": "Framework/Src/px4lite_diagnostic_capture.c",
+      "baseline_sha256": "e240a4f645148a06bd9fd5092b7e0a27a07843ec4178acdf87a94a7c7db20c39",
+      "sha256": "342d66c7b483e197e6de9cf07b7db872313d1f33fe8ece7096aba8d7efccbaf3"
+    },
+    {
+      "path": "Framework/Src/px4lite_mavlink_tx.c",
+      "baseline_sha256": "713ba084232e5489e6573ff11369028296734c47899f87010e638d89d283dea4",
+      "sha256": "b02dedee516083855d8b2d180f1fb1a9ff99344510a1bb2a1c2f58fef9dda2f2"
+    },
+    {
+      "path": "Framework/Src/px4lite_platform_f407.c",
+      "baseline_sha256": "278f0c14dd48bd12bceeb1b143f9aab1ba6b72a67f5db10ed6e5123421e7dad1",
+      "sha256": "9f0596fd92b9261bb2206f75b6d93778b7112d45c7a100f1249cc99d243fe62c"
+    },
+    {
+      "path": "MDK-ARM/formal_framework.uvprojx",
+      "baseline_sha256": "2f004c6b020f1c6a9d3110f34b4073d737af25110268a0ff9cfc4b989f0c5974",
+      "sha256": "fe12f5a78ac94d006826504ab3e1c3c39ce46e45ec7a20f2a97360d20ccb8c6f"
+    },
+    {
+      "path": "Sensor/Inc/sensor_gnss.h",
+      "baseline_sha256": "8f3497bfe29d18417c0baf03570e957d1ef52cab78d02b6f9e8f3fcf2147ae56",
+      "sha256": "38f75f5e35bea7d031274bec580046046661041e6160bacfe358a3a97d39c6bb"
+    },
+    {
+      "path": "Sensor/Inc/sensor_ubx.h",
+      "baseline_sha256": "45546fb3560d4566745bb721d84da60d0948990a94cd02b7717f36bf6c9f4115",
+      "sha256": "5b21aff124691ec8fe702876d01094cf903f61c5dbd7e5d62a26eadcb0d7019c"
+    },
+    {
+      "path": "Sensor/Src/sensor_gnss.c",
+      "baseline_sha256": "d079dd7a212659ba9d9dfb608471b58a0105c75dc9407e489b69ae03cf6f3606",
+      "sha256": "fbda45ee37f139c7258b00887d7608a62bfa8a1e4b94ed8434b080819248255c"
+    },
+    {
+      "path": "Framework/Inc/px4lite_gnss_raw_uplink.h",
+      "baseline_sha256": null,
+      "sha256": "32f4d509523e7200ddebc74b2020a499aae7bffc4a98c91b0c7d65ec35ceca8c"
+    },
+    {
+      "path": "Framework/Src/px4lite_gnss_raw_uplink.c",
+      "baseline_sha256": null,
+      "sha256": "fee694d914592b43ae0c63477589def7c275bab0b44c4bb00fe64ed255d9d260"
+    }
+  ],
+  "new_production_sources": [
+    "Framework/Inc/px4lite_gnss_raw_uplink.h",
+    "Framework/Src/px4lite_gnss_raw_uplink.c"
+  ]
+}
