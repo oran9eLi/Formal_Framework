@@ -80,7 +80,13 @@ int main(void)
   sample = ReadCondition(1013U, 1331U, 1500U);
   assert((uint32_t)(sample.voltage_v * 1000.0f + 0.5f) == 8305U);
   assert(sample.current_ma == 16507);
+  /* 按ADC实例确认逻辑组1未占外部通道；扩展板组2可合法复用PA5/PC0。 */
+  assert(adc_instance_channels[1] == ADC_CHANNEL_VREFINT);
+  assert(adc_instance_channels[2] == BSP_ADC2_CH);
+  assert(adc_instance_channels[3] == BSP_ADC_CURRENT2_CH);
+#if !BSP_POWER2_USE_EXPANSION_ROUTE
   assert(adc_channel_configs[ADC_CHANNEL_5] == 0U && adc_channel_configs[ADC_CHANNEL_10] == 0U);
+#endif
   assert(drive_calls == 0U && write_calls == 0U);
   puts("power2 conversion audit: PASS (12.213 V / 0.800 A -> 9.770 W; VDDA tracking; observed-scale reproduction)");
   return 0;

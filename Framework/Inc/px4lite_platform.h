@@ -255,20 +255,23 @@ typedef enum {
 typedef struct {
   uint32_t sequence;           /**< 电压采样尝试序号，自然回绕；是否有缓存以Copy返回值判断。 */
   uint32_t sample_time_ms;     /**< sensor采样时刻，单位ms。 */
-  uint32_t voltage_raw;        /**< PA4平均ADC原码；有效时0..4095，失败记录不得作为电压解释。 */
-  uint32_t voltage_pin_mv;     /**< PA4换算电压，单位mV。 */
+  uint32_t voltage_raw;        /**< 第二组电压脚平均ADC原码；有效时0..4095，失败记录不得作为电压解释。 */
+  uint32_t voltage_pin_mv;     /**< BSP所选第二组电压脚的换算电压，单位mV。 */
+  uint32_t voltage_discharge_pin_mv; /**< 所选电压脚弱下拉诊断，单位mV；不是正式电压或物理在位证明。 */
   uint32_t voltage_bsp_mv;     /**< 按分压系数还原的主回路电压，单位mV。 */
   uint32_t voltage_mv;         /**< Driver校准后发布的主回路电压，单位mV。 */
   uint32_t vref_raw;           /**< 同次VREFINT原码；有效时0..4095，非法时保留异常值。 */
   uint32_t vref_cal_raw;       /**< 工厂参考校准原字，保留非法值便于排查。 */
   uint32_t vdda_mv;            /**< 实际参与换算的VDDA，单位mV；可能为回退值。 */
   uint32_t vdda_calculated_mv; /**< 参考原码计算的VDDA，单位mV；尚不能计算时为0。 */
-  uint32_t current_pin_mv;     /**< 本轮PC1信号电压，单位mV；仅current_valid为1时有效。 */
+  uint32_t current_pin_mv;     /**< 所选电流脚最近完成或拒绝的诊断缓存，单位mV；current_valid=0时可陈旧，不得当本轮可信电流。 */
   int32_t current_ma;          /**< 本轮Driver输出电流，单位mA。 */
   uint8_t reference_status;    /**< Px4Lite_PowerReferenceStatus_t；不能将回退值冒充实测值。 */
   uint8_t current_valid;       /**< 本轮电流采样成功为1，失败为0。 */
   uint8_t voltage_valid;       /**< 本轮ADC与Driver电压均成功为1；失败的final值不得使用。 */
   uint8_t reserved;            /**< 保留为0。 */
+  uint8_t voltage_discharge_enabled; /**< 弱下拉源检查启用为1，0为明确关闭检查的兼容配置。 */
+  uint8_t voltage_discharge_checked; /**< 本轮弱下拉dummy转换成功为1；仅此字段不能证明接头存在。 */
 } Px4Lite_PowerDiagnostics_t;
 
 /**

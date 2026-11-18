@@ -92,7 +92,7 @@ void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result, uint32_t 
 #include "../../Framework/Src/px4lite_control.c"
 #include "../../Framework/Src/px4lite_command.c"
 /** @brief 电机事务夹具隔离声光消费者，收包提示不得访问本测试的硬件边界。 */
-void Px4Lite_StartupToneNotifyRpiCommand(void) {}
+void Px4Lite_StartupToneNotifyRpiResult(uint8_t succeeded) { (void)succeeded; }
 
 /** @brief 初始化并显式解锁；同步计数从命令测试开始计算，不包含准备阶段。 */
 static int ResetHarness(void)

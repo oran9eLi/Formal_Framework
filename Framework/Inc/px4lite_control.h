@@ -14,6 +14,33 @@
 
 #include "px4lite_types.h"
 
+/** @brief CNS V0.1 动作编号；与专用声光播放器共用，不等同 MAVLink command。 */
+typedef enum {
+  PX4LITE_CNS_ARM = 1,             /**< 低音后使四路进入怠速，成功后才解锁。 */
+  PX4LITE_CNS_TAKEOFF,             /**< 三声高音后执行原同步升速。 */
+  PX4LITE_CNS_LAND,                /**< 间歇高音与缓降并行，终点为怠速。 */
+  PX4LITE_CNS_DISARM,              /**< 立即上锁停车，随后高音提示。 */
+  PX4LITE_CNS_EMERGENCY_STOP,      /**< 立即取消全部动作声光并停车锁定。 */
+  PX4LITE_CNS_SET_MOTOR_PWM        /**< 成功声光后只改变指定一路精确脉宽。 */
+} Px4Lite_CnsAction_t;
+
+/**
+ * @brief 受理 CNS 动作；普通动作等待同 token 的 ACK 成功发送后才开始。
+ * @param[in] action 动作编号；上锁和急停先停车，不等待 ACK 或播放器。
+ * @param[in] motor_index 调速通道，0～3；其他动作忽略。
+ * @param[in] pulse_us 调速脉宽，单位 us，配置最小值～最大值；其他动作忽略。
+ * @param[out] reason 文档原因 0～5；0 无细分、1 未解锁、2 忙、3 参数、4 状态、5 起飞依赖。
+ * @param[out] token 接受后的非零流水号；拒绝为 0，不允许跨恢复重放旧令牌。
+ * @return OK 接受；BUSY 动作忙；NOT_READY 状态拒绝；IO_ERROR 内部检查失败。
+ * @note 仅任务上下文；不等待音符、串口或斜坡，不替代动作完成反馈。
+ */
+Px4Lite_Result_t Px4Lite_ControlCnsRequest(Px4Lite_CnsAction_t action, uint8_t motor_index,
+                                         uint16_t pulse_us, uint8_t *reason, uint32_t *token);
+/** @brief ACK 已实际提交串口成功后的通知；过期或已取消令牌静默忽略。 */
+void Px4Lite_ControlCnsAckSent(uint32_t token);
+/** @brief 返回真实人工解锁事实；未初始化及 CNS 解锁音期间为 0，不根据 PWM 大小推断。 */
+uint8_t Px4Lite_ControlCnsArmed(void);
+
 /**
  * @brief 设置人工上锁/解锁；首次启动、恢复和急停后必须显式解锁。
  * @param[in] locked 1 上锁并立即清目标、撤收输出；0 解锁但只开始 2500 ms 最小脉宽预备。
@@ -29,6 +56,15 @@ Px4Lite_Result_t Px4Lite_ControlGetMotorLocked(uint8_t *locked);
 Px4Lite_Result_t Px4Lite_ControlSetMotorThrottles(const uint8_t percent[PX4LITE_MOTOR_COUNT]);
 /** @brief 四路脉宽与 DIRECT 模式整体提交；拒绝无副作用。单位 us，仅任务上下文调用。 */
 Px4Lite_Result_t Px4Lite_ControlSetMotorPulses(const uint16_t pulse[PX4LITE_MOTOR_COUNT]);
+
+/** @brief 提交树莓派四路百分比；本地模式观察真实PWM，Pi通知模式仅提交，单位%，返回语义不变。 */
+Px4Lite_Result_t Px4Lite_ControlSetRpiMotorThrottles(const uint8_t percent[PX4LITE_MOTOR_COUNT]);
+/** @brief 提交树莓派四路脉宽；仅本地结果模式附加PWM观察，单位us。 */
+Px4Lite_Result_t Px4Lite_ControlSetRpiMotorPulses(const uint16_t pulse[PX4LITE_MOTOR_COUNT]);
+/** @brief 启动树莓派起飞斜坡，OK只表示接受；仅本地结果模式在实际终结时登记声光。 */
+Px4Lite_Result_t Px4Lite_ControlStartRpiAutoTakeoff(void);
+/** @brief 启动树莓派降落；本地模式观察真实完成，Pi模式统一等待0x8040声光通知。 */
+Px4Lite_Result_t Px4Lite_ControlStartRpiAutoLanding(void);
 
 /**
  * @brief 电机控制输出模式。

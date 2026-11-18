@@ -5,7 +5,7 @@
  * @details
  * 本文件承载 sensor、estimator、comm 和 health 周期任务的核心服务。普通传感器
  * 统一由 sensor 任务采集；Health task 独占 OFFLINE/FAILED 判定；状态复制通过
- * 版本号保持一致性。
+ * 版本号保持一致性。连接声光仅观察既有一致快照并排队，不新增外设I/O或改写状态策略。
  */
 
 #include "px4lite_modules.h"
@@ -24,6 +24,7 @@
 #include "px4lite_lora_lab.h"
 #include "px4lite_remote_telemetry.h"
 #include "px4lite_remoteid_tx.h"
+#include "px4lite_startup_tone.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <math.h>
@@ -38,17 +39,19 @@ static uint32_t s_baro_sequence;
 /** @brief 电源采样服务内部事实；下标 0/1 保留两组既有数据身份，只由 sensor 写入。 */
 typedef struct {
   uint32_t sequence;       /**< 本组发布序号，0 表示尚未发布。 */
-  uint32_t last_work_ms;   /**< 最近一次调度采集的时间，单位 ms。 */
+  uint32_t last_work_ms;   /**< 最近一次正常采样启动时刻，单位ms；BUSY恢复轮询不推迟1Hz锚点。 */
   uint32_t sample_time_ms; /**< 最近有效电压采样时间，单位 ms；0 是合法启动时刻。 */
   uint8_t work_started;   /**< 1 表示已执行首次采集，避免以零毫秒充当未开始。 */
   uint8_t sample_seen;    /**< 1 表示本组曾产生有效电压快照。 */
   uint8_t io_failed;      /**< 1 表示最近一次采集存在电压或电流 I/O 失败。 */
   uint8_t low_voltage;    /**< 最近电压告警事实，1 表示低压。 */
+  uint8_t retry_pending;  /**< 仅第二组电压恢复采样未完成为1，下一sensor周期继续，不改变普通1Hz。 */
 } Px4Lite_PowerChannelFact_t;
 static Px4Lite_PowerChannelFact_t s_power_facts[2];
 #endif
 static uint32_t s_navigation_sequence;
 static int32_t s_navigation_attitude_cache[6]; /**< 最近姿态/角速度，单位0.01度/0.01度每秒；仅估计任务写。 */
+static uint8_t s_navigation_last_fix; /**< 上次发布的本机定位等级，维度单独到期时也发布变化。 */
 static uint32_t s_navigation_last_valid_mask; /**< 上次发布字段位，断流过期时也必须发布撤销。 */
 static uint32_t s_health_sequence;
 static uint32_t s_start_ms;
@@ -87,26 +90,6 @@ static uint8_t Px4Lite_GnssQuality(const Px4Lite_SensorGnss_t *gnss)
     quality = (uint8_t)(quality - 10U);
   }
   return quality;
-}
-
-/**
- * @brief 将 GGA/GSA 定位事实映射为显示侧 GNSS fix 状态。
- *
- * @param[in] gnss GNSS 测量快照，不能为 NULL。
- *
- * @return 显示侧 fix 状态值。
- */
-static uint8_t Px4Lite_GnssDisplayFixState(const Px4Lite_SensorGnss_t *gnss)
-{
-  if ((gnss->fix_type == 0U) || (gnss->fix_dimension == 1U)) { return 0U; }
-
-  if (gnss->fix_type == 2U) { return 4U; }
-
-  if (gnss->fix_dimension == 2U) { return 2U; }
-
-  if (gnss->fix_dimension == 3U) { return 3U; }
-
-  return (gnss->satellites_used >= 4U) ? 3U : 2U;
 }
 
 /**
@@ -150,6 +133,130 @@ static uint8_t Px4Lite_IsModuleEnabled(Px4Lite_ModuleId_t id)
   }
 }
 
+#if PX4LITE_ENABLE_MODULE_CONNECTION_FEEDBACK
+#if (PX4LITE_MODULE_FEEDBACK_STARTUP_MS > 60000U) || \
+    (PX4LITE_MODULE_FEEDBACK_STABLE_MS < PX4LITE_HEALTH_PERIOD_MS) || \
+    (PX4LITE_MODULE_FEEDBACK_STABLE_MS > 10000U)
+#error "Module feedback requires startup0..60000ms and stable health-period..10000ms"
+#endif
+/** @brief 只监测已有明确设备/服务可用性事实的六类模块，不将网络或ADC读数当物理在位。 */
+static const Px4Lite_ModuleId_t s_connection_feedback_ids[] = {
+  PX4LITE_MODULE_GNSS, PX4LITE_MODULE_IMU, PX4LITE_MODULE_BARO,
+  PX4LITE_MODULE_LORA, PX4LITE_MODULE_REMOTE_ID, PX4LITE_MODULE_STORAGE
+};
+/** @brief 单模块连接边沿观察器；由Health唯一写入，所有时间均为真实毫秒。 */
+typedef struct {
+  uint32_t candidate_since_ms; /**< 最近一致候选开始时刻，单位ms，允许从0开始和自然回绕。 */
+  uint8_t initialized; /**< 已由明确状态建立静默基线为1。 */
+  uint8_t connected; /**< 最近确认可用为1，确认不可用为0，不代表物理插拔结论。 */
+  uint8_t candidate; /**< 正在等待稳定的候选，1为连接、0为中断。 */
+  uint8_t candidate_pending; /**< 候选有效为1，避免以时间0作无候选哨兵。 */
+} Px4Lite_ConnectionFeedback_t;
+static Px4Lite_ConnectionFeedback_t s_connection_feedback[
+  sizeof(s_connection_feedback_ids) / sizeof(s_connection_feedback_ids[0])];
+static uint32_t s_connection_feedback_start_ms; /**< 最近一次提示基线初始化时刻，单位ms。 */
+static uint8_t s_connection_feedback_startup_done; /**< 启动窗口已结束为1，避免运行49.7天后再次静默建基线。 */
+
+/** @brief 初始化/重复初始化只重建提示基线，不制造模块离线、恢复或历史拔插事件。 */
+static void Px4Lite_ConnectionFeedbackReset(uint32_t now_ms)
+{
+  memset(s_connection_feedback, 0, sizeof(s_connection_feedback));
+  s_connection_feedback_start_ms = now_ms;
+  s_connection_feedback_startup_done = 0U;
+}
+
+/**
+ * @brief 将已有公开设备事实映射为连接可用性；返回1表示事实明确，0表示启动/禁用等未知。
+ * @details GNSS未定位仍连接；SD未就绪虽为DEGRADED，却是存储可用性中断。
+ *          LoRa状态已按本机在位/AUX发布，RemoteID状态来自PC8，不依赖对端报文或盲发成功。
+ */
+static uint8_t Px4Lite_ConnectionFeedbackFact(const Px4Lite_ModuleStatus_t *status, uint8_t *connected)
+{
+  Px4Lite_State_t state = status->state;
+  if ((state == PX4LITE_STATE_UNINITIALIZED) || (state == PX4LITE_STATE_STARTING) ||
+      (state == PX4LITE_STATE_DISABLED)) { return 0U; }
+  if ((state == PX4LITE_STATE_OFFLINE) || (state == PX4LITE_STATE_FAILED)) {
+    *connected = 0U;
+    return 1U;
+  }
+  if (state == PX4LITE_STATE_ONLINE) {
+    *connected = 1U;
+    return 1U;
+  }
+  if (state == PX4LITE_STATE_DEGRADED) {
+    if (status->module_id == PX4LITE_MODULE_STORAGE) {
+      if (status->fault_code != PX4LITE_FAULT_STORAGE_NOT_READY) { return 0U; }
+      *connected = 0U;
+      return 1U;
+    }
+    if ((status->module_id == PX4LITE_MODULE_GNSS) || (status->module_id == PX4LITE_MODULE_IMU) ||
+        (status->module_id == PX4LITE_MODULE_BARO)) {
+      *connected = 1U;
+      return 1U;
+    }
+  }
+  return 0U;
+}
+
+/**
+ * @brief Health只观察刚发布的一致状态副本，确认稳定边沿后登记一次声光，不访问设备。
+ * @details 启动窗口只建基线，首次缺席不发拔出；未知恢复态不自行确认离线。
+ *          断开候选跨STARTING保留至再次明确不可用，防止恢复重试永久掩盖拔出；
+ *          插入候选遇未知则重新计时，实际正连接事实恢复即撤销待判断开。
+ */
+static void Px4Lite_ConnectionFeedbackObserve(const Px4Lite_ModuleStatus_t *status, uint32_t now_ms)
+{
+  uint32_t i;
+  uint8_t startup;
+  if (!s_connection_feedback_startup_done &&
+      (uint32_t)(now_ms - s_connection_feedback_start_ms) >= PX4LITE_MODULE_FEEDBACK_STARTUP_MS) {
+    s_connection_feedback_startup_done = 1U;
+  }
+  startup = (uint8_t)!s_connection_feedback_startup_done;
+  for (i = 0U; i < sizeof(s_connection_feedback_ids) / sizeof(s_connection_feedback_ids[0]); ++i) {
+    Px4Lite_ModuleId_t id = s_connection_feedback_ids[i];
+    const Px4Lite_ModuleStatus_t *item = &status[id];
+    Px4Lite_ConnectionFeedback_t *observer = &s_connection_feedback[i];
+    uint8_t connected;
+    if (!Px4Lite_IsModuleEnabled(id) || item->state == PX4LITE_STATE_DISABLED ||
+        item->state == PX4LITE_STATE_UNINITIALIZED) {
+      memset(observer, 0, sizeof(*observer));
+      continue;
+    }
+    if (!Px4Lite_ConnectionFeedbackFact(item, &connected)) {
+      if (startup || !observer->candidate_pending || observer->candidate != 0U) {
+        observer->candidate_pending = 0U;
+      }
+      continue;
+    }
+    if (startup || !observer->initialized) {
+      observer->initialized = 1U;
+      observer->connected = connected;
+      observer->candidate_pending = 0U;
+      continue;
+    }
+    if (observer->connected == connected) {
+      observer->candidate_pending = 0U;
+      continue;
+    }
+    if (!observer->candidate_pending || observer->candidate != connected) {
+      observer->candidate = connected;
+      observer->candidate_since_ms = now_ms;
+      observer->candidate_pending = 1U;
+      continue;
+    }
+    if ((uint32_t)(now_ms - observer->candidate_since_ms) >= PX4LITE_MODULE_FEEDBACK_STABLE_MS) {
+      observer->connected = connected;
+      observer->candidate_pending = 0U;
+      Px4Lite_StartupToneNotifyModuleConnection(connected);
+    }
+  }
+}
+#else
+#define Px4Lite_ConnectionFeedbackReset(now_ms) ((void)0)
+#define Px4Lite_ConnectionFeedbackObserve(status, now_ms) ((void)0)
+#endif
+
 /**
  * @brief 将模块公开状态映射为默认告警严重度。
  *
@@ -165,23 +272,11 @@ static uint8_t Px4Lite_StateSeverity(Px4Lite_State_t state)
   return (uint8_t)PX4LITE_SEVERITY_INFO;
 }
 
-/**
- * @brief 更新单个模块状态，并在发生变化时推进共享状态版本号。
- *
- * @param[in] id 模块编号。
- * @param[in] state 新的公开状态。
- * @param[in] fault 故障码，0 表示无故障。
- * @param[in] now_ms 当前系统毫秒时间。
- */
-static void Px4Lite_SetStatus(Px4Lite_ModuleId_t id, Px4Lite_State_t state, uint16_t fault, uint32_t now_ms)
+/** @brief 在调用者持有状态临界区时同步状态、故障及共享版本；仅修改内存中的状态记录。 */
+static void Px4Lite_SetStatusLocked(Px4Lite_ModuleId_t id, Px4Lite_State_t state, uint16_t fault, uint32_t now_ms)
 {
-  Px4Lite_ModuleStatus_t *item;
+  Px4Lite_ModuleStatus_t *item = &s_status[id];
   uint8_t changed = 0U;
-
-  if ((uint32_t)id >= (uint32_t)PX4LITE_MODULE_COUNT) { return; }
-
-  taskENTER_CRITICAL();
-  item = &s_status[id];
   if (item->state != state) {
     if (((item->state == PX4LITE_STATE_DEGRADED) || (item->state == PX4LITE_STATE_OFFLINE) || (item->state == PX4LITE_STATE_FAILED)) && (state == PX4LITE_STATE_ONLINE)) {
       if (item->recovery_count < 255U) { item->recovery_count++; }
@@ -199,6 +294,14 @@ static void Px4Lite_SetStatus(Px4Lite_ModuleId_t id, Px4Lite_State_t state, uint
     changed        = 1U;
   }
   if (changed != 0U) { s_status_version++; }
+}
+
+/** @brief 原子更新指定模块公开状态；now_ms为本机毫秒时标。 */
+static void Px4Lite_SetStatus(Px4Lite_ModuleId_t id, Px4Lite_State_t state, uint16_t fault, uint32_t now_ms)
+{
+  if ((uint32_t)id >= (uint32_t)PX4LITE_MODULE_COUNT) { return; }
+  taskENTER_CRITICAL();
+  Px4Lite_SetStatusLocked(id, state, fault, now_ms);
   taskEXIT_CRITICAL();
 }
 
@@ -227,7 +330,7 @@ static void Px4Lite_RecordSensorIoError(Px4Lite_ModuleId_t id, uint32_t now_ms)
 }
 
 /**
- * @brief 复位 Framework 模块状态、统计计数和启动时间。
+ * @brief 复位 Framework 模块状态、统计计数、启动时间和附加连接提示基线。
  */
 Px4Lite_Result_t Px4Lite_ModulesInit(void)
 {
@@ -252,6 +355,7 @@ Px4Lite_Result_t Px4Lite_ModulesInit(void)
   s_last_baro_work_ms    = 0U;
   s_baro_work_started    = 0U;
   s_start_ms             = Px4Lite_PlatformGetMs();
+  Px4Lite_ConnectionFeedbackReset(s_start_ms);
   return PX4LITE_OK;
 }
 
@@ -324,10 +428,22 @@ Px4Lite_Result_t Px4Lite_AlarmModuleInit(void)
  * recover 回调由 Health 侧恢复监视器调用。它们必须保持轻量，只请求所属模块的
  * Service 在本任务中执行 re-init，不能在 Health 任务里访问共享总线。
  */
+/**
+ * @brief 二次核对当前GNSS状态后登记owner恢复，丢弃监视器持有的过期离线判断。
+ * @details 高优先级sensor可在监视器复制状态后恢复；本临界区只检查状态和置请求标志，
+ *          不访问串口。owner仍须检查尚未解析的新字节，不能仅依赖此处状态门禁。
+ */
 Px4Lite_Result_t Px4Lite_GnssRecover(void)
 {
 #if PX4LITE_ENABLE_GNSS
+  taskENTER_CRITICAL();
+  if (s_status[PX4LITE_MODULE_GNSS].state != PX4LITE_STATE_OFFLINE &&
+      s_status[PX4LITE_MODULE_GNSS].state != PX4LITE_STATE_FAILED) {
+    taskEXIT_CRITICAL();
+    return PX4LITE_IDLE;
+  }
   Px4Lite_GnssRequestReinit();
+  taskEXIT_CRITICAL();
 #endif
   return PX4LITE_OK;
 }
@@ -439,6 +555,9 @@ static void Px4Lite_PowerPublishStatus(uint32_t now_ms)
  * @details 电流失败仍发布可用电压及 current_valid=0，供 Control 按电压保护；
  *          电流失败或平台参考回退时记录I/O错误并降级；参考回退的电压仍为兼容估算值。
  *          第二组始终发布Battery2，不映射到第一组。
+ *          第二组BUSY只继续恢复阶段，不累计错误；NOT_READY代表本轮已确认无有效输入，
+ *          OVERFLOW代表正式ADC量程越界并累计I/O错误；两者均立即发布该组失效快照，
+ *          不把内部零占位数作为有效0V/0A，不延长饱和之前的有效样本。
  */
 static void Px4Lite_PowerWorkRun(uint32_t now_ms)
 {
@@ -451,12 +570,17 @@ static void Px4Lite_PowerWorkRun(uint32_t now_ms)
     Px4Lite_BatteryStatus_t sample;
     Px4Lite_Result_t result;
     if ((enabled & (uint8_t)(1U << index)) == 0U) { continue; }
-    if ((fact->work_started != 0U) &&
+    if ((fact->work_started != 0U) && (fact->retry_pending == 0U) &&
         ((uint32_t)(now_ms - fact->last_work_ms) < PX4LITE_BATTERY_WORK_PERIOD_MS)) { continue; }
     fact->work_started = 1U;
-    fact->last_work_ms = now_ms;
+    if (fact->retry_pending == 0U) { fact->last_work_ms = now_ms; }
     memset(&sample, 0, sizeof(sample));
     result = (index == 0U) ? Px4Lite_BatteryRead(&sample) : Px4Lite_Battery2Read(&sample);
+    if ((index == 1U) && (result == PX4LITE_BUSY)) {
+      fact->retry_pending = 1U;
+      continue;
+    }
+    fact->retry_pending = 0U;
     if (result == PX4LITE_OK) {
       fact->sample_seen = 1U;
       fact->sample_time_ms = sample.header.sample_time_ms;
@@ -476,6 +600,22 @@ static void Px4Lite_PowerWorkRun(uint32_t now_ms)
       else { Px4Lite_PublishBattery2(&sample); }
       if (fact->io_failed != 0U) { Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms); }
       published = 1U;
+    } else if ((index == 1U) && ((result == PX4LITE_NOT_READY) || (result == PX4LITE_OVERFLOW))) {
+      /* 未供电与超量程都撤销测量，但超量程单独保留I/O故障，不冒充低电压或缺席。 */
+      if ((fact->sample_seen != 0U) || (fact->sequence == 0U)) {
+        fact->sequence++;
+        if (fact->sequence == 0U) { fact->sequence = 1U; }
+        sample.header.sequence = fact->sequence;
+        sample.header.publish_time_ms = Px4Lite_PlatformGetMs();
+        sample.header.device_id = (uint16_t)PX4LITE_MODULE_BATTERY;
+        /* memset形成header.valid=0/flags=0/current_valid=0，消费者沿既有链显示N/A。 */
+        Px4Lite_PublishBattery2(&sample);
+        published = 1U;
+      }
+      fact->sample_seen = 0U;
+      fact->io_failed = (result == PX4LITE_OVERFLOW) ? 1U : 0U;
+      fact->low_voltage = 0U;
+      if (result == PX4LITE_OVERFLOW) { Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms); }
     } else if (result == PX4LITE_IO_ERROR) {
       fact->io_failed = 1U;
       Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms);
@@ -519,9 +659,9 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
     if (s_status[PX4LITE_MODULE_GNSS].consecutive_valid < 65535U) { s_status[PX4LITE_MODULE_GNSS].consecutive_valid++; }
     if ((gnss.valid_mask & PX4LITE_GNSS_VALID_POSITION) != 0U) { s_status[PX4LITE_MODULE_GNSS].last_valid_ms = gnss.position_update_ms; }
     s_status_version++;
+    Px4Lite_SetStatusLocked(PX4LITE_MODULE_GNSS, (gnss.fix_type != 0U) ? PX4LITE_STATE_ONLINE : PX4LITE_STATE_DEGRADED,
+                            (gnss.fix_type != 0U) ? 0U : PX4LITE_FAULT_SENSOR_NO_FIX, now_ms);
     taskEXIT_CRITICAL();
-
-    Px4Lite_SetStatus(PX4LITE_MODULE_GNSS, (gnss.fix_type != 0U) ? PX4LITE_STATE_ONLINE : PX4LITE_STATE_DEGRADED, (gnss.fix_type != 0U) ? 0U : PX4LITE_FAULT_SENSOR_NO_FIX, now_ms);
   } else if (result == PX4LITE_IO_ERROR) {
     Px4Lite_RecordSensorIoError(PX4LITE_MODULE_GNSS, now_ms);
   }
@@ -616,6 +756,7 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 Px4Lite_Result_t Px4Lite_EstimatorInit(void)
 {
   s_navigation_last_valid_mask = 0U;
+  s_navigation_last_fix = 0U;
   memset(s_navigation_attitude_cache, 0, sizeof(s_navigation_attitude_cache));
   Px4Lite_AttitudeInit(&s_attitude_state);
   s_attitude_action_request = 0U;
@@ -702,7 +843,7 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
         (Px4Lite_ElapsedMs(now_ms, gnss.position_update_ms) <= PX4LITE_GNSS_MAX_AGE_MS)) {
       navigation.latitude_e7 = gnss.latitude_e7; navigation.longitude_e7 = gnss.longitude_e7;
       navigation.hdop_x100 = gnss.hdop_x100; navigation.satellites_used = gnss.satellites_used;
-      navigation.gnss_fix_type = Px4Lite_GnssDisplayFixState(&gnss);
+      navigation.gnss_fix_type = Px4Lite_GnssFixLevel(&gnss, now_ms, PX4LITE_GNSS_MAX_AGE_MS);
       navigation.navigation_quality = gnss.header.quality;
       navigation.valid_mask |= PX4LITE_NAV_VALID_POSITION;
     }
@@ -770,9 +911,10 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
     navigation.header.flags |= PX4LITE_DATA_FILTERED;
   }
 
-  if (navigation.valid_mask != s_navigation_last_valid_mask) { publish_navigation = 1U; }
+  if (navigation.valid_mask != s_navigation_last_valid_mask || navigation.gnss_fix_type != s_navigation_last_fix) { publish_navigation = 1U; }
   if (publish_navigation == 0U) { return; }
   s_navigation_last_valid_mask = navigation.valid_mask;
+  s_navigation_last_fix = navigation.gnss_fix_type;
   /* 零时刻有效，发布失效字段时也不得伪造新的测量时间。 */
   navigation.header.publish_time_ms = now_ms;
   navigation.header.sequence        = ++s_navigation_sequence;
@@ -784,22 +926,23 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
 }
 
 /**
- * @brief 初始化健康监控服务。
+ * @brief 初始化健康服务的连接提示基线；重复调用不改变设备状态或恢复策略。
  */
 Px4Lite_Result_t Px4Lite_HealthInit(void)
 {
+  Px4Lite_ConnectionFeedbackReset(Px4Lite_PlatformGetMs());
   return PX4LITE_OK;
 }
 
 /**
  * @brief 评估模块超时并发布一致的系统健康快照。
+ * @note 可选连接观察在原发布后只登记声光事件，不增加设备I/O或改写原状态策略。
  */
 void Px4Lite_HealthRun(uint32_t now_ms)
 {
   Px4Lite_SystemHealth_t health;
   Px4Lite_ModuleStatus_t status[PX4LITE_MODULE_COUNT];
   Px4Lite_FifoStats_t imu_stats;
-  Px4Lite_State_t gnss_state;
   Px4Lite_State_t imu_state;
   Px4Lite_State_t baro_state;
   Px4Lite_State_t battery_state;
@@ -807,7 +950,6 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   Px4Lite_State_t display_state;
   Px4Lite_State_t fiveg_state;
   uint32_t i;
-  uint32_t last_rx_ms;
   uint32_t imu_last_rx_ms;
   uint32_t baro_last_rx_ms;
   uint32_t battery_last_rx_ms;
@@ -817,8 +959,19 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   uint32_t status_version;
 
   taskENTER_CRITICAL();
-  last_rx_ms            = s_status[PX4LITE_MODULE_GNSS].last_rx_ms;
-  gnss_state            = s_status[PX4LITE_MODULE_GNSS].state;
+#if PX4LITE_ENABLE_GNSS
+  {
+    const Px4Lite_ModuleStatus_t *gnss = &s_status[PX4LITE_MODULE_GNSS];
+    /* sensor可在Health运行中抢占。读取最后收数与写入OFFLINE须在同一状态临界区。 */
+    uint8_t has_rx = (uint8_t)(gnss->last_rx_ms != 0U || gnss->state == PX4LITE_STATE_ONLINE ||
+                               gnss->state == PX4LITE_STATE_DEGRADED);
+    uint32_t elapsed = Px4Lite_ElapsedMs(now_ms, has_rx ? gnss->last_rx_ms : s_start_ms);
+    uint32_t limit = has_rx ? PX4LITE_GNSS_OFFLINE_MS : PX4LITE_GNSS_INSERT_CHECK_MS;
+    if (gnss->state != PX4LITE_STATE_FAILED && elapsed > limit) {
+      Px4Lite_SetStatusLocked(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms);
+    }
+  }
+#endif
   imu_last_rx_ms        = s_status[PX4LITE_MODULE_IMU].last_rx_ms;
   imu_state             = s_status[PX4LITE_MODULE_IMU].state;
   baro_last_rx_ms       = s_status[PX4LITE_MODULE_BARO].last_rx_ms;
@@ -832,19 +985,6 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   fiveg_last_rx_ms      = s_status[PX4LITE_MODULE_5G].last_rx_ms;
   fiveg_state           = s_status[PX4LITE_MODULE_5G].state;
   taskEXIT_CRITICAL();
-
-#if PX4LITE_ENABLE_GNSS
-  if (gnss_state != PX4LITE_STATE_FAILED) {
-    if ((last_rx_ms == 0U) && (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_GNSS_INSERT_CHECK_MS)) {
-      Px4Lite_SetStatus(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms);
-    } else if ((last_rx_ms != 0U) && (Px4Lite_ElapsedMs(now_ms, last_rx_ms) > PX4LITE_GNSS_OFFLINE_MS)) {
-      Px4Lite_SetStatus(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms);
-    }
-  }
-#else
-  (void)gnss_state;
-  (void)last_rx_ms;
-#endif
 
 #if PX4LITE_ENABLE_IMU
   if ((imu_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, imu_last_rx_ms) > PX4LITE_IMU_OFFLINE_MS)) {
@@ -943,6 +1083,7 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   Px4Lite_AlarmUpdateFromStatuses(status, (uint16_t)PX4LITE_MODULE_COUNT, now_ms);
 
   Px4Lite_PublishHealth(&health);
+  Px4Lite_ConnectionFeedbackObserve(status, now_ms);
   /* HealthTask 在本轮工作完成、心跳更新后统一执行 watchdog 门控。 */
 }
 

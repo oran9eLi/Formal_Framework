@@ -16,7 +16,7 @@ static void TestColdSilentLimitedRebuild(void)
   Cold();Step(0U);
   for(now=10U;now<=30000U;now+=10U) {
     Step(now);
-    if(now==6000U) { assert(requested_recoveries==1U && actual_recoveries==0U); }
+    if(now==6000U) { assert(s_silence_recovery_pending && !requested_recoveries && actual_recoveries==0U); }
     if(now==6010U) { assert(!requested_recoveries && actual_recoveries==1U); }
   }
   assert(actual_recoveries==4U && commands_count==9U && current_baud==115200U && !baud_set_calls);
@@ -72,7 +72,7 @@ static void TestSilentThenNewData(void)
   Gnss_Snapshot_t before,after;
   Cold();Sentence(s_silence_nofix,100U);
   assert(Sensor_GNSS_CopySnapshot(&before)==GNSS_RESULT_NO_FIX);
-  Step(6100U);assert(requested_recoveries && !actual_recoveries);
+  Step(6100U);assert(s_silence_recovery_pending && !requested_recoveries && !actual_recoveries);
   Step(6110U);assert(actual_recoveries==1U);
   assert(Sensor_GNSS_CopySnapshot(&after)==GNSS_RESULT_NO_FIX);
   assert(after.rx_sequence==before.rx_sequence && after.last_rx_ms==100U);
@@ -85,7 +85,7 @@ static void TestSilentThenNewData(void)
 static void TestFailedRecoveryBackoffAndRejoin(void)
 {
   uint32_t now;Gnss_Snapshot_t snapshot;
-  Cold();Step(0U);Step(6000U);assert(requested_recoveries && !actual_recoveries);
+  Cold();Step(0U);Step(6000U);assert(s_silence_recovery_pending && !requested_recoveries && !actual_recoveries);
   io_fail=1U;assert(Sensor_GNSS_Service(6010U)==GNSS_RESULT_IO_ERROR && actual_recoveries==1U);
   for(now=6020U;now<=10010U;now+=10U) {
     if(now%100U==0U) { Sensor_GNSS_RequestReinit(); }
@@ -118,10 +118,10 @@ static void TestRealFaultAndInterruptedTxIdentity(void)
 static void TestZeroEpochAndWrap(void)
 {
   Cold();Step(0U);Step(5999U);assert(!requested_recoveries);
-  Step(6000U);assert(requested_recoveries && !actual_recoveries);Step(6010U);assert(actual_recoveries==1U);
+  Step(6000U);assert(s_silence_recovery_pending && !requested_recoveries && !actual_recoveries);Step(6010U);assert(actual_recoveries==1U);
   Cold();Step(UINT32_MAX-3000U);Step(2998U);assert(!requested_recoveries);
-  Step(2999U);assert(requested_recoveries && !actual_recoveries);Step(3009U);assert(actual_recoveries==1U);
-  Step(9008U);assert(!requested_recoveries);Step(9009U);assert(requested_recoveries && actual_recoveries==1U);
+  Step(2999U);assert(s_silence_recovery_pending && !requested_recoveries && !actual_recoveries);Step(3009U);assert(actual_recoveries==1U);
+  Step(9008U);assert(!requested_recoveries);Step(9009U);assert(s_silence_recovery_pending && !requested_recoveries && actual_recoveries==1U);
   Step(9019U);assert(actual_recoveries==2U && current_baud==115200U);
 }
 

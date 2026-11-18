@@ -317,7 +317,7 @@ typedef struct {
   int32_t velocity_down_cms;    /**< 地向速度，单位：cm/s；当前本机为 0 占位，非实测垂直速度。 */
   uint16_t hdop_x100;           /**< 水平精度因子，单位：HDOP * 100。 */
   uint8_t satellites_used;      /**< 当前定位使用的卫星数量。 */
-  uint8_t gnss_fix_type;        /**< GNSS 定位类型。 */
+  uint8_t gnss_fix_type;        /**< 本机定位等级，0无定位、2/3为维度、4差分、5浮点、6固定、255已定位且维度未知。 */
   uint8_t navigation_quality;   /**< 导航质量，0 表示最低，数值越高表示质量越好。 */
   uint8_t reserved;             /**< 保留字段，保持结构体对齐。 */
 } Px4Lite_VehicleNavigation_t;
@@ -621,6 +621,31 @@ static __inline uint32_t Px4Lite_ElapsedMs(uint32_t now_ms, uint32_t then_ms)
   int32_t delta = (int32_t)(now_ms - then_ms);
 
   return (delta >= 0) ? (uint32_t)delta : 0U;
+}
+
+/** @brief 本机已定位但缺少有效维度，本值仅用于本机导航及显示，不作为MAVLink定位枚举。 */
+#define PX4LITE_GNSS_FIX_UNSPECIFIED 255U
+
+/**
+ * @brief 将已授权的定位质量及独立维度事实转换为本机显示等级。
+ * @param gnss 本机接收快照，调用者先按用途检查状态域或位置域。
+ * @param now_ms 当前本机时刻，单位ms。
+ * @param max_age_ms 维度报告允许的最大年龄，单位ms，与状态报告分别计时。
+ * @return 0无定位、2二维、3三维、4差分、5浮点、6固定或已定位但维度未知。
+ */
+static __inline uint8_t Px4Lite_GnssFixLevel(const Px4Lite_SensorGnss_t *gnss, uint32_t now_ms, uint32_t max_age_ms)
+{
+  if (gnss->fix_type == 0U) { return 0U; }
+  if (gnss->fix_type == 2U) { return 4U; }
+  if (gnss->fix_type == 4U) { return 6U; }
+  if (gnss->fix_type == 5U) { return 5U; }
+  if ((gnss->dimension_source == PX4LITE_GNSS_SOURCE_UBX_PVT || gnss->dimension_source == PX4LITE_GNSS_SOURCE_NMEA_GSA) &&
+      ((uint32_t)(now_ms - gnss->dimension_update_ms) <= max_age_ms ||
+       (uint32_t)(gnss->dimension_update_ms - now_ms) <= max_age_ms) &&
+      (gnss->fix_dimension == 2U || gnss->fix_dimension == 3U)) {
+    return gnss->fix_dimension;
+  }
+  return PX4LITE_GNSS_FIX_UNSPECIFIED;
 }
 
 /**

@@ -70,6 +70,25 @@
 #define POWER_CURRENT_FILTER_TOTAL 4U
 #endif
 
+/** @brief 第二组输入有效供电的进入阈值，单位mV；用于采样有效性，不修改标定或判物理在位。 */
+#ifndef POWER2_INPUT_ON_MV
+#define POWER2_INPUT_ON_MV 2000U
+#endif
+/** @brief 第二组输入有效供电的退出阈值，单位mV；与进入阈值形成回差。 */
+#ifndef POWER2_INPUT_OFF_MV
+#define POWER2_INPUT_OFF_MV 1000U
+#endif
+#if POWER2_INPUT_ON_MV <= POWER2_INPUT_OFF_MV
+#error "POWER2_INPUT_ON_MV must exceed POWER2_INPUT_OFF_MV"
+#endif
+/**
+ * @brief BSP所选第二组电压脚弱负载下的最低电压，单位mV；不是电流阈值或物理接头判据。
+ * @note 仅BSP明确启用并完成源检查时使用；低于阈值保守拒绝输入，高阻有效源也可能被拒绝，须实板确认。
+ */
+#ifndef POWER2_INPUT_SOURCE_MIN_PIN_MV
+#define POWER2_INPUT_SOURCE_MIN_PIN_MV 75U
+#endif
+
 #ifndef POWER2_CURRENT_ZERO_MV
 /** @brief 第二电池电流计 0A 输出电压，单位：mV。暂置 0：不减零点，直读引脚电压换算的原始电流。 */
 #define POWER2_CURRENT_ZERO_MV 0U
@@ -78,7 +97,7 @@
 #ifndef POWER2_CURRENT_MV_PER_A
 /** @brief 第二电池电流计每 1A 对应的输出电压变化，单位：mV/A。
  *  与第一电池同规格，沿用同一次标定结果，取值依据见 POWER_CURRENT_MV_PER_A 注释。
- *  注意：本路对应 PC1 通道，该通道曾因损坏更换开发板，零点 POWER2_CURRENT_ZERO_MV 仍需实测确认。 */
+ *  注意：逻辑第二组电流脚由BSP路由选择，改接后零点 POWER2_CURRENT_ZERO_MV 仍需实测确认。 */
 #define POWER2_CURRENT_MV_PER_A 65U
 #endif
 
@@ -87,7 +106,7 @@
  *  刻意与 NW5.1 分歧：NW5.1 取 -3000（按电机空载约 3A 扣基线，使空转显示 0A）。此处保持 0，
  *  因为该偏移会让电机停转(真 0A)读出约 -3A，且 3A 以下工况全为负值、功率恒 0，
  *  上报到 SD/MAVLink/远端的就不再是电池电流而是「相对电机空载的增量」。
- *  PC1 换板后的真实零点应实测后填入 POWER2_CURRENT_ZERO_MV，而不是用本偏移硬凑显示效果。 */
+ *  所选电流脚和当前模块的真实零点应实测后填入 POWER2_CURRENT_ZERO_MV，而不是用本偏移硬凑显示效果。 */
 #define POWER2_CURRENT_OFFSET_MA 0
 #endif
 

@@ -75,6 +75,8 @@ Px4Lite_Result_t Px4Lite_Battery2CopyDiagnostics(Px4Lite_PowerDiagnostics_t *out
   out->current_pin_mv = 52U; out->current_ma = 800;
   out->reference_status = PX4LITE_POWER_REF_MEASURED;
   out->current_valid = 1U; out->voltage_valid = 1U;
+  out->voltage_discharge_pin_mv = 315U;
+  out->voltage_discharge_enabled = 1U; out->voltage_discharge_checked = 1U;
   return PX4LITE_OK;
 }
 Px4Lite_Result_t Px4Lite_GetModuleStatus(Px4Lite_ModuleId_t id, Px4Lite_ModuleStatus_t *out)
@@ -106,7 +108,7 @@ int main(void)
 #if TEST_POWER_MONITOR
   {
   const unsigned enabled = PX4LITE_ENABLE_BATTERY1 + PX4LITE_ENABLE_BATTERY2;
-  const unsigned first_lines = enabled + 2U * PX4LITE_ENABLE_BATTERY2;
+  const unsigned first_lines = enabled + 3U * PX4LITE_ENABLE_BATTERY2;
   const unsigned absent_lines = enabled + PX4LITE_ENABLE_BATTERY2;
   const char *line;
   if (setjmp(task_exit) == 0) { DebugService_Task(0); }
@@ -128,6 +130,9 @@ int main(void)
   assert(strstr(line, "bsp_mv=12009") && strstr(line, "final_mv=12009") && strstr(line, "age_ms=200"));
   line = FindInputLine(0U, first_lines, "POWER-REF:");
   assert(line && strstr(line, "seq=77") && strstr(line, "ref_raw=1500") && strstr(line, "used_vdda_mv=3300"));
+  line = FindInputLine(0U, first_lines, "POWER-IN:");
+  assert(line && strstr(line, "seq=77") && strstr(line, "discharge_on=1") && strstr(line, "checked=1"));
+  assert(strstr(line, "discharge_pin_mv=315") && strstr(line, "voltage_valid=1") && strstr(line, "current_valid=1"));
 #else
   assert(line == 0);
 #endif

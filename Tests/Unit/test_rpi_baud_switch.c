@@ -18,7 +18,7 @@
 
 #include "../../Framework/Src/px4lite_rpi_baud_switch.c"
 /** @brief 切速率事务夹具不采集或播放提示，独立Rx/播放器用例核对真实通知。 */
-void Px4Lite_StartupToneNotifyRpiCommand(void) {}
+void Px4Lite_StartupToneNotifyRpiResult(uint8_t succeeded) { (void)succeeded; }
 /** @brief 独立协议夹具固定owner真实毫秒，不依赖未启动的F407计时硬件。 */
 uint32_t Px4Lite_PlatformGetMs(void) { return 1000U; }
 /** @brief 本协议夹具默认无H1待发事务；交叉仲裁由真实RX集成用例覆盖。 */

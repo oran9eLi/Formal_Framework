@@ -25,6 +25,8 @@ BSP_Status_t BSP_GNSS_CopyTransportInfo(BSP_GNSS_TransportInfo_t *out)
 { memset(out,0,sizeof(*out)); out->initialized=1U; out->baud_bps=115200U; return BSP_STATUS_OK; }
 uint8_t BSP_GNSS_ConsumeRecoverRxRequest(void) { return 0U; }
 BSP_Status_t BSP_GNSS_RecoverRx(void) { return BSP_STATUS_OK; }
+/** @brief 保留测试输入队列，模拟静默复核。 */
+BSP_Status_t BSP_GNSS_RecoverRxIfIdle(void) { return input_len ? BSP_STATUS_BUSY : BSP_GNSS_RecoverRx(); }
 void BSP_GNSS_RxIdleCallback(uint16_t unused) { (void)unused; }
 uint16_t BSP_GNSS_GetRxCount(void) { return input_len; }
 uint16_t BSP_GNSS_GetRxData(uint8_t *out, uint16_t cap)
@@ -85,7 +87,10 @@ int main(void)
   assert(snap.last_rx_ms==2500U && snap.position_update_ms==2400U);
   assert(snap.status_update_ms==2400U);
   Feed("GPGGA,000002.00,2230.0000,N,11330.0000,E,1,08,1.0,26.0,M,0.0,M,,",2700U);
+  Feed("GPGSA,A,2,01,02,03,,,,,,,,,,1.0,1.0,1.0",2750U);
+  assert(Sensor_GNSS_CopySnapshot(&snap)==GNSS_RESULT_OK && snap.fix_dimension==2U);
   Feed("GPGSA,A,1,,,,,,,,,,,,,1.0,1.0,1.0",2800U);
+  assert(Sensor_GNSS_CopySnapshot(&snap)==GNSS_RESULT_OK && snap.dimension_source==GNSS_SOURCE_NONE && !snap.fix_dimension);
   /* 单星座GSA无解不应撤销仍有效的GGA全局位置。 */
   assert(Sensor_GNSS_CopySnapshot(&snap)==GNSS_RESULT_OK);
   assert((snap.valid_mask&GNSS_VALID_POSITION)!=0U && snap.position_update_ms==2700U);

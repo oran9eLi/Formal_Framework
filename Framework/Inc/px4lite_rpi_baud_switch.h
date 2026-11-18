@@ -89,8 +89,16 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchPeekResponse(Px4Lite_RpiBaudSwitchResponse
 /**
  * @brief 通知旧速率响应整帧发送成功，并在安全点应用 B1。
  * @note 仅由 CommTask 在阻塞 UART 发送返回成功后调用。
+ *       只有本地结果模式按实际应用结果登记声光；Pi通知模式保留执行但不自动提示。
  */
 Px4Lite_Result_t Px4Lite_RpiBaudSwitchResponseSent(void);
+
+/**
+ * @brief Comm记录响应发送错误的提示事实；不修改原重试或事务状态，BUSY/IDLE不作为失败。
+ * @param[in] result 本次发送结果。重复错误只低音一次，重试后实际应用成功仍可高音。
+ * @note 上述声光仅在本地结果模式启用；Pi通知模式本回调无声光副作用。
+ */
+void Px4Lite_RpiBaudSwitchResponseFailed(Px4Lite_Result_t result);
 
 /** @brief 复制当前切换诊断快照并刷新已应用波特率。 */
 void Px4Lite_RpiBaudSwitchGetStats(Px4Lite_RpiBaudSwitchStats_t *out);

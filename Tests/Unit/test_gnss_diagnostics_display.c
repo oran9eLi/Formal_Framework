@@ -194,22 +194,29 @@ static void TestMeasurementDetails(void)
   s_measurement.altitude_update_ms = s_measurement.time_update_ms = 1000U;
   s_measurement.status_update_ms = 1000U;
   s_measurement.valid_mask = PX4LITE_GNSS_VALID_NAV_STATUS | PX4LITE_GNSS_VALID_POSITION | PX4LITE_GNSS_VALID_VELOCITY | PX4LITE_GNSS_VALID_ALTITUDE | PX4LITE_GNSS_VALID_TIME;
+  s_measurement.dimension_source = PX4LITE_GNSS_SOURCE_NMEA_GSA;
+  s_measurement.dimension_update_ms = 1000U;
   s_measurement.fix_type = 1U; s_measurement.fix_dimension = 3U; s_measurement.hdop_x100 = 95U;
   s_measurement.satellites_used = 12U; s_measurement.utc_sec = 45296U;
   s_measurement.ground_speed_cms = 250U; s_measurement.heading_deg100 = 9000U;
   DetailsAt(1000U);
-  assert(strcmp(s_row_text[0], "Fix 3D fix / used satellites 12 / age 0ms") == 0);
+  assert(strcmp(s_row_text[0], "3D fix / used satellites 12 / age 0ms") == 0);
   assert(strcmp(s_row_text[1], "GPS/BDS breakdown N/A / antenna N/A") == 0);
   assert(strcmp(s_row_text[2], "Position valid / age 0ms / HDOP 0.95") == 0);
   assert(strstr(s_row_text[3], "Ground speed 2.50m/s / course 90.00deg"));
   assert(strstr(s_row_text[4], "Altitude valid") && strstr(s_row_text[5], "UTC 12:34:56"));
+  s_measurement.dimension_source = PX4LITE_GNSS_SOURCE_NONE; DetailsAt(1000U);
+  assert(strcmp(s_row_text[0], "Position fix / used satellites 12 / age 0ms") == 0);
+  s_measurement.dimension_source = PX4LITE_GNSS_SOURCE_NMEA_GSA;
+  s_measurement.dimension_update_ms = 1000U - (PX4LITE_GNSS_MAX_AGE_MS + 1U);
+  DetailsAt(1000U); assert(strcmp(s_row_text[0], "Position fix / used satellites 12 / age 0ms") == 0);
   s_measurement.hdop_x100 = 0U; DetailsAt(1000U); assert(strstr(s_row_text[2], "HDOP N/A"));
   s_measurement.valid_mask = PX4LITE_GNSS_VALID_NAV_STATUS | PX4LITE_GNSS_VALID_TIME; s_measurement.fix_type = 0U;
   s_measurement.fix_dimension = 0U;
   for (i = 0U; i < 3U; ++i) {
     static const uint8_t satellites[] = {0U, 2U, 12U};
     char expected[80]; s_measurement.satellites_used = satellites[i];
-    DetailsAt(1000U); (void)snprintf(expected, sizeof(expected), "Fix No fix / used satellites %u / age 0ms", (unsigned)satellites[i]);
+    DetailsAt(1000U); (void)snprintf(expected, sizeof(expected), "No fix / used satellites %u / age 0ms", (unsigned)satellites[i]);
     assert(strcmp(s_row_text[0], expected) == 0);
   }
   DetailsAt(1000U);

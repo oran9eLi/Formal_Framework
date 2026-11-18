@@ -183,7 +183,12 @@ int main(void)
   assert(voltage_diag.reference.status == BSP_ADC_REF_FALLBACK_CAL_ERASED);
   assert(voltage_diag.reference.vdda_mv == 3300U);
   assert(drive_calls == 0U && write_calls == 0U);
+  /* ADC1仍只取内部参考；PA5若被组2/ADC2采用不代表启用了组1。 */
+  assert(adc_instance_channels[1] == ADC_CHANNEL_VREFINT);
+  assert(adc_instance_channels[2] == BSP_ADC2_CH);
+#if !BSP_POWER2_USE_EXPANSION_ROUTE
   assert(adc_channel_configs[ADC_CHANNEL_5] == 0U);
+#endif
   assert(s_critical_depth == 0U);
   puts("power ADC reference: PASS (valid tracking; fallback matrix; coherent read-only diag; 1.18V -> 12.01V)");
   return 0;

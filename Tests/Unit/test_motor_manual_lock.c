@@ -16,12 +16,18 @@ static unsigned s_test_critical_depth;
 #define taskENTER_CRITICAL() (++s_test_critical_depth)
 #define taskEXIT_CRITICAL() (--s_test_critical_depth)
 #define vTaskSuspendAll() (++s_test_scheduler_depth)
+#ifdef TEST_RPI_RESULT_RESUME_ALL
+#define xTaskResumeAll() TestRpiResultResumeAll()
+#else
 #define xTaskResumeAll() (--s_test_scheduler_depth)
+#endif
 
 #include "../../Framework/Src/px4lite_control.c"
 #include "../../Framework/Src/px4lite_command.c"
 /** @brief 上锁/电压门禁回归不运行声光输出，反馈仅保留独立任务通知语义。 */
-void Px4Lite_StartupToneNotifyRpiCommand(void) {}
+#ifndef TEST_RPI_RESULT_NOTIFY
+void Px4Lite_StartupToneNotifyRpiResult(uint8_t succeeded) { (void)succeeded; }
+#endif
 #include "../../Business/Src/app_data_api.c"
 
 static uint16_t s_test_pwm[PX4LITE_MOTOR_COUNT];

@@ -254,7 +254,8 @@ typedef struct {
 Gnss_Result_t Sensor_GNSS_CopyRawFrame(uint8_t slot, uint8_t *bytes, uint16_t capacity, Gnss_RawFrameInfo_t *info);
 
 /**
- * @brief 复位 GNSS 解析器和快照状态。
+ * @brief 显式复位GNSS解析器和测量快照；warm调用保留本次上电链路流水号。
+ * @details 显式Init仍清半帧和快照就绪，直到真正收到新完整帧；下一帧序号不回退。
  *
  * @return 初始化结果。
  */
@@ -264,8 +265,10 @@ Gnss_Result_t Sensor_GNSS_Init(void);
  * @brief 处理待解析 GNSS 输入并更新内部快照。
  * @details UBX半帧绝对寿命为500ms，到期只撤销解析片段。可独立中止的TX故障
  *          不重建RX；命令未确认和失败计数仍保留，不表示定位成功。
- *          原始字节连续静默6秒才请求下一owner周期硬件重建；坏CRC持续输入不触发。
+ *          原始字节连续静默6秒时由owner在下一周期复核；已有DMA或UART输入则继续收数。
  *          warm解析器Init不推迟静默观察，实际重建失败沿用2秒退避。
+ *          自动软恢复请求在本拍输入解析后复核；2秒内有字节或合法帧则撤销过期请求。
+ *          完整CRC正确的未知UBX也更新链路事实，但不授权任何测量域。
  *
  * @param[in] now_ms 当前 sensor 周期时间，单位：ms。
  *
@@ -296,9 +299,10 @@ Gnss_Result_t Sensor_GNSS_CopySnapshot(Gnss_Snapshot_t *out);
 Gnss_Result_t Sensor_GNSS_GetStatus(Gnss_Status_t *out);
 
 /**
- * @brief 请求 GNSS 解析器和快照在下一次 Service 中重新初始化。
+ * @brief 请求自动软恢复；下一Service先收数，确认原始输入已静默后才清旧解析/测量。
  *
- * @note 本函数只置位请求标志，适合 recovery 回调调用。
+ * @note 本函数只置位标志；近期字节、完整帧或正在抵达的半帧使过期请求失效。
+ *       显式强制清空仍调用Sensor_GNSS_Init；真实UART/DMA恢复不受此门禁影响。
  */
 void Sensor_GNSS_RequestReinit(void);
 

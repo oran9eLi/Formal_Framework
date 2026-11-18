@@ -76,7 +76,7 @@ static void TestSatelliteFactsAndAngles(void)
   assert(Diag().last_frame_ms==20U && Diag().valid_ubx==1U);
 }
 
-/** @brief 坏校验、版本和长度不匹配不得替换已发布表或续期；warm恢复保留原时刻。 */
+/** @brief 坏校验不续链路；CRC正确但结构不支持只续链路，不替换逐星表或测量时刻。 */
 static void TestSatelliteRejectAndLifecycle(void)
 {
   Gnss_SatellitePage_t before,after;
@@ -89,7 +89,7 @@ static void TestSatelliteRejectAndLifecycle(void)
   sat_payload[4]=1U;sat_payload[5]=2U;SendPreparedSat(20U,0U,400U);
   sat_payload[5]=1U;SendPreparedSat(19U,0U,500U);
   assert(Sensor_GNSS_CopySatellitePage(0U,&after)==GNSS_RESULT_OK && !memcmp(&before,&after,sizeof(after)));
-  assert(s_snapshot.rx_sequence==snapshot_sequence && Diag().checksum_errors==1U);
+  assert(s_snapshot.rx_sequence==snapshot_sequence+3U && Diag().checksum_errors==1U);
   assert(Sensor_GNSS_Init()==GNSS_RESULT_OK);
   assert(Sensor_GNSS_CopySatellitePage(0U,&after)==GNSS_RESULT_OK && !memcmp(&before,&after,sizeof(after)));
   after.entries[0].sv_id=255U;

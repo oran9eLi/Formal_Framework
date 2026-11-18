@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "px4lite_config.h"
+#include "px4lite_control.h"
 #include "px4lite_alarm.h"
 #include "px4lite_identity.h"
 #include "px4lite_local_msglog.h"
@@ -105,6 +106,23 @@ static Px4Lite_MavlinkTxStats_t s_stats;
 static uint32_t s_next_heartbeat_ms;
 static uint32_t s_next_sys_status_ms;
 static MavTx_PendingAck_t s_pending_ack[MAV_TX_ACK_SLOT_COUNT];
+#if PX4LITE_ENABLE_CNS_CONTROL
+#if PX4LITE_CNS_ACK_QUEUE_DEPTH < 2U || PX4LITE_CNS_ACK_QUEUE_DEPTH > 32U
+#error "CNS ACK queue depth must be within 2..32"
+#endif
+/** @brief comm任务独占的CNS受理应答；不复用旧单槽，不覆盖已受理应答。 */
+typedef struct {
+  uint32_t token; /**< Control动作令牌；仅接受项非0，成功发送后释放执行门禁。 */
+  uint32_t queued_ms; /**< 接收/排队时刻，单位真实ms；过期不发送迟到受理。 */
+  uint16_t command; /**< 原请求命令号。 */
+  uint8_t result; /**< MAV_RESULT，0～4。 */
+  uint8_t reason; /**< CNS细分原因，0～5。 */
+  uint8_t target_system; /**< Pi来源的动态系统号，目标组件固定191。 */
+} MavTx_CnsAck_t;
+static MavTx_CnsAck_t s_cns_ack[PX4LITE_CNS_ACK_QUEUE_DEPTH];
+static uint8_t s_cns_ack_read, s_cns_ack_write, s_cns_ack_count;
+static uint32_t s_cns_ack_overflow, s_cns_ack_expired; /**< 队满/过期诊断累计值，不代表成功回执。 */
+#endif
 /* 按目标(LoRa/RPi)分离的去重序号与分片游标：两条链路各自独立调度，不能共用一份，
    否则一条链路发过之后另一条会被去重/分片状态误判为"已发"而漏帧(GPS/姿态/电池等
    曾因共用 s_stats 里的序号，被先跑的 LoRa 趟消费掉，RPi 趟永远拿不到)。 */
@@ -402,6 +420,7 @@ static Px4Lite_Result_t MavTx_SendRpiBaudSwitchResponse(void)
   if (result != PX4LITE_OK) { return result; }
   if ((response.payload == 0) || (response.payload_length != PX4LITE_RPI_BAUD_PAYLOAD_LENGTH) ||
       (response.payload_length > (uint8_t)sizeof(packet.payload))) {
+    Px4Lite_RpiBaudSwitchResponseFailed(PX4LITE_INVALID_PARAM);
     return PX4LITE_INVALID_PARAM;
   }
 
@@ -418,6 +437,9 @@ static Px4Lite_Result_t MavTx_SendRpiBaudSwitchResponse(void)
   if (result == PX4LITE_OK) {
     /* BSP_RpiUART_Send 使用 HAL_UART_Transmit，成功返回表示最后一位已从 UART 移出。 */
     (void)Px4Lite_RpiBaudSwitchResponseSent();
+  } else {
+    /* 只记录本次未执行提示，保留既有重试；BUSY由接收事务观察器忽略。 */
+    Px4Lite_RpiBaudSwitchResponseFailed(result);
   }
   return result;
 }
@@ -692,6 +714,51 @@ static Px4Lite_Result_t MavTx_SendPendingAck(uint8_t slot, uint32_t now_ms)
   return result;
 }
 
+#if PX4LITE_ENABLE_CNS_CONTROL && PX4LITE_ENABLE_RPI_MAVLINK
+/**
+ * @brief CNS应答优先于H1和周期遥测；同步UART发送成功才向Control确认对应令牌。
+ * @details 过期项仅撤出FIFO，不释放动作门禁；Control也独立检查2秒时限。
+ *          物理链路不可用或超出有界接收容量时不伪称2秒已送达Pi。
+ */
+static Px4Lite_Result_t MavTx_SendCnsAck(uint32_t now_ms)
+{
+  mavlink_command_ack_t packet;
+  MavTx_CnsAck_t *pending;
+  Px4Lite_Result_t result;
+  uint32_t token;
+  /* 调用者时刻可能早于同轮其他阻塞I/O；为完整UART发送预留其现有超时预算。 */
+  now_ms = Px4Lite_PlatformGetMs();
+  while (s_cns_ack_count) {
+    pending = &s_cns_ack[s_cns_ack_read];
+    if ((uint32_t)(now_ms - pending->queued_ms) <
+        PX4LITE_CNS_ACK_TIMEOUT_MS - PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS) { break; }
+    s_cns_ack_read = (uint8_t)((s_cns_ack_read + 1U) % PX4LITE_CNS_ACK_QUEUE_DEPTH);
+    --s_cns_ack_count; ++s_cns_ack_expired;
+  }
+  if (!s_cns_ack_count) { return PX4LITE_IDLE; }
+  pending = &s_cns_ack[s_cns_ack_read];
+  memset(&packet, 0, sizeof(packet));
+  packet.command = pending->command;
+  packet.result = pending->result;
+  packet.progress = UINT8_MAX;
+  packet.result_param2 = pending->reason;
+  packet.target_system = pending->target_system;
+  packet.target_component = 191U;
+  (void)mavlink_msg_command_ack_encode_chan(Px4Lite_IdentityGetMavlinkSystemId(),
+      PX4LITE_RPI_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, &packet);
+  result = MavTx_SendRpiExclusive();
+  if (result == PX4LITE_OK) {
+    token = pending->token;
+    s_cns_ack_read = (uint8_t)((s_cns_ack_read + 1U) % PX4LITE_CNS_ACK_QUEUE_DEPTH);
+    --s_cns_ack_count;
+    ++s_stats.command_ack_tx_count;
+    s_stats.last_message_id = MAVLINK_MSG_ID_COMMAND_ACK;
+    if (token) { Px4Lite_ControlCnsAckSent(token); }
+  }
+  return result;
+}
+#endif
+
 
 
 /**
@@ -699,8 +766,12 @@ static Px4Lite_Result_t MavTx_SendPendingAck(uint8_t slot, uint32_t now_ms)
  */
 static Px4Lite_Result_t MavTx_SendHeartbeat(uint32_t now_ms)
 {
+  uint8_t base_mode = 0U;
+#if PX4LITE_ENABLE_CNS_CONTROL
+  if (Px4Lite_ControlCnsArmed()) { base_mode |= MAV_MODE_FLAG_SAFETY_ARMED; }
+#endif
   (void)now_ms;
-  (void)mavlink_msg_heartbeat_pack_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, MAV_TYPE_ONBOARD_CONTROLLER, MAV_AUTOPILOT_INVALID, 0U, 0U, MAV_STATE_ACTIVE);
+  (void)mavlink_msg_heartbeat_pack_chan(Px4Lite_IdentityGetMavlinkSystemId(), PX4LITE_MAVLINK_COMPONENT_ID, MavTx_Channel(), &s_message, MAV_TYPE_ONBOARD_CONTROLLER, MAV_AUTOPILOT_INVALID, base_mode, 0U, MAV_STATE_ACTIVE);
 
   return MavTx_SendPrepared();
 }
@@ -1739,6 +1810,11 @@ Px4Lite_Result_t Px4Lite_MavlinkTxInit(uint32_t now_ms)
   s_lab_group_active=0U; s_next_basic_id_ms=now_ms+200U;
   Px4Lite_LoraLabInit(now_ms);
   memset(s_pending_ack, 0, sizeof(s_pending_ack));
+#if PX4LITE_ENABLE_CNS_CONTROL
+  memset(s_cns_ack, 0, sizeof(s_cns_ack));
+  s_cns_ack_read = 0U; s_cns_ack_write = 0U; s_cns_ack_count = 0U;
+  s_cns_ack_overflow = 0U; s_cns_ack_expired = 0U;
+#endif
   /* 通信初始化/恢复不得清空由 Control、Estimator、Business 共写的事件环。 */
   return PX4LITE_OK;
 }
@@ -1801,7 +1877,12 @@ Px4Lite_Result_t Px4Lite_MavlinkTxRunRpi(uint32_t now_ms)
   Px4Lite_GnssRawUplinkPollTimeout(now_ms);
 #endif
 
-  /* 切速率接受帧最高优先级；整帧在 B0 发完后才应用 B1。 */
+  /* 已受理CNS命令不能被实验回显饿死；本帧仍在当前实际速率完整同步发送。 */
+#if PX4LITE_ENABLE_CNS_CONTROL
+  result = MavTx_SendCnsAck(now_ms);
+  if (result != PX4LITE_IDLE) { return result; }
+#endif
+  /* 没有CNS受理时保留切速率/H1优先序；切速率接受帧完整发送后才应用B1。 */
   result = MavTx_SendRpiBaudSwitchResponse();
   if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY) ||
       (result == PX4LITE_IO_ERROR) || (result == PX4LITE_INVALID_PARAM)) { return result; }
@@ -1897,6 +1978,38 @@ uint8_t Px4Lite_MavlinkGetTxEnabled(void)
 void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component, Px4Lite_MavlinkLink_t link)
 {
   MavTx_QueueAck(command, result, target_system, target_component, link);
+}
+
+/** @brief 保留一个安全撤收应答位置；comm任务是CNS FIFO的唯一读写者。 */
+uint8_t Px4Lite_MavlinkCnsAckAvailable(void)
+{
+#if PX4LITE_ENABLE_CNS_CONTROL
+  return (uint8_t)(s_cns_ack_count < PX4LITE_CNS_ACK_QUEUE_DEPTH - 1U);
+#else
+  return 0U;
+#endif
+}
+
+/** @brief 新受理只追加到队尾；容量不足不覆盖旧请求，急停可使用最后保留项。 */
+Px4Lite_Result_t Px4Lite_MavlinkQueueCnsAck(uint16_t command, uint8_t result,
+    uint8_t reason, uint8_t target_system, uint32_t token, uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_CNS_CONTROL
+  MavTx_CnsAck_t *pending;
+  if (s_cns_ack_count >= PX4LITE_CNS_ACK_QUEUE_DEPTH ||
+      (command != 31090U && command != 31094U && !Px4Lite_MavlinkCnsAckAvailable())) {
+    ++s_cns_ack_overflow; return PX4LITE_BUSY;
+  }
+  pending = &s_cns_ack[s_cns_ack_write];
+  pending->command = command; pending->result = result; pending->reason = reason;
+  pending->target_system = target_system; pending->token = token; pending->queued_ms = now_ms;
+  s_cns_ack_write = (uint8_t)((s_cns_ack_write + 1U) % PX4LITE_CNS_ACK_QUEUE_DEPTH);
+  ++s_cns_ack_count;
+  return PX4LITE_OK;
+#else
+  (void)command; (void)result; (void)reason; (void)target_system; (void)token; (void)now_ms;
+  return PX4LITE_NOT_READY;
+#endif
 }
 
 /** @brief RPi 命令应答计数，退出旧 LoRa 请求重试状态。 */

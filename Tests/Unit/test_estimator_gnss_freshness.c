@@ -28,9 +28,14 @@ int main(void)
   gnss_input.header.valid=1U; gnss_input.header.sequence=1U;
   gnss_input.fix_type=1U; gnss_input.fix_dimension=3U; gnss_input.latitude_e7=123;
   gnss_input.valid_mask=PX4LITE_GNSS_VALID_POSITION|PX4LITE_GNSS_VALID_VELOCITY|PX4LITE_GNSS_VALID_TIME|PX4LITE_GNSS_VALID_ALTITUDE;
-  Step(0U); assert(published.header.sample_time_ms==0U);
+  gnss_input.dimension_source = PX4LITE_GNSS_SOURCE_NMEA_GSA;
+  gnss_input.dimension_update_ms = 0U - 500U;
+  Step(0U); assert(published.header.sample_time_ms==0U && published.gnss_fix_type==3U);
   gnss_input.time_update_ms=1000U; gnss_input.header.sample_time_ms=1000U; gnss_input.header.sequence++;
   Step(1000U); before=publishes;
+  Step(1001U); assert(publishes==before+1U && published.gnss_fix_type==PX4LITE_GNSS_FIX_UNSPECIFIED);
+  assert(published.valid_mask & PX4LITE_NAV_VALID_POSITION);
+  before=publishes;
   Step(PX4LITE_GNSS_MAX_AGE_MS+1U);
   assert(publishes==before+1U);
   assert((published.valid_mask&PX4LITE_NAV_VALID_POSITION)==0U && published.latitude_e7==0);

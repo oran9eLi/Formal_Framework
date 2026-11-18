@@ -6,15 +6,18 @@
 static FRESULT open_result, write_result, seek_result, sync_result, close_result;
 static unsigned opens, closes, mounts;
 static unsigned short_write, existing_file;
+static unsigned probe_count;
+static uint8_t media_ready;
 static uint32_t fake_clock_ms, write_delay_ms, close_delay_ms, unmount_delay_ms;
 uint32_t Px4Lite_PlatformGetMs(void) { return fake_clock_ms; }
-FRESULT f_mount(FATFS *f,const char *p,BYTE v) { (void)p;(void)v; if(f) mounts++; else fake_clock_ms+=unmount_delay_ms; return FR_OK; }
+FRESULT f_mount(FATFS *f,const char *p,BYTE v) { (void)p;(void)v; if(f) { mounts++; return media_ready ? FR_OK : FR_NOT_READY; } fake_clock_ms+=unmount_delay_ms; return FR_OK; }
 FRESULT f_open(FIL *f,const char *p,BYTE m) { (void)p;(void)m;opens++;f->size=existing_file;return open_result; }
 FRESULT f_write(FIL *f,const void *p,UINT n,UINT *w) { (void)f;(void)p;fake_clock_ms+=write_delay_ms;*w=short_write ? n-1:n;return write_result; }
 FRESULT f_close(FIL *f) { (void)f;closes++;fake_clock_ms+=close_delay_ms;return close_result; }
 FRESULT f_sync(FIL *f) { (void)f;return sync_result; }
 FRESULT f_lseek(FIL *f,FSIZE_t n) { (void)f;(void)n;return seek_result; }
 DiskioSdSpi_Error_t DiskioSdSpi_LastError(void) { return DISKIO_SD_SPI_ERR_NONE; }
+uint8_t DiskioSdSpi_CheckMedia(void) { probe_count++; return media_ready; }
 uint8_t DiskioSdSpi_CardType(void) { return 1; }
 uint8_t DiskioSdSpi_LastCommand(void) { return 0; }
 uint8_t DiskioSdSpi_LastResponse(void) { return 0; }
@@ -22,10 +25,42 @@ const char *StorageCsv_DataHeader(void) { return "data\n"; }
 const char *StorageCsv_EventHeader(void) { return "event\n"; }
 /** @brief 每次故障场景使用全新服务与可控 FatFs 桩。 */
 static void Reset(void) {
+  media_ready=1U;probe_count=0U;
   open_result=write_result=seek_result=sync_result=close_result=FR_OK;
   short_write=existing_file=opens=closes=mounts=0;
   fake_clock_ms=write_delay_ms=close_delay_ms=unmount_delay_ms=0;
   Storage_SD_Init();Storage_SD_Service(0);
+}
+/** @brief 空闲无文件时拔卡、缺卡退避、重新挂载和跨毫秒回绕的探测间隔。 */
+static void TestIdleMedia(void)
+{
+  Reset();
+  assert(Storage_SD_IsReady() && s_status.card_type == 1U && opens == 0);
+  media_ready = 0U;
+  Storage_SD_Service(STORAGE_CARD_PROBE_MS - 1U);
+  assert(probe_count == 0 && Storage_SD_IsReady());
+  fake_clock_ms = STORAGE_CARD_PROBE_MS;
+  Storage_SD_Service(fake_clock_ms);
+  assert(probe_count == 1 && !Storage_SD_IsReady() && s_status.card_type == 0U);
+  assert(s_status.open_phase == 13U && s_status.open_result == FR_NOT_READY && opens == 0);
+  fake_clock_ms += STORAGE_MOUNT_RETRY_MS;
+  Storage_SD_Service(fake_clock_ms);
+  assert(!Storage_SD_IsReady() && mounts == 2 && s_status.open_phase == 11U);
+  media_ready = 1U;
+  Storage_SD_Service(fake_clock_ms + STORAGE_MOUNT_RETRY_MS - 1U);
+  assert(!Storage_SD_IsReady() && mounts == 2);
+  fake_clock_ms += STORAGE_MOUNT_RETRY_MS;
+  Storage_SD_Service(fake_clock_ms);
+  assert(Storage_SD_IsReady() && mounts == 3 && s_status.card_type == 1U);
+  assert(s_status.open_phase == 11U && s_status.open_result == FR_NOT_READY);
+  fake_clock_ms = UINT32_MAX - 199U;
+  Storage_SD_Service(fake_clock_ms);
+  assert(probe_count == 2);
+  Storage_SD_Service(299U);
+  assert(probe_count == 2);
+  fake_clock_ms = 300U;
+  Storage_SD_Service(fake_clock_ms);
+  assert(probe_count == 3 && Storage_SD_IsReady() && opens == 0);
 }
 /** @brief 核对清理、首因、计数与退避，并在重挂载后实际写一条记录。 */
 static void CheckFailure(unsigned phase, FRESULT cause, unsigned expected_close) {
@@ -45,6 +80,7 @@ static void CheckFailure(unsigned phase, FRESULT cause, unsigned expected_close)
 }
 int main(void) {
   unsigned type, stage;
+  TestIdleMedia();
   for(type=0;type<2;type++) for(stage=0;stage<3;stage++) {
     Reset();
     if(stage==0) open_result=FR_DENIED;

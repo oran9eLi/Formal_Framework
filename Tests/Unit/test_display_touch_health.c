@@ -4,6 +4,7 @@
 #include <assert.h>
 typedef int BaseType_t;
 typedef uint32_t TickType_t;
+typedef void *TaskHandle_t;
 #include "../../Framework/Src/px4lite_modules.c"
 #include "../../Business/Src/business_platform_adapter.c"
 static Display_RuntimeStatus_t display_runtime;

@@ -10,4 +10,5 @@ typedef struct lv_indev_drv_t { int type; void (*read_cb)(struct lv_indev_drv_t 
 #define LV_INDEV_STATE_REL 0
 void lv_indev_drv_init(lv_indev_drv_t *);
 lv_indev_t *lv_indev_drv_register(lv_indev_drv_t *);
+void lv_indev_wait_release(lv_indev_t *);
 #endif

@@ -87,7 +87,8 @@ static void AssertProjection(const char *state, const char *action, uint8_t bloc
   unsigned i;
   unsigned before = lock_requests;
   unsigned before_throttle = throttle_requests;
-  Display_LvglFormatValue(DISPLAY_HMI_VAR_MOTOR_LOCKED, s_values[DISPLAY_HMI_VAR_MOTOR_LOCKED]);
+  Display_LvglFormatValue(DISPLAY_HMI_VAR_MOTOR_LOCKED, s_values[DISPLAY_HMI_VAR_MOTOR_LOCKED],
+                          s_value_slots[DISPLAY_HMI_VAR_MOTOR_LOCKED].text);
   assert(strcmp(s_value_slots[DISPLAY_HMI_VAR_MOTOR_LOCKED].text, state) == 0);
   UiMotorLockControls();
   assert(strcmp(button_text, action) == 0);

@@ -10,6 +10,9 @@ typedef void *TaskHandle_t;
 #include "../../Framework/Src/px4lite_modules.c"
 #include "../../Framework/Src/px4lite_recovery.c"
 
+/** @brief 电源健康回归隔离模块连接提示，不替换或改动被测健康判定。 */
+void Px4Lite_StartupToneNotifyModuleConnection(uint8_t connected) { (void)connected; }
+
 static uint32_t s_now;
 static unsigned s_reads[2], s_publishes[2], s_reinit_requests;
 static Px4Lite_Result_t s_read_result[2] = {PX4LITE_OK, PX4LITE_OK};

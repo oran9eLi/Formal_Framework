@@ -39,6 +39,7 @@
 #define DISPLAY_LVGL_VALUE_TEXT_LEN 32U
 #define UI_LABEL_COUNT 48U
 #define UI_BUTTON_COUNT 16U
+#define UI_NAV_COUNT ((uint8_t)(DISPLAY_HMI_PAGE_ALARM - DISPLAY_HMI_PAGE_SELF_CHECK + 1U))
 #define UI_STATUS_COUNT 12U
 #define UI_LOG_CAP 32U
 #define UI_HISTORY_ROWS 6U
@@ -142,7 +143,7 @@ static Display_LvglHudFrame_t s_hud;
 static uint32_t s_hud_poll_ms; /**< 上次圆圈取数时刻，真实ms，可回绕。 */
 static uint8_t s_hud_polled; /**< 区分尚未取数与合法0ms时刻。 */
 static lv_obj_t *s_state_labels[UI_STATUS_COUNT];
-static char s_state_text[UI_STATUS_COUNT][20];
+static const char *s_state_text[UI_STATUS_COUNT]; /**< 自检行当前绑定的静态状态文字，重建行时重新绑定。 */
 static lv_obj_t *s_row_labels[UI_TEXT_ROWS];
 static char s_row_text[UI_TEXT_ROWS][UI_ROW_TEXT_LEN];
 /** @brief 显示任务独占的格式化暂存；不为每个标签复制历史文本。 */
@@ -213,6 +214,7 @@ static const char * const s_comm_data_names[4]={"GNSS","Attitude","Power","Envir
 static Display_HmiPage_t s_current_lvgl_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static Display_HmiPage_t s_requested_page = DISPLAY_HMI_PAGE_SELF_CHECK;
 static Display_HmiPage_t s_primary_page = DISPLAY_HMI_PAGE_SELF_CHECK;
+static Display_HmiPage_t s_nav_highlight = DISPLAY_HMI_PAGE_LOGO; /**< 已着色的主入口，LOGO 表示首次布局。 */
 static uint32_t s_last_tick_ms, s_next_status_ms, s_next_remote_ms;
 
 /** @brief 在覆盖静态文本前标记全部绑定标签；仅显示任务调用。 */
@@ -400,6 +402,7 @@ static void UiControlFeedback(Display_Result_t result)
 static void Display_LvglUpdateLogs(void);
 static void Display_LvglUpdateAlarms(void);
 static void Display_LvglUpdateModules(void);
+static void UiUpdateSelfCheckIndicator(uint8_t index);
 static void Display_LvglUpdateRemote(void);
 /** @brief UI 请求只提交应用队列，不直接操作 UART 或 Flash。 */
 static void UiLabRequest(Px4Lite_LabOperation_t operation)
@@ -434,8 +437,11 @@ static const char *Display_LvglGnssFixText(uint32_t value)
     case 6U:
       return "RTK-X"; /* RTK 固定 */
     case 3U:
+      return "3D fix";
+    case PX4LITE_GNSS_FIX_UNSPECIFIED:
+      return "Position fix";
     default:
-      return "3D fix"; /* 3D定位 */
+      return "N/A";
   }
 }
 
@@ -509,9 +515,8 @@ static void Display_LvglFormatAttitudePhase(char *text, uint32_t phase)
 }
 
 /** @brief 格式化已有 HMI 值，保留原单位及控制语义。 */
-static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
+static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value, char *text)
 {
-  char *text;
   uint32_t hh;
   uint32_t mm;
   uint32_t ss;
@@ -520,7 +525,6 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
     return;
   }
 
-  text = s_value_slots[id].text;
   if (s_value_valid[id] == 0U) {
     const char *unavailable = "N/A";
     if ((id >= DISPLAY_HMI_VAR_MOTOR_TARGET_1) && (id <= DISPLAY_HMI_VAR_MOTOR_TARGET_4)) { unavailable = "Set N/A"; }
@@ -612,6 +616,9 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
       /* 定位状态显示解算 fix 等级(无定位/2D/3D/差分…)，与自检模块态文字区分开。 */
       (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s", Display_LvglGnssFixText(value));
       break;
+    case DISPLAY_HMI_VAR_SELF_CHECK_SD:
+      (void)snprintf(text, DISPLAY_LVGL_VALUE_TEXT_LEN, "%s", value == 2U ? "READY" : "NOT READY");
+      break;
     case DISPLAY_HMI_VAR_SYSTEM_STATUS:
     case DISPLAY_HMI_VAR_SELF_CHECK_GNSS:
     case DISPLAY_HMI_VAR_SELF_CHECK_MPU6050:
@@ -619,7 +626,6 @@ static void Display_LvglFormatValue(Display_HmiVariableId_t id, uint32_t value)
     case DISPLAY_HMI_VAR_SELF_CHECK_LORA:
     case DISPLAY_HMI_VAR_SELF_CHECK_5GA:
     case DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID:
-    case DISPLAY_HMI_VAR_SELF_CHECK_SD:
     case DISPLAY_HMI_VAR_SELF_CHECK_MOTOR:
     case DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2:
     case DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3:
@@ -1224,7 +1230,7 @@ static lv_obj_t *UiLabel(const char *text, lv_coord_t x, lv_coord_t y, lv_coord_
 /** @brief 绑定一个 HMI 数值，未知值可见为 N/A。 */
 static void UiValue(Display_HmiVariableId_t id, lv_coord_t x, lv_coord_t y, lv_coord_t w)
 {
-  Display_LvglFormatValue(id, s_values[id]);
+  Display_LvglFormatValue(id, s_values[id], s_value_slots[id].text);
   s_value_slots[id].label = UiLabel(s_value_slots[id].text, x, y, w, &display_lvgl_font_zh_16, UI_COLOR_TEXT);
 }
 
@@ -1548,6 +1554,19 @@ static void UiButtonEvent(lv_event_t *event)
   }
 }
 
+/** @brief 底部导航常驻按钮池前六项，切页只更新有变化的选中颜色。 */
+static void Display_LvglHighlightNavigation(void)
+{
+  if (s_nav_highlight == s_primary_page) { return; }
+  if (s_nav_highlight != DISPLAY_HMI_PAGE_LOGO) {
+    lv_obj_set_style_bg_color(s_buttons[s_nav_highlight - DISPLAY_HMI_PAGE_SELF_CHECK].obj,
+                              lv_color_hex(0x142A3B), 0);
+  }
+  lv_obj_set_style_bg_color(s_buttons[s_primary_page - DISPLAY_HMI_PAGE_SELF_CHECK].obj,
+                            lv_color_hex(0x186577), 0);
+  s_nav_highlight = s_primary_page;
+}
+
 /** @brief 启动时预分配唯一对象池及所有样式属性；保持 40 KiB LVGL 堆配置。 */
 static void Display_LvglInitWorkspace(void)
 {
@@ -1626,7 +1645,7 @@ static void Display_LvglInitWorkspace(void)
     UiInitGeometry(s_dots[i]);
     lv_obj_set_style_radius(s_dots[i], LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(s_dots[i], LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(UI_COLOR_MUTED), 0);
+    lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(s_modules[i].id == PX4LITE_MODULE_STORAGE ? UI_COLOR_ERROR : UI_COLOR_MUTED), 0);
     lv_obj_clear_flag(s_dots[i], LV_OBJ_FLAG_CLICKABLE);
   }
   for (i = 0U; i < 4U; i++) {
@@ -1652,18 +1671,28 @@ static void Display_LvglInitWorkspace(void)
   UiInitGeometry(s_attitude_obj);
   lv_obj_clear_flag(s_attitude_obj, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(s_attitude_obj, Display_LvglHorizonDrawCb, LV_EVENT_DRAW_POST, 0);
+  for (i = 0U; i < UI_NAV_COUNT; i++) {
+    (void)UiButton(s_main_titles[i], (lv_coord_t)(8 + i * 132), 430, 124, 44,
+                   UI_ACTION_PAGE, (uint16_t)(DISPLAY_HMI_PAGE_SELF_CHECK + i), 0x142A3B);
+  }
   lv_scr_load(s_screen);
   s_workspace_ready = 1U;
 }
 
-/** @brief 隐藏并解除上一页面所有数据绑定，不销毁对象或改变控制状态。 */
+/** @brief 解除上页动态控件的绑定，保留底部导航的位置、文字和动作。 */
 static void Display_LvglResetWorkspace(void)
 {
   uint16_t i;
   memset(s_text_pending, 0xFF, sizeof(s_text_pending));
   s_content_pending = 0U;
-  for (i = 0U; i < UI_LABEL_COUNT; i++) { lv_obj_add_flag(s_labels[i], LV_OBJ_FLAG_HIDDEN); }
-  for (i = 0U; i < UI_BUTTON_COUNT; i++) {
+  /* 未使用的槽已隐藏。只有上页启用了换行的标签需要重算裁剪模式。 */
+  for (i = 0U; i < s_label_used; i++) {
+    lv_obj_add_flag(s_labels[i], LV_OBJ_FLAG_HIDDEN);
+    if (lv_label_get_long_mode(s_labels[i]) != LV_LABEL_LONG_CLIP) {
+      lv_label_set_long_mode(s_labels[i], LV_LABEL_LONG_CLIP);
+    }
+  }
+  for (i = UI_NAV_COUNT; i < s_button_used; i++) {
     s_buttons[i].action = UI_ACTION_NONE;
     lv_obj_add_flag(s_buttons[i].obj, LV_OBJ_FLAG_HIDDEN);
   }
@@ -1680,13 +1709,12 @@ static void Display_LvglResetWorkspace(void)
   for (i = 0U; i < DISPLAY_HMI_VAR_COUNT; i++) { s_value_slots[i].label = 0; }
   for (i = 0U; i < UI_TEXT_ROWS; i++) { s_row_labels[i] = 0; }
   s_alarm_header = 0; s_page_info = 0; s_runtime_label = 0; s_freeze_label = 0;
-  s_label_used = 0U; s_button_used = 0U;
+  s_label_used = 0U; s_button_used = UI_NAV_COUNT;
 }
 
 /** @brief 绘制公共页头和六个主入口，二级页面始终提供所属主入口返回。 */
 static void Display_LvglLayoutChrome(void)
 {
-  uint8_t i;
   const char *title;
   uint8_t secondary = (s_current_lvgl_page >= DISPLAY_HMI_PAGE_HIDDEN) ? 1U : 0U;
   if (s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN) { title = "Comm"; }
@@ -1716,11 +1744,7 @@ static void Display_LvglLayoutChrome(void)
   } else if (secondary != 0U) {
     (void)UiButton("\xE8""\xBF""\x94""\xE5""\x9B""\x9E""", 676, 5, 112, 48, UI_ACTION_BACK, 0, 0x173749);
   }
-  for (i = 0U; i < 6U; i++) {
-    Display_HmiPage_t page = (Display_HmiPage_t)(DISPLAY_HMI_PAGE_SELF_CHECK + i);
-    (void)UiButton(s_main_titles[i], (lv_coord_t)(8 + i * 132), 430, 124, 44,
-                   UI_ACTION_PAGE, (uint16_t)page, (page == s_primary_page) ? 0x186577 : 0x142A3B);
-  }
+  Display_LvglHighlightNavigation();
 }
 
 /** @brief 主页面最近三条事件摘要，点击统一历史入口；日志始终保持运行。 */
@@ -1747,9 +1771,11 @@ static void Display_LvglLayoutSelfCheck(void)
     lv_coord_t x = (lv_coord_t)(22 + (i % 3U) * 158);
     lv_coord_t y = (lv_coord_t)(103 + (i / 3U) * 47);
     lv_obj_set_pos(s_dots[i], x, y + 3); lv_obj_set_size(s_dots[i], 12, 12);
-    lv_obj_clear_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN);
     (void)UiLabel(s_modules[i].name, x + 18, y, 133, &lv_font_montserrat_14, UI_COLOR_TEXT);
-    s_state_labels[i] = UiLabel("N/A", x + 18, y + 19, 133, &lv_font_montserrat_12, UI_COLOR_MUTED);
+    s_state_labels[i] = UiLabel("", x + 18, y + 19, 133, &lv_font_montserrat_12, UI_COLOR_MUTED);
+    s_state_text[i] = NULL;
+    UiUpdateSelfCheckIndicator(i);
+    lv_obj_clear_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN);
   }
   (void)UiButton("Diagnostics", 320, 293, 160, 34, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DIAGNOSTICS, 0x173749);
   (void)UiLabel("Active Alarms", 520, 76, 250, &lv_font_montserrat_16, UI_COLOR_WARN);
@@ -1816,7 +1842,8 @@ static void Display_LvglLayoutMotor(void)
   mode = UiButton("", 548, 76, 108, 42, UI_ACTION_MOTOR_MODE, 0, 0x173749);
   (void)UiButton("Details >", 666, 76, 110, 42, UI_ACTION_PAGE, DISPLAY_HMI_PAGE_DETAILS, 0x173749);
   s_value_slots[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE].label = mode->label;
-  Display_LvglFormatValue(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, s_values[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE]);
+  Display_LvglFormatValue(DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE, s_values[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE],
+                          s_value_slots[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE].text);
   UiText(mode->label, s_value_slots[DISPLAY_HMI_VAR_MOTOR_CONTROL_MODE].text);
   UiValue(DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, 548, 120, 228);
   UiValue(DISPLAY_HMI_VAR_MOTOR_LOCKED, 548, 144, 228);
@@ -1875,18 +1902,6 @@ static void Display_LvglLayoutDetails(void)
     (void)UiButton("E-Stop", 638, 293, 140, 33, UI_ACTION_ESTOP, 0, 0x782538);
   }
   Display_LvglUpdateDetails();
-}
-
-/** @brief 将新鲜状态域转换为既有No fix/2D/3D/DGPS显示等级，不借位置位推断未知状态。 */
-static const char *Display_LvglGnssStatusText(const App_GnssDetails_t *gnss)
-{
-  uint32_t value;
-  if (gnss->fix_type == 0U || gnss->fix_dimension == 1U) { value = 0U; }
-  else if (gnss->fix_type == 2U) { value = 4U; }
-  else if (gnss->fix_dimension == 2U) { value = 2U; }
-  else if (gnss->fix_dimension == 3U) { value = 3U; }
-  else { value = gnss->satellites_used >= 4U ? 3U : 2U; }
-  return Display_LvglGnssFixText(value);
 }
 
 /** @brief App已授权新鲜的字段允许复制时抢占；显示年龄以0为下限，不把未来1ms展开成整圈。 */
@@ -2032,7 +2047,7 @@ static void Display_LvglFormatGnssDetails(uint32_t now_ms)
   UiText(s_page_info, s_page_info_text);
   if (result == PX4LITE_NOT_READY) { return; }
   if (result == PX4LITE_OK && (gnss.valid_mask & PX4LITE_GNSS_VALID_NAV_STATUS)) {
-    (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Fix %s / used satellites %u / age %lums", Display_LvglGnssStatusText(&gnss),
+    (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "%s / used satellites %u / age %lums", Display_LvglGnssFixText(Px4Lite_GnssFixLevel(&gnss, now_ms, PX4LITE_GNSS_MAX_AGE_MS)),
       (unsigned int)gnss.satellites_used, (unsigned long)Display_LvglGnssFieldAge(now_ms, gnss.status_update_ms));
   } else { (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "%s", "Fix N/A / used satellites N/A"); }
   (void)UiFormat(s_row_text[1], UI_ROW_TEXT_LEN, "%s", "GPS/BDS breakdown N/A / antenna N/A");
@@ -2051,7 +2066,41 @@ static void Display_LvglFormatGnssDetails(uint32_t now_ms)
   } else { (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "%s", "UTC N/A"); }
 }
 
-/** @brief 各详情域独立展示测量，电源只展示真实V/A/W；禁用或缺测字段显示N/A。 */
+/**
+ * @brief 仅格式化本机Power Details的V/A/W三行；不修改源快照、原始观察或实验数据。
+ * @param[in] env App已复制的环境快照，只读；调用方保证非NULL。
+ * @param[in] now_ms 本轮真实显示时间，单位ms，仅用于原有测量年龄文字。
+ * @details 先按有效电压的原始mV判显示门槛；仅有效低压触发整组N/A。
+ *          缺电压时保留原有独立电流显示；缺电流时只显示电压，真实0A仍显示0A/0W。
+ *          不用格式化后的舍入值判断，不改变上层快照各字段的有效位。
+ */
+static void Display_LvglFormatSupplyDetails(const App_EnvironmentSnapshot_t *env, uint32_t now_ms)
+{
+  uint32_t voltage_mv, voltage_bit, current_bit, measurement_ms;
+  int32_t current_ma;
+  uint8_t voltage_valid, hidden_for_low_voltage, voltage_visible, current_visible;
+#if PX4LITE_ENABLE_BATTERY2
+  voltage_mv = env->voltage2_mv; current_ma = env->current2_ma;
+  voltage_bit = APP_ENV_VALID_VOLTAGE2; current_bit = APP_ENV_VALID_CURRENT2;
+  measurement_ms = env->power2_measurement_ms;
+#else
+  voltage_mv = env->voltage_mv; current_ma = env->current_ma;
+  voltage_bit = APP_ENV_VALID_VOLTAGE1; current_bit = APP_ENV_VALID_CURRENT1;
+  measurement_ms = env->power1_measurement_ms;
+#endif
+  voltage_valid = (uint8_t)((env->valid_mask & voltage_bit) != 0U);
+  hidden_for_low_voltage = (uint8_t)(voltage_valid && !Display_SupplyVoltageVisible(voltage_mv));
+  voltage_visible = (uint8_t)(voltage_valid && !hidden_for_low_voltage);
+  current_visible = (uint8_t)(((env->valid_mask & current_bit) != 0U) && !hidden_for_low_voltage);
+  if (voltage_visible) { (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "Voltage %.3fV / age %lums", (double)voltage_mv/1000.0, (unsigned long)(now_ms-measurement_ms)); }
+  else { (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "%s", "Voltage N/A"); }
+  if (current_visible) { (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "Current %.3fA", (double)current_ma/1000.0); }
+  else { (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "%s", "Current N/A"); }
+  if (voltage_visible && current_visible) { (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "Power %.3fW", (double)voltage_mv*(double)current_ma/1000000.0); }
+  else { (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "%s", "Power N/A"); }
+}
+
+/** @brief 各详情域独立展示测量；本机电源三行应用显示门槛，其余域保持逐字段有效性。 */
 static void Display_LvglUpdateDetails(void)
 {
   uint8_t i;
@@ -2078,23 +2127,10 @@ static void Display_LvglUpdateDetails(void)
   } else if (s_details_kind == 1U) {
     Display_LvglFormatGnssDetails(now);
   } else if (s_details_kind == 2U) {
-    uint32_t voltage_mv, voltage_bit, current_bit, measurement_ms;
-    int32_t current_ma;
     (void)App_CopyEnvironment(&data.env, now);
     if ((data.env.valid_mask & APP_ENV_VALID_PRESSURE_TEMPERATURE) != 0U) { (void)UiFormat(s_row_text[0], UI_ROW_TEXT_LEN, "Pressure %.1fPa / temperature %.2fC / age %lums", (double)data.env.pressure_pa, (double)data.env.temperature_c, (unsigned long)(now-data.env.environment_measurement_ms)); }
     if ((data.env.valid_mask & APP_ENV_VALID_HUMIDITY) != 0U) { (void)UiFormat(s_row_text[1], UI_ROW_TEXT_LEN, "Humidity %.1f%%", (double)data.env.relative_humidity_pct); }
-#if PX4LITE_ENABLE_BATTERY2
-    voltage_mv = data.env.voltage2_mv; current_ma = data.env.current2_ma;
-    voltage_bit = APP_ENV_VALID_VOLTAGE2; current_bit = APP_ENV_VALID_CURRENT2;
-    measurement_ms = data.env.power2_measurement_ms;
-#else
-    voltage_mv = data.env.voltage_mv; current_ma = data.env.current_ma;
-    voltage_bit = APP_ENV_VALID_VOLTAGE1; current_bit = APP_ENV_VALID_CURRENT1;
-    measurement_ms = data.env.power1_measurement_ms;
-#endif
-    if (data.env.valid_mask & voltage_bit) { (void)UiFormat(s_row_text[2], UI_ROW_TEXT_LEN, "Voltage %.3fV / age %lums", (double)voltage_mv/1000.0, (unsigned long)(now-measurement_ms)); }
-    if (data.env.valid_mask & current_bit) { (void)UiFormat(s_row_text[3], UI_ROW_TEXT_LEN, "Current %.3fA", (double)current_ma/1000.0); }
-    if ((data.env.valid_mask & (voltage_bit | current_bit)) == (voltage_bit | current_bit)) { (void)UiFormat(s_row_text[4], UI_ROW_TEXT_LEN, "Power %.3fW", (double)voltage_mv*(double)current_ma/1000000.0); }
+    Display_LvglFormatSupplyDetails(&data.env, now);
     (void)UiFormat(s_row_text[5], UI_ROW_TEXT_LEN, "Input supply");
   } else {
     if (App_CopyMotor(&data.motor, now) == PX4LITE_OK) {
@@ -2637,26 +2673,50 @@ static void Display_LvglUpdateAlarms(void)
   }
 }
 
-/** @brief 200 ms 节奏读取 App 模块状态；仅活动诊断页格式化详情。 */
+/** @brief 生成自检状态灯的文字与颜色；SD 仅在已挂载时显示可用，诊断页仍保留原始状态。 */
+static const char *UiSelfCheckIndicator(Px4Lite_ModuleId_t id, Px4Lite_Result_t result,
+                                        Px4Lite_State_t state, uint32_t *color)
+{
+  if (id == PX4LITE_MODULE_STORAGE) {
+    if (result == PX4LITE_OK && Display_MapStorageStateValue(state) == 2U) {
+      *color = 0x59CC8A;
+      return "READY";
+    }
+    *color = UI_COLOR_ERROR;
+    return "NOT READY";
+  }
+  *color = UI_COLOR_MUTED;
+  if (result != PX4LITE_OK) { return "N/A"; }
+  if (state == PX4LITE_STATE_ONLINE) { *color = 0x59CC8A; }
+  else if (state == PX4LITE_STATE_STARTING || state == PX4LITE_STATE_DEGRADED) { *color = UI_COLOR_WARN; }
+  else if (state == PX4LITE_STATE_OFFLINE || state == PX4LITE_STATE_FAILED) { *color = UI_COLOR_ERROR; }
+  return UiModuleState(state);
+}
+
+/** @brief 初次显示与周期刷新共用同一快照映射，避免切回页面时露出上次的灯色。 */
+static void UiUpdateSelfCheckIndicator(uint8_t index)
+{
+  Px4Lite_ModuleStatus_t status;
+  uint32_t color;
+  Px4Lite_ModuleId_t id = s_modules[index].id;
+  Px4Lite_Result_t result = App_GetModuleStatus(id, &status);
+  const char *state = UiSelfCheckIndicator(id, result,
+      result == PX4LITE_OK ? status.state : PX4LITE_STATE_UNINITIALIZED, &color);
+  if (s_state_text[index] != state) {
+    s_state_text[index] = state;
+    UiText(s_state_labels[index], state);
+    lv_obj_set_style_bg_color(s_dots[index], lv_color_hex(color), 0);
+  }
+}
+
+/** @brief 读取当前活动页面的模块快照，仅在诊断页格式化详细状态。 */
 static void Display_LvglUpdateModules(void)
 {
   uint8_t i;
   Px4Lite_ModuleStatus_t status;
   if (s_current_lvgl_page == DISPLAY_HMI_PAGE_SELF_CHECK) {
     for (i = 0U; i < UI_STATUS_COUNT; i++) {
-      Px4Lite_Result_t result = App_GetModuleStatus(s_modules[i].id, &status);
-      const char *state = (result == PX4LITE_OK) ? UiModuleState(status.state) : "N/A";
-      if (strcmp(s_state_text[i], state) != 0) {
-        uint32_t color = UI_COLOR_MUTED;
-        if (result == PX4LITE_OK) {
-          if (status.state == PX4LITE_STATE_ONLINE) { color = 0x59CC8A; }
-          else if ((status.state == PX4LITE_STATE_STARTING) || (status.state == PX4LITE_STATE_DEGRADED)) { color = UI_COLOR_WARN; }
-          else if ((status.state == PX4LITE_STATE_OFFLINE) || (status.state == PX4LITE_STATE_FAILED)) { color = UI_COLOR_ERROR; }
-        }
-        (void)UiFormat(s_state_text[i], sizeof(s_state_text[i]), "%s", state);
-        UiText(s_state_labels[i], s_state_text[i]);
-        lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(color), 0);
-      }
+      UiUpdateSelfCheckIndicator(i);
     }
   } else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DIAGNOSTICS) {
     if (s_diag_view != 0U) {
@@ -2813,7 +2873,6 @@ static void Display_LvglUpdateRemote(void)
 /** @brief 重排唯一工作区，既不分配控件也不发控制命令。 */
 static void Display_LvglLayout(void)
 {
-  uint16_t i;
   if (s_layout_stage == 0U) { s_layout_stage = 1U; }
   if (s_layout_stage == 1U) {
   LvPortDisp_AbortHudFrame();
@@ -2825,8 +2884,6 @@ static void Display_LvglLayout(void)
     indev = lv_indev_get_next(indev);
   }
   Display_LvglResetWorkspace();
-  /* WRAP 也使用静态文本，不启用滚动动画；下个页面恢复普通裁剪。 */
-  for (i = 0U; i < UI_LABEL_COUNT; i++) { lv_label_set_long_mode(s_labels[i], LV_LABEL_LONG_CLIP); }
     s_layout_stage = 2U; return;
   }
   if (s_layout_stage == 2U) {
@@ -2857,10 +2914,9 @@ static void Display_LvglLayout(void)
   if ((s_current_lvgl_page != DISPLAY_HMI_PAGE_DIAGNOSTICS) && (s_current_lvgl_page != DISPLAY_HMI_PAGE_EVENT_HISTORY)) { Display_LvglLayoutSummary(); }
     s_layout_stage = 5U; return;
   }
-  memset(s_state_text, 0, sizeof(s_state_text));
   Display_LvglUpdateAlarms();
   Display_LvglUpdateLogs();
-  Display_LvglUpdateModules();
+  if (s_current_lvgl_page == DISPLAY_HMI_PAGE_DIAGNOSTICS) { Display_LvglUpdateModules(); }
   Display_LvglUpdateRemote();
   s_layout_stage = 0U;
 }
@@ -2926,7 +2982,12 @@ Display_Result_t Display_LvglRefreshStep(uint32_t now_ms, uint32_t budget_us)
       s_content_pending = 1U;
     }
     if (s_layout_requested) { s_layout_requested = 0U; s_layout_stage = 1U; }
-    if (s_layout_stage) { Display_LvglLayout(); }
+    if (s_layout_stage) {
+      /* 各阶段只执行一次。软预算耗尽时保留阶段号，下次从该阶段继续。 */
+      while (s_layout_stage && App_RuntimeGetUs() - started_us < budget_us) {
+        Display_LvglLayout();
+      }
+    }
     else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_HIDDEN && (s_content_pending || (int32_t)(now_ms-s_next_comm_ms)>=0)) { Display_LvglUpdateRemote(); }
     else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_OBSERVE && (s_content_pending || (int32_t)(now_ms-s_observe_due_ms)>=0)) { Display_LvglUpdateObservation();s_observe_due_ms=now_ms+200U; }
     else if (s_current_lvgl_page == DISPLAY_HMI_PAGE_RECORD && (s_content_pending || (int32_t)(now_ms-s_inspector_due_ms)>=0)) { Display_LvglUpdateRecording();s_inspector_due_ms=now_ms+200U; }
@@ -2997,12 +3058,25 @@ Display_Result_t Display_LvglSetValue(Display_HmiVariableId_t id, uint32_t value
   return DISPLAY_OK;
 }
 
+/** @brief 只在可见文字改变时刷新标签，避免舍入后同值仍重画整个数值区。 */
+static void Display_LvglUpdateValueLabel(Display_HmiVariableId_t id)
+{
+  Display_LvglValueSlot_t *slot = &s_value_slots[id];
+  char text[DISPLAY_LVGL_VALUE_TEXT_LEN];
+  if (!slot->label) { return; }
+  Display_LvglFormatValue(id, s_values[id], text);
+  if (strcmp(slot->text, text) != 0) {
+    memcpy(slot->text, text, strlen(text) + 1U);
+    UiTextForce(slot->label, slot->text);
+  }
+}
+
 /** @brief 预算允许时应用一个缓存值，解析/快照复制阶段不操作LVGL。 */
 static void Display_LvglApplyValue(Display_HmiVariableId_t id)
 {
   uint32_t value = s_values[id];
   if (!s_workspace_ready) { return; }
-  if (s_value_slots[id].label) { Display_LvglFormatValue(id, value); UiTextForce(s_value_slots[id].label, s_value_slots[id].text); }
+  Display_LvglUpdateValueLabel(id);
   if (id == DISPLAY_HMI_VAR_MOTOR_LOCKED) { UiMotorLockControls(); }
   if ((id >= DISPLAY_HMI_VAR_MOTOR_TARGET_1) && (id <= DISPLAY_HMI_VAR_MOTOR_TARGET_4) && (s_current_lvgl_page == DISPLAY_HMI_PAGE_MOTOR)) {
     uint8_t index = (uint8_t)(id - DISPLAY_HMI_VAR_MOTOR_TARGET_1);
@@ -3012,9 +3086,9 @@ static void Display_LvglApplyValue(Display_HmiVariableId_t id)
       s_control_update_active = 1U; lv_slider_set_value(s_motor_pwm_bars[index], Display_LvglClampPercent(value), LV_ANIM_OFF); s_control_update_active = 0U;
     }
   }
-  if ((id >= DISPLAY_HMI_VAR_ATTITUDE_ACTION) && (id <= DISPLAY_HMI_VAR_ATTITUDE_REFERENCE) && s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].label) {
-    Display_LvglFormatValue(DISPLAY_HMI_VAR_ATTITUDE_PHASE, s_values[DISPLAY_HMI_VAR_ATTITUDE_PHASE]);
-    UiTextForce(s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].label, s_value_slots[DISPLAY_HMI_VAR_ATTITUDE_PHASE].text);
+  if ((id >= DISPLAY_HMI_VAR_ATTITUDE_ACTION) && (id <= DISPLAY_HMI_VAR_ATTITUDE_REFERENCE) &&
+      (id != DISPLAY_HMI_VAR_ATTITUDE_PHASE)) {
+    Display_LvglUpdateValueLabel(DISPLAY_HMI_VAR_ATTITUDE_PHASE);
   }
   if ((id == DISPLAY_HMI_VAR_ROLL) || (id == DISPLAY_HMI_VAR_PITCH) || (id == DISPLAY_HMI_VAR_YAW)) {
     /* 圆圈由独立快照驱动；200ms数字不能把绘制中帧退回旧角度或重新失效尾带。 */

@@ -83,13 +83,61 @@
 #endif
 #define PX4LITE_STARTUP_TONE_DELAY_MS 1000U
 
-/** @brief 树莓派发给本机的控制/合法配置请求独立声光收包提示；不表示执行成功。 */
+/** @brief 电机实际运行时循环播放用户提供的单音曲谱；停机或提示抢占时保留进度。 */
+#ifndef PX4LITE_ENABLE_MOTOR_MUSIC
+#define PX4LITE_ENABLE_MOTOR_MUSIC 1U
+#endif
+/** @brief 音乐允许使用的实际电机输出快照最大年龄，单位真实ms，不延长控制失效保护。 */
+#ifndef PX4LITE_MOTOR_MUSIC_FRESH_MS
+#define PX4LITE_MOTOR_MUSIC_FRESH_MS 200U
+#endif
+
+/** @brief 树莓派控制/配置执行结果声光提示；由调用者区分成功和未执行/失败。 */
 #ifndef PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK
 #define PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK 1U
 #endif
-#define PX4LITE_RPI_FEEDBACK_PENDING_MAX 8U /**< 待播提示上限，不含当前播放；满时只丢提示。 */
-#define PX4LITE_RPI_FEEDBACK_SLOT_MS 100U /**< 响/停/响/停每槽时长，真实ms。 */
-#define PX4LITE_RPI_FEEDBACK_HZ 2400U /**< 两声短鸣的PWM频率，Hz。 */
+/**
+ * @brief 命令声光结果来源：1由Pi的TUNNEL/0x8040单向终态通知，0保留F407原本地执行结果模式。
+ * @note 默认由Pi统一汇总结果，避免同一控制命令在本地和Pi两处重复提示；不改变业务ACK。
+ */
+#ifndef PX4LITE_RPI_RESULT_SOURCE_PI
+#define PX4LITE_RPI_RESULT_SOURCE_PI 1U
+#endif
+#if (PX4LITE_RPI_RESULT_SOURCE_PI != 0U) && (PX4LITE_RPI_RESULT_SOURCE_PI != 1U)
+#error "PX4LITE_RPI_RESULT_SOURCE_PI must be 0 (local) or 1 (Pi notification)"
+#endif
+/** @brief 本地自动结果提示派生开关；Pi模式下只关闭本地提示来源，不改变命令执行或模块插拔。 */
+#define PX4LITE_RPI_LOCAL_RESULT_FEEDBACK (PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK && !PX4LITE_RPI_RESULT_SOURCE_PI)
+/** @brief 模块稳定连接恢复/中断提示；与命令结果和启动音开关独立。 */
+#ifndef PX4LITE_ENABLE_MODULE_CONNECTION_FEEDBACK
+#define PX4LITE_ENABLE_MODULE_CONNECTION_FEEDBACK 1U
+#endif
+/** @brief 模块连接观察启动建基线等待时间，单位真实ms；不改变原模块超时。 */
+#ifndef PX4LITE_MODULE_FEEDBACK_STARTUP_MS
+#define PX4LITE_MODULE_FEEDBACK_STARTUP_MS 3000U
+#endif
+/** @brief 模块连接状态边沿连续稳定时间，单位真实ms；由Health观察器使用。 */
+#ifndef PX4LITE_MODULE_FEEDBACK_STABLE_MS
+#define PX4LITE_MODULE_FEEDBACK_STABLE_MS 300U
+#endif
+#define PX4LITE_RPI_FEEDBACK_PENDING_MAX 8U /**< 四类声光事件共用FIFO待播上限，不含当前播放；满时只丢提示。 */
+#define PX4LITE_RPI_FEEDBACK_TAIL_MS 100U /**< 旋律后静音时长，真实ms；防止连续结果声音粘连。 */
+
+/** @brief CNS V0.1实验控制入口；关闭时保留旧控制、通用通知和本地页面语义。 */
+#ifndef PX4LITE_ENABLE_CNS_CONTROL
+#define PX4LITE_ENABLE_CNS_CONTROL 1U
+#endif
+#define PX4LITE_CNS_IDLE_PULSE_US 1200U /**< CNS解锁及降落后的怠速脉宽，单位us；停车仍为原最小脉宽。 */
+#define PX4LITE_CNS_ACK_TIMEOUT_MS 2000U /**< 请求受理到ACK发送的时限，单位真实ms；过期不启动普通动作。 */
+#define PX4LITE_CNS_ACK_QUEUE_DEPTH 16U /**< UART6受理应答FIFO容量，条；满时不执行新的普通动作。 */
+#define PX4LITE_CNS_LOW_TONE_HZ 880U /**< CNS低音请求频率，单位Hz。 */
+#define PX4LITE_CNS_HIGH_TONE_HZ 3136U /**< CNS高音请求频率，单位Hz。 */
+#define PX4LITE_CNS_ARM_TONE_MS 1000U /**< 解锁前低音最短时长，单位ms。 */
+#define PX4LITE_CNS_LOCK_TONE_MS 1000U /**< 上锁后高音最短时长，单位ms。 */
+#define PX4LITE_CNS_QUICK_TONE_MS 100U /**< 起飞/急停快速高音的单声时长，单位ms。 */
+#define PX4LITE_CNS_QUICK_GAP_MS 100U /**< 快速高音之间的静音时长，单位ms。 */
+#define PX4LITE_CNS_LAND_TONE_MS 500U /**< 降落间歇高音的单声时长，单位ms。 */
+#define PX4LITE_CNS_LAND_GAP_MS 500U /**< 降落间歇高音之间静音时长，单位ms。 */
 
 #define PX4LITE_SENSOR_WORK_PERIOD_MS      10U
 #define PX4LITE_ESTIMATOR_PERIOD_MS        20U

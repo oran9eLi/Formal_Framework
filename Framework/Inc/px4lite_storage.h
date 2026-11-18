@@ -27,7 +27,7 @@ typedef struct {
  uint32_t started_ms; /**< 开始毫秒。 */uint32_t finished_ms; /**< Saved/Partial/Error时毫秒。 */
  Px4Lite_Result_t result; /**< 最后动作结果。 */Px4Lite_Result_t reason; /**< 错误首因，OK无错误。 */
  uint8_t state; /**< RecordingState。 */uint8_t interval; /**< 间隔编号。 */uint8_t pending; /**< 动作待处理。 */uint8_t reserved; /**< 对齐。 */
- uint8_t sd_state; /**< 本机SD服务状态。 */uint8_t card_type; /**< 卡类型。 */uint8_t open_phase; /**< 最近SD错误阶段。 */uint8_t fatfs_result; /**< 最近真实FatFs错误码。 */
+ uint8_t sd_state; /**< 本机SD服务状态。 */uint8_t card_type; /**< 当前挂载卡类型，未挂载为0。 */uint8_t open_phase; /**< 最近SD错误阶段。 */uint8_t fatfs_result; /**< 最近错误的FatFs结果，阶段13表示探测到介质未就绪。 */
 } Px4Lite_RecordingStatus_t;
 /** @brief 固定请求槽，仅由storage执行。 */
 Px4Lite_Result_t Px4Lite_RequestRecording(const Px4Lite_RecordingRequest_t *request);

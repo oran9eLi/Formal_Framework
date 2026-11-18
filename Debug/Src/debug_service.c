@@ -374,6 +374,12 @@ static void DebugService_ReportPowerAdc(uint32_t now_ms)
             (unsigned long)diag.vref_raw, (unsigned long)diag.vdda_calculated_mv,
             (unsigned long)diag.vdda_mv, (unsigned int)diag.reference_status,
             (unsigned int)diag.current_valid);
+  /* 只打印sensor缓存的源检查事实，便于区分无电/开路嫌疑与恢复后正式采样；不访问ADC。 */
+  DBG_PRINT("POWER-IN: seq=%lu discharge_on=%u checked=%u discharge_pin_mv=%lu voltage_valid=%u current_valid=%u",
+            (unsigned long)diag.sequence, (unsigned int)diag.voltage_discharge_enabled,
+            (unsigned int)diag.voltage_discharge_checked,
+            (unsigned long)diag.voltage_discharge_pin_mv,
+            (unsigned int)diag.voltage_valid, (unsigned int)diag.current_valid);
 }
 #endif
 

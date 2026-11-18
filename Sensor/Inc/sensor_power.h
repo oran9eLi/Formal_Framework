@@ -19,7 +19,10 @@ typedef enum {
   POWER_RESULT_OK = 0,       /**< 操作成功。 */
   POWER_RESULT_NO_DATA,      /**< 当前无可用新样本。 */
   POWER_RESULT_IO_ERROR,     /**< ADC 或 BSP 访问失败。 */
-  POWER_RESULT_INVALID_PARAM /**< 参数非法。 */
+  POWER_RESULT_INVALID_PARAM, /**< 参数非法。 */
+  POWER_RESULT_NOT_CONNECTED, /**< 第二组电压窗口/源条件未满足有效输入；不等同物理接头检测。 */
+  POWER_RESULT_PENDING,       /**< 第二组电压输入恢复/采样尚在进行，所属任务下次轮询；不是I/O错误。 */
+  POWER_RESULT_INVALID_DATA   /**< 第二组正式ADC饱和/超量程，测量无效；不是无电或有效零值。 */
 } Power_Result_t;
 
 /**

@@ -29,12 +29,17 @@
 #define GNSS_LINK_LOSS_MS 6000U
 /** @brief 原始字节静默后请求接收自愈的间隔，ms；与有效帧/定位健康判定独立。 */
 #define GNSS_RX_SILENCE_MS 6000U
+/** @brief 自动软恢复前要求的输入静默时间，单位ms；不反向依赖Framework健康门限。 */
+#define GNSS_SOFT_RECOVER_QUIET_MS 2000U
 #define GNSS_CONFIG_RETRY_MS 10000U
 #define GNSS_PVT_FRESH_MS 3000U
+/** @brief 同批NMEA为PVT让出的时间，单位ms；1Hz的下一批可在1500ms测量期限内接替。 */
+#define GNSS_PVT_PRIORITY_MS 500U
 /** @brief UBX半帧的绝对寿命，ms；1016B载荷在115200下约89ms，保留调度余量但不跨离线门限。 */
 #define GNSS_UBX_FRAME_TIMEOUT_MS 500U
 
 static Gnss_Snapshot_t s_snapshot;
+static uint32_t s_rx_sequence_counter; /**< 本次上电完整合法帧流水号；warm Init保留，0不作为新帧发布。 */
 /** @brief 独立卫星表；sensor在区外完整解析后一次发布，不扩展主导航快照或创建任务。 */
 typedef struct {
   uint32_t sequence;    /**< NAV-SAT有效帧代数，自然回绕。 */
@@ -63,7 +68,7 @@ static uint16_t s_line_pos;
 
 static uint8_t s_recover_rx_pending;
 static uint32_t s_recover_rx_last_ms;
-static volatile uint8_t s_reinit_request;
+static volatile uint8_t s_reinit_request; /**< 自动软恢复请求；由sensor消费后复核输入，不能无条件清新数据。 */
 static uint32_t s_rx_silence_since_ms; /**< 最近字节消费或实际重建尝试时刻，真实ms。 */
 static uint8_t s_rx_silence_timed; /**< 静默观察已建立为1；合法0ms不能用时间值判空。 */
 static uint8_t s_silence_recovery_pending; /**< 本owner因无原始字节请求重建为1，不冒充硬件错误。 */
@@ -168,9 +173,9 @@ static uint8_t Gnss_ReadField(const Nmea_Sentence_t *sentence, uint8_t index, ch
   return 1U;
 }
 
-/** @brief 当前PVT仅在其接收服务时刻后3秒内保护基础测量；不屏蔽独立NMEA统计事实。 */
-static uint8_t Gnss_PvtFresh(uint32_t now)
-{ return (uint8_t)(s_link.pvt_seen && (uint32_t)(now - s_link.pvt_ms) <= GNSS_PVT_FRESH_MS); }
+/** @brief 对同批到达的基础测量优先采用PVT；与同iTOW的DOP配对期限独立。 */
+static uint8_t Gnss_PreferPvt(uint32_t now)
+{ return (uint8_t)(s_link.pvt_seen && (uint32_t)(now - s_link.pvt_ms) < GNSS_PVT_PRIORITY_MS); }
 
 /** @brief caller持有快照临界区时更新一个DOP事实；0和65535撤授权而不伪造新时刻。 */
 static void Gnss_SetDop(uint8_t index, uint16_t value, uint8_t source, uint32_t now, uint8_t itow_known, uint32_t itow, uint8_t solution_ok)
@@ -309,7 +314,7 @@ static void Gnss_ParseGga(const Nmea_Sentence_t *sentence, uint32_t now)
   primask = BSP_Critical_Enter();
   Gnss_SetDop(GNSS_DOP_H, reported_hdop, GNSS_SOURCE_NMEA_GGA, now, 0U, 0U, position_ok);
   BSP_Critical_Exit(primask);
-  if (Gnss_PvtFresh(now)) { return; }
+  if (Gnss_PreferPvt(now)) { return; }
   altitude_ok = (uint8_t)((position_ok != 0U) && (Gnss_ReadDecimal(sentence, 9U, -100000.0, 100000.0, &altitude) != 0U) &&
     Gnss_ReadField(sentence, 10U, unit, sizeof(unit)) && unit[0] == 'M' && unit[1] == '\0');
   if (position_ok != 0U) {
@@ -321,6 +326,10 @@ static void Gnss_ParseGga(const Nmea_Sentence_t *sentence, uint32_t now)
   primask = BSP_Critical_Enter();
   s_snapshot.valid_mask &= ~(GNSS_VALID_POSITION | GNSS_VALID_ALTITUDE | GNSS_VALID_NAV_STATUS);
   s_snapshot.fix_valid = position_ok;
+  if (s_snapshot.dimension_source == GNSS_SOURCE_UBX_PVT) {
+    s_snapshot.fix_dimension = 0U;
+    s_snapshot.dimension_source = GNSS_SOURCE_NONE;
+  }
   s_snapshot.fix_quality = (position_ok != 0U) ? geo.fix_quality : 0U;
   if (status_ok) {
     s_snapshot.satellites = satellites;
@@ -481,7 +490,7 @@ static void Gnss_ParseGsa(const Nmea_Sentence_t *sentence, uint32_t now)
   uint16_t pdop = Gnss_ReadNmeaDop(sentence, 15U), hdop = Gnss_ReadNmeaDop(sentence, 16U);
   uint16_t vdop = Gnss_ReadNmeaDop(sentence, 17U);
   uint8_t system = Gnss_CountSystem(sentence), used = 0U, dimension = 0U, dimension_ok, counts_ok;
-  uint8_t pvt_protected = Gnss_PvtFresh(now);
+  uint8_t pvt_protected = Gnss_PreferPvt(now);
   char mode[2];
   uint32_t primask;
   dimension_ok = (uint8_t)(Gnss_ReadField(sentence, 1U, mode, sizeof(mode)) &&
@@ -497,7 +506,10 @@ static void Gnss_ParseGsa(const Nmea_Sentence_t *sentence, uint32_t now)
     if (dimension_ok && dimension >= 2U) {
       s_snapshot.fix_dimension = dimension; s_snapshot.dimension_source = GNSS_SOURCE_NMEA_GSA;
       s_snapshot.dimension_update_ms = now;
-    } else if (s_snapshot.dimension_source == GNSS_SOURCE_NMEA_GSA) { s_snapshot.dimension_source = GNSS_SOURCE_NONE; }
+    } else if (s_snapshot.dimension_source == GNSS_SOURCE_NMEA_GSA) {
+      s_snapshot.fix_dimension = 0U;
+      s_snapshot.dimension_source = GNSS_SOURCE_NONE;
+    }
   }
   if (system != UINT8_MAX) { Gnss_SetCount((uint8_t)(system + GNSS_COUNT_GPS_USED), used, GNSS_SOURCE_NMEA_GSA, now, counts_ok); }
   BSP_Critical_Exit(primask);
@@ -520,12 +532,13 @@ static void Gnss_UpdateState(void)
 }
 
 /**
- * @brief 复位 GNSS 拆句缓存及强类型快照。
+ * @brief 显式复位GNSS拆句缓存及测量快照，保留本次上电的完整帧流水号。
  */
 Gnss_Result_t Sensor_GNSS_Init(void)
 {
   uint32_t primask;
   if (!s_driver_started) {
+    s_rx_sequence_counter = 0U;
     memset(&s_link, 0, sizeof(s_link));
     memset(&s_diag_work, 0, sizeof(s_diag_work));
     memset(&s_diag_published, 0, sizeof(s_diag_published));
@@ -541,7 +554,9 @@ Gnss_Result_t Sensor_GNSS_Init(void)
   /* 注册表软恢复只清解析/测量，不擦累计诊断、版本探测进度或正在等待的配置阶段。 */
   primask = BSP_Critical_Enter();
   memset(&s_snapshot, 0, sizeof(s_snapshot));
+  s_link.pvt_seen = 0U;
   s_link.pvt_position_ok = 0U;
+  s_link.dop_seen = 0U;
   s_snapshot.data_state = GNSS_DATA_NONE;
   BSP_Critical_Exit(primask);
   Gnss_ResetFraming(0U, 0U);
@@ -550,7 +565,7 @@ Gnss_Result_t Sensor_GNSS_Init(void)
 }
 
 /**
- * @brief 请求在 sensor 所属任务下一周期复位解析器。
+ * @brief 请求自动软恢复；sensor下一周期先收数，再仅在输入已静默时清旧解析状态。
  */
 void Sensor_GNSS_RequestReinit(void)
 {
@@ -573,7 +588,7 @@ static void Gnss_CheckRxSilence(uint32_t now)
   if(!s_rx_silence_timed) { Gnss_MarkRxObservation(now);return; }
   if(!s_recover_rx_pending && !s_silence_recovery_pending &&
       (uint32_t)(now-s_rx_silence_since_ms)>=GNSS_RX_SILENCE_MS) {
-    s_silence_recovery_pending=1U;BSP_GNSS_RequestRecoverRx();
+    s_silence_recovery_pending = 1U;
   }
 }
 
@@ -583,6 +598,7 @@ static void Gnss_CheckRxSilence(uint32_t now)
  *          收新字节前撤销寿命达到500ms的UBX半帧，不重启UART或续期有效数据。
  *          TX单独中止成功只标配置未确认；真实接收错误仍保留IO_ERROR和原恢复。
  *          连续6秒没有原始字节才请求下拍重建；实际重建尝试重新观察，失败仍2秒退避。
+ *          自动软恢复在本拍解析后复核活动；近期输入使过期请求失效，不清新帧或半帧。
  *          本入口只由sensor任务调用且不可重入；恢复传输事实用owner静态暂存，
  *          每次尝试清零，不向外部借用地址或改变任何快照发布/失败语义。
  */
@@ -590,34 +606,44 @@ Gnss_Result_t Sensor_GNSS_Service(uint32_t now_ms)
 {
   Gnss_Result_t result = GNSS_RESULT_OK;
   uint32_t primask;
+  uint8_t soft_reinit_requested;
   if (!s_driver_started) { (void)Sensor_GNSS_Init(); }
   s_diag_work.measured_ms = now_ms;
   s_diag_work.service_count++;
-  if (s_reinit_request != 0U) {
-    s_reinit_request = 0U;
-    (void)Sensor_GNSS_Init();
-  }
+  primask = BSP_Critical_Enter();
+  soft_reinit_requested = s_reinit_request;
+  s_reinit_request = 0U;
+  BSP_Critical_Exit(primask);
   Gnss_FlushRawReject(now_ms);
   Gnss_ExpireUbxCandidate(now_ms);
-  if (BSP_GNSS_ConsumeRecoverRxRequest() != 0U) { s_recover_rx_pending = 1U; }
-  if (s_recover_rx_pending != 0U) {
+  if (BSP_GNSS_ConsumeRecoverRxRequest() != 0U) {
+    s_recover_rx_pending = 1U;
+    s_silence_recovery_pending = 0U;
+  }
+  if (s_recover_rx_pending || s_silence_recovery_pending) {
     if ((!s_recover_attempt_seen) || ((uint32_t)(now_ms - s_recover_rx_last_ms) >= GNSS_RECOVER_RETRY_MS)) {
       /** @brief sensor所有者独占的重建前后事实，避免嵌套接收解析占用80B调用栈。 */
       static BSP_GNSS_TransportInfo_t before,after;
       uint8_t preserve_link=0U,interrupted_tx=0U;
+      BSP_Status_t recovery;
       memset(&before,0,sizeof(before));memset(&after,0,sizeof(after));
       if(s_silence_recovery_pending && BSP_GNSS_CopyTransportInfo(&before)==BSP_STATUS_OK && before.initialized) {
         preserve_link=1U;interrupted_tx=before.tx_busy;
       }
-      s_recover_rx_last_ms = now_ms; s_recover_attempt_seen = 1U;
-      Gnss_MarkRxObservation(now_ms);
-      if (BSP_GNSS_RecoverRx() == BSP_STATUS_OK) {
+      recovery = s_silence_recovery_pending ? BSP_GNSS_RecoverRxIfIdle() : BSP_GNSS_RecoverRx();
+      if (recovery != BSP_STATUS_BUSY || !s_silence_recovery_pending) {
+        s_recover_rx_last_ms = now_ms;
+        s_recover_attempt_seen = 1U;
+        Gnss_MarkRxObservation(now_ms);
+        s_recover_rx_pending = (uint8_t)(recovery != BSP_STATUS_OK);
+      }
+      if (recovery == BSP_STATUS_OK) {
         if(preserve_link && (BSP_GNSS_CopyTransportInfo(&after)!=BSP_STATUS_OK || !after.initialized ||
             after.uart_errors!=before.uart_errors || after.dma_errors!=before.dma_errors)) { preserve_link=0U; }
-        s_recover_rx_pending = 0U;
         Gnss_ResetFraming(now_ms, 1U);
         s_link.tx_watchdog_seen=0U;
         if(!preserve_link) {
+          s_link.pvt_seen = 0U; s_link.pvt_position_ok = 0U; s_link.dop_seen = 0U;
           s_link.stage_seen = 0U; s_link.probes = 0U; s_link.awaiting_ack = 0U; s_link.waiting_nav = 0U;
           s_diag_work.state = GNSS_LINK_SCAN; s_diag_work.version_seen = 0U;
           s_diag_work.protocol_version_x100 = 0U; s_diag_work.config_confirmed = 0U;
@@ -634,6 +660,14 @@ Gnss_Result_t Sensor_GNSS_Service(uint32_t now_ms)
     Gnss_UpdateState();
     if (s_diag_work.state == GNSS_LINK_IO_ERROR) { result = GNSS_RESULT_IO_ERROR; }
     else { Gnss_CheckRxSilence(now_ms); }
+  }
+  if (soft_reinit_requested && result == GNSS_RESULT_OK) {
+    /* Health观察与本拍收数之间可发生抢占；完整帧及尚未组完的真实字节都优先保留。 */
+    uint8_t raw_recent = (uint8_t)(s_diag_work.rx_seen &&
+        (uint32_t)(now_ms - s_diag_work.last_rx_ms) < GNSS_SOFT_RECOVER_QUIET_MS);
+    uint8_t frame_recent = (uint8_t)(s_diag_work.frame_seen &&
+        (uint32_t)(now_ms - s_diag_work.last_frame_ms) < GNSS_SOFT_RECOVER_QUIET_MS);
+    if (!raw_recent && !frame_recent) { (void)Sensor_GNSS_Init(); }
   }
   primask = BSP_Critical_Enter();
   s_diag_published = s_diag_work; s_diag_ready = 1U;
@@ -785,15 +819,16 @@ Gnss_Result_t Sensor_GNSS_GetStatus(Gnss_Status_t *out)
 }
 
 /**
- * @brief 记录完整且校验通过的 NMEA 链路活动，不更新测量时间。
+ * @brief 为完整且校验通过的NMEA/UBX分配单调链路序号，不更新测量时间。
  */
 static void Gnss_RecordValidSentence(uint32_t now)
 {
   uint32_t primask = BSP_Critical_Enter();
 
   s_snapshot.last_rx_ms = now;
-  s_snapshot.rx_sequence++;
-  if (s_snapshot.rx_sequence == 0U) { s_snapshot.rx_sequence = 1U; }
+  s_rx_sequence_counter++;
+  if (s_rx_sequence_counter == 0U) { s_rx_sequence_counter = 1U; }
+  s_snapshot.rx_sequence = s_rx_sequence_counter;
 
   BSP_Critical_Exit(primask);
 }
@@ -839,6 +874,9 @@ static void Gnss_FeedAndParse(uint32_t now)
       }
       if (ubx_result == UBX_RESULT_FRAME) {
         s_diag_work.valid_ubx++;
+        /* 协议内容是否已支持与物理链路是否有合法帧相互独立；每帧只记录一次。 */
+        Gnss_LinkFrame(GNSS_PROTOCOL_UBX, now);
+        Gnss_RecordValidSentence(now);
         Gnss_ProcessUbx(now);
       } else if (ubx_result == UBX_RESULT_CHECKSUM_ERROR) { s_diag_work.checksum_errors++; }
       else if (ubx_result == UBX_RESULT_OVERSIZE) {
@@ -897,7 +935,7 @@ static void Gnss_FeedAndParse(uint32_t now)
             switch (sentence.type) {
             case NMEA_TYPE_GGA: Gnss_ParseGga(&sentence, now); break;
             case NMEA_TYPE_RMC:
-              if (!Gnss_PvtFresh(now)) { Gnss_ParseRmc(&sentence, now); }
+              if (!Gnss_PreferPvt(now)) { Gnss_ParseRmc(&sentence, now); }
               break;
             case NMEA_TYPE_GSV: Gnss_ParseGsv(&sentence, now); break;
             case NMEA_TYPE_GSA: Gnss_ParseGsa(&sentence, now); break;
@@ -1146,14 +1184,13 @@ static uint8_t Gnss_ParseSatellites(uint32_t now)
   return 1U;
 }
 
-/** @brief 消费校验完成帧，ACK必须匹配当前命令，导航、UTC与逐星事实独立更新。 */
+/** @brief 仅解析已支持UBX测量/配置内容；完整帧链路计数由调用方统一完成。 */
 static void Gnss_ProcessUbx(uint32_t now)
 {
   const uint8_t *p = s_ubx.payload;
   uint16_t length = s_ubx.length;
-  uint8_t recognized = 0U;
   if (s_ubx.class_id == 0x01U && s_ubx.message_id == 0x07U && (length == 92U || length == 84U)) {
-    Gnss_ParsePvt(now); recognized = 1U;
+    Gnss_ParsePvt(now);
   } else if (s_ubx.class_id == 0x01U && s_ubx.message_id == 0x04U && length == 18U) {
     uint16_t value = Gnss_U16(p + 12);
     uint16_t dop[GNSS_DOP_COUNT];
@@ -1162,16 +1199,17 @@ static void Gnss_ProcessUbx(uint32_t now)
     uint32_t primask;
     for (i = 0U; i < GNSS_DOP_COUNT; ++i) { dop[i] = Gnss_U16(p + 4U + 2U * i); }
     s_link.dop_seen = 1U; s_link.dop_ms = now; s_link.dop_itow = Gnss_U32(p); s_link.hdop = (value == UINT16_MAX) ? 0U : value;
-    solution_ok = (uint8_t)(Gnss_PvtFresh(now) && s_link.pvt_position_ok && s_link.pvt_itow == s_link.dop_itow);
+    solution_ok = (uint8_t)(s_link.pvt_seen && (uint32_t)(now - s_link.pvt_ms) <= GNSS_PVT_FRESH_MS &&
+                            s_link.pvt_position_ok && s_link.pvt_itow == s_link.dop_itow);
     primask = BSP_Critical_Enter();
     for (i = 0U; i < GNSS_DOP_COUNT; ++i) { Gnss_SetDop(i, dop[i], GNSS_SOURCE_UBX_DOP, now, 1U, s_link.dop_itow, solution_ok); }
     BSP_Critical_Exit(primask);
-    if (s_link.pvt_seen && s_link.pvt_itow == s_link.dop_itow && (uint32_t)(now - s_link.pvt_ms) <= GNSS_PVT_FRESH_MS) {
+    if (s_snapshot.position_source == GNSS_SOURCE_UBX_PVT && s_link.pvt_seen &&
+        s_link.pvt_itow == s_link.dop_itow && (uint32_t)(now - s_link.pvt_ms) <= GNSS_PVT_FRESH_MS) {
       primask = BSP_Critical_Enter(); s_snapshot.hdop_cm = s_link.hdop; BSP_Critical_Exit(primask);
     }
-    recognized = 1U;
   } else if (s_ubx.class_id == 0x01U && s_ubx.message_id == 0x35U) {
-    recognized = Gnss_ParseSatellites(now);
+    (void)Gnss_ParseSatellites(now);
   } else if (s_ubx.class_id == 0x0AU && s_ubx.message_id == 0x04U && length >= 40U && (length - 40U) % 30U == 0U &&
              Gnss_VersionText(p, 30U) && Gnss_VersionText(p + 30, 10U)) {
     uint16_t offset, version = 0U;
@@ -1179,9 +1217,8 @@ static void Gnss_ProcessUbx(uint32_t now)
       uint16_t found = Gnss_ParseProtocolVersion(p + offset);
       if (found) { version = found; }
     }
-    s_diag_work.version_seen = 1U; s_diag_work.protocol_version_x100 = version; recognized = 1U;
+    s_diag_work.version_seen = 1U; s_diag_work.protocol_version_x100 = version;
   } else if (s_ubx.class_id == 0x05U && s_ubx.message_id <= 1U && length == 2U) {
-    recognized = 1U;
     if (s_diag_work.state == GNSS_LINK_CONFIGURE && s_link.awaiting_ack && p[0] == 0x06U && p[1] == s_link.expected_id) {
       s_link.awaiting_ack = 0U;
       if (s_ubx.message_id == 0U) { s_diag_work.nak_count++; Gnss_Unconfirmed(now); }
@@ -1193,7 +1230,6 @@ static void Gnss_ProcessUbx(uint32_t now)
       }
     }
   }
-  if (recognized) { Gnss_LinkFrame(GNSS_PROTOCOL_UBX, now); Gnss_RecordValidSentence(now); }
 }
 
 /** @brief 将已编码协议命令复制交给非阻塞BSP；BUSY不会消耗重试额度。 */

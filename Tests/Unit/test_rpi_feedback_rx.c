@@ -1,8 +1,8 @@
 /**
  * @file test_rpi_feedback_rx.c
- * @brief 真实UART6字节解析与MAVLink RX入口的控制/配置提示门禁回归。
+ * @brief 真实UART6字节解析与MAVLink RX入口的控制/配置结果提示门禁回归。
  * @details CRC/半帧/噪声走生产Platform解析；硬件输出边界仅作失败断言，
- *          Notify只是任务间事件，不能把收包提示当作指令执行成功。
+ *          Control由显式完成桩隔离；接受请求时静默，收到完成事实后才生成成功提示。
  */
 #include <assert.h>
 #include <stdint.h>
@@ -80,6 +80,8 @@ Px4Lite_Result_t Px4Lite_PlatformRgbService(uint32_t now_ms);
 static const uint8_t *s_input;
 static uint16_t s_input_size;
 static unsigned s_notifications,s_hardware_calls,s_command_calls,s_ack_calls,s_echo_calls,s_external_calls,s_control_calls;
+static unsigned s_success_notifications,s_failure_notifications,s_control_pending;
+static uint32_t s_mock_baud_bps=115200U;
 static unsigned s_lora_commits;
 static uint8_t s_lora_pending;
 static Px4Lite_CommRxFrame_t s_lora_frame;
@@ -88,8 +90,11 @@ static uint8_t s_ack_result;
 static Px4Lite_MavlinkLink_t s_expected_link;
 static uint8_t s_echo_pending;
 
-/** @brief Notify仅计事件，硬件操作必须由另一sensor播放器单元执行。 */
-void Px4Lite_StartupToneNotifyRpiCommand(void) { s_notifications++; }
+/** @brief Notify只计分类结果，真正声光输出由独立sensor播放器专项验证。 */
+void Px4Lite_StartupToneNotifyRpiResult(uint8_t succeeded)
+{ s_notifications++;if(succeeded==1U) { s_success_notifications++; }else { s_failure_notifications++; } }
+/** @brief 生产入口不得再使用纯收包通知来冒充成功。 */
+void Px4Lite_StartupToneNotifyRpiCommand(void) { assert(0); }
 /** @brief 原硬件边界只要被通信线程调用即失败。 */
 Px4Lite_Result_t Px4Lite_PlatformBuzzerInit(void) { s_hardware_calls++;assert(0);return PX4LITE_IO_ERROR; }
 /** @brief 通信线程不得改变PWM。 */
@@ -108,7 +113,9 @@ uint16_t BSP_RpiUART_Read(uint8_t *data,uint16_t count)
 /** @brief 冷初始化接口不访问真实设备。 */
 BSP_Status_t BSP_RpiUART_Init(void) { return BSP_STATUS_OK; }
 /** @brief 仅查询速率不涉及硬件重配置。 */
-BSP_Status_t BSP_RpiUART_GetBaudRate(uint32_t *baud_bps) { assert(baud_bps);*baud_bps=115200U;return BSP_STATUS_OK; }
+BSP_Status_t BSP_RpiUART_GetBaudRate(uint32_t *baud_bps) { assert(baud_bps);*baud_bps=s_mock_baud_bps;return BSP_STATUS_OK; }
+/** @brief 配置应用桩写入独立速率事实，不操作真实串口。 */
+BSP_Status_t BSP_RpiUART_SetBaudRate(uint32_t baud_bps) { s_mock_baud_bps=baud_bps;return BSP_STATUS_OK; }
 /** @brief 平台时钟独立于msg.time字段。 */
 uint32_t BSP_Time_GetTickMs(void) { return s_now; }
 /** @brief 捕获旁路只记录校验过的源，不生成提示或消费接收队列。 */
@@ -143,6 +150,18 @@ Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoff(void)
 /** @brief 自动缓降控制不触及真实设备。 */
 Px4Lite_Result_t Px4Lite_ControlStartAutoLanding(void)
 { s_control_calls++;return s_control_result; }
+/** @brief 真实执行跟踪在Control专项覆盖；本夹具仅模拟未完成的RPi目标。 */
+Px4Lite_Result_t Px4Lite_ControlSetRpiMotorThrottles(const uint8_t percent[PX4LITE_MOTOR_COUNT])
+{ Px4Lite_Result_t rc=Px4Lite_ControlSetMotorThrottles(percent);if(rc==PX4LITE_OK) { s_control_pending++; }return rc; }
+/** @brief 精确PWM请求成功只登记待完成，不能在收包处自行成功。 */
+Px4Lite_Result_t Px4Lite_ControlSetRpiMotorPulses(const uint16_t pulse[PX4LITE_MOTOR_COUNT])
+{ Px4Lite_Result_t rc=Px4Lite_ControlSetMotorPulses(pulse);if(rc==PX4LITE_OK) { s_control_pending++; }return rc; }
+/** @brief 自动过程启动接受尚未执行完成。 */
+Px4Lite_Result_t Px4Lite_ControlStartRpiAutoTakeoff(void)
+{ Px4Lite_Result_t rc=Px4Lite_ControlStartAutoTakeoff();if(rc==PX4LITE_OK) { s_control_pending++; }return rc; }
+/** @brief 自动过程启动接受尚未执行完成。 */
+Px4Lite_Result_t Px4Lite_ControlStartRpiAutoLanding(void)
+{ Px4Lite_Result_t rc=Px4Lite_ControlStartAutoLanding();if(rc==PX4LITE_OK) { s_control_pending++; }return rc; }
 /** @brief 模拟真实命名状态消费，不改变其副作用次数。 */
 void Px4Lite_SetExternalModuleState(Px4Lite_ModuleId_t id,Px4Lite_State_t state,uint16_t fault,uint32_t now)
 { (void)state;(void)fault;assert(id==PX4LITE_MODULE_5G && now==s_now);s_external_calls++; }
@@ -175,19 +194,31 @@ Px4Lite_Result_t Px4Lite_RemoteTelemetryCommitNode(uint8_t node,const Px4Lite_Re
 static void Reset(void)
 {
   s_now=100U;s_input_size=0U;s_notifications=s_hardware_calls=s_command_calls=s_ack_calls=s_echo_calls=s_external_calls=0U;
+  s_success_notifications=s_failure_notifications=s_control_pending=0U;s_mock_baud_bps=115200U;
   s_lora_commits=0U;s_lora_pending=0U;s_control_calls=0U;s_control_result=PX4LITE_OK;s_ack_result=0U;
   s_expected_link=PX4LITE_MAVLINK_LINK_RPI;
   s_echo_pending=0U;
   assert(Px4Lite_RpiMavlinkInit()==PX4LITE_OK);
   assert(Px4Lite_RpiBaudSwitchInit()==PX4LITE_OK);
 }
-/** @brief 每个本机控制/配置请求的收包提示计数，关闭feature时始终为0。 */
+/** @brief 结果提示计数，关闭feature时始终为0。 */
 static unsigned Expected(unsigned count)
 {
 #if PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK
   return count;
 #else
   (void)count;return 0U;
+#endif
+}
+/** @brief 显式模拟Control异步结果；真实PWM确认/取消逻辑由另一生产Control专项验证。 */
+static void CompleteControl(uint8_t succeeded)
+{
+#if PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK
+  assert(s_control_pending);s_control_pending--;
+  Px4Lite_StartupToneNotifyRpiResult(succeeded);
+#else
+  if(s_control_pending) { s_control_pending--; }
+  (void)succeeded;
 #endif
 }
 /** @brief 输入一段线上字节后推进实际Comm解码一次，不合并或伪造校验。 */
@@ -229,30 +260,37 @@ static void TestCrcFramingAndHeartbeat(void)
   Reset();length=Build(0U,wire);assert(Pump(wire,length)==PX4LITE_IDLE && !s_notifications);
   assert(Pump(noise,sizeof(noise))==PX4LITE_IDLE && !s_notifications);
   length=Build(1U,wire);assert(Pump(wire,7U)==PX4LITE_IDLE && !s_notifications);
-  s_now+=10U;assert(Pump(wire+7U,(uint16_t)(length-7U))==PX4LITE_OK && s_notifications==Expected(1U));
+  s_now+=10U;assert(Pump(wire+7U,(uint16_t)(length-7U))==PX4LITE_OK && !s_notifications);
+  CompleteControl(1U);assert(s_notifications==Expected(1U) && s_success_notifications==Expected(1U));
   assert(Px4Lite_MavlinkRxRunRpi(s_now)==PX4LITE_IDLE && s_notifications==Expected(1U));
   length=Build(1U,wire);wire[length-1U]^=0x40U;
   assert(Pump(wire,length)==PX4LITE_IDLE && s_notifications==Expected(1U) && s_rpi_monitor.rx_frame_errors==1U);
-  wire[length-1U]^=0x40U;assert(Pump(wire,length)==PX4LITE_OK && s_notifications==Expected(2U));
+  wire[length-1U]^=0x40U;assert(Pump(wire,length)==PX4LITE_OK && s_notifications==Expected(1U));
+  CompleteControl(0U);assert(s_notifications==Expected(2U) && s_failure_notifications==Expected(1U));
   assert(!s_hardware_calls && s_command_calls==2U && s_control_calls==2U);
 }
-/** @brief ACK/命名状态/普通回显/遥测静默，只有控制和波特率配置请求通知。 */
+/** @brief ACK/命名状态/回显/遥测及接受未完成静默，只有结果产生对应提示。 */
 static void TestControlConfigurationOnly(void)
 {
   uint8_t wire[300];unsigned kind;uint16_t length;mavlink_message_t msg;
   Reset();
-  for(kind=0U;kind<=5U;kind++) { length=Build(kind,wire);(void)Pump(wire,length);assert(s_notifications==Expected(kind?1U:0U)); }
+  for(kind=0U;kind<=5U;kind++) { length=Build(kind,wire);(void)Pump(wire,length);assert(!s_notifications); }
   assert(s_command_calls==1U && s_ack_calls==1U && s_external_calls==1U && s_echo_calls==1U);
-  length=Build(6U,wire);(void)Pump(wire,length);assert(s_notifications==Expected(2U) && Px4Lite_RpiBaudSwitchIsPending());
-  /* 真实执行器的业务拒绝不改变“有效控制请求已收到”的提示含义。 */
+  CompleteControl(1U);assert(s_notifications==Expected(1U) && s_success_notifications==Expected(1U));
+  length=Build(6U,wire);(void)Pump(wire,length);assert(s_notifications==Expected(1U) && Px4Lite_RpiBaudSwitchIsPending());
+  assert(Px4Lite_RpiBaudSwitchResponseSent()==PX4LITE_OK);
+  assert(s_notifications==Expected(2U) && s_success_notifications==Expected(2U));
+  /* 真实执行器业务拒绝必须是低音，不能跟成功混为一类。 */
   s_control_result=PX4LITE_INVALID_PARAM;length=Build(1U,wire);
   assert(Pump(wire,length)==PX4LITE_OK && s_notifications==Expected(3U) && s_command_calls==2U);
   assert(s_ack_result==MAV_RESULT_DENIED && s_control_calls==2U);
+  assert(s_failure_notifications==Expected(1U));
   /* 参数非法由真实执行器拒绝，不调用Control，也不能被解释成成功。 */
   mavlink_msg_command_long_pack_chan(9U,191U,MAVLINK_COMM_1,&msg,42U,193U,31011U,0U,101.0f,0,0,0,0,0,0);
   length=mavlink_msg_to_send_buffer(wire,&msg);
   assert(Pump(wire,length)==PX4LITE_OK && s_notifications==Expected(4U));
   assert(s_ack_result==MAV_RESULT_DENIED && s_control_calls==2U && s_command_calls==3U);
+  assert(s_failure_notifications==Expected(2U));
   assert(!s_hardware_calls);
 }
 
@@ -295,14 +333,18 @@ static void TestConfigurationTargetsAndPayloads(void)
     if(variant==10U) { component=0U; }
     if(variant==11U) { packet.payload[2]=2U; }
     if(variant==12U) { packet.payload_type=0x9999U; }
-    /* 同nonce重发仍是收到一次配置请求，提示不等于实际再次切波特率。 */
+    /* 首次接受保持静默，重复或忙请求不再执行，立即生成低音结果。 */
     mavlink_msg_tunnel_encode_chan(source,component,MAVLINK_COMM_1,&msg,&packet);
-    if(variant==0U || variant==6U || variant==11U) { assert(msg.len==17U);expected++; }
+    if(variant==0U || variant==6U || variant==11U) { assert(msg.len==17U); }
+    if(variant==6U || variant==11U) { expected++; }
     length=mavlink_msg_to_send_buffer(wire,&msg);(void)Pump(wire,length);assert(s_notifications==Expected(expected));
   }
   Px4Lite_RpiBaudSwitchGetStats(&stats);
   assert(stats.accepted_count==1U && stats.duplicate_count==1U && stats.busy_count==1U);
   assert(stats.current_baud_bps==115200U && stats.state==PX4LITE_RPI_BAUD_STATE_PENDING_TX);
+  assert(s_failure_notifications==Expected(2U) && !s_success_notifications);
+  assert(Px4Lite_RpiBaudSwitchResponseSent()==PX4LITE_OK);
+  assert(s_success_notifications==Expected(1U) && s_notifications==Expected(3U));
   assert(!s_hardware_calls);
 }
 /** @brief H1占用不掩盖合法配置收包提示，非法请求静默且不得抢占事务槽。 */
@@ -332,8 +374,48 @@ static void TestConfigurationWhileH1Pending(void)
   length=Build(4U,wire);(void)Pump(wire,length);assert(s_notifications==Expected(1U));
   s_echo_pending=0U;length=Build(6U,wire);(void)Pump(wire,length);
   Px4Lite_RpiBaudSwitchGetStats(&stats);
-  assert(s_notifications==Expected(2U) && stats.accepted_count==1U && Px4Lite_RpiBaudSwitchIsPending());
+  assert(s_notifications==Expected(1U) && stats.accepted_count==1U && Px4Lite_RpiBaudSwitchIsPending());
+  assert(Px4Lite_RpiBaudSwitchResponseSent()==PX4LITE_OK);
+  assert(s_notifications==Expected(2U) && s_success_notifications==Expected(1U) && s_failure_notifications==Expected(1U));
   assert(!s_hardware_calls && !s_control_calls && !s_command_calls);
+}
+/** @brief 发不出配置响应不等于执行，忙等待静默，错误低音去重、恢复后真实应用才高。 */
+static void TestConfigurationSendFailureAndRetry(void)
+{
+  uint8_t wire[300];uint16_t length;
+  Reset();length=Build(6U,wire);(void)Pump(wire,length);
+  assert(!s_notifications && Px4Lite_RpiBaudSwitchIsPending());
+  Px4Lite_RpiBaudSwitchResponseFailed(PX4LITE_BUSY);
+  Px4Lite_RpiBaudSwitchResponseFailed(PX4LITE_IDLE);
+  assert(!s_notifications);
+  Px4Lite_RpiBaudSwitchResponseFailed(PX4LITE_IO_ERROR);
+  assert(s_failure_notifications==Expected(1U) && !s_success_notifications && Px4Lite_RpiBaudSwitchIsPending());
+  Px4Lite_RpiBaudSwitchResponseFailed(PX4LITE_IO_ERROR);
+  assert(s_failure_notifications==Expected(1U));
+  assert(Px4Lite_RpiBaudSwitchResponseSent()==PX4LITE_OK);
+  assert(s_success_notifications==Expected(1U) && s_notifications==Expected(2U));
+  assert(!s_hardware_calls);
+}
+/** @brief 拒绝/失败与同步配置、急停及异步过程分别生成准确的执行结果类别。 */
+static void TestCommandOutcomes(void)
+{
+  mavlink_message_t msg;uint8_t wire[300];uint16_t length;
+  Reset();s_control_result=PX4LITE_NOT_READY;length=Build(1U,wire);(void)Pump(wire,length);
+  assert(s_ack_result==MAV_RESULT_TEMPORARILY_REJECTED && s_failure_notifications==Expected(1U) && !s_success_notifications);
+  s_control_result=PX4LITE_IO_ERROR;length=Build(1U,wire);(void)Pump(wire,length);
+  assert(s_ack_result==MAV_RESULT_FAILED && s_failure_notifications==Expected(2U) && !s_success_notifications);
+  s_control_result=PX4LITE_OK;
+  mavlink_msg_command_long_pack_chan(9U,191U,MAVLINK_COMM_1,&msg,42U,193U,PX4LITE_CMD_SET_MOTOR_CONTROL_MODE,0U,0,0,0,0,0,0,0);
+  length=mavlink_msg_to_send_buffer(wire,&msg);(void)Pump(wire,length);
+  assert(s_ack_result==MAV_RESULT_ACCEPTED && s_success_notifications==Expected(1U));
+  mavlink_msg_command_long_pack_chan(9U,191U,MAVLINK_COMM_1,&msg,42U,193U,PX4LITE_CMD_MOTOR_EMERGENCY_STOP,0U,0,0,0,0,0,0,0);
+  length=mavlink_msg_to_send_buffer(wire,&msg);(void)Pump(wire,length);
+  assert(s_ack_result==MAV_RESULT_ACCEPTED && s_success_notifications==Expected(2U));
+  mavlink_msg_command_long_pack_chan(9U,191U,MAVLINK_COMM_1,&msg,42U,193U,PX4LITE_CMD_AUTO_TAKEOFF,0U,0,0,0,0,0,0,0);
+  length=mavlink_msg_to_send_buffer(wire,&msg);(void)Pump(wire,length);
+  assert(s_ack_result==MAV_RESULT_ACCEPTED && s_success_notifications==Expected(2U));
+  CompleteControl(1U);assert(s_success_notifications==Expected(3U));
+  assert(!s_hardware_calls);
 }
 /** @brief 拼接两个完整包仍一包一次，pending重复服务不会重复通知。 */
 static void TestMultipleFramesAndLoraScope(void)
@@ -343,7 +425,8 @@ static void TestMultipleFramesAndLoraScope(void)
   s_input=wire;s_input_size=(uint16_t)(first+second);
   assert(Px4Lite_RpiMavlinkService(s_now)==PX4LITE_OK && s_input_size==second);
   assert(Px4Lite_RpiMavlinkService(s_now)==PX4LITE_BUSY);
-  assert(Px4Lite_MavlinkRxRunRpi(s_now)==PX4LITE_OK && s_notifications==Expected(1U));
+  assert(Px4Lite_MavlinkRxRunRpi(s_now)==PX4LITE_OK && !s_notifications);
+  CompleteControl(1U);assert(s_notifications==Expected(1U));
   assert(Px4Lite_RpiMavlinkService(s_now)==PX4LITE_OK && !s_input_size);
   assert(Px4Lite_MavlinkRxRunRpi(s_now)==PX4LITE_IDLE && s_notifications==Expected(1U));
   for(i=0U;i<3U;i++) { assert(Px4Lite_MavlinkRxRunRpi(s_now)==PX4LITE_IDLE); }
@@ -365,8 +448,9 @@ int main(void)
 {
 #if PX4LITE_ENABLE_RPI_MAVLINK
   TestCrcFramingAndHeartbeat();TestControlConfigurationOnly();TestCommandTargetsAndTrimming();
-  TestConfigurationTargetsAndPayloads();TestConfigurationWhileH1Pending();TestMultipleFramesAndLoraScope();
-  printf("RPi feedback RX: real CRC / partial / controls+configuration only / MAV2 trim / targets / H1-busy arbitration / consume-once / LoRa / no Comm hardware PASS enabled=%u\n",(unsigned)PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK);
+  TestConfigurationTargetsAndPayloads();TestConfigurationWhileH1Pending();TestConfigurationSendFailureAndRetry();
+  TestCommandOutcomes();TestMultipleFramesAndLoraScope();
+  printf("RPi result RX: real CRC / accepted still silent / actual completion boundary / high vs low / config retry / MAV2 trim / targets / H1-busy / consume-once / LoRa / no Comm hardware PASS enabled=%u\n",(unsigned)PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK);
 #else
   assert(Px4Lite_RpiMavlinkService(0U)==PX4LITE_IDLE && Px4Lite_MavlinkRxRunRpi(0U)==PX4LITE_IDLE);
   assert(!s_notifications && !s_hardware_calls && !s_command_calls);

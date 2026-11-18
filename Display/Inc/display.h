@@ -6,6 +6,27 @@
 #include "px4lite_attitude.h"
 #include "px4lite_control.h"
 
+/** @brief 本机供电文字隐藏上限，单位mV；不大于此值时V/A/W显示N/A，不改变采样事实。 */
+#ifndef DISPLAY_SUPPLY_HIDE_AT_OR_BELOW_MV
+#define DISPLAY_SUPPLY_HIDE_AT_OR_BELOW_MV 5000U
+#endif
+
+/**
+ * @brief 纯显示策略：有效供电电压高于隐藏上限时才展示本机供电文字。
+ * @param[in] voltage_mv 未经屏幕取整的有效电压，单位mV；有效位由调用者独立判断。
+ * @return 大于上限返回1，否则返回0；不代表电流计在位、硬件状态或控制许可。
+ */
+static inline uint8_t Display_SupplyVoltageVisible(uint32_t voltage_mv)
+{
+  return (voltage_mv > DISPLAY_SUPPLY_HIDE_AT_OR_BELOW_MV) ? 1U : 0U;
+}
+
+/** @brief SD 自检灯只表示存储可用性，返回 HMI 编码 2（绿）或 3（红）。 */
+static inline uint16_t Display_MapStorageStateValue(Px4Lite_State_t state)
+{
+  return (state == PX4LITE_STATE_ONLINE) ? 2U : 3U;
+}
+
 /** @brief 显示任务内使用的运行状态；LCD 与触摸独立就绪。 */
 typedef struct {
   uint8_t display_ready; /**< LCD/LVGL 已就绪。 */

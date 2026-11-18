@@ -25,6 +25,14 @@ typedef struct {
 
 static MockPlatform_t s_mock;
 
+/** @brief 启动声光专项不运行电机，背景音乐门控保持无可用输出。 */
+Px4Lite_Result_t Px4Lite_CopyMotor(Px4Lite_MotorOutputs_t *out) { (void)out;return PX4LITE_NOT_READY; }
+/** @brief 无运行电机的夹具保持人工锁定事实，不影响旧声光断言。 */
+Px4Lite_Result_t Px4Lite_ControlGetMotorLocked(uint8_t *locked) { *locked=1U;return PX4LITE_OK; }
+/** @brief 仅隔离新增只读控制状态边界，不替换被测播放器。 */
+Px4Lite_Result_t Px4Lite_GetModuleStatus(Px4Lite_ModuleId_t id,Px4Lite_ModuleStatus_t *out)
+{ (void)id;(void)out;return PX4LITE_NOT_READY; }
+
 /** @brief 提供独立于微秒参数的真实毫秒时钟。 */
 uint32_t Px4Lite_PlatformGetMs(void) { return s_mock.now_ms; }
 /** @brief 记录蜂鸣器初始化及注入结果。 */

@@ -307,6 +307,27 @@ BSP_Status_t BSP_GNSS_RecoverRx(void)
   if (result == BSP_STATUS_OK) { s_transport.recoveries++; }
   return result;
 }
+/**
+ * @brief 仅当静默仍成立才重建；不清UART数据寄存器，保留最后时刻到达的字节。
+ * @details 短临界区内暂停本UART的DMA请求，核对NDTR与RXNE。发现数据立即恢复请求；
+ *          真正的HAL重建在临界区外执行，错误会话仍交常规恢复处理。
+ */
+BSP_Status_t BSP_GNSS_RecoverRxIfIdle(void)
+{
+  uint32_t key = BspGnss_Lock();
+  if (BspGnss_RxSessionReady()) {
+    CLEAR_BIT(s_gnss_uart.Instance->CR3, USART_CR3_DMAR);
+    BspGnss_UpdateRxPosition();
+    if (BspGnss_Queued() != 0U || (s_gnss_uart.Instance->SR & USART_SR_RXNE) != 0U) {
+      s_gnss_uart.Instance->CR3 |= USART_CR3_DMAR;
+      BspGnss_Unlock(key);
+      return BSP_STATUS_BUSY;
+    }
+  }
+  BspGnss_Unlock(key);
+  return BSP_GNSS_RecoverRx();
+}
+
 /** @brief 仅登记恢复请求，ISR不访问总线重初始化。 */
 void BSP_GNSS_RequestRecoverRx(void) { s_rx_recover_request = 1U; }
 /** @brief owner原子取走请求标志，实际恢复由其自行限速执行。 */

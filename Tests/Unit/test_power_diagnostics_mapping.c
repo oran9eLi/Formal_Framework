@@ -146,7 +146,7 @@ static void TestMappingAndReadOwnership(void)
   assert(out.sample_time_ms == 0U && out.sequence == 1U);
 }
 
-/** @brief 电流失败不授权旧电流针脚；电压失败新尝试明确无效，恢复后重新发布。 */
+/** @brief 电流失败仍可复制只读诊断缓存但不授权有效电流；电压失败新尝试明确无效。 */
 static void TestFailuresAndNoAttempt(void)
 {
   Px4Lite_BatteryStatus_t sample;
@@ -158,7 +158,7 @@ static void TestFailuresAndNoAttempt(void)
   assert(Px4Lite_Battery2Read(&sample) == PX4LITE_OK);
   out = CopyWithoutIO();
   assert(out.sequence == 2U && out.voltage_valid && !out.current_valid);
-  assert(out.current_pin_mv == 0U && out.current_ma == 0 && s_current_diag_copies == current_before);
+  assert(out.current_pin_mv == 52U && out.current_ma == 0 && s_current_diag_copies == current_before + 1U);
 
   SetSample(3U, 2000U); s_source_diag.sample_valid = 0U; s_service_result = POWER_RESULT_IO_ERROR;
   assert(Px4Lite_Battery2Read(&sample) == PX4LITE_IO_ERROR);

@@ -31,6 +31,8 @@ void BSP_GNSS_RxIdleCallback(uint16_t unused) { (void)unused; }
 void BSP_GNSS_RequestRecoverRx(void) { requested_recoveries=1U; }
 uint8_t BSP_GNSS_ConsumeRecoverRxRequest(void) { uint8_t value=(uint8_t)requested_recoveries; requested_recoveries=0U; return value; }
 BSP_Status_t BSP_GNSS_RecoverRx(void) { actual_recoveries++; if(io_fail) { return BSP_STATUS_ERROR; } initialized=1U; busy=0U; return BSP_STATUS_OK; }
+/** @brief 健康且队列已有输入时返回BUSY，其他情况保留夹具原来的硬件恢复行为。 */
+BSP_Status_t BSP_GNSS_RecoverRxIfIdle(void) { return (initialized && input_size) ? BSP_STATUS_BUSY : BSP_GNSS_RecoverRx(); }
 /** @brief 发送独立撤销保留接收队列，硬件撤销失败可单独注入。 */
 BSP_Status_t BSP_GNSS_AbortTx(void)
 { aborted_tx_count++;if(abort_tx_fail) { return BSP_STATUS_ERROR; }busy=0U;return BSP_STATUS_OK; }
@@ -303,6 +305,31 @@ static void TestPvtAndDop(void)
   assert(Sensor_GNSS_CopySnapshot(&s)==GNSS_RESULT_OK && s.position_update_ms==70U);
 }
 
+/** @brief 混合输出中同批PVT优先，下一个1Hz历元的GGA/RMC立即接替，PVT回来后重新生效。 */
+static void TestNmeaAfterPvtStops(void)
+{
+  static const char gga[] = "GPGGA,000000,2230.0000,N,11330.0000,E,1,08,1.0,25.0,M,0.0,M,,";
+  static const char rmc[] = "GPRMC,000000,A,2230.0000,N,11330.0000,E,1.0,90.0,131126,,,A";
+  Gnss_Snapshot_t s;
+  uint32_t base = UINT32_MAX - 300U;
+  Cold(); Pvt(3U, 1U, 0U, 1000U, base);
+  Sentence(gga, base + 100U); Sentence(rmc, base + 200U);
+  assert(Sensor_GNSS_CopySnapshot(&s) == GNSS_RESULT_OK);
+  assert(s.position_source == GNSS_SOURCE_UBX_PVT && s.time_update_ms == base);
+  Sentence(gga, base + 1000U); Sentence(rmc, base + 1010U);
+  assert(Sensor_GNSS_CopySnapshot(&s) == GNSS_RESULT_OK);
+  assert(s.position_source == GNSS_SOURCE_NMEA_GGA && s.status_update_ms == base + 1000U);
+  assert(s.time_source == GNSS_SOURCE_NMEA_RMC && s.velocity_update_ms == base + 1010U);
+  assert(s.dimension_source == GNSS_SOURCE_NONE && !s.fix_dimension);
+  Pvt(2U, 1U, 0U, 2000U, base + 1100U);
+  assert(Sensor_GNSS_CopySnapshot(&s) == GNSS_RESULT_OK);
+  assert(s.position_source == GNSS_SOURCE_UBX_PVT && s.fix_dimension == 2U);
+  assert(Sensor_GNSS_Init()==GNSS_RESULT_OK);
+  Sentence(gga, base + 1110U);
+  assert(Sensor_GNSS_CopySnapshot(&s) == GNSS_RESULT_OK);
+  assert(s.position_source == GNSS_SOURCE_NMEA_GGA && !s.fix_dimension);
+}
+
 static void TestConfigurationConfirmed(void)
 {
   uint32_t count; static const uint8_t pvt_key[5]={0x07U,0x00U,0x91U,0x20U,0x01U};
@@ -367,7 +394,10 @@ static void TestVersionGateAndLegacyPvt(void)
   Cold();Step(0U);count=commands_count;
   memset(p,0,sizeof(p));memcpy(p,"SPG 5.10",8U);memcpy(p+30,"000A0000",8U);
   Frame(0x0AU,4U,p,39U,10U);Frame(0x0AU,4U,p,41U,20U);
-  assert(!Diag().version_seen && commands_count==count);
+  /* CRC正确仍证明UBX链路，可触发只读版本查询，但畸形版本不得写CFG。 */
+  assert(!Diag().version_seen && commands_count==count+1U &&
+         commands[count][2]==0x0AU && commands[count][3]==0x04U);
+  count=commands_count;
   Frame(0x0AU,4U,p,40U,30U);assert(Diag().state==GNSS_LINK_UNCONFIRMED && !Diag().config_confirmed && commands_count==count);
   Cold();Step(0U);memcpy(p+40,"PROTVER=34.1x",13U);Frame(0x0AU,4U,p,70U,10U);
   assert(Diag().protocol_version_x100==0U && Diag().state==GNSS_LINK_UNCONFIRMED && commands_count==1U);
@@ -382,7 +412,7 @@ static void TestVersionGateAndLegacyPvt(void)
 
 int main(void)
 {
-  TestPvtIndependentNavigationStatus();TestGgaIndependentNavigationStatus();
+  TestNmeaAfterPvtStops();TestPvtIndependentNavigationStatus();TestGgaIndependentNavigationStatus();
   TestFixedBaudAndWarmInit();TestFixedBaudSurvivesRecovery();TestFrequentErrorsKeepFixedBaud();
   TestFixedBaudRecoveryFailureZeroAndWrap();TestNoDataProbeBackoffAndHotplug();TestFixedBaudCorrectionBusyAndError();
   TestNmeaPassiveAndBinaryIsolation();TestFixedRateAfterLockAndLoss();TestPvtAndDop();

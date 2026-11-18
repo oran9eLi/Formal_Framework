@@ -40,6 +40,8 @@ void BSP_GNSS_RxIdleCallback(uint16_t unused) { (void)unused; }
 void BSP_GNSS_RequestRecoverRx(void) { s_recover_request=1U; }
 uint8_t BSP_GNSS_ConsumeRecoverRxRequest(void) { uint8_t p=s_recover_request;s_recover_request=0U;return p; }
 BSP_Status_t BSP_GNSS_RecoverRx(void) { s_input_size=0U;return BSP_STATUS_OK; }
+/** @brief 静默复核不得丢已排队的原帧。 */
+BSP_Status_t BSP_GNSS_RecoverRxIfIdle(void) { return s_input_size ? BSP_STATUS_BUSY : BSP_GNSS_RecoverRx(); }
 BSP_Status_t BSP_GNSS_Transmit(const uint8_t *p,uint16_t n) { assert(p!=NULL && n>0U);return BSP_STATUS_OK; }
 /** @brief 独立TX复位不消费或清空待转发的原始接收字节。 */
 BSP_Status_t BSP_GNSS_AbortTx(void) { return BSP_STATUS_OK; }

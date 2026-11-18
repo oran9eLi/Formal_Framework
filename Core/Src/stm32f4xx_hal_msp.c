@@ -372,7 +372,7 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef *hadc)
     HAL_GPIO_Init(BSP_ADC2_PORT, &gpio);
 #endif
   } else if (hadc->Instance == BSP_ADC_CURRENT_INS) {
-    /* 仅初始化启用组；PC0 停用后不配置其引脚。 */
+    /* 按启用的逻辑组及所选路由配脚；组1停用时，组2仍可使用扩展板的PC0。 */
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_ADC3_CLK_ENABLE();
 

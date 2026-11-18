@@ -4,6 +4,11 @@
  * @details Driver快照与I/O结果为独立故障注入；不复制健康策略，不改生产配置。
  * 本测试仅禁用无关硬件采集，保留真实GNSS两秒离线规则和App字段时效。
  */
+#include <assert.h>
+static unsigned s_critical_depth, s_inject_rx;
+static void ExitCritical(void);
+#define taskENTER_CRITICAL() (++s_critical_depth)
+#define taskEXIT_CRITICAL() ExitCritical()
 #include "px4lite_config.h"
 #undef PX4LITE_ENABLE_IMU
 #undef PX4LITE_ENABLE_BARO
@@ -26,6 +31,9 @@
 #include "test_gnss_status_domain.c"
 #undef main
 #include "../../Framework/Src/px4lite_modules.c"
+
+/** @brief 本夹具只核验原GNSS采集/健康规则，新增声光事件隔离为无硬件输出。 */
+void Px4Lite_StartupToneNotifyModuleConnection(uint8_t connected) { (void)connected; }
 
 static uint32_t s_published_gnss,s_health_runs;
 static Px4Lite_SystemHealth_t s_last_health;
@@ -69,6 +77,35 @@ static void NewNoFix(uint32_t now_ms)
   s_driver_source.valid_mask=GNSS_VALID_NAV_STATUS;s_driver_source.fix_quality=0U;
   s_driver_source.satellites=0U;s_snapshot_result=GNSS_RESULT_NO_FIX;
 }
+/** @brief 只在最外层解锁时模拟高优先级sensor发布；真实采集函数负责更新状态和时标。 */
+static void ExitCritical(void)
+{
+  assert(s_critical_depth != 0U);
+  if (--s_critical_depth != 0U || !s_inject_rx) { return; }
+  s_inject_rx = 0U;
+  NewNoFix(s_clock);
+  s_driver_source.valid_mask |= GNSS_VALID_POSITION;
+  s_driver_source.fix_valid = s_driver_source.fix_quality = 1U;
+  s_driver_source.position_update_ms = s_clock;
+  s_snapshot_result = GNSS_RESULT_OK;
+  Px4Lite_SensorWorkRun(s_clock);
+}
+
+/** @brief 超时判定遇到新的定位时，新状态与时标必须同时留在Health快照。 */
+static void TestRecoveryDuringHealth(void)
+{
+  DropoutReset();
+  NewNoFix(0U);
+  DropoutStep(0U);
+  DropoutStep(PX4LITE_GNSS_OFFLINE_MS);
+  assert(s_last_health.module_state[PX4LITE_MODULE_GNSS] == PX4LITE_STATE_DEGRADED);
+  s_clock = PX4LITE_GNSS_OFFLINE_MS + 1U;
+  s_inject_rx = 1U;
+  Px4Lite_HealthRun(s_clock);
+  assert(s_inject_rx == 0U && s_status[PX4LITE_MODULE_GNSS].last_rx_ms == s_clock);
+  assert(s_last_health.module_state[PX4LITE_MODULE_GNSS] == PX4LITE_STATE_ONLINE);
+}
+
 /** @brief 连续有效接收不能被TX故障伪装成红色离线，无定位仍必须是DEGRADED。 */
 static void TestNewRxSurvivesServiceError(void)
 {
@@ -129,7 +166,7 @@ static void TestSnapshotErrorsDoNotPublish(void)
 /** @brief 执行跨层异常/时效回归，不能用通过结果代替实板接线与长稳验证。 */
 int main(void)
 {
-  TestNewRxSurvivesServiceError();TestRealOfflineWithoutNewRx();
+  TestRecoveryDuringHealth();TestNewRxSurvivesServiceError();TestRealOfflineWithoutNewRx();
   TestOldMeasurementsNotResurrected();TestSnapshotErrorsDoNotPublish();
   puts("GNSS dropout integration: real Adapter/SensorWork/Health new RX+IO error / real 2s offline / stale fields / invalid snapshot PASS");
   return 0;

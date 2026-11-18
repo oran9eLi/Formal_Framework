@@ -60,7 +60,7 @@
 #include <string.h>
 
 static volatile uint8_t s_gnss_reinit_pending; /**< Health 只置位，由 sensor 消费。 */
-static uint32_t s_gnss_last_rx_sequence; /**< 适配器已消费的驱动链路序号，重初始化后复位。 */
+static uint32_t s_gnss_last_rx_sequence; /**< 适配器已消费的驱动链路序号；只在冷初始化复位，自动恢复不重发旧快照。 */
 
 static uint32_t s_heartbeat_ms[PX4LITE_HEARTBEAT_COUNT];
 static uint32_t s_heartbeat_seen_mask;
@@ -578,7 +578,7 @@ Px4Lite_Result_t Px4Lite_GnssRead(Px4Lite_SensorGnss_t *measurement)
   s_gnss_reinit_pending = 0U;
   taskEXIT_CRITICAL();
   if (reinit != 0U) {
-    s_gnss_last_rx_sequence = 0U;
+    /* Driver在owner内复核自动恢复；warm后新帧仍使用单调序号，不先清消费者标记。 */
     Sensor_GNSS_RequestReinit();
   }
   now_ms = Px4Lite_PlatformGetMs();
@@ -1118,11 +1118,25 @@ static uint8_t PlatformPowerReferenceStatus(uint8_t status)
   }
 }
 
+/** @brief 输入等待、未供电或量程越界时撤销测量有效性，保留原始缓存及其时间。 */
+static void PlatformPower2InvalidateDiagnostics(void)
+{
+  taskENTER_CRITICAL();
+  s_power2_diagnostics.voltage_valid = 0U;
+  s_power2_diagnostics.current_valid = 0U;
+  s_power2_diagnostics.voltage_mv = 0U;
+  s_power2_diagnostics.current_ma = 0;
+  s_power2_diagnostics.current_pin_mv = 0U;
+  taskEXIT_CRITICAL();
+}
+
 /**
  * @brief sensor在Service之后发布同轮只读诊断，失败尝试明确标为无效。
  * @param[in] now_ms 本轮采样时刻，单位ms。
  * @param[in] snapshot 成功的Driver副本；采集失败时为NULL。
  * @details 仅复制ADC缓存，不启动转换；ADC2内嵌参考不受后续电流参考采样覆盖。
+ *          snapshot存在时所选第二组电流脚可复制最近完成或拒绝的诊断缓存；current_valid=0时，
+ *          该缓存可能属于更早尝试，不能冒充本轮可信电流或承诺本轮新鲜。
  */
 static void PlatformPower2PublishDiagnostics(uint32_t now_ms, const Power_Snapshot_t *snapshot)
 {
@@ -1138,6 +1152,9 @@ static void PlatformPower2PublishDiagnostics(uint32_t now_ms, const Power_Snapsh
   converted.voltage_raw = source.raw_average;
   converted.voltage_pin_mv = source.pin_mv;
   converted.voltage_bsp_mv = source.input_mv;
+  converted.voltage_discharge_pin_mv = source.discharge_pin_mv;
+  converted.voltage_discharge_enabled = source.discharge_enabled;
+  converted.voltage_discharge_checked = source.discharge_checked;
   converted.vref_raw = source.reference.vref_raw;
   converted.vref_cal_raw = source.reference.calibration_raw;
   converted.vdda_mv = source.reference.vdda_mv;
@@ -1148,9 +1165,7 @@ static void PlatformPower2PublishDiagnostics(uint32_t now_ms, const Power_Snapsh
     converted.voltage_mv = (uint32_t)(snapshot->voltage_v * 1000.0f + 0.5f);
     converted.current_ma = snapshot->current_ma;
     converted.current_valid = snapshot->current_valid;
-    if (snapshot->current_valid) {
-      BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY2, &converted.current_pin_mv, &floating);
-    }
+    BSP_ADC_Current_GetDiag(BSP_ADC_CURRENT_BATTERY2, &converted.current_pin_mv, &floating);
   }
   taskENTER_CRITICAL();
   s_power2_diagnostics = converted;
@@ -1175,7 +1190,11 @@ Px4Lite_Result_t Px4Lite_Battery2CopyDiagnostics(Px4Lite_PowerDiagnostics_t *out
   return PX4LITE_NOT_READY;
 }
 
-/** @brief 读取第二组主回路测量，保持原topic身份；参考回退作为降级事实交给Framework。 */
+/**
+ * @brief 读取第二组主回路测量，保持原topic身份；参考回退作为降级事实交给Framework。
+ * @note 输入恢复阶段返回BUSY要求sensor后续短周期轮询；明确未供电返回NOT_READY，
+ *       正式ADC量程越界返回OVERFLOW；Framework立即发布完整失效快照并区分故障与无电。
+ */
 Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement)
 {
 #if PX4LITE_ENABLE_BATTERY2
@@ -1188,12 +1207,39 @@ Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *measurement)
 
   now_ms = Px4Lite_PlatformGetMs();
   result = Sensor_Power2_Service(now_ms);
+  if (result == POWER_RESULT_PENDING) {
+    PlatformPower2InvalidateDiagnostics();
+    return PX4LITE_BUSY;
+  }
+  if (result == POWER_RESULT_NOT_CONNECTED) {
+    memset(measurement, 0, sizeof(*measurement));
+    PlatformPower2InvalidateDiagnostics();
+    PlatformPower2PublishDiagnostics(now_ms, 0);
+    return PX4LITE_NOT_READY;
+  }
+  if (result == POWER_RESULT_INVALID_DATA) {
+    memset(measurement, 0, sizeof(*measurement));
+    PlatformPower2InvalidateDiagnostics();
+    PlatformPower2PublishDiagnostics(now_ms, 0);
+    return PX4LITE_OVERFLOW;
+  }
   if (result != POWER_RESULT_OK) {
     if (result != POWER_RESULT_NO_DATA) { PlatformPower2PublishDiagnostics(now_ms, 0); }
     return (result == POWER_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR;
   }
 
   result = Sensor_Power2_CopySnapshot(&snapshot);
+  if (result == POWER_RESULT_INVALID_DATA) {
+    memset(measurement, 0, sizeof(*measurement));
+    PlatformPower2InvalidateDiagnostics();
+    return PX4LITE_OVERFLOW;
+  }
+  if (result == POWER_RESULT_PENDING) { return PX4LITE_BUSY; }
+  if (result == POWER_RESULT_NOT_CONNECTED) {
+    memset(measurement, 0, sizeof(*measurement));
+    PlatformPower2InvalidateDiagnostics();
+    return PX4LITE_NOT_READY;
+  }
   if (result != POWER_RESULT_OK) { return (result == POWER_RESULT_NO_DATA) ? PX4LITE_IDLE : PX4LITE_IO_ERROR; }
   PlatformPower2PublishDiagnostics(now_ms, &snapshot);
 

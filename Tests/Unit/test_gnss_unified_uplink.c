@@ -36,6 +36,8 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchInit(void) { return PX4LITE_OK; }
 Px4Lite_Result_t Px4Lite_RpiBaudSwitchPeekResponse(Px4Lite_RpiBaudSwitchResponseView_t *out)
 { if(!b1_pending){return PX4LITE_IDLE;}memset(out,0,sizeof(*out));out->payload=reply_bytes;out->payload_type=0x8003U;out->payload_length=14U;return PX4LITE_OK; }
 Px4Lite_Result_t Px4Lite_RpiBaudSwitchResponseSent(void) { b1_pending=0U;return PX4LITE_OK; }
+/** @brief GNSS编码回归不播放配置结果音；专用TX用例覆盖真实失败通知。 */
+void Px4Lite_RpiBaudSwitchResponseFailed(Px4Lite_Result_t result) { (void)result; }
 Px4Lite_Result_t Px4Lite_RpiH1EchoPeekResponse(Px4Lite_RpiH1EchoResponseView_t *out)
 { if(!h1_pending){return PX4LITE_IDLE;}memset(out,0,sizeof(*out));out->payload=reply_bytes;out->payload_type=0x8003U;out->payload_length=2U;return PX4LITE_OK; }
 void Px4Lite_RpiH1EchoResponseSent(void) { h1_pending=0U; }

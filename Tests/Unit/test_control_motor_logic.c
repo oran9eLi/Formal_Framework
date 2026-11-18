@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file test_control_motor_logic.c
  * @brief 验证 Control 模块的电机油门映射、急停和失效保护逻辑。
  * @details 原电压保护断言使用 PX4LITE_CONTROL_POWER_GATE_ENABLE=1 的 host 配置执行。
@@ -124,6 +124,8 @@ Px4Lite_Result_t Px4Lite_GetModuleStatus(Px4Lite_ModuleId_t module_id, Px4Lite_M
 }
 
 #include "../../Framework/Src/px4lite_control.c"
+/** @brief 原控制策略夹具隔离声光输出，结果观察由专用真实Control测试验证。 */
+void Px4Lite_StartupToneNotifyRpiResult(uint8_t succeeded) { (void)succeeded; }
 
 /** @brief 显式解锁并完成 ESC 预备；记录初始化或解锁失败，不靠油门隐式解锁。 */
 static int ArmControl(void)

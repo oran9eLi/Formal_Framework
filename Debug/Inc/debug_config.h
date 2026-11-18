@@ -31,7 +31,7 @@
 #endif
 /** @brief 本轮三模块诊断输出Baro真实状态及sample有效性，仅读缓存，不访问I2C。 */
 #define DEBUG_BARO_MONITOR_ENABLE      1U
-#define DEBUG_POWER_MONITOR_ENABLE     1U /**< 主回路调试：每秒输出topic和同轮ADC/参考缓存，不触发采样。 */
+#define DEBUG_POWER_MONITOR_ENABLE     1U /**< 逻辑第二组主回路调试：每秒输出topic及BSP所选路由的ADC/参考缓存，不触发采样。 */
 #define DEBUG_LORA_MONITOR_ENABLE      0U /* 临时诊断LoRa收不到：打印rx_byte/rx_frame；定位后改回0 */
 #define DEBUG_ALARM_MONITOR_ENABLE     0U
 #define DEBUG_STORAGE_MONITOR_ENABLE   0U

@@ -110,9 +110,39 @@ static void TestSilenceThenReconnect(void)
   assert(Snapshot().rx_sequence==1U && Snapshot().last_rx_ms==30010U && Snapshot().fix_valid);
 }
 
+/** @brief 校验静默后的第一帧在队列已提交、仅NDTR推进、串口字节待取时均可保留。 */
+static void TestFirstFrameDuringSilenceRecovery(void)
+{
+  unsigned mode;
+  const uint16_t length = sizeof(s_good_gga) - 1U;
+  for (mode = 0U; mode < 3U; ++mode) {
+    NewBoard();
+    assert(Run(0U) == GNSS_RESULT_OK && Run(6000U) == GNSS_RESULT_OK);
+    assert(s_silence_recovery_pending && !s_rx_recover_request);
+    if (mode == 2U) {
+      uart_regs.SR = USART_SR_RXNE;
+      assert(Run(6010U) == GNSS_RESULT_OK && (uart_regs.CR3 & USART_CR3_DMAR));
+      uart_regs.SR = 0U;
+    }
+    Wire(s_good_gga, length);
+    if (mode == 0U) {
+      uart_regs.SR = USART_SR_IDLE;
+      BSP_GNSS_UartIrqHandler();
+      assert(Info().queued_bytes == length);
+    }
+    assert(Run(mode == 2U ? 6020U : 6010U) == GNSS_RESULT_OK);
+    assert(Info().recoveries == 0U && Info().rx_drop_bytes == 0U && Snapshot().fix_valid);
+    assert(Info().rx_bytes == length && Snapshot().rx_sequence == 1U);
+  }
+  /* 真UART错误与队列数据同时到达时，错误路径优先。 */
+  NewBoard(); Run(0U); Run(6000U); Wire(s_good_gga, length); UartFault(); Run(6010U);
+  assert(Info().recoveries == 1U && Info().uart_errors == 1U && !Snapshot().fix_valid);
+}
+
 /** @brief 联合真实恢复链检查，GNSS物理接线/信号质量仍需实板计数。 */
 int main(void)
 {
+  TestFirstFrameDuringSilenceRecovery();
   TestFaultDuringRebuildThenRecover();TestRepeatedFaultsAndWarmRequests();
   TestOwnerDetectsMissingReceiveEnable();TestSilenceThenReconnect();
   assert(primask==0U);

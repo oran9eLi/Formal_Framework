@@ -21,9 +21,23 @@
 #ifndef BSP_ENABLE_POWER1
 #define BSP_ENABLE_POWER1 0U
 #endif
-/** @brief 第二组外部电源输入（PA4 电压、PC1 电流）；当前用于整机主回路监测。 */
+/** @brief 第二组逻辑电源输入；用于整机主回路，物理引脚由板级路由配置选择。 */
 #ifndef BSP_ENABLE_POWER2
 #define BSP_ENABLE_POWER2 1U
+#endif
+/**
+ * @brief 第二组物理路由：1为主扩展板两根排线的PA5/PC0，0保留独立直连PA4/PC1。
+ * @details 扩展板VOLT/CURR经U3.17/U3.26进入PA5/PC0；只改变板级映射，
+ *          不启用逻辑组1，不改变ADC实例、标定、有效性判据或上层单组出口。
+ */
+#ifndef BSP_POWER2_USE_EXPANSION_ROUTE
+#define BSP_POWER2_USE_EXPANSION_ROUTE 1U
+#endif
+#if (BSP_POWER2_USE_EXPANSION_ROUTE != 0U) && (BSP_POWER2_USE_EXPANSION_ROUTE != 1U)
+#error "BSP_POWER2_USE_EXPANSION_ROUTE must be 0 or 1"
+#endif
+#if BSP_POWER2_USE_EXPANSION_ROUTE && BSP_ENABLE_POWER1 && BSP_ENABLE_POWER2
+#error "Expansion power2 PA5/PC0 route conflicts with enabled power1; select direct route for dual inputs"
 #endif
 /** @brief 任一电源组启用时保留 ADC1 内部参考及所需外部 ADC。 */
 #define BSP_ENABLE_ADC ((BSP_ENABLE_POWER1 != 0U) || (BSP_ENABLE_POWER2 != 0U))
@@ -167,22 +181,45 @@
 #define BSP_ADC_DIVIDER_NUM 101779U
 #define BSP_ADC_DIVIDER_DEN 10000U
 
-/* 第二块电池电源采样 ADC2：ADC2 IN4，PA4。与电池 1 同规格，分压系数相同。 */
+/** @brief 第二组独立使用ADC2；扩展板走IN5/PA5，独立直连走IN4/PA4。 */
 #define BSP_ADC2_INS         ADC2
-#define BSP_ADC2_CH          ADC_CHANNEL_4
 #define BSP_ADC2_PORT        GPIOA
+#if BSP_POWER2_USE_EXPANSION_ROUTE
+#define BSP_ADC2_CH          ADC_CHANNEL_5
+#define BSP_ADC2_PIN         GPIO_PIN_5
+#else
+#define BSP_ADC2_CH          ADC_CHANNEL_4
 #define BSP_ADC2_PIN         GPIO_PIN_4
+#endif
 #define BSP_ADC2_DIVIDER_NUM 101779U
 #define BSP_ADC2_DIVIDER_DEN 10000U
 
-/* 两路电流计采样 ADC：ADC3 IN10/IN11，PC0/PC1。与电池电压 ADC1/ADC2 分属独立外设，互不冲突。 */
+/** @brief 第二组所选电压脚采样前以输入弱下拉清理残留电荷；不作用于电流脚。 */
+#ifndef BSP_ADC2_DISCHARGE_ENABLE
+#define BSP_ADC2_DISCHARGE_ENABLE 1U
+#endif
+/** @brief 弱下拉dummy采样后恢复模拟输入的等待时间，单位真实ms；等待期间不保持下拉。 */
+#ifndef BSP_ADC2_DISCHARGE_RECOVERY_MS
+#define BSP_ADC2_DISCHARGE_RECOVERY_MS 100U
+#endif
+/** @brief 弱下拉时仅用于清理采样保持电荷的转换次数，不能作为正式电压。 */
+#ifndef BSP_ADC2_DISCHARGE_SAMPLE_COUNT
+#define BSP_ADC2_DISCHARGE_SAMPLE_COUNT 4U
+#endif
+
+/** @brief 电流共用ADC3；组2扩展板走IN10/PC0，独立直连走IN11/PC1。 */
 #define BSP_ADC_CURRENT_INS           ADC3
 #define BSP_ADC_CURRENT1_CH           ADC_CHANNEL_10
 #define BSP_ADC_CURRENT1_PORT         GPIOC
 #define BSP_ADC_CURRENT1_PIN          GPIO_PIN_0
-#define BSP_ADC_CURRENT2_CH           ADC_CHANNEL_11
 #define BSP_ADC_CURRENT2_PORT         GPIOC
+#if BSP_POWER2_USE_EXPANSION_ROUTE
+#define BSP_ADC_CURRENT2_CH           ADC_CHANNEL_10
+#define BSP_ADC_CURRENT2_PIN          GPIO_PIN_0
+#else
+#define BSP_ADC_CURRENT2_CH           ADC_CHANNEL_11
 #define BSP_ADC_CURRENT2_PIN          GPIO_PIN_1
+#endif
 #define BSP_ADC_CURRENT_SAMPLE_TIME   ADC_SAMPLETIME_480CYCLES
 #define BSP_ADC_CURRENT_AVERAGE_COUNT 16U
 

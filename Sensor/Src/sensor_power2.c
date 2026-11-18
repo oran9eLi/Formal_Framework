@@ -3,9 +3,10 @@
  * @brief 实现第二块电池电源检测强类型驱动。
  *
  * @details
- * 本文件从 BSP_ADC2 读取 PA4/ADC2_IN4 电压，使用 `sensor_power_config.h` 中的第二电池动力电池
- * 曲线，并复用通用校准和滤波配置。低电压事实经过滤波、连续确认和回差处理后上报，系统级
- * 告警和关断策略由上层仲裁。
+ * 本文件从 BSP_ADC2 和逻辑电流通道BATTERY2读取第二组测量；物理引脚由BSP路由选择，
+ * 默认扩展板PA5/PC0，也可选择独立PA4/PC1，Driver不绑定引脚或改变组身份。
+ * 使用 `sensor_power_config.h` 的第二组电量曲线、校准和滤波配置。低电压事实经连续确认和
+ * 回差处理后上报，系统级告警和关断策略由上层仲裁。
  */
 
 #include "sensor_power2.h"
@@ -48,6 +49,42 @@ static uint8_t s_initialized2;
 static uint8_t s_filter_valid2;
 static uint8_t s_current_filter_valid2;
 static volatile uint8_t s_reinit_request2;
+static uint8_t s_input_voltage_seen2; /**< 已完成一轮可解释的输入电压测量为1，不以时间0作哨兵。 */
+static uint8_t s_input_powered2; /**< 输入电压通过供电回差判据为1，不证明电流计物理在位。 */
+static uint8_t s_invalid_data2; /**< 最近正式电压测量饱和/超量程为1，旧有效样本不得继续对外授权。 */
+
+/**
+ * @brief 根据新完成的未滤波输入电压更新供电回差，不用电流大小判定接入。
+ * @param[in] voltage_mv 同轮校准后的新电压，单位mV；不会被旧IIR值拖住离电判定。
+ * @return 1为本轮输入可用于电压/电流测量，0为未确认有效供电。
+ */
+static uint8_t Power2_InputPowered(uint32_t voltage_mv)
+{
+  s_input_voltage_seen2 = 1U;
+  if (s_input_powered2 != 0U) {
+    if (voltage_mv <= POWER2_INPUT_OFF_MV) { s_input_powered2 = 0U; }
+  } else if (voltage_mv >= POWER2_INPUT_ON_MV) {
+    s_input_powered2 = 1U;
+  }
+  return s_input_powered2;
+}
+
+/** @brief 无有效输入时撤销测量并重置滤波；保留有效样本序号、最后采样时间和累计错误。 */
+static void Power2_InvalidateInput(void)
+{
+  s_snapshot2.voltage_v = 0.0f;
+  s_snapshot2.current_ma = 0;
+  s_snapshot2.current_valid = 0U;
+  s_snapshot2.power_mw = 0U;
+  s_snapshot2.percent = 0U;
+  s_snapshot2.low_voltage = 0U;
+  s_filtered_voltage_mv2 = 0U;
+  s_filtered_current_ma2 = 0;
+  s_filter_valid2 = 0U;
+  s_current_filter_valid2 = 0U;
+  s_pending_percent_count2 = 0U;
+  s_pending_low_voltage_count2 = 0U;
+}
 
 /**
  * @brief 对 BSP_ADC2 输出的电池电压做二次校准。
@@ -270,6 +307,7 @@ static uint8_t Power2_ApplyLowVoltageConfirm(uint8_t previous, uint32_t filtered
   return previous;
 }
 
+/** @brief 初始化第二组驱动私有状态，不在本层操作ADC或引脚。 */
 Power_Result_t Sensor_Power2_Init(void)
 {
   memset(&s_snapshot2, 0, sizeof(s_snapshot2));
@@ -279,15 +317,24 @@ Power_Result_t Sensor_Power2_Init(void)
   s_pending_low_voltage_count2 = 0U;
   s_filter_valid2              = 0U;
   s_current_filter_valid2      = 0U;
+  s_input_voltage_seen2        = 0U;
+  s_input_powered2             = 0U;
+  s_invalid_data2              = 0U;
   s_initialized2               = 1U;
   return POWER_RESULT_OK;
 }
 
+/** @brief 仅提交重建请求，实际复位仍由sensor所有者的Service执行。 */
 void Sensor_Power2_RequestReinit(void)
 {
   s_reinit_request2 = 1U;
 }
 
+/**
+ * @brief sensor所有者执行第二组采样；正式ADC饱和立即撤销测量，普通I/O失败保留短期旧样本。
+ * @param[in] now_ms 本轮真实毫秒时刻；BUSY只代表BSP合作等待，不累计故障。
+ * @return 原始量程越界为INVALID_DATA；无有效输入为NOT_CONNECTED，两者不等价。
+ */
 Power_Result_t Sensor_Power2_Service(uint32_t now_ms)
 {
   uint32_t measured_voltage_mv = 0U;
@@ -296,26 +343,68 @@ Power_Result_t Sensor_Power2_Service(uint32_t now_ms)
   uint32_t filtered_voltage_mv;
   int32_t current_ma;
   uint8_t candidate_percent;
+  uint8_t first_voltage;
+  BSP_Status_t voltage_result;
+  BSP_ADC2_Diag_t voltage_diag;
 
   if (s_reinit_request2 != 0U) {
+    uint32_t sequence = s_snapshot2.rx_sequence;
+    uint32_t errors = s_snapshot2.error_count;
     s_reinit_request2 = 0U;
     (void)Sensor_Power2_Init();
+    /* warm恢复不重置有效序号，防止首帧与Platform旧last_sequence相同而被吞掉。 */
+    s_snapshot2.rx_sequence = sequence;
+    s_snapshot2.error_count = errors;
   }
   if (s_initialized2 == 0U) { return POWER_RESULT_NO_DATA; }
 
-  if (BSP_ADC2_ReadVoltageMv(&measured_voltage_mv) != BSP_STATUS_OK) {
+  voltage_result = BSP_ADC2_ReadVoltageMv(&measured_voltage_mv);
+  if (voltage_result == BSP_STATUS_BUSY) { return POWER_RESULT_PENDING; }
+  if (voltage_result != BSP_STATUS_OK) {
     s_snapshot2.error_count++;
     return POWER_RESULT_IO_ERROR;
   }
 
+  /* 正常转换成功不等于源条件通过；只解释同轮BSP已完成的原始诊断，不再操作引脚。 */
+  if ((BSP_ADC2_GetDiag(&voltage_diag) != BSP_STATUS_OK) || !voltage_diag.sample_valid) {
+    s_snapshot2.error_count++;
+    return POWER_RESULT_IO_ERROR;
+  }
+  /* 12bit上轨4095只能证明量程已到边界，不能解释为精确33.587V或“有电且真实”。 */
+  if ((voltage_diag.raw_average >= 4095U) || (voltage_diag.raw_max >= 4095U)) {
+    s_invalid_data2 = 1U;
+    s_input_powered2 = 0U;
+    s_snapshot2.error_count++;
+    Power2_InvalidateInput();
+    return POWER_RESULT_INVALID_DATA;
+  }
+  if (voltage_diag.discharge_enabled && (!voltage_diag.discharge_checked ||
+      voltage_diag.discharge_status != (uint8_t)BSP_STATUS_OK)) {
+    s_snapshot2.error_count++;
+    return POWER_RESULT_IO_ERROR;
+  }
+  s_invalid_data2 = 0U;
+  if (voltage_diag.discharge_enabled &&
+      (voltage_diag.discharge_pin_mv < POWER2_INPUT_SOURCE_MIN_PIN_MV)) {
+    s_input_voltage_seen2 = 1U;
+    s_input_powered2 = 0U;
+    Power2_InvalidateInput();
+    return POWER_RESULT_NOT_CONNECTED;
+  }
+
   voltage_mv = Power2_ApplyCalibration(measured_voltage_mv);
+  if (Power2_InputPowered(voltage_mv) == 0U) {
+    Power2_InvalidateInput();
+    return POWER_RESULT_NOT_CONNECTED;
+  }
+  first_voltage = (s_filter_valid2 == 0U) ? 1U : 0U;
   s_snapshot2.rx_sequence++;
   if (s_snapshot2.rx_sequence == 0U) { s_snapshot2.rx_sequence = 1U; }
   s_snapshot2.sample_time_ms = now_ms;
   s_snapshot2.voltage_v      = ((float)voltage_mv) / 1000.0f;
   filtered_voltage_mv        = Power2_FilterVoltage(voltage_mv);
   candidate_percent          = Power2_CalcPercent(filtered_voltage_mv);
-  s_snapshot2.percent        = (s_snapshot2.rx_sequence == 1U) ? candidate_percent : Power2_ApplyPercentConfirm(s_snapshot2.percent, candidate_percent, filtered_voltage_mv);
+  s_snapshot2.percent        = first_voltage ? candidate_percent : Power2_ApplyPercentConfirm(s_snapshot2.percent, candidate_percent, filtered_voltage_mv);
   s_snapshot2.low_voltage    = Power2_ApplyLowVoltageConfirm(s_snapshot2.low_voltage, filtered_voltage_mv);
 
   if (BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CURRENT_BATTERY2, &current_adc_mv) == BSP_STATUS_OK) {
@@ -325,6 +414,9 @@ Power_Result_t Sensor_Power2_Service(uint32_t now_ms)
     s_snapshot2.power_mw   = Power2_CalcPowerMw(voltage_mv, current_ma);
   } else {
     s_snapshot2.error_count++;
+    /* 无效电流不能进入IIR，恢复的首个可信样本必须独立建立滤波，包括真实0A。 */
+    s_current_filter_valid2 = 0U;
+    s_filtered_current_ma2 = 0;
     s_snapshot2.current_ma = 0;
     s_snapshot2.current_valid = 0U;
     s_snapshot2.power_mw   = 0U;
@@ -333,14 +425,19 @@ Power_Result_t Sensor_Power2_Service(uint32_t now_ms)
   return POWER_RESULT_OK;
 }
 
+/** @brief 复制设备事实；饱和保持独立无效结果，不因旧有效序号存在而重获授权。 */
 Power_Result_t Sensor_Power2_CopySnapshot(Power_Snapshot_t *out)
 {
   if (out == 0) { return POWER_RESULT_INVALID_PARAM; }
 
   *out = s_snapshot2;
+  if (s_invalid_data2 != 0U) { return POWER_RESULT_INVALID_DATA; }
+  if (s_input_voltage_seen2 == 0U) { return POWER_RESULT_NO_DATA; }
+  if ((s_input_voltage_seen2 != 0U) && (s_input_powered2 == 0U)) { return POWER_RESULT_NOT_CONNECTED; }
   return (s_snapshot2.rx_sequence != 0U) ? POWER_RESULT_OK : POWER_RESULT_NO_DATA;
 }
 
+/** @brief 复制累计计数及当前有效性；量程越界不伪装未接入或低电压。 */
 Power_Result_t Sensor_Power2_GetStatus(Power_Status_t *out)
 {
   if (out == 0) { return POWER_RESULT_INVALID_PARAM; }
@@ -354,5 +451,8 @@ Power_Result_t Sensor_Power2_GetStatus(Power_Status_t *out)
   out->percent        = s_snapshot2.percent;
   out->low_voltage    = s_snapshot2.low_voltage;
   out->reserved       = 0U;
+  if (s_invalid_data2 != 0U) { return POWER_RESULT_INVALID_DATA; }
+  if (s_input_voltage_seen2 == 0U) { return POWER_RESULT_NO_DATA; }
+  if ((s_input_voltage_seen2 != 0U) && (s_input_powered2 == 0U)) { return POWER_RESULT_NOT_CONNECTED; }
   return (s_snapshot2.rx_sequence != 0U) ? POWER_RESULT_OK : POWER_RESULT_NO_DATA;
 }

@@ -93,7 +93,7 @@ static void AssertDisabledFields(void)
   assert(!s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT].valid);
 }
 
-/** @brief 验证总输入真实V/A/W、合法零电流、测量缺失、低压和高压的显示事实。 */
+/** @brief 验证总输入V/A/W、合法零电流、独立有效位及用户低压文字隐藏规则。 */
 static void TestSingleSupply(void)
 {
   App_EnvironmentSnapshot_t env;
@@ -125,7 +125,9 @@ static void TestSingleSupply(void)
   assert(Display_EvalMotorFault(&env) == 0U && !s_hmi_values[DISPLAY_HMI_VAR_SELF_CHECK_MOTOR].valid);
   env.valid_mask = APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_CURRENT2; env.voltage2_mv = 4500U;
   Display_UpdateBatteryBands(&env); Display_LoadEnvironmentSnapshot(&env);
-  assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].value == 450U); /* 真实4.5V，非在位推断零。 */
+  assert(!s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].valid);
+  assert(!s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT].valid && !s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].valid);
+  assert(s_hmi_values[DISPLAY_HMI_VAR_SELF_CHECK_MOTOR].valid); /* 只隐藏文字，不伪造电机状态未知。 */
   assert(Display_EvalMotorFault(&env) != 0U);
   env.voltage2_mv = 15000U; Display_UpdateBatteryBands(&env); Display_LoadEnvironmentSnapshot(&env);
   assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].value == 1500U);
@@ -136,6 +138,45 @@ static void TestSingleSupply(void)
   AssertDisabledFields();
   Display_ClearBatteryFields();
   assert(!s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].valid);
+}
+
+/** @brief 原始mV边界、整组隐藏、合法0A和状态灯/百分比/输入副本不变独立验证。 */
+static void TestSupplyVisibilityBoundary(void)
+{
+  static const uint32_t values[] = {0U,4999U,5000U,5001U,12000U};
+  App_EnvironmentSnapshot_t env, original;
+  unsigned i;
+  memset(&env,0,sizeof(env));
+  env.valid_mask=APP_ENV_VALID_VOLTAGE2|APP_ENV_VALID_CURRENT2|APP_ENV_VALID_PERCENT2|APP_ENV_VALID_PRESSURE_TEMPERATURE;
+  env.current2_ma=1500;env.battery2_percent=43U;env.temperature_c=23.5f;env.pressure_pa=100000.0f;
+  for(i=0U;i<sizeof(values)/sizeof(values[0]);i++) {
+    uint8_t visible=(values[i]>5000U)?1U:0U;
+    env.voltage2_mv=values[i];original=env;
+    assert(Display_SupplyVoltageVisible(values[i])==visible);
+    Display_UpdateBatteryBands(&env);Display_LoadEnvironmentSnapshot(&env);
+    assert(memcmp(&env,&original,sizeof(env))==0);
+    assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].valid==visible);
+    assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT].valid==visible);
+    assert(s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].valid==visible);
+    assert(s_hmi_values[DISPLAY_HMI_VAR_SELF_CHECK_MOTOR].valid);
+    assert(s_hmi_values[DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2].valid);
+    assert(s_hmi_values[DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3].valid);
+    assert(s_hmi_values[DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4].valid);
+    assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT].valid && s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT].value==43U);
+    assert(s_hmi_values[DISPLAY_HMI_VAR_TEMPERATURE].valid && s_hmi_values[DISPLAY_HMI_VAR_PRESSURE].valid);
+    if(!visible) { assert(!s_disp_motor_dv_valid); }
+  }
+  env.voltage2_mv=5000U;Display_LoadEnvironmentSnapshot(&env);
+  env.voltage2_mv=5001U;env.current2_ma=0;original=env;Display_LoadEnvironmentSnapshot(&env);
+  assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].valid && s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].value==500U);
+  assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT].valid && !s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT].value);
+  assert(s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].valid && !s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].value);
+  assert(memcmp(&env,&original,sizeof(env))==0);
+  env.valid_mask=0U;Display_LoadEnvironmentSnapshot(&env);
+  assert(!s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].valid);
+  env.valid_mask=APP_ENV_VALID_VOLTAGE2|APP_ENV_VALID_CURRENT2;env.voltage2_mv=12000U;Display_LoadEnvironmentSnapshot(&env);
+  assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].valid && s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].value==1200U);
+  AssertDisabledFields();
 }
 
 /** @brief 环境字段、午夜时间及完整快照路径在失效后必须撤值，并允许同值恢复。 */
@@ -174,7 +215,7 @@ static void TestEnvironmentAndSnapshot(void)
 int main(void)
 {
   assert(!PX4LITE_ENABLE_BATTERY1 && PX4LITE_ENABLE_BATTERY2);
-  TestNavigationValidity(); TestSingleSupply(); TestEnvironmentAndSnapshot();
-  puts("display field validity: PASS (input 2 V/A/W, disabled input 1, unknown/zero, actual voltage, no SOC, recovery)");
+  TestNavigationValidity(); TestSingleSupply(); TestSupplyVisibilityBoundary(); TestEnvironmentAndSnapshot();
+  puts("display field validity: PASS (0/4999/5000 hidden V-A-W, 5001/12000 recover, true0A, input and motor lights/percent intact, prior validity)");
   return 0;
 }

@@ -17,6 +17,9 @@ static unsigned primary_copies, secondary_copies, current_reads;
 
 BSP_Status_t BSP_ADC2_ReadVoltageMv(uint32_t *out)
 { if (fail_voltage) { return BSP_STATUS_ERROR; } *out = 12000U; return BSP_STATUS_OK; }
+/** @brief 本夹具隔离源检查，只验证Driver/App有效零电流；明确disabled不代表已证明接头在位。 */
+BSP_Status_t BSP_ADC2_GetDiag(BSP_ADC2_Diag_t *out)
+{ memset(out,0,sizeof(*out));out->ready=1U;out->sample_valid=1U;out->discharge_enabled=0U;return BSP_STATUS_OK; }
 BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uint32_t *out)
 {
   assert(channel == BSP_ADC_CURRENT_BATTERY2); current_reads++;

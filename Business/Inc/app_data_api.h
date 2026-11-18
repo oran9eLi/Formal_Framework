@@ -162,7 +162,7 @@ typedef struct {
   int32_t yaw_rate_dps100;      /**< 航向角速度，单位：(degree/s) * 100。 */
   uint16_t hdop_x100;           /**< 水平精度因子，单位：HDOP * 100。 */
   uint8_t satellites_used;      /**< 当前定位使用的卫星数量。 */
-  uint8_t gnss_fix_type;        /**< GNSS 定位类型，沿用驱动层 fix type。 */
+  uint8_t gnss_fix_type;        /**< 本机定位等级，已定位但维度未知为 PX4LITE_GNSS_FIX_UNSPECIFIED。 */
   uint8_t navigation_quality;   /**< 导航质量，0 表示最低，数值越高表示质量越好。 */
   uint8_t reserved;             /**< 保留字段，保持结构体对齐。 */
 } App_NavigationSnapshot_t;

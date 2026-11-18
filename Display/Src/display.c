@@ -366,7 +366,7 @@ static void Display_InitSelfCheckValues(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_BME280, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue(PX4LITE_STATE_UNINITIALIZED));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_2, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3, 0U);
@@ -625,14 +625,6 @@ static uint16_t Display_MapStateValue(Px4Lite_State_t state)
     case PX4LITE_STATE_DISABLED: return 6U;
     default: return 0U;
   }
-}
-
-/*
- * 存储状态保留启动、降级、离线、失败和禁用。
- */
-static uint16_t Display_MapStorageStateValue(Px4Lite_State_t state)
-{
-  return Display_MapStateValue(state);
 }
 
 /*
@@ -1018,16 +1010,6 @@ static void Display_LoadFallbackDateTime(uint32_t now_ms)
   else { Display_InvalidateValue(DISPLAY_HMI_VAR_DATE); }
 }
 
-/** @brief 沿既有显示等级映射GGA质量和维度；调用方必须先授权新鲜NAV_STATUS。 */
-static uint16_t Display_GnssStatusFix(const App_GnssDetails_t *gnss)
-{
-  if (gnss->fix_type == 0U || gnss->fix_dimension == 1U) { return 0U; }
-  if (gnss->fix_type == 2U) { return 4U; }
-  if (gnss->fix_dimension == 2U) { return 2U; }
-  if (gnss->fix_dimension == 3U) { return 3U; }
-  return gnss->satellites_used >= 4U ? 3U : 2U;
-}
-
 /**
  * @brief 本机未冻结时一次读取独立GNSS状态与UTC；不借位置或链路活动授权旧状态。
  * @details App已分别裁剪NAV_STATUS/TIME时效。无定位和0颗只有NAV_STATUS真实有效才显示；
@@ -1038,7 +1020,7 @@ static void Display_LoadLocalGnssSnapshot(uint32_t now_ms)
   App_GnssDetails_t gnss;
   Px4Lite_Result_t result = App_CopyGnssDetails(&gnss, now_ms);
   if (result == PX4LITE_OK && (gnss.valid_mask & PX4LITE_GNSS_VALID_NAV_STATUS)) {
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, Display_GnssStatusFix(&gnss));
+    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_FIX, Px4Lite_GnssFixLevel(&gnss, now_ms, PX4LITE_GNSS_MAX_AGE_MS));
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_GNSS_SAT_COUNT, gnss.satellites_used);
   } else {
     Display_InvalidateValue(DISPLAY_HMI_VAR_GNSS_FIX);
@@ -1095,7 +1077,7 @@ static void Display_ClearSystemSnapshot(void)
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_LORA, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_LORA_STATUS, 0U);
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_REMOTEID, 0U);
-  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, 0U);
+  (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_SD, Display_MapStorageStateValue(PX4LITE_STATE_UNINITIALIZED));
   (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_SELF_CHECK_5GA, 0U);
   Display_SetMotorSelfCheckLights(0U);
 }
@@ -1304,13 +1286,48 @@ static uint16_t Display_CurrentMaToDeciA(int32_t current_ma)
 }
 
 /**
+ * @brief 根据有效电压计算本机供电文字隐藏组，bit0/1分别对应逻辑第一/第二组。
+ * @note 只在显示消费端判断，不改App快照、告警、电机状态灯、观察统计或协议有效位。
+ */
+static uint8_t Display_HiddenSupplyGroups(const App_EnvironmentSnapshot_t *environment)
+{
+  uint8_t hidden = 0U;
+  if (PX4LITE_ENABLE_BATTERY1 && (environment->valid_mask & APP_ENV_VALID_VOLTAGE1) &&
+      !Display_SupplyVoltageVisible(environment->voltage_mv)) { hidden |= 1U; }
+  if (PX4LITE_ENABLE_BATTERY2 && (environment->valid_mask & APP_ENV_VALID_VOLTAGE2) &&
+      !Display_SupplyVoltageVisible(environment->voltage2_mv)) { hidden |= 2U; }
+  return hidden;
+}
+
+/** @brief 冻结期间仅撤销命中隐藏规则的V/A/W文字，不恢复高压文字或更新其他冻结字段。 */
+static void Display_HideFrozenSupplyText(uint8_t hidden)
+{
+  if (hidden & 1U) {
+    Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_VOLTAGE);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_CURRENT);
+    s_disp_main_dv_valid = 0U;
+  }
+  if (hidden & 2U) {
+    Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE);
+    Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT);
+    s_disp_motor_dv_valid = 0U;
+  }
+  if (hidden & (PX4LITE_ENABLE_BATTERY2 ? 2U : 1U)) {
+    Display_InvalidateValue(DISPLAY_HMI_VAR_INPUT_POWER_MW);
+  }
+}
+
+/**
  * @brief 仅消费已启用采样组的真实字段，通用输入功率由同组新鲜电压、电流相乘得到。
  * @details 保留历史第一/第二组 HMI 编号，不把第二组复制成第一组；禁用组保持无效。
  *          功率计算使用原始 mV/mA，不使用屏幕去抖或取整值；任一来源无效则显示 N/A。
+ *          有效电压不大于显示隐藏上限时只隐藏该组V/A/W，原有效位仍用于状态灯及其它事实。
  */
 static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *environment)
 {
   uint32_t valid;
+  uint32_t text_valid;
+  uint8_t hidden;
   uint32_t supply_voltage_mv;
   int32_t supply_current_ma;
   uint32_t supply_mask;
@@ -1318,6 +1335,10 @@ static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *env
   valid = environment->valid_mask;
   if (!PX4LITE_ENABLE_BATTERY1) { valid &= ~APP_ENV_VALID_BATTERY1; }
   if (!PX4LITE_ENABLE_BATTERY2) { valid &= ~APP_ENV_VALID_BATTERY2; }
+  hidden = Display_HiddenSupplyGroups(environment);
+  text_valid = valid;
+  if (hidden & 1U) { text_valid &= ~(APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_CURRENT1); }
+  if (hidden & 2U) { text_valid &= ~(APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_CURRENT2); }
 #if PX4LITE_ENABLE_BATTERY2
   supply_voltage_mv = environment->voltage2_mv;
   supply_current_ma = environment->current2_ma;
@@ -1327,7 +1348,7 @@ static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *env
   supply_current_ma = environment->current_ma;
   supply_mask = APP_ENV_VALID_VOLTAGE1 | APP_ENV_VALID_CURRENT1;
 #endif
-  if ((valid & supply_mask) == supply_mask) {
+  if ((text_valid & supply_mask) == supply_mask) {
     int64_t power_mw = (int64_t)supply_voltage_mv * supply_current_ma / 1000;
     if (power_mw > INT32_MAX) { power_mw = INT32_MAX; }
     if (power_mw < INT32_MIN) { power_mw = INT32_MIN; }
@@ -1343,20 +1364,24 @@ static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *env
   if ((valid & APP_ENV_VALID_HUMIDITY) != 0U) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_HUMIDITY, Display_FloatToU16Tenths(environment->relative_humidity_pct));
   } else { Display_InvalidateValue(DISPLAY_HMI_VAR_HUMIDITY); }
-  if ((valid & APP_ENV_VALID_VOLTAGE1) != 0U) {
-    /* 保护档位不能把有效测量改写为零；低压和超范围仍展示实际电压。 */
+  if ((text_valid & APP_ENV_VALID_VOLTAGE1) != 0U) {
+    /* 仅对允许展示的文字做取整，显示隐藏不修改实际电压或控制档位。 */
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_VOLTAGE, Display_StabilizeVoltCv(environment->voltage_mv,
         1U, &s_disp_main_dv, &s_disp_main_dv_valid));
   } else { Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_VOLTAGE); s_disp_main_dv_valid = 0U; }
-  if ((valid & APP_ENV_VALID_CURRENT1) != 0U) {
+  if ((text_valid & APP_ENV_VALID_CURRENT1) != 0U) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_CURRENT, Display_CurrentMaToDeciA(environment->current_ma));
   } else { Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_CURRENT); }
   if ((valid & APP_ENV_VALID_PERCENT1) != 0U) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_BATTERY_PERCENT, environment->battery_percent);
   } else { Display_InvalidateValue(DISPLAY_HMI_VAR_BATTERY_PERCENT); }
   if ((valid & APP_ENV_VALID_VOLTAGE2) != 0U) {
-    (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, Display_StabilizeVoltCv(environment->voltage2_mv,
-        1U, &s_disp_motor_dv, &s_disp_motor_dv_valid));
+    if (text_valid & APP_ENV_VALID_VOLTAGE2) {
+      (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, Display_StabilizeVoltCv(environment->voltage2_mv,
+          1U, &s_disp_motor_dv, &s_disp_motor_dv_valid));
+    } else {
+      Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE); s_disp_motor_dv_valid = 0U;
+    }
     Display_SetMotorSelfCheckLights(Display_MotorSelfCheckValue());
   } else {
     Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE); s_disp_motor_dv_valid = 0U;
@@ -1365,7 +1390,7 @@ static void Display_LoadEnvironmentSnapshot(const App_EnvironmentSnapshot_t *env
     Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_3);
     Display_InvalidateValue(DISPLAY_HMI_VAR_SELF_CHECK_MOTOR_4);
   }
-  if ((valid & APP_ENV_VALID_CURRENT2) != 0U) {
+  if ((text_valid & APP_ENV_VALID_CURRENT2) != 0U) {
     (void)Display_SetHmiValueU16(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, Display_CurrentMaToDeciA(environment->current2_ma));
   } else { Display_InvalidateValue(DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT); }
   if ((valid & APP_ENV_VALID_PERCENT2) != 0U) {
@@ -1442,6 +1467,7 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
     Display_UpdateBatteryBands(&environment);
     motor_fault = Display_EvalMotorFault(&environment);
     main_fault = Display_EvalMainFault(&environment);
+    if (frozen != 0U) { Display_HideFrozenSupplyText(Display_HiddenSupplyGroups(&environment)); }
   }
   alarm_result = App_GetDisplayAlarm(&alarm, now_ms);
   if (alarm_result == PX4LITE_OK) {

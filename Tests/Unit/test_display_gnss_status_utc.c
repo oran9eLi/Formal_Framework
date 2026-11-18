@@ -17,6 +17,7 @@ static App_DateTimeSnapshot_t s_clock;
 static Px4Lite_Result_t s_clock_result = PX4LITE_OK;
 static unsigned s_gnss_copies;
 static uint8_t s_frozen;
+static uint32_t s_power_mv=12000U;
 
 Display_Result_t Display_LvglSetValue(Display_HmiVariableId_t id, uint32_t value)
 { (void)id; (void)value; return DISPLAY_OK; }
@@ -38,7 +39,7 @@ Px4Lite_Result_t App_GetDisplayEnvironment(App_EnvironmentSnapshot_t *out, uint3
 {
   (void)now_ms; memset(out, 0, sizeof(*out));
   out->valid_mask = APP_ENV_VALID_VOLTAGE2 | APP_ENV_VALID_CURRENT2;
-  out->voltage2_mv = 12000U; out->current2_ma = 1000;
+  out->voltage2_mv = s_power_mv; out->current2_ma = 1000;
   return PX4LITE_OK;
 }
 Px4Lite_Result_t App_GetDisplayAlarm(App_AlarmSnapshot_t *out, uint32_t now_ms)
@@ -78,7 +79,10 @@ static void TestIndependentState(void)
     assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_FIX].valid && s_hmi_values[DISPLAY_HMI_VAR_GNSS_FIX].value == 0U);
     assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_SAT_COUNT].valid && s_hmi_values[DISPLAY_HMI_VAR_GNSS_SAT_COUNT].value == counts[i]);
   }
-  s_gnss.fix_type = 1U; s_gnss.fix_dimension = 2U; Display_LoadLocalGnssSnapshot(0U);
+  s_gnss.fix_type = 1U; s_gnss.fix_dimension = 2U;
+  Display_LoadLocalGnssSnapshot(0U);
+  assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_FIX].value == PX4LITE_GNSS_FIX_UNSPECIFIED);
+  s_gnss.dimension_source = PX4LITE_GNSS_SOURCE_NMEA_GSA; Display_LoadLocalGnssSnapshot(0U);
   assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_FIX].value == 2U);
   s_gnss.fix_dimension = 3U; Display_LoadLocalGnssSnapshot(0U); assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_FIX].value == 3U);
   s_gnss.fix_type = 2U; Display_LoadLocalGnssSnapshot(0U); assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_FIX].value == 4U);
@@ -116,7 +120,7 @@ static void TestUtcAndLocalClock(void)
   s_gnss.utc_sec = 86400U; Display_LoadLocalGnssSnapshot(1000U); assert(!s_hmi_values[DISPLAY_HMI_VAR_GNSS_TIME].valid);
 }
 
-/** @brief Prepare只读一次GNSS；冻结保留GNSS测量值，顶栏Clock/Date和保护反馈仍更新。 */
+/** @brief 冻结保留GNSS测量及高压恢复，低压只撤V/A/W；Clock/Date和保护反馈仍更新。 */
 static void TestPrepareFreeze(void)
 {
   unsigned before;
@@ -125,14 +129,21 @@ static void TestPrepareFreeze(void)
   s_gnss.valid_mask = PX4LITE_GNSS_VALID_NAV_STATUS | PX4LITE_GNSS_VALID_TIME; s_gnss.satellites_used = 2U;
   s_clock_result = PX4LITE_OK; s_clock.local_date_ymd = 20261106U; s_clock.local_time_hhmmss = 80000U;
   before = s_gnss_copies; assert(Display_PrepareSnapshot(0U) == DISPLAY_OK && s_gnss_copies == before + 1U);
+  assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].valid && s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].valid);
   assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_FIX].value == 0U && s_hmi_values[DISPLAY_HMI_VAR_GNSS_SAT_COUNT].value == 2U);
   assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_TIME].value == 0U);
+  s_gnss.dimension_source = PX4LITE_GNSS_SOURCE_UBX_PVT;
   s_frozen = 1U; s_gnss.fix_type = 1U; s_gnss.fix_dimension = 3U; s_gnss.satellites_used = 12U; s_gnss.utc_sec = 45296U;
-  s_clock.local_time_hhmmss = 203456U; before = s_gnss_copies;
+  s_clock.local_time_hhmmss = 203456U; before = s_gnss_copies;s_power_mv=5000U;
   assert(Display_PrepareSnapshot(1000U) == DISPLAY_OK && s_gnss_copies == before);
   assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_FIX].value == 0U && s_hmi_values[DISPLAY_HMI_VAR_GNSS_SAT_COUNT].value == 2U);
   assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_TIME].value == 0U && s_hmi_values[DISPLAY_HMI_VAR_CLOCK_TIME].value == 203456U);
-  s_frozen = 0U; assert(Display_PrepareSnapshot(1001U) == DISPLAY_OK && s_gnss_copies == before + 1U);
+  assert(!s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].valid && !s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT].valid && !s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].valid);
+  s_power_mv=12000U;assert(Display_PrepareSnapshot(1001U)==DISPLAY_OK && s_gnss_copies==before && s_frozen);
+  assert(!s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].valid && !s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].valid);
+  assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_SAT_COUNT].value==2U && s_hmi_values[DISPLAY_HMI_VAR_GNSS_TIME].value==0U);
+  s_frozen = 0U; assert(Display_PrepareSnapshot(1002U) == DISPLAY_OK && s_gnss_copies == before + 1U);
+  assert(s_hmi_values[DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE].valid && s_hmi_values[DISPLAY_HMI_VAR_INPUT_POWER_MW].valid);
   assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_FIX].value == 3U && s_hmi_values[DISPLAY_HMI_VAR_GNSS_SAT_COUNT].value == 12U);
   assert(s_hmi_values[DISPLAY_HMI_VAR_GNSS_TIME].value == 123456U && s_hmi_values[DISPLAY_HMI_VAR_CLOCK_TIME].value == 203456U);
   s_gnss_result = PX4LITE_NOT_READY; assert(Display_PrepareSnapshot(2000U) == DISPLAY_OK);

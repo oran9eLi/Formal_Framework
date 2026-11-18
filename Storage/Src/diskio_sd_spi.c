@@ -1,9 +1,10 @@
 /**
  * @file diskio_sd_spi.c
- * @brief Implement FatFS diskio over SD card SPI mode.
+ * @brief Storage 层 SPI 磁盘适配，由 storage 任务独占，使用 BSP 完成卡协议和介质探测。
  */
 
 #include "diskio_sd_spi.h"
+#include <string.h>
 
 #include "diskio.h"
 #include "bsp_spi.h"
@@ -20,6 +21,7 @@
 #define SD_CMD0               0U
 #define SD_CMD1               1U
 #define SD_CMD8               8U
+#define SD_CMD10              10U
 #define SD_CMD16              16U
 #define SD_CMD17              17U
 #define SD_CMD24              24U
@@ -38,6 +40,7 @@
 
 static DSTATUS s_status = STA_NOINIT;
 static uint8_t s_card_type;
+static uint8_t s_card_cid[16]; /**< 当前挂载介质的 128 位卡身份，初始化成功后有效。 */
 static DiskioSdSpi_Error_t s_last_error;
 static uint8_t s_last_command;
 static uint8_t s_last_response = SD_DUMMY_BYTE;
@@ -110,7 +113,10 @@ static uint8_t SdSpi_SendCommand(uint8_t cmd, uint32_t arg)
     packet[5] = 0x87U;
   }
 
-  (void)BSP_SPI1_Transmit(packet, sizeof(packet), STORAGE_SPI_TIMEOUT_MS);
+  if (BSP_SPI1_Transmit(packet, sizeof(packet), STORAGE_SPI_TIMEOUT_MS) != BSP_STATUS_OK) {
+    s_last_response = SD_DUMMY_BYTE;
+    return s_last_response;
+  }
 
   for (n = 0U; n < 10U; ++n) {
     response        = SdSpi_TransferByte(SD_DUMMY_BYTE);
@@ -128,11 +134,14 @@ static uint8_t SdSpi_ReadBlock(uint8_t *buffer, uint32_t count)
   do {
     token = SdSpi_TransferByte(SD_DUMMY_BYTE);
     if (token == SD_TOKEN_START_BLOCK) {
+      /* F407 两线主机的 HAL_SPI_Receive 用接收区产生发送时钟，读卡时 MOSI 应保持高。 */
+      memset(buffer, SD_DUMMY_BYTE, count);
       if (BSP_SPI1_Receive(buffer, (uint16_t)count, STORAGE_SPI_TIMEOUT_MS) != BSP_STATUS_OK) { return 0U; }
       (void)SdSpi_TransferByte(SD_DUMMY_BYTE);
       (void)SdSpi_TransferByte(SD_DUMMY_BYTE);
       return 1U;
     }
+    if (token != SD_DUMMY_BYTE) { return 0U; } /* 卡返回数据错误标识，不再等待数据块。 */
   } while ((uint32_t)(BSP_Time_GetTickMs() - start_ms) < SD_TOKEN_TIMEOUT_MS);
 
   return 0U;
@@ -155,6 +164,18 @@ static uint8_t SdSpi_WriteBlock(const uint8_t *buffer)
   return SdSpi_WaitReady(SD_CMD_TIMEOUT_MS);
 }
 
+/** @brief 通过 CMD10 读取 16 字节 CID，结束时总是释放片选，不访问文件系统。 */
+static uint8_t SdSpi_ReadCid(uint8_t cid[16])
+{
+  uint8_t ok = 0U;
+  if (SdSpi_SendCommand(SD_CMD10, 0U) == 0U) {
+    ok = SdSpi_ReadBlock(cid, sizeof(s_card_cid));
+  }
+  SdSpi_Deselect();
+  return ok;
+}
+
+/** @brief 由 FatFs 初始化磁盘，成功前读出介质身份以供空闲及运行期核对。 */
 DSTATUS disk_initialize(BYTE pdrv)
 {
   uint8_t response;
@@ -256,9 +277,30 @@ DSTATUS disk_initialize(BYTE pdrv)
     }
   }
 
+  if (!SdSpi_ReadCid(s_card_cid)) {
+    s_last_error = DISKIO_SD_SPI_ERR_CID_READ;
+    s_card_type = 0U;
+    return s_status;
+  }
   (void)BSP_SPI1_SetSpeedHigh();
   s_status = 0U;
   return s_status;
+}
+
+/** @brief 由 storage 任务检查同一介质；读失败或身份不符时复核一次，确认失效后禁止旧句柄写盘。 */
+uint8_t DiskioSdSpi_CheckMedia(void)
+{
+  uint8_t cid[sizeof(s_card_cid)];
+  uint8_t attempt, received = 0U;
+  if ((s_status & STA_NOINIT) != 0U) { return 0U; }
+  for (attempt = 0U; attempt < 2U; ++attempt) {
+    received = SdSpi_ReadCid(cid);
+    if (received && memcmp(cid, s_card_cid, sizeof(cid)) == 0) { return 1U; }
+  }
+  s_last_error = received ? DISKIO_SD_SPI_ERR_CID_CHANGED : DISKIO_SD_SPI_ERR_CID_READ;
+  s_status = STA_NOINIT;
+  s_card_type = 0U;
+  return 0U;
 }
 
 DSTATUS disk_status(BYTE pdrv)

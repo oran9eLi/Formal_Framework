@@ -95,6 +95,11 @@ void BSP_GNSS_DmaIrqHandler(void);
  */
 BSP_Status_t BSP_GNSS_RecoverRx(void);
 /**
+ * @brief sensor仅为静默超时调用。健康会话在停收前复核DMA环和UART待收字节。
+ * @return BUSY表示已有输入、继续当前接收；OK表示确已重建，ERROR交给常规恢复。
+ */
+BSP_Status_t BSP_GNSS_RecoverRxIfIdle(void);
+/**
  * @brief Request GNSS RX recovery from USART2 ISR; only sets a flag in ISR.
  */
 void BSP_GNSS_RequestRecoverRx(void);

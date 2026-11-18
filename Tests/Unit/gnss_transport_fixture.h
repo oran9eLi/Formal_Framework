@@ -68,6 +68,7 @@ static DmaRegisters dma_regs;
 #define USART_SR_NE 4U
 #define USART_SR_ORE 8U
 #define USART_SR_IDLE 0x10U
+#define USART_SR_RXNE 0x20U
 #define USART_SR_TXE 0x80U
 #define USART_SR_TC 0x40U
 #define USART_CR1_UE 0x2000U
