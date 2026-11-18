@@ -105,6 +105,20 @@ uint8_t Px4Lite_MavlinkGetTxEnabled(void);
  * @param[in] link ACK 出口链路，取收到命令的链路。
  */
 void Px4Lite_MavlinkQueueCommandAck(uint16_t command, uint8_t result, uint8_t target_system, uint8_t target_component, Px4Lite_MavlinkLink_t link);
+/** @brief 查询CNS受理FIFO是否可新增一条；仅comm任务调用，不消费容量。 */
+uint8_t Px4Lite_MavlinkCnsAckAvailable(void);
+/**
+ * @brief 排队CNS受理应答，保持FIFO且不覆盖已受理请求；仅comm任务调用。
+ * @param[in] command 原请求命令号。
+ * @param[in] result MAV_RESULT受理结果，范围0～4。
+ * @param[in] reason 文档细分原因，范围0～5；接受为0。
+ * @param[in] target_system 来源动态系统号，目标组件固定为191。
+ * @param[in] token 已接受动作的Control令牌，拒绝为0。
+ * @param[in] now_ms 排队时刻，单位真实ms。
+ * @return OK已排队，BUSY队满；没有执行或重试电机动作的副作用。
+ */
+Px4Lite_Result_t Px4Lite_MavlinkQueueCnsAck(uint16_t command, uint8_t result,
+    uint8_t reason, uint8_t target_system, uint32_t token, uint32_t now_ms);
 void Px4Lite_MavlinkRecordCommandAck(uint16_t command, uint8_t result, uint32_t now_ms);
 
 /* 前向声明 MAVLink 消息结构标签，避免在本头引入 common/mavlink.h(保持与 types.h 同层)。 */

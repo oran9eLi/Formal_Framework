@@ -33,7 +33,7 @@
 #endif
 
 #if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_IMU_SNAPSHOT_ENABLE
-#include "sensor_mpu6050.h"
+#include "px4lite_platform.h"
 #endif
 
 #if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_GNSS_ENABLE
@@ -52,50 +52,29 @@ static App_RemoteNodeView_t s_selftest_remote_nodes[PX4LITE_REMOTE_NODE_MAX];
 
 #if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_IMU_SNAPSHOT_ENABLE
 /**
- * @brief 将浮点量按指定比例转换为整数，避免调试串口使用浮点格式化。
- *
- * @param[in] value 原始浮点值。
- * @param[in] scale 缩放倍数。
- *
- * @return 缩放后的整数值。
- */
-static int32_t DebugSelfTest_ScaleFloat(float value, float scale)
-{
-  return (int32_t)(value * scale);
-}
-#endif
-
-#if DEBUG_SELFTEST_ACTIVE_ENABLE && DEBUG_SELFTEST_IMU_SNAPSHOT_ENABLE
-/**
- * @brief 打印 MPU6050 快照一致性自测结果。
- *
- * @details
- * 本测试直接读取 Sensor Driver 的只读诊断接口，是 Debug 特例，不得照搬到 Business 或
- * Display 层。重点确认 60 字节 IMU snapshot 复制不会出现序号倒退或状态/样本不一致。
+ * @brief 检查统一IMU缓存序号在同一初始化周期内是否前进，不执行MEMS激励自检。
+ * @details 单次原子复制避免两次读取间sensor抢占造成误报；不访问驱动或硬件。
  */
 static void DebugSelfTest_ReportImuSnapshot(void)
 {
-  Mpu6050_Status_t status;
-  Mpu6050_Snapshot_t sample;
-  Mpu6050_Result_t status_rc;
-  Mpu6050_Result_t sample_rc;
+  static uint32_t last_sequence;
+  static uint32_t last_reinit_count;
+  Px4Lite_ImuDiagnostics_t status;
+  Px4Lite_Result_t status_rc;
   uint8_t consistent = 1U;
 
-  status_rc = Sensor_MPU6050_GetStatus(&status);
-  sample_rc = Sensor_MPU6050_CopySnapshot(&sample);
-
-  if ((status_rc == MPU6050_RESULT_OK) && (sample_rc == MPU6050_RESULT_OK)) {
-    if (sample.rx_sequence > status.rx_sequence) { consistent = 0U; }
-    if (sample.error_count != status.error_count) { consistent = 0U; }
-
-    DBG_PRINT("SELFTEST IMU: rc=%d/%d ok=%u seq=%lu sample_ms=%lu err=%lu "
-              "stage=%u result=%u reinit=%lu accel_mg=%ld,%ld,%ld "
-              "gyro_mdps=%ld,%ld,%ld temp_cC=%ld",
-              (int)status_rc, (int)sample_rc, (unsigned int)consistent, (unsigned long)sample.rx_sequence, (unsigned long)sample.sample_time_ms, (unsigned long)sample.error_count, (unsigned int)status.last_stage, (unsigned int)status.last_result, (unsigned long)status.reinit_count, (long)DebugSelfTest_ScaleFloat(sample.accel_g[0], 1000.0f), (long)DebugSelfTest_ScaleFloat(sample.accel_g[1], 1000.0f), (long)DebugSelfTest_ScaleFloat(sample.accel_g[2], 1000.0f), (long)DebugSelfTest_ScaleFloat(sample.gyro_dps[0], 1000.0f), (long)DebugSelfTest_ScaleFloat(sample.gyro_dps[1], 1000.0f), (long)DebugSelfTest_ScaleFloat(sample.gyro_dps[2], 1000.0f), (long)DebugSelfTest_ScaleFloat(sample.temperature_c, 100.0f));
-  } else {
-    DBG_PRINT("SELFTEST IMU: rc=%d/%d seq=%lu err=%lu stage=%u result=%u reinit=%lu chip=0x%02X bsp=%u",
-              (int)status_rc, (int)sample_rc, (unsigned long)status.rx_sequence, (unsigned long)status.error_count, (unsigned int)status.last_stage, (unsigned int)status.last_result, (unsigned long)status.reinit_count, (unsigned int)status.last_chip_id, (unsigned int)status.last_bsp_status);
+  status_rc = Px4Lite_ImuCopyDiagnostics(&status);
+  if (status_rc == PX4LITE_OK) {
+    if ((status.reinit_count == last_reinit_count) && (status.rx_sequence != 0U) &&
+        ((int32_t)(status.rx_sequence - last_sequence) < 0)) { consistent = 0U; }
+    last_sequence = status.rx_sequence;
+    last_reinit_count = status.reinit_count;
   }
+  DBG_PRINT("SELFTEST IMU CACHE: rc=%d ok=%u model=%u bus=%u seq=%lu sample_ms=%lu err=%lu stage=%u result=%u reinit=%lu id=0x%02X/0x%02X ready=%u",
+            (int)status_rc, (unsigned int)consistent, (unsigned int)status.driver, (unsigned int)status.bus,
+            (unsigned long)status.rx_sequence, (unsigned long)status.sample_time_ms, (unsigned long)status.error_count,
+            (unsigned int)status.last_stage, (unsigned int)status.last_result, (unsigned long)status.reinit_count,
+            (unsigned int)status.accel_chip_id, (unsigned int)status.gyro_chip_id, (unsigned int)status.device_ready);
 }
 #endif
 

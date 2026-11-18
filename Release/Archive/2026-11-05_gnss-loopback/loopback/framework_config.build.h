@@ -1,0 +1,306 @@
+/**
+ * @file px4lite_config.h
+ * @brief 配置 Framework 模块开关、周期、超时、队列和任务栈。
+ *
+ * @details
+ * 本文件只保存 Framework 层配置。BSP 引脚/外设配置放在 `bsp_config.h`，
+ * Business 任务配置放在 `business_template_config.h`。所有 `_MS` 后缀宏均为真实
+ * 毫秒值，不能填入 RTOS tick。
+ */
+
+#ifndef PX4LITE_CONFIG_H
+#define PX4LITE_CONFIG_H
+
+#define PX4LITE_ENABLE_GNSS                1U
+/** @brief 仅独立PA2/PA3硬件回环候选启用；普通固件默认不发送测试字节、不注册raw观察器。 */
+#ifndef PX4LITE_GNSS_LOOPBACK_ENABLE
+#define PX4LITE_GNSS_LOOPBACK_ENABLE       1U
+#endif
+#define PX4LITE_ENABLE_IMU                 1U
+#define PX4LITE_ENABLE_BARO                1U
+/** @brief 第一组电源 topic 的生产开关；停用后不采集、不发布、不产生缺测告警。 */
+#ifndef PX4LITE_ENABLE_BATTERY1
+#define PX4LITE_ENABLE_BATTERY1            0U
+#endif
+/** @brief 第二组电源 topic 的生产开关；当前为整机主回路唯一测量源。 */
+#ifndef PX4LITE_ENABLE_BATTERY2
+#define PX4LITE_ENABLE_BATTERY2            1U
+#endif
+/** @brief 电源服务总开关由启用组派生；不得关闭总服务而遗漏第二组保护数据。 */
+#define PX4LITE_ENABLE_BATTERY (PX4LITE_ENABLE_BATTERY1 || PX4LITE_ENABLE_BATTERY2)
+#define PX4LITE_ENABLE_LORA                1U
+/* 5G-A 可通过所属服务发送 AT 指令做连接管理，不承载业务数据或 Remote ID 数据流。 */
+#define PX4LITE_ENABLE_5G                  1U
+#define PX4LITE_ENABLE_STORAGE             1U
+/* Remote ID 由 STM32 通过 UART4 向 ESP32-S3 发送 MAVLink/OpenDroneID 消息。 */
+#define PX4LITE_ENABLE_REMOTE_ID           1U
+#define PX4LITE_ENABLE_RPI_MAVLINK         1U
+#define PX4LITE_ENABLE_DISPLAY             1U
+#define PX4LITE_ENABLE_CONTROL             1U
+#define PX4LITE_ENABLE_ALARM               1U
+#define PX4LITE_ENABLE_COMMAND             0U
+#define PX4LITE_ENABLE_LOG_POOL            0U
+
+/** 本候选只试听一次经典启动音，不启用声光操作反馈。 */
+#ifndef PX4LITE_ENABLE_STARTUP_TONE
+#define PX4LITE_ENABLE_STARTUP_TONE 1U
+#endif
+#define PX4LITE_STARTUP_TONE_DELAY_MS 1000U
+
+#define PX4LITE_SENSOR_WORK_PERIOD_MS      10U
+#define PX4LITE_ESTIMATOR_PERIOD_MS        20U
+#define PX4LITE_HEALTH_PERIOD_MS           100U
+#define PX4LITE_COMM_PERIOD_MS             10U
+#define PX4LITE_CONTROL_PERIOD_MS          20U
+#define PX4LITE_MOTOR_COUNT                4U
+#define PX4LITE_CONTROL_ESC_MIN_PULSE_US   1000U
+#define PX4LITE_CONTROL_ESC_MAX_PULSE_US   2000U
+/** @brief 暂停电压对电机的门禁，0 为旁路、1 恢复原采样/新鲜度/电压保护；不影响急停和人工锁。 */
+#ifndef PX4LITE_CONTROL_POWER_GATE_ENABLE
+#define PX4LITE_CONTROL_POWER_GATE_ENABLE 0U
+#endif
+/** 原本机电压门禁阈值，单位 mV；由上述开关保留，恢复滞回独立于显示档位。 */
+#define PX4LITE_CONTROL_POWER_CUTOFF_MV  9900U
+#define PX4LITE_CONTROL_POWER_RECOVER_MV 10100U
+#define PX4LITE_CONTROL_POWER_MAX_MV     13500U
+#define PX4LITE_CONTROL_ESC_ARM_TIME_MS    2500U
+#define PX4LITE_CONTROL_FAILSAFE_TIMEOUT_MS 200U
+#define PX4LITE_CONTROL_ATTITUDE_ASSIST_DEFAULT 0U
+#define PX4LITE_CONTROL_ATTITUDE_TARGET_ROLL_DEG100 0
+#define PX4LITE_CONTROL_ATTITUDE_TARGET_PITCH_DEG100 0
+#define PX4LITE_CONTROL_ATTITUDE_TARGET_YAW_DEG100 0
+#define PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 4500
+#define PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100 18000
+#define PX4LITE_CONTROL_ATTITUDE_MIN_BASE_PERCENT 1U
+#define PX4LITE_CONTROL_ATTITUDE_MAX_CORRECTION_PERCENT 20U
+/* 姿态 PD 增益均放大 100：30 表示 0.30%/degree，4 表示 0.04%/(degree/s)。 */
+#define PX4LITE_CONTROL_ATTITUDE_KP_X100 30
+#define PX4LITE_CONTROL_ATTITUDE_KD_X100 4
+#define PX4LITE_TASK_HEARTBEAT_MIN_MS 500U /**< 各任务心跳最小期限，单位 ms。 */
+#define PX4LITE_WATCHDOG_STARTUP_WINDOW_MS 10000U /**< 调度器交接后首轮心跳期限，单位 ms。 */
+#define PX4LITE_IMU_WORK_PERIOD_MS         10U
+#define PX4LITE_BARO_WORK_PERIOD_MS        1000U
+#define PX4LITE_BATTERY_WORK_PERIOD_MS     1000U
+#define PX4LITE_STORAGE_PERIOD_MS          50U
+
+#define PX4LITE_TIME_LOCAL_OFFSET_S        28800U
+#define PX4LITE_TIME_GNSS_SYNC_INTERVAL_MS 600000U
+#define PX4LITE_TIME_SYNC_DELTA_S          1U
+#define PX4LITE_TIME_STALE_MS              86400000U
+
+#define PX4LITE_PRIORITY_SENSOR            (tskIDLE_PRIORITY + 4U)
+#define PX4LITE_PRIORITY_ESTIMATOR         (tskIDLE_PRIORITY + 3U)
+#define PX4LITE_PRIORITY_HEALTH            (tskIDLE_PRIORITY + 2U)
+#define PX4LITE_PRIORITY_COMM              (tskIDLE_PRIORITY + 2U)
+#define PX4LITE_PRIORITY_CONTROL           (tskIDLE_PRIORITY + 2U)
+/* Storage 会执行阻塞 SD I/O，优先级必须低于 biz_display（idle+1）。 */
+#define PX4LITE_PRIORITY_STORAGE (tskIDLE_PRIORITY)
+
+/*
+ * 硬件 watchdog：main 最早期启用启动窗口，调度前只允许有限进展点刷新。
+ * 交接后必须在首轮期限内收齐实际任务心跳并成功切换运行窗口；运行刷新
+ * 仅由 HealthTask 完成工作后通过 Platform 门控。Debug/Storage 不纳入集合。
+ */
+#define PX4LITE_ENABLE_HARDWARE_WATCHDOG 1U
+
+#define PX4LITE_GNSS_STARTUP_GRACE_MS    5000U
+#define PX4LITE_GNSS_INSERT_CHECK_MS     1500U
+#define PX4LITE_GNSS_OFFLINE_MS          2000U
+#define PX4LITE_GNSS_MAX_AGE_MS          1500U
+#define PX4LITE_IMU_STARTUP_GRACE_MS     2000U
+#define PX4LITE_IMU_OFFLINE_MS           2000U
+#define PX4LITE_IMU_MAX_AGE_MS           200U
+#define PX4LITE_IMU_STABLE_VALID_MIN     3U
+#define PX4LITE_IMU_CALIBRATION_SAMPLES  500U
+#define PX4LITE_IMU_CALIB_ACCEL_MIN_MG   850U
+#define PX4LITE_IMU_CALIB_ACCEL_MAX_MG   1150U
+#define PX4LITE_IMU_CALIB_GYRO_MAX_MDPS  5000U
+#define PX4LITE_IMU_ATTITUDE_MIN_QUALITY 55U
+#define PX4LITE_BARO_STARTUP_GRACE_MS    5000U
+#define PX4LITE_BARO_OFFLINE_MS          3000U
+#define PX4LITE_BARO_MAX_AGE_MS          2500U
+#define PX4LITE_BARO_PRESSURE_MIN_PA     30000.0f
+#define PX4LITE_BARO_PRESSURE_MAX_PA     110000.0f
+#define PX4LITE_BARO_SEA_LEVEL_PA        101325.0f
+#define PX4LITE_BARO_MAX_VERTICAL_CMS    1500
+#define PX4LITE_BARO_MAX_JUMP_MM         20000
+#define PX4LITE_FUSION_TIME_ALIGN_MS     1500U
+#define PX4LITE_BATTERY_STARTUP_GRACE_MS 5000U
+#define PX4LITE_BATTERY_OFFLINE_MS       3000U
+#define PX4LITE_BATTERY_MAX_AGE_MS       2500U
+#define PX4LITE_DISPLAY_STARTUP_GRACE_MS 5000U
+#define PX4LITE_DISPLAY_OFFLINE_MS       3000U
+#define PX4LITE_5G_STARTUP_GRACE_MS      5000U
+/* RPICELL 接收超时。按《STM32与树莓派链路周期通信约定》§5 取 5000ms：RPICELL 默认 1Hz，
+   5s 容忍 4 帧调度抖动，又能在树莓派退出/掉电/UART 中断后及时把 5G 显示置为未知。 */
+#define PX4LITE_5G_HEARTBEAT_TIMEOUT_MS  5000U
+
+/*
+ * GNSS 专用恢复路径已经挂到 HealthRun，但在 BSP 恢复路径完成硬件故障注入测试前
+ * 保持关闭。
+ */
+#define PX4LITE_GNSS_RECOVERY_ENABLE    0U
+#define PX4LITE_GNSS_ERROR_THRESHOLD    3U
+#define PX4LITE_GNSS_RECOVERY_DELAY_MS  1000U
+#define PX4LITE_GNSS_RECOVERY_MAX_RETRY 5U
+
+/*
+ * 通用注册表恢复：Health 只监督并调用轻量 recover 回调，真正 re-init 由模块所属
+ * Service 执行。recover 回调必须是“请求重初始化”形式，不能在 Health 任务中执行
+ * 阻塞总线 I/O。重试限速但不设总次数上限，以支持长时间拔插后的热恢复。
+ */
+#define PX4LITE_RECOVERY_ENABLE          1U
+#define PX4LITE_RECOVERY_ERROR_THRESHOLD 5U
+#define PX4LITE_RECOVERY_DELAY_MS        2000U
+
+#define PX4LITE_IMU_FIFO_CAPACITY        32U
+#define PX4LITE_ALARM_QUEUE_LENGTH       16U
+#define PX4LITE_ALARM_DEBOUNCE_MS        1000U
+#define PX4LITE_COMMAND_QUEUE_LENGTH     8U
+
+#define PX4LITE_STACK_SENSOR             512U
+#define PX4LITE_STACK_ESTIMATOR          512U
+#define PX4LITE_STACK_HEALTH             768U
+#define PX4LITE_STACK_COMM               384U
+#define PX4LITE_STACK_CONTROL            384U
+#define PX4LITE_STACK_STORAGE            768U
+#define PX4LITE_HEAP_MIN_FREE_BYTES      8192U
+
+#define PX4LITE_LORA_OFFLINE_MS          8000U
+#define PX4LITE_LORA_STARTUP_GRACE_MS    3000U
+#define PX4LITE_LORA_RECOVERY_ENABLE     1U
+/*
+ * 远端节点表容量。node_id 直接作为表索引（见 RemoteTelemetry_NodeIdToIndex），
+ * 且 node_id 由 DCDW-xxx 编号后缀派生，故本宏同时决定“可同时显示的最大远端板号”：
+ * 取 8 表示支持 DCDW-000..007。单节点快照约 408B，41→8 省约 13.5KB SRAM，
+ * 是屏幕端 128KB SRAM 容纳 fj 融合体系的关键。若需接入更大编号，按 RAM 余量上调。
+ */
+#define PX4LITE_REMOTE_NODE_MAX          8U
+
+/*
+ * 板卡身份配置：
+ * - PX4LITE_DEVICE_NAME + STM32 UID 哈希短编号组成学校侧编号 DCDW-XXX。
+ * - 该短编号同时作为 LoRa node_id / MAVLink system_id，保持不同板卡自动区分。
+ * - 厂商唯一产品识别码由 DCDWCNS1 + STM32 UID 派生 SN 组成，不依赖 RPi。
+ */
+#define PX4LITE_DEVICE_NAME              "DCDW"
+#define PX4LITE_VENDOR_ID_PREFIX         "DCDWCNS1"
+#define PX4LITE_MAVLINK_COMPONENT_ID     191U
+#define PX4LITE_REMOTEID_MAVLINK_COMPONENT_ID 192U
+#define PX4LITE_RPI_MAVLINK_COMPONENT_ID      193U
+#define PX4LITE_RPI_MAVLINK_UART_TIMEOUT_MS   20U
+/* H1 只开放受控回显。旧改参草案保留在工作区，但不接入 UART6 收发路径。 */
+#define PX4LITE_RPI_EXPERIMENT_ENABLE          0U
+#define PX4LITE_RPI_EXPERIMENT_BAUD_LOW_BPS    57600U
+#define PX4LITE_RPI_EXPERIMENT_BAUD_HIGH_BPS   115200U
+#define PX4LITE_RPI_EXPERIMENT_ECHO_MAX_BYTES  64U
+/* 里程碑五受控 UART6 改参：仅允许本机从 B0=115200 切至 B1=57600，复位恢复 B0。 */
+#define PX4LITE_RPI_BAUD_SWITCH_ENABLE         1U
+/*
+ * 树莓派 MAVLink 已迁到独立的 USART6(PC6/PC7)，USART1 恢复为纯调试口，
+ * 不再需要为 RPi 静音调试打印。保留本宏仅为回退到 USART1 共线方案时使用。
+ */
+#define PX4LITE_DEBUG_USART1_SILENT_FOR_RPI   0U
+#define PX4LITE_LORA_UART_BAUD_BPS       9600U /**< USART3 到 E22 的本地串口波特率，单位：bit/s。 */
+#define PX4LITE_LORA_AIR_RATE_BPS        9600U /**< E22 当前空中速率，单位：bit/s。 */
+#define PX4LITE_LORA_USABLE_BUDGET_BPS   3840U /**< 半双工默认单端可用发送预算，约为空中速率 40%。 */
+#define PX4LITE_LORA_TX_DUTY_LIMIT_PCT   40U   /**< 半双工默认本机占空预算，预留对端发送和避让空间。 */
+
+#define PX4LITE_MAVLINK_LINK_MODE_PRODUCT 0U
+#define PX4LITE_MAVLINK_LINK_MODE_GCS     1U
+#define PX4LITE_MAVLINK_LINK_MODE         PX4LITE_MAVLINK_LINK_MODE_PRODUCT
+#define PX4LITE_MAVLINK_ENABLE_NAMED_VALUE_EXTENSIONS 1U
+#define PX4LITE_REMOTE_VIEW_TIMEOUT_MS          180000U
+/** M4 LoRa 基础广播周期，与 RPi 原目录周期隔离；单位 ms。 */
+#define PX4LITE_LORA_LAB_HEARTBEAT_MS          2000U
+#define PX4LITE_LORA_LAB_IDENTITY_MS           5000U
+#define PX4LITE_LORA_LAB_STATUS_MS             5000U
+/** 经 E22 REG0=0x64 读回验证的课堂空速，单位 bit/s；改变此值须同步驱动预设。 */
+#define PX4LITE_LORA_LAB_AIR_BPS               9600U
+/** 身份连续三次 5 s 广播缺失后不组装遥测，单位 ms。 */
+#define PX4LITE_LORA_LAB_IDENTITY_MAX_AGE_MS   15000U
+#define PX4LITE_REMOTE_DATA_STALE_MS            30000U
+#define PX4LITE_REMOTE_HEARTBEAT_STALE_MS       20000U
+#define PX4LITE_MAVLINK_COMMAND_RETRY_MS        300U
+#define PX4LITE_MAVLINK_COMMAND_RETRY_MAX       5U
+#define PX4LITE_MAVLINK_LOSS_MIN_EXPECTED       32U
+#define PX4LITE_MAVLINK_HEARTBEAT_SLOT_MS       0U
+
+/*
+ * MAVLink 遥测消息选择。CommTask 是唯一发送拥有者，消息必须逐字段编码，不能直接
+ * 发送 C 结构体内存。默认周期按两块板同程序互发的半双工 LoRa 保守预算配置，
+ * 后续 E22 空口速率和功率确定后再统一调整。
+ */
+#define PX4LITE_MAVLINK_ENABLE_HEARTBEAT       1U
+#define PX4LITE_MAVLINK_ENABLE_GPS_RAW         1U
+#define PX4LITE_MAVLINK_ENABLE_GNSS_DETAIL     1U
+#define PX4LITE_MAVLINK_ENABLE_ATTITUDE        1U
+#define PX4LITE_MAVLINK_ENABLE_GLOBAL_POSITION 1U
+#define PX4LITE_MAVLINK_ENABLE_SYS_STATUS      1U
+#define PX4LITE_MAVLINK_ENABLE_MODULE_STATE    1U
+#define PX4LITE_MAVLINK_ENABLE_BATTERY_STATUS  1U
+#define PX4LITE_MAVLINK_ENABLE_SCALED_PRESSURE 1U
+#define PX4LITE_MAVLINK_ENABLE_STATUSTEXT      1U
+#define PX4LITE_MAVLINK_ENABLE_ENV_HUMIDITY    1U
+#define PX4LITE_MAVLINK_ENABLE_MOTOR_STATUS    1U
+#define PX4LITE_MAVLINK_ENABLE_MOTOR_PULSE     1U
+#define PX4LITE_MAVLINK_ENABLE_ALARM_STATUS    1U
+#define PX4LITE_MAVLINK_ENABLE_MESSAGE_LOG     1U
+#define PX4LITE_MAVLINK_ENABLE_DATETIME        1U
+
+#define PX4LITE_MAVLINK_HEARTBEAT_PERIOD_MS    1000U
+#define PX4LITE_MAVLINK_GPS_RAW_PERIOD_MS      1000U
+#define PX4LITE_MAVLINK_GNSS_DETAIL_PERIOD_MS  1000U
+#define PX4LITE_MAVLINK_ATTITUDE_PERIOD_MS     500U
+#define PX4LITE_MAVLINK_POSITION_PERIOD_MS     500U
+#define PX4LITE_MAVLINK_SYS_STATUS_PERIOD_MS   1000U
+#define PX4LITE_MAVLINK_MODULE_STATE_PERIOD_MS 700U
+#define PX4LITE_MAVLINK_BATTERY_PERIOD_MS      1000U
+#define PX4LITE_MAVLINK_PRESSURE_PERIOD_MS     1000U
+#define PX4LITE_MAVLINK_ENV_HUMIDITY_PERIOD_MS 1000U
+#define PX4LITE_MAVLINK_STATUSTEXT_PERIOD_MS   2000U
+#define PX4LITE_MAVLINK_MOTOR_PERIOD_MS        500U
+#define PX4LITE_MAVLINK_MOTOR_PULSE_PERIOD_MS  1000U
+#define PX4LITE_MAVLINK_ALARM_STATUS_PERIOD_MS 700U
+#define PX4LITE_MAVLINK_MESSAGE_LOG_PERIOD_MS  1000U
+#define PX4LITE_MAVLINK_LOG_REPLAY_PERIOD_MS   20000U
+#define PX4LITE_MAVLINK_DATETIME_PERIOD_MS     1000U
+#define PX4LITE_MAVLINK_RETRY_PERIOD_MS        50U
+
+/*
+ * 树莓派(USART6/compid 193)专属扩展遥测周期。
+ * 这些消息只发 RPi、不上 LoRa，构成 RPi 的"全量数据出口"：
+ * LoRa 链路状态、RemoteID 广播状态(NAMED_VALUE_INT)，完整告警表、批量消息日志(TUNNEL)。
+ * 身份数据(OPEN_DRONE_ID_*)由 RemoteID 发送器镜像到 USART6，不在此列。
+ */
+#define PX4LITE_MAVLINK_RPI_LORASTAT_PERIOD_MS 1000U
+#define PX4LITE_MAVLINK_RPI_RIDSTAT_PERIOD_MS  1000U
+#define PX4LITE_MAVLINK_RPI_ALARM_PERIOD_MS    1000U
+#define PX4LITE_MAVLINK_RPI_LOG_PERIOD_MS      2000U
+
+/*
+ * USART6 上行统一 1Hz 上限。RPi 遥测复用 LoRa 编码器，周期宏与 LoRa 共用，改宏会连累
+ * LoRa 空口，故不改宏，而在 RPi 发送趟对每项周期取此下限：只放慢 USART6，LoRa 侧仍按原周期。
+ * 心跳与多数项本就 1000ms，仅 ATTITUDE/POSITION/MOTOR(500ms)、MODULE_STATE(700ms)被抬到 1000ms。
+ */
+#define PX4LITE_MAVLINK_RPI_TELEM_MIN_PERIOD_MS 1000U
+
+/*
+ * ESP32-S3 RemoteID 发送配置。身份字段是生产默认值，后续可由 5G/网口命令写入配置存储后统一加载。
+ * 当前阶段不新增任务，仍由 comm task 以静态缓冲逐帧调度，避免扩大任务栈压力。
+ */
+#define PX4LITE_REMOTEID_OPERATOR_ID             "DCDW"
+#define PX4LITE_REMOTEID_TARGET_SYSTEM           0U
+#define PX4LITE_REMOTEID_TARGET_COMPONENT        0U
+#define PX4LITE_REMOTEID_HEARTBEAT_PERIOD_MS     1000U
+#define PX4LITE_REMOTEID_BASIC_ID_PERIOD_MS      1000U
+#define PX4LITE_REMOTEID_LOCATION_PERIOD_MS      1000U
+#define PX4LITE_REMOTEID_SYSTEM_PERIOD_MS        1000U
+#define PX4LITE_REMOTEID_OPERATOR_ID_PERIOD_MS   1000U
+#define PX4LITE_REMOTEID_SELF_ID_PERIOD_MS       5000U
+#define PX4LITE_REMOTEID_RETRY_PERIOD_MS         100U
+#define PX4LITE_REMOTEID_STARTUP_GRACE_MS        3000U
+#define PX4LITE_REMOTEID_OFFLINE_MS              3000U
+#define PX4LITE_REMOTEID_TX_BUSY_TIMEOUT_MS      500U
+
+#endif

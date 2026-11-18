@@ -18,6 +18,7 @@ static Px4Lite_BatteryStatus_t test_battery;
 static Px4Lite_MotorOutputs_t test_motor;
 static char saved_line[STORAGE_CSV_LINE_MAX];
 static uint32_t queue_drops, write_drops;
+static unsigned battery1_copies, battery2_copies, battery1_events;
 /** @brief 读取真实 CSV 字段，测试预期列号独立于生产格式化实现。 */
 static long Field(unsigned column)
 {
@@ -33,8 +34,8 @@ Px4Lite_Result_t Px4Lite_CopyTime(Px4Lite_TimeSnapshot_t *out) { (void)out; retu
 Px4Lite_Result_t Px4Lite_CopyNavigation(Px4Lite_VehicleNavigation_t *out) { *out = test_navigation; return other_sources_ready ? PX4LITE_OK : PX4LITE_NOT_READY; }
 Px4Lite_Result_t Px4Lite_CopyGnss(Px4Lite_SensorGnss_t *out) { *out = test_gnss; return other_sources_ready ? PX4LITE_OK : PX4LITE_NOT_READY; }
 Px4Lite_Result_t Px4Lite_CopyBaro(Px4Lite_SensorBaro_t *out) { *out = test_baro; return baro_result; }
-Px4Lite_Result_t Px4Lite_CopyBattery(Px4Lite_BatteryStatus_t *out) { *out = test_battery; return other_sources_ready ? PX4LITE_OK : PX4LITE_NOT_READY; }
-Px4Lite_Result_t Px4Lite_CopyBattery2(Px4Lite_BatteryStatus_t *out) { *out = test_battery; return other_sources_ready ? PX4LITE_OK : PX4LITE_NOT_READY; }
+Px4Lite_Result_t Px4Lite_CopyBattery(Px4Lite_BatteryStatus_t *out) { ++battery1_copies; *out = test_battery; return other_sources_ready ? PX4LITE_OK : PX4LITE_NOT_READY; }
+Px4Lite_Result_t Px4Lite_CopyBattery2(Px4Lite_BatteryStatus_t *out) { ++battery2_copies; *out = test_battery; return other_sources_ready ? PX4LITE_OK : PX4LITE_NOT_READY; }
 Px4Lite_Result_t Px4Lite_CopyMotor(Px4Lite_MotorOutputs_t *out) { *out = test_motor; return other_sources_ready ? PX4LITE_OK : PX4LITE_NOT_READY; }
 Px4Lite_Result_t Px4Lite_CopyAlarmSnapshot(Px4Lite_AlarmSnapshot_t *out) { (void)out; return PX4LITE_NOT_READY; }
 void Px4Lite_GetCommDebugInfo(Px4Lite_CommDebugInfo_t *out) { memset(out, 0, sizeof(*out)); }
@@ -43,7 +44,7 @@ uint32_t StorageQueue_DropCount(void) { return queue_drops; }
 /** @brief 本用例无 SD 故障，提供新增运行统计依赖。 */
 void Storage_SD_CopyStatus(Storage_SdStatus_t *out) { memset(out, 0, sizeof(*out)); out->write_drop_count = write_drops; }
 Storage_EventAction_t StorageEventTracker_Update(const char *source, uint32_t fault, const char *message, uint8_t active, uint32_t *count)
-{ (void)source; (void)fault; (void)message; (void)active; (void)count; return STORAGE_EVENT_ACTION_NONE; }
+{ if (strcmp(source, "BATTERY") == 0) { ++battery1_events; } (void)fault; (void)message; (void)active; (void)count; return STORAGE_EVENT_ACTION_NONE; }
 Px4Lite_Result_t StorageQueue_Push(const Storage_Record_t *record)
 {
   if (record->type == STORAGE_RECORD_DATA) { strcpy(saved_line, record->line); }

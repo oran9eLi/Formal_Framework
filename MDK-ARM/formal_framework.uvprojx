@@ -10,13 +10,13 @@
       <TargetName>Target 1</TargetName>
       <ToolsetNumber>0x4</ToolsetNumber>
       <ToolsetName>ARM-ADS</ToolsetName>
-      <pCCUsed>5060528::V5.06 update 5 (build 528)::ARMCC</pCCUsed>
+      <pCCUsed>5060960::V5.06 update 7 (build 960)::.\ARMCC</pCCUsed>
       <uAC6>0</uAC6>
       <TargetOption>
         <TargetCommonOption>
           <Device>STM32F407ZGTx</Device>
           <Vendor>STMicroelectronics</Vendor>
-          <PackID>Keil.STM32F4xx_DFP.2.17.0</PackID>
+          <PackID>Keil.STM32F4xx_DFP.3.1.1</PackID>
           <PackURL>https://www.keil.com/pack/</PackURL>
           <Cpu>IRAM(0x20000000,0x00020000) IRAM2(0x10000000,0x00010000) IROM(0x08000000,0x000E0000) CPUTYPE("Cortex-M4") FPU2 CLOCK(12000000) ELITTLE</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
@@ -184,6 +184,9 @@
             <hadXRAM>0</hadXRAM>
             <uocXRam>0</uocXRam>
             <RvdsVP>2</RvdsVP>
+            <RvdsMve>0</RvdsMve>
+            <RvdsCdeCp>0</RvdsCdeCp>
+            <nBranchProt>0</nBranchProt>
             <hadIRAM2>1</hadIRAM2>
             <hadIROM2>0</hadIROM2>
             <StupSel>8</StupSel>
@@ -324,6 +327,7 @@
             <uThumb>0</uThumb>
             <uSurpInc>0</uSurpInc>
             <uC99>1</uC99>
+            <uGnu>0</uGnu>
             <useXO>0</useXO>
             <v6Lang>1</v6Lang>
             <v6LangP>1</v6LangP>
@@ -349,7 +353,7 @@
             <NoWarn>0</NoWarn>
             <uSurpInc>0</uSurpInc>
             <useXO>0</useXO>
-            <uClangAs>0</uClangAs>
+            <ClangAsOpt>4</ClangAsOpt>
             <VariousControls>
               <MiscControls></MiscControls>
               <Define></Define>
@@ -415,8 +419,36 @@
         <Group>
           <GroupName>Framework</GroupName>
           <Files>
-            <File><FileName>px4lite_diagnostic_capture.c</FileName><FileType>1</FileType><FilePath>..\Framework\Src\px4lite_diagnostic_capture.c</FilePath></File>
-            <File><FileName>px4lite_mavlink_decode.c</FileName><FileType>1</FileType><FilePath>..\Framework\Src\px4lite_mavlink_decode.c</FilePath></File>
+            <File>
+              <FileName>px4lite_startup_tone.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_startup_tone.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_diagnostic_capture.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_diagnostic_capture.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_gnss_uplink.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_gnss_uplink.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_gnss_raw_uplink.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_gnss_raw_uplink.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_bmi088_uplink.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_bmi088_uplink.c</FilePath>
+            </File>
+            <File>
+              <FileName>px4lite_mavlink_decode.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Framework\Src\px4lite_mavlink_decode.c</FilePath>
+            </File>
             <File>
               <FileName>px4lite_app.c</FileName>
               <FileType>1</FileType>
@@ -542,7 +574,11 @@
         <Group>
           <GroupName>Business</GroupName>
           <Files>
-            <File><FileName>app_experiment.c</FileName><FileType>1</FileType><FilePath>..\Business\Src\app_experiment.c</FilePath></File>
+            <File>
+              <FileName>app_experiment.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Business\Src\app_experiment.c</FilePath>
+            </File>
             <File>
               <FileName>business_event_bus.c</FileName>
               <FileType>1</FileType>
@@ -609,6 +645,11 @@
               <FilePath>..\Sensor\Src\sensor_nmea.c</FilePath>
             </File>
             <File>
+              <FileName>sensor_ubx.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Sensor\Src\sensor_ubx.c</FilePath>
+            </File>
+            <File>
               <FileName>sensor_bme280.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Sensor\Src\sensor_bme280.c</FilePath>
@@ -617,6 +658,11 @@
               <FileName>sensor_mpu6050.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Sensor\Src\sensor_mpu6050.c</FilePath>
+            </File>
+            <File>
+              <FileName>sensor_bmi088.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Sensor\Src\sensor_bmi088.c</FilePath>
             </File>
             <File>
               <FileName>sensor_power.c</FileName>
@@ -633,6 +679,16 @@
         <Group>
           <GroupName>BSP</GroupName>
           <Files>
+            <File>
+              <FileName>bsp_buzzer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_buzzer.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_rgb.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_rgb.c</FilePath>
+            </File>
             <File>
               <FileName>bsp.c</FileName>
               <FileType>1</FileType>
@@ -684,6 +740,11 @@
               <FilePath>..\Bsp\Src\bsp_i2c.c</FilePath>
             </File>
             <File>
+              <FileName>bsp_imu_spi.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\bsp_imu_spi.c</FilePath>
+            </File>
+            <File>
               <FileName>bsp_adc.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\bsp_adc.c</FilePath>
@@ -728,7 +789,11 @@
         <Group>
           <GroupName>Display</GroupName>
           <Files>
-            <File><FileName>display_observation.c</FileName><FileType>1</FileType><FilePath>..\Display\Src\display_observation.c</FilePath></File>
+            <File>
+              <FileName>display_observation.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Display\Src\display_observation.c</FilePath>
+            </File>
             <File>
               <FileName>display.c</FileName>
               <FileType>1</FileType>
@@ -748,6 +813,16 @@
               <FileName>display_ssd1963.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Display\Src\display_ssd1963.c</FilePath>
+            </File>
+            <File>
+              <FileName>display_hud_present.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Display\Src\display_hud_present.c</FilePath>
+            </File>
+            <File>
+              <FileName>display_hud_masks.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Display\Src\display_hud_masks.c</FilePath>
             </File>
             <File>
               <FileName>display_lvgl.c</FileName>

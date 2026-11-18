@@ -6,6 +6,7 @@
 #include "app_experiment.h"
 #include "app_data_api.h"
 #include "app_message_log.h"
+#include "px4lite_config.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <math.h>
@@ -26,8 +27,16 @@ static const App_ObservationFieldInfo_t s_fields[APP_OBSERVATION_FIELDS]={
  {"Gyro X","deg/s",0,0},{"Gyro Y","deg/s",0,0},{"Gyro Z","deg/s",0,0},{"IMU temp","C",0,0},
  {"Roll","deg",1,1},{"Pitch","deg",1,1},{"Yaw","deg",1,1},{"Roll rate","deg/s",1,0},{"Pitch rate","deg/s",1,0},{"Yaw rate","deg/s",1,0},
  {"Pressure","Pa",2,0},{"Baro temp","C",2,0},
- {"Power1 voltage","V",3,0},{"Power1 current","A",3,0},{"Power1 power","W",3,0},
- {"Power2 voltage","V",3,0},{"Power2 current","A",3,0},{"Power2 power","W",3,0},
+#if PX4LITE_ENABLE_BATTERY1
+ {"Voltage","V",3,0},{"Current","A",3,0},{"Power","W",3,0},
+#else
+ {"Voltage","V",APP_OBSERVATION_GROUP_DISABLED,0},{"Current","A",APP_OBSERVATION_GROUP_DISABLED,0},{"Power","W",APP_OBSERVATION_GROUP_DISABLED,0},
+#endif
+#if PX4LITE_ENABLE_BATTERY2
+ {"Voltage","V",3,0},{"Current","A",3,0},{"Power","W",3,0},
+#else
+ {"Voltage","V",APP_OBSERVATION_GROUP_DISABLED,0},{"Current","A",APP_OBSERVATION_GROUP_DISABLED,0},{"Power","W",APP_OBSERVATION_GROUP_DISABLED,0},
+#endif
  {"GNSS altitude","m",4,0},{"Ground speed","m/s",4,0},{"Ground course","deg",4,1},
  {"M1 target","%",5,0},{"M1 output","%",5,0},{"M1 pulse","us",5,0},
  {"M2 target","%",5,0},{"M2 output","%",5,0},{"M2 pulse","us",5,0},
@@ -44,10 +53,11 @@ static void ObservationReset(void)
  s_state.point_count=0U;s_head=0U;s_state.frozen=0U;
  memset(s_state.stats,0,sizeof(s_state.stats));memset(s_source,0,sizeof(s_source));
 }
-/** @brief 请求只复制；固定槽满拒绝，不覆盖未执行动作。 */
+/** @brief 请求只复制；拒绝禁用字段及越界编号，固定槽满时不覆盖未执行动作。 */
 Px4Lite_Result_t App_RequestObservation(const App_ObservationRequest_t *r)
 {
  if(!r||r->operation>APP_OBSERVE_SET_REF||r->field[0]>=APP_OBSERVATION_FIELDS||r->field[1]>=APP_OBSERVATION_FIELDS||r->interval>2U) { return PX4LITE_INVALID_PARAM; }
+ if(s_fields[r->field[0]].group==APP_OBSERVATION_GROUP_DISABLED||s_fields[r->field[1]].group==APP_OBSERVATION_GROUP_DISABLED) { return PX4LITE_INVALID_PARAM; }
  taskENTER_CRITICAL();if(s_state.pending) { taskEXIT_CRITICAL();return PX4LITE_BUSY; }
  s_request=*r;s_state.request_id++;s_state.pending=1U;s_public.request_id=s_state.request_id;s_public.pending=1U;taskEXIT_CRITICAL();return PX4LITE_OK;
 }
@@ -66,11 +76,12 @@ static void ObservationDrift(uint32_t now)
  if(north*north+east*east>1000000.0) { s_state.drift_state=3U;return; }
  s_state.north_m=(float)north;s_state.east_m=(float)east;s_state.drift_state=1U;s_reference_ms=g.position_update_ms;
 }
-/** @brief 从App读取单字段及真正测量身份；零值可有效，过期/无效返回0。 */
+/** @brief 从App读取已启用字段及真正测量身份；零值可有效，禁用/过期/无效返回0。 */
 static uint8_t ObservationSample(uint8_t f,uint32_t now,float *v,uint32_t *ms,uint32_t *seq)
 {
  union { App_ImuSnapshot_t imu;App_NavigationSnapshot_t nav;App_EnvironmentSnapshot_t env;App_GnssDetails_t gnss;App_MotorSnapshot_t motor; } data;
  *seq=0U;
+ if(f>=APP_OBSERVATION_FIELDS||s_fields[f].group==APP_OBSERVATION_GROUP_DISABLED) { return 0U; }
  if(f<7U) { if(App_CopyImuLatest(&data.imu,now)!=PX4LITE_OK) { return 0U; }*ms=data.imu.header.sample_time_ms;*seq=data.imu.header.sequence;
   *v=f<3U?(float)data.imu.accel_mg[f]:(f<6U?(float)data.imu.gyro_mdps[f-3U]/1000.0f:(float)data.imu.temperature_cdeg/100.0f);return 1U; }
  if(f<13U) { (void)App_CopyNavigation(&data.nav,now);if(!(data.nav.valid_mask&PX4LITE_NAV_VALID_ATTITUDE)||(uint32_t)(now-data.nav.attitude_measurement_ms)>200U) { return 0U; }*ms=data.nav.attitude_measurement_ms;

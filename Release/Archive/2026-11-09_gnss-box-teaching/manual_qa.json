@@ -1,0 +1,113 @@
+{
+  "reference_unchanged": true,
+  "manuals": [
+    {
+      "path": "D:\\1\\OneDrive\\Desktop\\Formal_Framework\\Reports\\教学实验\\实验一_GNSS定位与授时_高职实验手册_箱体版V1.1.docx",
+      "pages": 7,
+      "sha256": "7b18f55dba9689acf87132c1cd2fc28bc98f2113501143966b3bf12eb35cdb63",
+      "template_parts_preserved": true,
+      "fonts_and_colors": "PASS",
+      "all_pages_visual_review": "PASS",
+      "pdf_geometry": [
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ]
+      ],
+      "page_top_30px_all_white": true
+    },
+    {
+      "path": "D:\\1\\OneDrive\\Desktop\\Formal_Framework\\Reports\\教学实验\\实验二_多星座卫星观测_高职实验手册_箱体版V1.1.docx",
+      "pages": 7,
+      "sha256": "e2450a2d155bd29a1b846dc01a2861c2c6ec2597afeadfe259c17d07bd063229",
+      "template_parts_preserved": true,
+      "fonts_and_colors": "PASS",
+      "all_pages_visual_review": "PASS",
+      "pdf_geometry": [
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ],
+        [
+          0.0,
+          0.0,
+          595.32,
+          841.92
+        ]
+      ],
+      "page_top_30px_all_white": true
+    }
+  ],
+  "backend": "Word read-only PDF plus packaged render_docx.py rasterizer; Windows bundle has no LibreOffice.",
+  "visual_review_note": "Both manuals reviewed page by page. Apparent trimmed margins in multi-image tool previews disproved by PDF page geometry/image presence, Word top=60pt and PNG pixel checks."
+}

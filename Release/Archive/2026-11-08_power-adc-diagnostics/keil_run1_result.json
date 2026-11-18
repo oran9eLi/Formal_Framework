@@ -1,0 +1,34 @@
+{
+  "exit_code": 0,
+  "errors": 0,
+  "baseline": "gnss_parsed_and_raw_restored",
+  "ended_utc": "2026-11-08T03:53:32.5132747Z",
+  "warnings": 0,
+  "passed": true,
+  "input_count": 1034,
+  "variant": "power_adc_diagnostics",
+  "inputs_unchanged": true,
+  "started_utc": "2026-11-08T03:53:08.6181021Z",
+  "artifacts": [
+    {
+      "sha256": "e491359e7b3052808dbecdbb0b112c8f2d9e6b4dc5c19baa2a3e7696fc701f87",
+      "bytes": 1331794,
+      "name": "formal_framework.hex"
+    },
+    {
+      "sha256": "02488820cfc8aeed3c72b48b475dada5511753c2ddc3e8c3ed721eea402e46b6",
+      "bytes": 5776952,
+      "name": "formal_framework.axf"
+    },
+    {
+      "sha256": "322d85df6f87a3dea7e5d69b5d26bd0320b50efb84c5c1e7c93ee8939cdbfde5",
+      "bytes": 2389258,
+      "name": "formal_framework.map"
+    },
+    {
+      "sha256": "f5d4c66218f3f863cf26c433a3a4ac634acc380a3947ebb97f1a5c5ab0cdae32",
+      "bytes": 7925,
+      "name": "formal_framework.build_log.htm"
+    }
+  ]
+}

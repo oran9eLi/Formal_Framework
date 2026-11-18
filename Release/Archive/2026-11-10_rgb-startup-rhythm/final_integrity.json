@@ -1,0 +1,22 @@
+{
+  "candidate": "Release/Archive/2026-11-10_rgb-startup-rhythm",
+  "input_count": 1041,
+  "production_changes": 13,
+  "inputs_match_current_and_zip": true,
+  "host_groups": 14,
+  "keil_configurations": 2,
+  "hex_name": "cns-f407-rgb-startup-rhythm-20261110.hex",
+  "hex_sha256": "95ebe3867b3e9adcce3075bf064994cb4170e393173fe6be88e22b5631536f76",
+  "main_sram_used": 124872,
+  "main_sram_free": 6200,
+  "main_sram_delta": 480,
+  "flash_load_bytes": 482048,
+  "flash_delta": 3004,
+  "dma_buffer_address": "0x20008bb0",
+  "dma_buffer_bytes": 254,
+  "code": 370044,
+  "ro": 111872,
+  "rw": 2044,
+  "zi": 122828,
+  "hardware_status": "not_flashed_not_tested"
+}

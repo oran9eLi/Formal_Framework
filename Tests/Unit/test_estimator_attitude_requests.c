@@ -3,6 +3,20 @@
  */
 #include <assert.h>
 #include <stdio.h>
+/** @brief 单线程主机夹具所需FreeRTOS公开类型，不创建调度器任务。 */
+typedef int BaseType_t;
+typedef void *TaskHandle_t;
+
+#include "px4lite_log_message_ids.h"
+#include "px4lite_local_msglog.h"
+/** @brief 日志边界替身；本用例仅验证姿态数学与状态，不启动日志服务。 */
+uint8_t Px4Lite_LogMessageSeverity(uint16_t message_id)
+{ (void)message_id; return 0U; }
+/** @brief 接收姿态事件，保持生产接口完整，不修改待测姿态状态。 */
+void Px4Lite_LocalMsgLogEvent(uint16_t message_id, uint32_t now_ms, uint16_t fault_code,
+                            uint8_t source_id, uint8_t active)
+{ (void)message_id; (void)now_ms; (void)fault_code; (void)source_id; (void)active; }
+
 #include "../../Framework/Src/px4lite_modules.c"
 #include "../../Framework/Src/px4lite_attitude.c"
 static uint32_t now;

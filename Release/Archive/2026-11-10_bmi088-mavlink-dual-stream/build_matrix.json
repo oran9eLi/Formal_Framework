@@ -1,0 +1,108 @@
+[
+  {
+    "variant": "bmi088_uplink_off",
+    "defines": [
+      "PX4LITE_ENABLE_RPI_BMI088_UPLINK=0"
+    ],
+    "started_utc": "2026-11-10T06:09:16.306228+00:00",
+    "ended_utc": "2026-11-10T06:09:40.564093+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1043,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1358524,
+        "sha256": "e867f839d54de7e22cc7e3fac4db36f058db1e9237a7c076b645f7fdf550e9ba"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5842112,
+        "sha256": "b285ead4298f132c33c3023e033944b6cee9b6a996f2f208368890a019fc0606"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2440375,
+        "sha256": "a799a06f99b4aa48ab6e070fc9abdd112234c4c24f681ffa5cea892d94b44612"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8045,
+        "sha256": "b5fd34a961128c3b353f5fa5586fee14ec87d69c596778699e880b280931c6c6"
+      }
+    ],
+    "passed": true
+  },
+  {
+    "variant": "mpu6050_compatible",
+    "defines": [
+      "PX4LITE_IMU_DRIVER=0"
+    ],
+    "started_utc": "2026-11-10T06:09:40.749542+00:00",
+    "ended_utc": "2026-11-10T06:10:02.261869+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1043,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1354466,
+        "sha256": "3345d5aada11f94b34dc195854cdfe2229a496865fed5516c32cd2b696a86fbe"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5832084,
+        "sha256": "6c36302a7ed43c9425cd26a470ddaa172dee6008f2437c04d8027e17556f15ad"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2438233,
+        "sha256": "60a3c6ed00d824a4f0e66f5b409d0aaa19b0d88af822877d352791ecb4a83933"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8045,
+        "sha256": "e33ba97bfeca210ad95ab7b2128a7974a2d1180c73cd88af1a004727931ea106"
+      }
+    ],
+    "passed": true
+  },
+  {
+    "variant": "bmi088_dual_stream",
+    "defines": [],
+    "started_utc": "2026-11-10T06:10:02.442451+00:00",
+    "ended_utc": "2026-11-10T06:10:24.035337+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1043,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1365994,
+        "sha256": "7df99dae989b17d5fcb15cb73f7d6445c93b4994c507c5553ecf150951bc6f11"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5854040,
+        "sha256": "569dd62975c45970e8dfc47e5417c2abf029d4554edbc05c022ac657546c9fca"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2456367,
+        "sha256": "47ee8e0f2c83244148b6587b403798cdbf36e9f0e2575fcace599cca4a8fcb61"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8045,
+        "sha256": "6e3596b90c763d27298cdb00a1e433b9f09b7f2a85b4a8d7244d24a85a501b98"
+      }
+    ],
+    "passed": true
+  }
+]

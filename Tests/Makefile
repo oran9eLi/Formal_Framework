@@ -40,7 +40,7 @@ TESTS := power control imu display command alarm attitude attitude_ops estimator
 TESTS += lora_parser rpi_parser
 TESTS += display_touch_health
 TESTS += attitude_roll_wrap adc_current_sampling adc_current_probe bme280_progress baro_schedule sensor_debug_ownership sensor_debug_off
-TESTS += m2_sd_recovery m2_touch_recovery m2_remoteid_fields
+TESTS += m2_sd_recovery sd_spi_media m2_touch_recovery m2_remoteid_fields
 TESTS += display_field_validity display_lvgl_invalidation
 TESTS += remote_freshness remote_navigation remote_slots gnss_measurement gnss_dma gnss_tx_freshness gnss_time_freshness estimator_gnss_freshness
 TESTS += power_current_valid
@@ -80,6 +80,9 @@ $(OUTDIR)/test_display_lvgl_invalidation.exe: FORCE | $(OUTDIR)
 
 $(OUTDIR)/test_m2_sd_recovery.exe: FORCE | $(OUTDIR)
 	$(CC) -Istubs -Im2_comms_stubs $(CFLAGS) -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member Unit/test_m2_sd_recovery.c -o $@
+
+$(OUTDIR)/test_sd_spi_media.exe: FORCE | $(OUTDIR)
+	$(CC) $(CFLAGS) -std=c99 -Werror -I../Third_Party/FatFs Unit/test_sd_spi_media.c -o $@
 
 $(OUTDIR)/test_m2_touch_recovery.exe: FORCE | $(OUTDIR)
 	$(CC) -Istubs -Im2_comms_stubs $(CFLAGS) -O1 -fwhole-program -I../Third_Party/mavlink -Wno-address-of-packed-member Unit/test_m2_touch_recovery.c -o $@

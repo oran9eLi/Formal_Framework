@@ -1,0 +1,78 @@
+[
+  {
+    "variant": "quiet",
+    "started_utc": "2026-11-11T11:28:23.487565+00:00",
+    "ended_utc": "2026-11-11T11:28:48.788700+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1047,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1385471,
+        "sha256": "2954c36c21ead41a444010aa4a36f76452ebd54b681394ad7c65a21807b10c4c"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5907000,
+        "sha256": "d09e96c810e542134c8443e50f1ace2cd83c6ee88a4b482bca60b5abdbd07dc6"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2486506,
+        "sha256": "c88dd6ff783c234d26978ce8b7b8c6e5f6fa73cf4377b12299c1cbcfb8dc8841"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8115,
+        "sha256": "62c1bafc374f54cdac7a5ce3546f02b2fbeaf93bbddca26e18688cc93238f290"
+      },
+      {
+        "name": "formal_framework.htm",
+        "bytes": 2011432,
+        "sha256": "fec118fa997e1045437258e21661594836021fa7c29db3765e531f0abd41cd76"
+      }
+    ],
+    "passed": true
+  },
+  {
+    "variant": "sensor_diagnostics",
+    "started_utc": "2026-11-11T11:28:49.062042+00:00",
+    "ended_utc": "2026-11-11T11:29:13.835252+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1047,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1391337,
+        "sha256": "15483420057bb319b3ab858d76afc215100f9307abe38f78dd92d64f8253663a"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5922828,
+        "sha256": "5988796855860ba5a4c4a7680c1ab64dd479be0674ff9638188b3a1165268e24"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2492429,
+        "sha256": "a9aaa6240ad3261d8c0e58bd1fd0751c998e8de17b97caad43fd93da40b67a3a"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8115,
+        "sha256": "10227b05be759413011fc26e7e6d307e35c44d97de16d11a2a61f88685a684c8"
+      },
+      {
+        "name": "formal_framework.htm",
+        "bytes": 2017962,
+        "sha256": "35b5e253bc2aebbb6367e7ae0fd8a386045c7de87ae13150155120c5b1729eee"
+      }
+    ],
+    "passed": true
+  }
+]

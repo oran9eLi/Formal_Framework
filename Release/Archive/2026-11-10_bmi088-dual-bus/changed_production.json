@@ -1,0 +1,62 @@
+[
+  {
+    "path": "Bsp/Inc/bsp_config.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Bsp/Inc/bsp_imu_spi.h",
+    "kind": "added"
+  },
+  {
+    "path": "Bsp/Src/bsp_imu_spi.c",
+    "kind": "added"
+  },
+  {
+    "path": "Core/Src/stm32f4xx_hal_msp.c",
+    "kind": "modified"
+  },
+  {
+    "path": "Debug/Inc/debug_config.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Debug/Src/debug_selftest.c",
+    "kind": "modified"
+  },
+  {
+    "path": "Debug/Src/debug_service.c",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Inc/px4lite_config.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Inc/px4lite_imu_axis_map.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Inc/px4lite_imu_diagnostics.h",
+    "kind": "added"
+  },
+  {
+    "path": "Framework/Inc/px4lite_platform.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Src/px4lite_platform_f407.c",
+    "kind": "modified"
+  },
+  {
+    "path": "MDK-ARM/formal_framework.uvprojx",
+    "kind": "modified"
+  },
+  {
+    "path": "Sensor/Inc/sensor_bmi088.h",
+    "kind": "added"
+  },
+  {
+    "path": "Sensor/Src/sensor_bmi088.c",
+    "kind": "added"
+  }
+]

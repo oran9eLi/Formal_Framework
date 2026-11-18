@@ -21,6 +21,9 @@
 static uint32_t s_mock_baud_bps = 57600U;
 static Px4Lite_Result_t s_mock_get_result = PX4LITE_OK;
 
+/** @brief H1请求时间戳使用固定平台毫秒，不访问实际定时器。 */
+uint32_t Px4Lite_PlatformGetMs(void) { return 100U; }
+
 Px4Lite_Result_t Px4Lite_RpiMavlinkGetBaudRate(uint32_t *baud_bps)
 {
   if (baud_bps == 0) { return PX4LITE_INVALID_PARAM; }

@@ -1,0 +1,27 @@
+{
+  "groups": [
+    "attitude",
+    "attitude_ops",
+    "attitude_roll_wrap",
+    "bmi088_platform",
+    "bmi088_uplink",
+    "display_field_validity",
+    "display_gnss_status_utc",
+    "display_motor_lock",
+    "gnss_clean_display",
+    "gnss_sat_stream",
+    "hud_present",
+    "hud_present_off",
+    "hud_refresh",
+    "startup_rgb"
+  ],
+  "passed": 14,
+  "failed": 0,
+  "hardware_fps_measured": false,
+  "traffic_only": {
+    "repeat_written": 17361,
+    "repeat_original": 66564,
+    "slow12_written": 24096,
+    "slow12_original": 494508
+  }
+}

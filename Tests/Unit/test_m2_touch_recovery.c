@@ -6,6 +6,10 @@
 #include "../../Display/Src/display_gt911.c"
 static unsigned registrations, register_fail;
 static lv_indev_t fake_indev;
+static unsigned cancelled;
+static uint8_t touch_info = 0x81U;
+/** @brief 记录硬件异常造成的手势取消，正常释放应仍能产生点击。 */
+void lv_indev_wait_release(lv_indev_t *indev) { assert(indev == &fake_indev); cancelled++; }
 void lv_indev_drv_init(lv_indev_drv_t *d) { memset(d,0,sizeof(*d)); }
 lv_indev_t *lv_indev_drv_register(lv_indev_drv_t *d) { (void)d;registrations++;return register_fail?0:&fake_indev; }
 static unsigned present, read_fail, write_fail, init_calls, reads;
@@ -20,7 +24,7 @@ BSP_TouchPortResult_t BSP_TouchPort_ReadReg16(uint8_t addr,uint16_t reg,uint8_t 
   reads++;memset(buf,0,len);
   if(!present || read_fail || addr!=valid_addr) return BSP_TOUCH_PORT_ERROR;
   if(reg==DISPLAY_GT911_REG_PID) memcpy(buf,"911",4);
-  if(reg==DISPLAY_GT911_REG_TP_INFO) buf[0]=0x81;
+  if(reg==DISPLAY_GT911_REG_TP_INFO) buf[0]=touch_info;
   if(reg==DISPLAY_GT911_REG_TP1) { buf[0]=42;buf[2]=31; }
   return BSP_TOUCH_PORT_OK;
 }
@@ -43,7 +47,13 @@ int main(void) {
   Advance(deadline,deadline+400);Display_Gt911_GetStatus(&status);
   assert(status.ready && !status.recovering && status.last_error==0 && status.recovery_count==2);
   LvPortIndev_Read(0,&data);assert(data.state==LV_INDEV_STATE_PR && data.point.x==42 && data.point.y==31);
+  touch_info=0U;LvPortIndev_Read(0,&data);LvPortIndev_Read(0,&data);
+  assert(data.state==LV_INDEV_STATE_PR && data.point.x==42 && data.point.y==31);
+  touch_info=0x80U;LvPortIndev_Read(0,&data);assert(data.state==LV_INDEV_STATE_REL && !cancelled);
+  touch_info=0U;LvPortIndev_Read(0,&data);assert(data.state==LV_INDEV_STATE_REL);
+  touch_info=0x81U;LvPortIndev_Read(0,&data);assert(data.state==LV_INDEV_STATE_PR);
   read_fail=1;LvPortIndev_Read(0,&data);assert(data.state==LV_INDEV_STATE_REL);
+  assert(cancelled==1U);
   Display_Gt911_GetStatus(&status);assert(!status.ready && status.last_error==7);
   deadline=s_gt911_deadline_ms;read_fail=0;valid_addr=0x5d;
   Advance(deadline,deadline+500);assert(s_gt911_addr==0x5d && registrations==1);

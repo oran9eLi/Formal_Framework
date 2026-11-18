@@ -1,6 +1,6 @@
 /**
  * @file bsp_adc_current.c
- * @brief 实现 PC0/PC1 两路电流计模拟输出采样。
+ * @brief BSP 层电流计模拟采样；逻辑第二组默认按扩展板路由从PC0监测主回路。
  * @details
  * 本文件属于 BSP 层，只负责 ADC3 初始化、通道切换、轮询采样、平均采样和 ADC 引脚
  * 电压换算。不得在本层解释电流计比例、零点或电池状态。
@@ -16,9 +16,19 @@
 
 static ADC_HandleTypeDef s_hadc_current;
 
-/** @brief 最近成功采样的诊断缓存；下标 0/1 对应 PC0/PC1，不触发额外采样。 */
+/** @brief 最近ReadVoltage正常值或被拒绝的饱和值诊断；下标0/1对应逻辑第一/第二组，物理脚由BSP路由配置，不触发额外采样。 */
 static uint32_t s_diag_adc_mv[2];
 static uint8_t  s_diag_floating[2];
+static uint32_t s_rejected_raw[2]; /**< 本轮正式平均采样碰到的饱和/越界原码，仅供失败诊断。 */
+static uint8_t s_rejected_raw_valid[2]; /**< 本轮平均因原码>=4095被拒绝为1，不表示测量有效。 */
+
+/** @brief 判断逻辑电流通道是否启用；禁用通道不得触发惰性初始化或采样。 */
+static uint8_t BSP_ADC_Current_ChannelEnabled(BSP_ADC_CurrentChannel_t channel)
+{
+  if (channel == BSP_ADC_CURRENT_BATTERY1) { return (BSP_ENABLE_POWER1 != 0U) ? 1U : 0U; }
+  if (channel == BSP_ADC_CURRENT_BATTERY2) { return (BSP_ENABLE_POWER2 != 0U) ? 1U : 0U; }
+  return 0U;
+}
 
 /**
  * @brief 将 HAL ADC 返回状态映射为 BSP 通用返回码。
@@ -79,6 +89,7 @@ static void BSP_ADC_Current_PrechargePin(BSP_ADC_CurrentChannel_t channel, uint8
 
 BSP_Status_t BSP_ADC_Current_Init(void)
 {
+#if BSP_ENABLE_ADC_CURRENT
   s_hadc_current.Instance                   = BSP_ADC_CURRENT_INS;
   s_hadc_current.Init.ClockPrescaler        = ADC_CLOCK_SYNC_PCLK_DIV4;
   s_hadc_current.Init.Resolution            = ADC_RESOLUTION_12B;
@@ -93,6 +104,9 @@ BSP_Status_t BSP_ADC_Current_Init(void)
   s_hadc_current.Init.EOCSelection          = ADC_EOC_SINGLE_CONV;
 
   return (HAL_ADC_Init(&s_hadc_current) == HAL_OK) ? BSP_STATUS_OK : BSP_STATUS_ERROR;
+#else
+  return BSP_STATUS_ERROR;
+#endif
 }
 
 BSP_Status_t BSP_ADC_Current_DeInit(void)
@@ -119,7 +133,7 @@ BSP_Status_t BSP_ADC_Current_ReadRaw(BSP_ADC_CurrentChannel_t channel, uint32_t 
   HAL_StatusTypeDef result;
 
   if (raw == 0) { return BSP_STATUS_ERROR; }
-  if ((channel != BSP_ADC_CURRENT_BATTERY1) && (channel != BSP_ADC_CURRENT_BATTERY2)) { return BSP_STATUS_ERROR; }
+  if (BSP_ADC_Current_ChannelEnabled(channel) == 0U) { return BSP_STATUS_ERROR; }
 
   if (s_hadc_current.Instance == 0) {
     if (BSP_ADC_Current_Init() != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
@@ -141,18 +155,29 @@ BSP_Status_t BSP_ADC_Current_ReadRaw(BSP_ADC_CurrentChannel_t channel, uint32_t 
   return BSP_ADC_Current_MapHalStatus(result);
 }
 
+/**
+ * @brief 逐样本排除满量程/越界后再求平均，防止单次饱和被其他样本稀释成假有效值。
+ * @note 原始ReadRaw仍可用于查看4095诊断码；正式平均中0合法，4095及以上不授权为电流测量。
+ */
 BSP_Status_t BSP_ADC_Current_ReadAverage(BSP_ADC_CurrentChannel_t channel, uint32_t *raw, uint8_t count)
 {
   uint32_t sum = 0U;
   uint8_t i;
+  uint8_t idx = (channel == BSP_ADC_CURRENT_BATTERY2) ? 1U : 0U;
 
-  if (raw == 0) { return BSP_STATUS_ERROR; }
+  if ((raw == 0) || (BSP_ADC_Current_ChannelEnabled(channel) == 0U)) { return BSP_STATUS_ERROR; }
   if (count == 0U) { count = 1U; }
+  s_rejected_raw_valid[idx] = 0U;
 
   for (i = 0U; i < count; i++) {
     uint32_t sample;
     BSP_Status_t result = BSP_ADC_Current_ReadRaw(channel, &sample);
     if (result != BSP_STATUS_OK) { return result; }
+    if (sample >= BSP_ADC_CURRENT_RAW_MAX) {
+      s_rejected_raw[idx] = sample;
+      s_rejected_raw_valid[idx] = 1U;
+      return BSP_STATUS_ERROR;
+    }
     sum += sample;
   }
 
@@ -203,7 +228,7 @@ static BSP_Status_t BSP_ADC_Current_PinFloating(BSP_ADC_CurrentChannel_t channel
  * @brief 平均采样并换算引脚毫伏值；可选浮空探测的全部引脚操作受编译开关门控。
  * @param[in] channel 第一或第二电流通道。
  * @param[out] voltage_mv 成功时输出毫伏值，失败时保持原值。
- * @return 参数、诊断探测或正常转换失败返回 ERROR，否则返回 OK。
+ * @return 参数、探测、转换失败或任一正式样本满量程/越界返回ERROR，否则返回OK。
  */
 BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uint32_t *voltage_mv)
 {
@@ -214,15 +239,22 @@ BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uin
   uint8_t  idx = (channel == BSP_ADC_CURRENT_BATTERY2) ? 1U : 0U;
 
   if (voltage_mv == 0) { return BSP_STATUS_ERROR; }
-  if ((channel != BSP_ADC_CURRENT_BATTERY1) && (channel != BSP_ADC_CURRENT_BATTERY2)) { return BSP_STATUS_ERROR; }
+  if (BSP_ADC_Current_ChannelEnabled(channel) == 0U) { return BSP_STATUS_ERROR; }
 
 #if BSP_ADC_CURRENT_FLOAT_CHECK_ENABLE
   if (BSP_ADC_Current_PinFloating(channel, &floating) != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
 #endif
 
   vdda = BSP_ADC_GetVddaMv(); /* 用 VREFINT 实测 VDDA 代替写死的 3.3V，消除电机负载导致的 VDDA 下陷误差 */
-  if (BSP_ADC_Current_ReadAverage(channel, &raw, BSP_ADC_CURRENT_AVERAGE_COUNT) != BSP_STATUS_OK) { return BSP_STATUS_ERROR; }
-  if (raw > BSP_ADC_CURRENT_RAW_MAX) { raw = BSP_ADC_CURRENT_RAW_MAX; }
+  if (BSP_ADC_Current_ReadAverage(channel, &raw, BSP_ADC_CURRENT_AVERAGE_COUNT) != BSP_STATUS_OK) {
+    if (s_rejected_raw_valid[idx] != 0U) {
+      /* 只保留被拒绝的实际原码对应mV供诊断；不改调用者测量输出，不伪造有效大电流。 */
+      s_diag_adc_mv[idx] = (uint32_t)((((uint64_t)s_rejected_raw[idx] * vdda) +
+                                     (BSP_ADC_CURRENT_RAW_MAX / 2U)) / BSP_ADC_CURRENT_RAW_MAX);
+      s_diag_floating[idx] = floating;
+    }
+    return BSP_STATUS_ERROR;
+  }
 
   pin_mv = ((raw * vdda) + (BSP_ADC_CURRENT_RAW_MAX / 2U)) / BSP_ADC_CURRENT_RAW_MAX;
   s_diag_adc_mv[idx]   = pin_mv;

@@ -15,7 +15,7 @@
 #include "px4lite_attitude.h"
 
 /**
- * @brief 复位 Framework 模块状态、统计计数和启动时间。
+ * @brief 复位 Framework 模块状态、统计计数、启动时间和附加连接提示基线。
  *
  * @return 初始化结果。
  */
@@ -179,6 +179,7 @@ Px4Lite_Result_t Px4Lite_CopyCommRxFrame(Px4Lite_CommRxFrame_t *out);
  * @brief 初始化健康监控服务。
  *
  * @return 初始化结果。
+ * @note 重建附加连接声光的静默基线与启动窗口，不修改模块状态、超时或恢复策略。
  */
 Px4Lite_Result_t Px4Lite_HealthInit(void);
 
@@ -188,6 +189,7 @@ Px4Lite_Result_t Px4Lite_HealthInit(void);
  * @param[in] now_ms 当前 health 周期时间，单位：ms。
  *
  * @note Health task 统一负责模块超时、OFFLINE/FAILED 判定和 watchdog 喂狗门控。
+ *       可选连接观察只读取同轮快照登记声光事件，不在Health驱动硬件或改变状态策略。
  */
 void Px4Lite_HealthRun(uint32_t now_ms);
 

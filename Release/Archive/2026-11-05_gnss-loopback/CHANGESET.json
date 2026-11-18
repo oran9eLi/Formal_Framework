@@ -1,0 +1,49 @@
+{
+  "baseline": "Release/Archive/2026-11-05_gnss-rx-config/normal/inputs_after.json",
+  "variant_diff": [
+    "Debug/Inc/debug_config.h",
+    "Framework/Inc/px4lite_config.h"
+  ],
+  "changes": [
+    {
+      "path": "Bsp/Inc/bsp_gnss.h",
+      "after_sha256": "092212fa7ebcbcb98a59dbab2de881380c7bf0f5035453dba405be379c08ca2a",
+      "before_sha256": "c227d471aa4bf970479f1831547af8f4ddc8e1142619f755ec3383536eb23256"
+    },
+    {
+      "path": "Bsp/Src/bsp_gnss.c",
+      "after_sha256": "44dff483d1852993611ad9c6e40de27a07dd65cc39644eb702154dfb3b46b516",
+      "before_sha256": "2806b3796cc251122efe2857cfb809751679a42a97ab1d7fb9cac4a0b198e4f4"
+    },
+    {
+      "path": "Sensor/Inc/sensor_gnss.h",
+      "after_sha256": "e8ecc51feaf35606560974d5e498c851bc817777a199da80995736450381eea4",
+      "before_sha256": "4ff26bf10e335e3b21e245c249289b2a24c600f6e53aaa6de8152377659d9856"
+    },
+    {
+      "path": "Sensor/Src/sensor_gnss.c",
+      "after_sha256": "ae82e4bfc62c70926279e80cfba76015ae9fd77f3c9ffb1d427afaea1a0bf3d8",
+      "before_sha256": "74bb79b617f642a3e6bad5189617da8311855e5e3bac2acc245d35d1dd70bf45"
+    },
+    {
+      "path": "Framework/Inc/px4lite_config.h",
+      "after_sha256": "3165fb1ff9a090d23d0040811059e7ddbe08615dc24fb82f0b6e7b7f29ee6782",
+      "before_sha256": "e50cbc9656d2bc6ecf490f85596c911fbc97155b903b488a19191a39a46a98ba"
+    },
+    {
+      "path": "Framework/Inc/px4lite_platform.h",
+      "after_sha256": "edfb85e05aea3f4b6ba73a915057f6a8bf1cce0abb0ee75741d4e14fa217a3f2",
+      "before_sha256": "4666ac63b85f96259d540d45ffbf3aa26f241884827941b186cbb3c1a2a686d8"
+    },
+    {
+      "path": "Framework/Src/px4lite_platform_f407.c",
+      "after_sha256": "cbad3ff970f8b31f43fb5a94ff8f823b5554148bf7cc9b668892e43d74c38d8b",
+      "before_sha256": "a1116e68be25345ec56c836344d737199042b1b5610ca921b6ef0e87f5a8e9ca"
+    },
+    {
+      "path": "Debug/Src/debug_service.c",
+      "after_sha256": "b3a44689ed5347bf1b772fac9fca0ede04220e6633be51c18e779936fd1ef814",
+      "before_sha256": "8ebdb14166b5ce6a63ec859957b9cb25de7b75cf024d9b5049fa695f57340c09"
+    }
+  ]
+}

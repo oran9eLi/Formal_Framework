@@ -1,0 +1,7 @@
+[
+  "Bsp/Inc/bsp_gnss.h",
+  "Bsp/Src/bsp_gnss.c",
+  "Framework/Inc/px4lite_platform.h",
+  "Framework/Src/px4lite_platform_f407.c",
+  "Debug/Src/debug_service.c"
+]

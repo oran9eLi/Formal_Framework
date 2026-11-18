@@ -1,0 +1,141 @@
+{
+  "passed": 33,
+  "failed_selected_final": 0,
+  "groups": {
+    "gnss_bringup": {
+      "run_log": "build/20261109_gnss_box_experiments/host_driver/gnss_bringup.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_driver/gnss_bringup.build.log"
+    },
+    "gnss_measurement": {
+      "run_log": "build/20261109_gnss_box_experiments/host_driver/gnss_measurement.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_driver/gnss_measurement.build.log"
+    },
+    "gnss_raw_capture": {
+      "run_log": "build/20261109_gnss_box_experiments/host_driver/gnss_raw_capture.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_driver/gnss_raw_capture.build.log"
+    },
+    "gnss_raw_forward_hooks": {
+      "run_log": "build/20261109_gnss_box_experiments/host_driver/gnss_raw_forward_hooks.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_driver/gnss_raw_forward_hooks.build.log"
+    },
+    "gnss_satellites": {
+      "run_log": "build/20261109_gnss_box_experiments/host_driver/gnss_satellites.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_driver/gnss_satellites.build.log"
+    },
+    "gnss_unified_facts": {
+      "run_log": "build/20261109_gnss_box_experiments/host_driver/gnss_unified_facts.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_driver/gnss_unified_facts.build.log"
+    },
+    "gnss_satellite_mapping": {
+      "run_log": "build/20261109_gnss_box_experiments/host_mapping/gnss_satellite_mapping.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_mapping/gnss_satellite_mapping.build.log"
+    },
+    "gnss_satellite_mapping_off": {
+      "run_log": "build/20261109_gnss_box_experiments/host_mapping/gnss_satellite_mapping_off.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_mapping/gnss_satellite_mapping_off.build.log"
+    },
+    "gnss_sat_stream": {
+      "run_log": "build/20261109_gnss_box/host_stream/gnss_sat_stream.run.log",
+      "build_log": "build/20261109_gnss_box/host_stream/gnss_sat_stream.build.log"
+    },
+    "display_motor_lock": {
+      "run_log": "build/20261109_gnss_local_labs/host_ui_regression/display_motor_lock.run.log",
+      "build_log": "build/20261109_gnss_local_labs/host_ui_regression/display_motor_lock.build.log"
+    },
+    "estimator_gnss_freshness": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/estimator_gnss_freshness.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/estimator_gnss_freshness.build.log"
+    },
+    "gnss_diagnostics_mapping": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_diagnostics_mapping.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_diagnostics_mapping.build.log"
+    },
+    "gnss_diagnostics_mapping_off": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_diagnostics_mapping_off.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_diagnostics_mapping_off.build.log"
+    },
+    "gnss_raw_debug_off": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_raw_debug_off.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_raw_debug_off.build.log"
+    },
+    "gnss_raw_uplink": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_raw_uplink.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_raw_uplink.build.log"
+    },
+    "gnss_raw_uplink_compat": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_raw_uplink_compat.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_raw_uplink_compat.build.log"
+    },
+    "gnss_status_domain": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_status_domain.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_status_domain.build.log"
+    },
+    "gnss_status_domain_off": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_status_domain_off.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_status_domain_off.build.log"
+    },
+    "gnss_time_freshness": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_time_freshness.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_time_freshness.build.log"
+    },
+    "gnss_tx_freshness": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_tx_freshness.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_tx_freshness.build.log"
+    },
+    "gnss_unified_uplink": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/gnss_unified_uplink.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/gnss_unified_uplink.build.log"
+    },
+    "motor_manual_lock": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/motor_manual_lock.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/motor_manual_lock.build.log"
+    },
+    "motor_manual_lock_gate": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/motor_manual_lock_gate.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/motor_manual_lock_gate.build.log"
+    },
+    "p25_gnss_transport": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/p25_gnss_transport.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/p25_gnss_transport.build.log"
+    },
+    "power2_conversion_audit": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/power2_conversion_audit.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/power2_conversion_audit.build.log"
+    },
+    "power_diagnostics_mapping": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/power_diagnostics_mapping.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/power_diagnostics_mapping.build.log"
+    },
+    "single_supply_csv": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/single_supply_csv.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/single_supply_csv.build.log"
+    },
+    "single_supply_mavlink": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/single_supply_mavlink.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/single_supply_mavlink.build.log"
+    },
+    "single_supply_service": {
+      "run_log": "build/20261109_gnss_box_experiments/host_regression/single_supply_service.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_regression/single_supply_service.build.log"
+    },
+    "gnss_raw_debug": {
+      "run_log": "build/20261109_gnss_box_experiments/host_fixture_fix/gnss_raw_debug.run.log",
+      "build_log": "build/20261109_gnss_box_experiments/host_fixture_fix/gnss_raw_debug.build.log"
+    },
+    "gnss_clean_display": {
+      "run_log": "build/20261109_gnss_local_labs/host_ui/gnss_clean_display.run.log",
+      "build_log": "build/20261109_gnss_local_labs/host_ui/gnss_clean_display.build.log"
+    },
+    "display_field_validity": {
+      "run_log": "build/20261109_gnss_local_labs/host_ui_regression/display_field_validity.run.log",
+      "build_log": "build/20261109_gnss_local_labs/host_ui_regression/display_field_validity.build.log"
+    },
+    "display_gnss_status_utc": {
+      "run_log": "build/20261109_gnss_local_labs/host_ui_regression/display_gnss_status_utc.run.log",
+      "build_log": "build/20261109_gnss_local_labs/host_ui_regression/display_gnss_status_utc.build.log"
+    }
+  },
+  "initial_fixture_failure": "gnss_raw_debug initially linked the now-enabled independent POWER monitor without its stubs. Isolated this GNSS-only fixture; final rerun passed. Production unchanged by this fix.",
+  "known_unrelated_failure": "reference still expects obsolete global remote-display selection; current display is fixed local. Existing mismatch retained, not counted passed or fixed.",
+  "hardware_validation": false
+}

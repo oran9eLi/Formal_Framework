@@ -1,12 +1,15 @@
 /**
  * @file bsp_adc.c
- * @brief 实现用于电源采样的板级 ADC 接口。
+ * @brief BSP 层 ADC1 内部参考与可选第一组外部电压采样。
+ * @details 第一组停用时仅读取内部 VREFINT，供 ADC2/ADC3 修正 VDDA；不得触碰 PA5。
  */
 
 #include "bsp_adc.h"
 
 #include "bsp_config.h"
 #include "stm32f4xx_hal.h"
+#include "bsp_critical.h"
+#include <string.h>
 
 #define BSP_ADC_TIMEOUT_MS    10U
 #define BSP_ADC_AVERAGE_COUNT 16U /* 电池通道平均次数(加重滤波) */
@@ -17,11 +20,28 @@
 
 /* STM32F407 出厂校准的 VREFINT 原始值(VDDA=3.3V 下测得)，地址固定。
    实测 VDDA = 3300 * VREFINT_CAL / VREFINT_raw，用于消除 VDDA 纹波对读数的比例误差。 */
+/* 主机验证可注入只读校准样本；正式构建默认使用 STM32F407 出厂校准区。 */
+#ifndef BSP_ADC_VREFINT_CAL
 #define BSP_ADC_VREFINT_CAL    (*((const volatile uint16_t *)0x1FFF7A2AU))
+#endif
 #define BSP_ADC_VREFINT_CAL_MV 3300U
+
+/* 当前PCLK2/4为21MHz。DS8626规定VDDA<2.4V时ADC时钟最高18MHz，不能把该区间估值当本配置正常。 */
+#ifndef BSP_ADC_VDDA_MIN_MV
+#define BSP_ADC_VDDA_MIN_MV 2400U
+#endif
+#ifndef BSP_ADC_VDDA_MAX_MV
+#define BSP_ADC_VDDA_MAX_MV 3600U
+#endif
+#if BSP_ADC_VDDA_MIN_MV == 0 || BSP_ADC_VDDA_MIN_MV > BSP_ADC_VDDA_MAX_MV
+#error "Invalid ADC reference diagnostic voltage window"
+#endif
 
 static ADC_HandleTypeDef s_hadc;
 static uint8_t s_initialized;
+static BSP_ADC_ReferenceDiag_t s_reference_diag;
+static uint8_t s_reference_raw_invalid;
+static uint32_t s_reference_bad_raw;
 
 /**
  * @brief 将 HAL ADC 返回状态映射为 BSP 通用返回码。
@@ -38,8 +58,10 @@ static BSP_Status_t BSP_ADC_MapHalStatus(HAL_StatusTypeDef status)
   return BSP_STATUS_ERROR;
 }
 
+/** @brief 初始化 ADC1；关闭第一组时默认选择内部参考，不初始化外部采集脚。 */
 BSP_Status_t BSP_ADC_Init(void)
 {
+#if BSP_ENABLE_ADC
   ADC_ChannelConfTypeDef channel;
 
   if (s_initialized != 0U) { return BSP_STATUS_OK; }
@@ -59,15 +81,22 @@ BSP_Status_t BSP_ADC_Init(void)
 
   if (HAL_ADC_Init(&s_hadc) != HAL_OK) { return BSP_STATUS_ERROR; }
 
+#if BSP_ENABLE_POWER1
   channel.Channel      = BSP_ADC_CH;
+#else
+  channel.Channel      = ADC_CHANNEL_VREFINT;
+#endif
   channel.Rank         = 1U;
-  channel.SamplingTime = ADC_SAMPLETIME_144CYCLES;
+  channel.SamplingTime = BSP_ADC_SAMPLETIME;
   channel.Offset       = 0U;
 
   if (HAL_ADC_ConfigChannel(&s_hadc, &channel) != HAL_OK) { return BSP_STATUS_ERROR; }
 
   s_initialized = 1U;
   return BSP_STATUS_OK;
+#else
+  return BSP_STATUS_ERROR;
+#endif
 }
 
 BSP_Status_t BSP_ADC_DeInit(void)
@@ -94,6 +123,7 @@ BSP_Status_t BSP_ADC_Recover(void)
 /* 采样前把外部采集脚预置到指定电平：high=0 拉低、high=1 拉高，数 µs 后切回模拟态。
    用于两个目的：(1) 拉低=软件放电，减小浮空漂高；(2) 配合拉高做浮空检测(见下)。
    仅用于外部引脚通道；内部 VREFINT 通道不可驱动。 */
+#if BSP_ENABLE_POWER1
 static void BSP_ADC_PrechargePin(uint8_t high)
 {
   GPIO_InitTypeDef gpio;
@@ -114,6 +144,7 @@ static void BSP_ADC_PrechargePin(uint8_t high)
   gpio.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(BSP_ADC_PORT, &gpio);
 }
+#endif
 
 /* 配置指定通道与采样时间，连续转换 count 次并返回四舍五入平均原始值。
    每次调用都重配通道，便于在电池通道与内部 VREFINT 通道之间切换。 */
@@ -136,8 +167,11 @@ static BSP_Status_t BSP_ADC_ReadChannelAverage(uint32_t channel, uint32_t sample
   if (HAL_ADC_ConfigChannel(&s_hadc, &cfg) != HAL_OK) { return BSP_STATUS_ERROR; }
 
   for (i = 0U; i < count; ++i) {
+    uint32_t sample;
     /* 外部采集脚每次转换前拉低放电，消除浮空漂高；VREFINT 等内部通道不驱动。 */
+#if BSP_ENABLE_POWER1
     if (channel == BSP_ADC_CH) { BSP_ADC_PrechargePin(0U); }
+#endif
     hs = HAL_ADC_Start(&s_hadc);
     if (hs != HAL_OK) {
       (void)HAL_ADC_Stop(&s_hadc);
@@ -148,38 +182,82 @@ static BSP_Status_t BSP_ADC_ReadChannelAverage(uint32_t channel, uint32_t sample
       (void)HAL_ADC_Stop(&s_hadc);
       return BSP_ADC_MapHalStatus(hs);
     }
-    sum += HAL_ADC_GetValue(&s_hadc);
+    sample = HAL_ADC_GetValue(&s_hadc);
     (void)HAL_ADC_Stop(&s_hadc);
+    if (channel == ADC_CHANNEL_VREFINT && (sample == 0U || sample > BSP_ADC_RAW_MAX)) {
+      s_reference_raw_invalid = 1U; s_reference_bad_raw = sample;
+      return BSP_STATUS_ERROR;
+    }
+    sum += sample;
   }
 
   *raw = (sum + ((uint32_t)count / 2U)) / (uint32_t)count;
   return BSP_STATUS_OK;
 }
 
+/** @brief owner测量公共参考并发布尝试缓存；异常兼容回退3300，但明确保留失败原因与计算值。 */
 uint32_t BSP_ADC_GetVddaMv(void)
 {
-  uint32_t vref_raw = 0U;
-  uint16_t cal      = BSP_ADC_VREFINT_CAL;
+  BSP_ADC_ReferenceDiag_t diag;
+  uint32_t key;
+  memset(&diag, 0, sizeof(diag));
+  diag.sequence = s_reference_diag.sequence + 1U;
+  diag.calibration_raw = BSP_ADC_VREFINT_CAL;
+  diag.vdda_mv = BSP_ADC_REF_MV;
+  diag.ready = 1U;
+  s_reference_raw_invalid = 0U; s_reference_bad_raw = 0U;
+  if (diag.calibration_raw == 0U) { diag.status = BSP_ADC_REF_FALLBACK_CAL_ZERO; }
+  else if (diag.calibration_raw == UINT16_MAX) { diag.status = BSP_ADC_REF_FALLBACK_CAL_ERASED; }
+  else if (diag.calibration_raw > BSP_ADC_RAW_MAX) { diag.status = BSP_ADC_REF_FALLBACK_CAL_RANGE; }
+  else if (BSP_ADC_ReadChannelAverage(ADC_CHANNEL_VREFINT, BSP_ADC_SAMPLETIME, BSP_ADC_VREF_COUNT, &diag.vref_raw) != BSP_STATUS_OK) {
+    diag.status = s_reference_raw_invalid ? BSP_ADC_REF_FALLBACK_RAW : BSP_ADC_REF_FALLBACK_READ;
+    if (s_reference_raw_invalid) { diag.vref_raw = s_reference_bad_raw; }
+  } else if (diag.vref_raw == 0U || diag.vref_raw > BSP_ADC_RAW_MAX) { diag.status = BSP_ADC_REF_FALLBACK_RAW; }
+  else {
+    diag.calculated_vdda_mv = (BSP_ADC_VREFINT_CAL_MV * (uint32_t)diag.calibration_raw) / diag.vref_raw;
+    if (diag.calculated_vdda_mv < BSP_ADC_VDDA_MIN_MV || diag.calculated_vdda_mv > BSP_ADC_VDDA_MAX_MV) {
+      diag.status = BSP_ADC_REF_FALLBACK_VDDA_RANGE;
+    } else { diag.vdda_mv = diag.calculated_vdda_mv; diag.status = BSP_ADC_REF_MEASURED; }
+  }
+  key = BSP_Critical_Enter(); s_reference_diag = diag; BSP_Critical_Exit(key);
+  return diag.vdda_mv;
+}
 
-  /* 校准值无效或读取失败时退回标称 3.3V，不影响功能。 */
-  if (cal == 0U) { return BSP_ADC_REF_MV; }
-  if (BSP_ADC_ReadChannelAverage(ADC_CHANNEL_VREFINT, BSP_ADC_SAMPLETIME, BSP_ADC_VREF_COUNT, &vref_raw) != BSP_STATUS_OK) { return BSP_ADC_REF_MV; }
-  if (vref_raw == 0U) { return BSP_ADC_REF_MV; }
-
-  return (BSP_ADC_VREFINT_CAL_MV * (uint32_t)cal) / vref_raw;
+/** @brief 只复制owner参考缓存，失败不写输出；不触碰ADC、工厂区或通道配置。 */
+BSP_Status_t BSP_ADC_GetReferenceDiag(BSP_ADC_ReferenceDiag_t *out)
+{
+  uint32_t key;
+  if (out == 0) { return BSP_STATUS_ERROR; }
+  key = BSP_Critical_Enter();
+  if (s_reference_diag.ready == 0U) { BSP_Critical_Exit(key); return BSP_STATUS_ERROR; }
+  *out = s_reference_diag;
+  BSP_Critical_Exit(key);
+  return BSP_STATUS_OK;
 }
 
 BSP_Status_t BSP_ADC_ReadRaw(uint32_t *raw)
 {
+#if BSP_ENABLE_POWER1
   return BSP_ADC_ReadChannelAverage(BSP_ADC_CH, BSP_ADC_SAMPLETIME, 1U, raw);
+#else
+  (void)raw;
+  return BSP_STATUS_ERROR;
+#endif
 }
 
 BSP_Status_t BSP_ADC_ReadAverage(uint32_t *raw, uint8_t count)
 {
+#if BSP_ENABLE_POWER1
   return BSP_ADC_ReadChannelAverage(BSP_ADC_CH, BSP_ADC_SAMPLETIME, count, raw);
+#else
+  (void)raw;
+  (void)count;
+  return BSP_STATUS_ERROR;
+#endif
 }
 
 /* 单次转换：先把 PA5 预置到 high 指定电平再采样。用于浮空检测。 */
+#if BSP_ENABLE_POWER1
 static BSP_Status_t BSP_ADC_ReadOnePrecharged(uint8_t high, uint32_t *raw)
 {
   ADC_ChannelConfTypeDef cfg;
@@ -215,9 +293,12 @@ static uint8_t BSP_ADC_PinFloating(void)
   if (BSP_ADC_ReadOnePrecharged(1U, &raw_hi) != BSP_STATUS_OK) { return 0U; }
   return ((raw_hi > raw_lo) && ((raw_hi - raw_lo) > BSP_ADC_FLOAT_DELTA_RAW)) ? 1U : 0U;
 }
+#endif
 
+/** @brief 读取第一组电压；停用时返回错误且不改写输出、不执行外部采样。 */
 BSP_Status_t BSP_ADC_ReadVoltageMv(uint32_t *voltage_mv)
 {
+#if BSP_ENABLE_POWER1
   uint32_t raw = 0U;
   uint32_t vdda;
   uint32_t pin_mv;
@@ -237,4 +318,8 @@ BSP_Status_t BSP_ADC_ReadVoltageMv(uint32_t *voltage_mv)
   pin_mv      = ((raw * vdda) + (BSP_ADC_RAW_MAX / 2U)) / BSP_ADC_RAW_MAX;
   *voltage_mv = (pin_mv * BSP_ADC_DIVIDER_NUM) / BSP_ADC_DIVIDER_DEN;
   return BSP_STATUS_OK;
+#else
+  (void)voltage_mv;
+  return BSP_STATUS_ERROR;
+#endif
 }

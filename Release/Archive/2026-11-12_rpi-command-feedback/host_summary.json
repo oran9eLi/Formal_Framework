@@ -1,0 +1,43 @@
+{
+  "selected_groups": [
+    "bmi088_uplink",
+    "command",
+    "control",
+    "gnss_sat_stream",
+    "gnss_silence_recovery",
+    "heartbeat_policy",
+    "hud_present",
+    "hud_refresh",
+    "motor_manual_lock",
+    "motor_manual_lock_gate",
+    "rgb_platform",
+    "rpi_baud_switch",
+    "rpi_feedback",
+    "rpi_feedback_all_off",
+    "rpi_feedback_off",
+    "rpi_feedback_rgb_off",
+    "rpi_feedback_rx",
+    "rpi_feedback_rx_off",
+    "rpi_feedback_rx_rpioff",
+    "rpi_feedback_tone_off",
+    "rpi_feedback_tone_rgb_off",
+    "rpi_h1_echo",
+    "rpi_parser",
+    "sensor_work_independence",
+    "startup_rgb",
+    "startup_rgb_off",
+    "startup_tone_off"
+  ],
+  "passed": 27,
+  "failed": 0,
+  "player_final_matrix_groups": 10,
+  "real_crc_rx_variants": 3,
+  "full_repository_suite_claimed": false,
+  "initial_failures_recorded": {
+    "rpi_h1_echo": "Existing fixture missing PlatformGetMs; fixed fixture only",
+    "rpi_parser": "Existing fixture missing UART constants; fixed fixture only",
+    "alarm": "Obsolete removed MavRx_DecodeTunnel fixture, not changed",
+    "remote_navigation": "Obsolete NAMED_VALUE_INT decoding expectation, not changed"
+  },
+  "board_tested": false
+}

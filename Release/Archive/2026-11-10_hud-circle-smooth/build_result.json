@@ -1,0 +1,36 @@
+{
+  "variant": "hud_only_default",
+  "started_utc": "2026-11-10T05:23:23.745653+00:00",
+  "ended_utc": "2026-11-10T05:23:47.687125+00:00",
+  "exit_code": 0,
+  "errors": 0,
+  "warnings": 0,
+  "input_count": 1041,
+  "inputs_unchanged": true,
+  "changed_production": [
+    "Display/Src/display_lvgl.c"
+  ],
+  "artifacts": [
+    {
+      "name": "formal_framework.hex",
+      "bytes": 1358180,
+      "sha256": "3f9c0864b68c0c45e667790bcd20c154f1d682db4596ff83e52421998a5c8072"
+    },
+    {
+      "name": "formal_framework.axf",
+      "bytes": 5832564,
+      "sha256": "e8c3144289429225b2c28068c1c2648eea984288e6bb0e340aedcc4107278c4a"
+    },
+    {
+      "name": "formal_framework.map",
+      "bytes": 2439722,
+      "sha256": "9dde0c928814d03f820ad091814eb8447fe9955be44b22e67f1f77159923a52d"
+    },
+    {
+      "name": "formal_framework.build_log.htm",
+      "bytes": 8007,
+      "sha256": "a0b20c18ea0fa569565e9b172e379c750911ff0c11c44b434ef1ba2bb65ba6b3"
+    }
+  ],
+  "passed": true
+}

@@ -207,6 +207,9 @@ typedef enum {
   PX4LITE_LOGMSG_RECORD_SAVED, /**< CSV recording saved；INFO。 */
   PX4LITE_LOGMSG_RECORD_PARTIAL, /**< CSV recording partial；WARN。 */
   PX4LITE_LOGMSG_RECORD_ERROR, /**< CSV recording failed；ERROR。 */
+  PX4LITE_LOGMSG_MOTOR_MANUAL_LOCKED, /**< 人工权限已锁定、目标已清；硬件撤收失败由控制写入故障另报，严重度 0。 */
+  PX4LITE_LOGMSG_MOTOR_MANUAL_UNLOCKED, /**< 人工解锁，仍需等待电调最小脉宽预备；严重度 0。 */
+  PX4LITE_LOGMSG_THROTTLE_LOCKED, /**< 人工锁定阻止非零油门或斜坡动作；严重度 1。 */
   PX4LITE_LOGMSG_COUNT
 /* COUNT 之前只允许追加新编号，RPi 日志表已有编号保持。 */
 } Px4Lite_LogMessageId_t;

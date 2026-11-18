@@ -1,0 +1,95 @@
+{
+  "profile": "gnss_unified_and_raw_uplink",
+  "date": "2026-11-06",
+  "hex": "cns-f407-gnss-unified-raw-20261106.hex",
+  "hex_sha256": "142625cf096ab67b9a16e79473a05bfb8b7ee8ac8c0a1ce948279682decf0958",
+  "keil": {
+    "input_count": 1034,
+    "inputs_unchanged": true,
+    "errors": 0,
+    "started_utc": "2026-11-06T08:26:53.7753308Z",
+    "variant": "gnss_unified_and_raw_uplink",
+    "passed": true,
+    "artifacts": [
+      {
+        "bytes": 1328750,
+        "sha256": "142625cf096ab67b9a16e79473a05bfb8b7ee8ac8c0a1ce948279682decf0958",
+        "name": "formal_framework.hex"
+      },
+      {
+        "bytes": 5765840,
+        "sha256": "2ee68db80087eb189679769d34f10597cfff03e6c10e83b015346f4d3ddce4c5",
+        "name": "formal_framework.axf"
+      },
+      {
+        "bytes": 2380064,
+        "sha256": "e972cc8d9063ca2e9c8ae083db22b2873564517cd12332083cef1d1d23600d41",
+        "name": "formal_framework.map"
+      },
+      {
+        "bytes": 7925,
+        "sha256": "7785c82011675d0880fba3280fbc23f925c5dbc3bfa3b8b3c0577ae4853feb26",
+        "name": "formal_framework.build_log.htm"
+      }
+    ],
+    "exit_code": 0,
+    "baseline": "stage1_gnss_unified_uplink",
+    "warnings": 0,
+    "ended_utc": "2026-11-06T08:27:16.9903056Z"
+  },
+  "production_inputs": 1034,
+  "changed_production": 11,
+  "new_production_sources": [
+    "Framework/Inc/px4lite_gnss_raw_uplink.h",
+    "Framework/Src/px4lite_gnss_raw_uplink.c"
+  ],
+  "program_size": {
+    "code": 360760,
+    "ro": 111492,
+    "rw": 1988,
+    "zi": 120404
+  },
+  "keil_log_seconds": 21,
+  "main_sram_static": 122392,
+  "main_sram_free": 8680,
+  "delta_vs_adaptive_sram": 6464,
+  "delta_vs_phase1_sram": 5648,
+  "gnss_dma_buffers": [
+    "s_rx_buf                                 0x200085b0   Data        1024  bsp_gnss.o(.bss)",
+    "s_tx_buf                                 0x200089b0   Data          96  bsp_gnss.o(.bss)"
+  ],
+  "flash_loaded_bytes": 472384,
+  "hex_min": "0x8000000",
+  "hex_end_exclusive": "0x8073540",
+  "hex_checksums_valid": true,
+  "no_overlap": true,
+  "sector11_untouched": true,
+  "host_groups_passed": 38,
+  "host_groups_failed": 0,
+  "new_tasks": 0,
+  "debug_raw_output_retained": true,
+  "structured_gnss_types": [
+    32785,
+    32786,
+    32787,
+    32788
+  ],
+  "raw_mavlink_implemented": true,
+  "raw_types": [
+    32800,
+    32801
+  ],
+  "raw_queue_capacity": 4,
+  "raw_frame_max_bytes": 1024,
+  "raw_fragment_data_max_bytes": 40,
+  "python_tests_passed": 31,
+  "stage1_completed_first": true,
+  "baseline_rtos_heap_estimate_percent": 79.22,
+  "heap_75_percent_target_met": false,
+  "resource_hardware_verified": false,
+  "new_image_hardware_flashed": false,
+  "latest_changed": false,
+  "stable_release": false,
+  "project_pack_id": "Keil.STM32F4xx_DFP.3.1.1",
+  "current_project_rebuild_verified": true
+}

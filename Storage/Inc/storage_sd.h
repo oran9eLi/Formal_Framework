@@ -22,12 +22,12 @@ typedef struct {
   uint8_t files_open;       /**< 文件打开标志，1 表示数据/错误文件已打开。 */
   uint8_t last_sync_ok;     /**< 最近一次 sync 成功标志。 */
   uint8_t disk_error;       /**< 磁盘错误标志。 */
-  uint8_t card_type;        /**< SD 卡类型，来自底层识别结果。 */
+  uint8_t card_type;        /**< 当前挂载卡的类型位，未挂载为 0。 */
   uint8_t mount_result;     /**< 最近一次挂载结果。 */
   uint8_t last_command;     /**< 最近一次底层 SD 命令。 */
   uint8_t last_response;    /**< 最近一次底层 SD 响应。 */
-  uint8_t open_phase;       /**< 最近故障阶段：1..6 打开/表头/seek，7 换日 sync，8 换日 close，9 写入，10 sync，11 mount，12 主动恢复 close。 */
-  uint8_t open_result;      /**< 最近故障真实 FatFs 结果；清理及成功重挂载不覆盖。 */
+  uint8_t open_phase;       /**< 最近故障阶段：1..6 打开/表头/seek，7 换日 sync，8 换日 close，9 写入，10 sync，11 mount，12 主动恢复 close，13 在线介质检查。 */
+  uint8_t open_result;      /**< 最近故障的 FatFs 结果；阶段 13 将介质不可用映射为 FR_NOT_READY。成功重挂载保留该记录。 */
   uint8_t short_write;      /**< 最近故障是否为 FR_OK 短写；真实 FatFs 结果仍保留。 */
   uint8_t reserved;         /**< 保留字节。 */
   uint32_t written_count;   /**< 累计成功写入记录数。 */

@@ -28,6 +28,7 @@
 #include "bsp_lora.h"
 #include "bsp_remoteid.h"
 #include "bsp_uart.h"
+#include "bsp_rgb.h"
 
 /** @addtogroup STM32F4xx_HAL_Examples
  * @{
@@ -234,35 +235,15 @@ void DebugMon_Handler(void)
 /**
  * @}
  */
+/** @brief GNSS RX DMA中断只转发BSP，由其推进原始位置和记录恢复请求。 */
 void DMA1_Stream5_IRQHandler(void)
 {
   BSP_GNSS_DmaIrqHandler();
 }
+/** @brief GNSS UART中断只转发BSP/HAL，不在Core解析或等待发送完成。 */
 void USART2_IRQHandler(void)
 {
-  UART_HandleTypeDef *huart = BSP_GNSS_GetUartHandle();
-  uint32_t sr               = USART2->SR;
-
-#if DEBUG_GNSS_BSP_MONITOR_ENABLE
-  BSP_GNSS_DebugMarkUsart2Irq(USART2->SR, USART2->CR1, USART2->CR3);
-#endif
-
-  if ((sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE)) != 0U) {
-    BSP_GNSS_RequestRecoverRx();
-    HAL_UART_IRQHandler(huart);
-    return;
-  }
-
-  if (__HAL_UART_GET_FLAG(huart, UART_FLAG_IDLE) != RESET) {
-#if DEBUG_GNSS_BSP_MONITOR_ENABLE
-    BSP_GNSS_DebugMarkIdleIrq();
-#endif
-
-    __HAL_UART_CLEAR_IDLEFLAG(huart);
-    BSP_GNSS_RxIdleCallback(0U);
-  }
-
-  HAL_UART_IRQHandler(huart);
+  BSP_GNSS_UartIrqHandler();
 }
 
 void DMA1_Stream1_IRQHandler(void)
@@ -278,6 +259,12 @@ void DMA1_Stream3_IRQHandler(void)
 void DMA1_Stream4_IRQHandler(void)
 {
   BSP_RemoteId_TxDmaIrqHandler();
+}
+
+/** @brief RGB DMA中断仅转发原始发送事实，不在中断推进旋律或恢复外设。 */
+void DMA2_Stream7_IRQHandler(void)
+{
+  BSP_RGB_DmaIrqHandler();
 }
 
 void USART3_IRQHandler(void)

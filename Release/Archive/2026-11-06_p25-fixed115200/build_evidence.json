@@ -1,0 +1,71 @@
+{
+  "date": "2026-11-06",
+  "firmware_profile": "p25_fixed115200_clean",
+  "hex": "cns-f407-p25-fixed115200-20261106.hex",
+  "hex_sha256": "cf9371f146c5f3a1971c391dff48dc2d51810d6e2d61977e8fb6194c60129efa",
+  "keil": {
+    "inputs_unchanged": true,
+    "warnings": 0,
+    "variant": "p25_fixed115200_clean",
+    "passed": true,
+    "exit_code": 0,
+    "input_count": 1030,
+    "started_utc": "2026-11-06T02:22:01.5442054Z",
+    "ended_utc": "2026-11-06T02:22:28.0909340Z",
+    "errors": 0,
+    "baseline": "2026-11-06_p25_rx_followup",
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1291167,
+        "sha256": "cf9371f146c5f3a1971c391dff48dc2d51810d6e2d61977e8fb6194c60129efa"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5675708,
+        "sha256": "79e9c14e20da6a519d6c7729e65c09d38d95b0ad602f166b614da04b19e100ea"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2319621,
+        "sha256": "5b5cff777d856c9c4bc1f9559f28413bf7edf3f91fe8012a119f892086450b22"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 7849,
+        "sha256": "d6bbb937f6ac320768a825b74658a675a2a310f05da60aa2f81d5d9066603a07"
+      }
+    ]
+  },
+  "production_inputs": 1030,
+  "new_sources": [],
+  "program_size": {
+    "code": 347872,
+    "ro": 111016,
+    "rw": 1964,
+    "zi": 111356
+  },
+  "main_sram_static": 113320,
+  "main_sram_free": 17752,
+  "delta_vs_parent_sram": 0,
+  "flash_loaded_bytes": 459020,
+  "hex_min": "0x8000000",
+  "hex_end_exclusive": "0x807010c",
+  "hex_checksums_valid": true,
+  "no_overlap": true,
+  "sector11_untouched": true,
+  "dma_map": [
+    "s_rx_buf                                 0x20006450   Data        1024  bsp_gnss.o(.bss)"
+  ],
+  "tx_map": [
+    "s_tx_buf                                 0x20006850   Data          96  bsp_gnss.o(.bss)"
+  ],
+  "host_groups_passed": 27,
+  "host_groups_failed": 0,
+  "new_tasks": 0,
+  "receive_link_user_confirmed": true,
+  "pre_cleanup_photo_handshake_confirmed": true,
+  "final_image_hardware_flashed": false,
+  "final_image_real_p25_verified": false,
+  "latest_changed": false
+}

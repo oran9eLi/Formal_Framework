@@ -14,6 +14,8 @@
 
 #include "px4lite_config.h"
 #include "px4lite_platform.h"
+#include "px4lite_rpi_h1_echo.h"
+#include "px4lite_startup_tone.h"
 
 #define RPI_BAUD_B0_BPS 115200U
 #define RPI_BAUD_B1_BPS 57600U
@@ -26,6 +28,18 @@ typedef struct {
 
 static RpiBaudSwitchSlot_t s_slot;
 static Px4Lite_RpiBaudSwitchStats_t s_stats;
+#if PX4LITE_RPI_LOCAL_RESULT_FEEDBACK
+static uint8_t s_baud_feedback_pending; /**< 已接受配置仍等待发送/应用的提示观察，0或1。 */
+static uint8_t s_baud_feedback_failure_sent; /**< 同一配置事务的发送失败低音已登记为1，后续实际成功仍可高音。 */
+/** @brief 完整合法但本次没有执行的请求，仅登记一次低音，不访问声光硬件。 */
+static void RpiBaudFeedbackRejected(void)
+{
+  Px4Lite_StartupToneNotifyRpiResult(0U);
+}
+#else
+#define RpiBaudFeedbackRejected() ((void)0)
+#endif
+
 
 /** @brief 从协议字节数组读取小端 32 位无符号整数。 */
 static uint32_t RpiBaudSwitch_GetU32Le(const uint8_t *src)
@@ -74,6 +88,11 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchInit(void)
   uint32_t baud_bps = 0U;
   Px4Lite_Result_t result;
 
+#if PX4LITE_RPI_LOCAL_RESULT_FEEDBACK
+  if (s_baud_feedback_pending && !s_baud_feedback_failure_sent) { Px4Lite_StartupToneNotifyRpiResult(0U); }
+  s_baud_feedback_pending = 0U;
+  s_baud_feedback_failure_sent = 0U;
+#endif
   memset(&s_slot, 0, sizeof(s_slot));
   memset(&s_stats, 0, sizeof(s_stats));
   result = Px4Lite_RpiMavlinkGetBaudRate(&baud_bps);
@@ -101,6 +120,7 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchHandleTunnel(uint8_t source_system,
   uint32_t current_baud_bps = 0U;
   uint8_t i;
   Px4Lite_Result_t result;
+  Px4Lite_RpiH1EchoResponseView_t pending_echo;
 
   if (payload_type != PX4LITE_RPI_BAUD_TUNNEL_TYPE) { return PX4LITE_IDLE; }
   if ((source_system == 0U) || (source_component == 0U) || (local_system == 0U) ||
@@ -131,16 +151,26 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchHandleTunnel(uint8_t source_system,
     s_stats.rejected_count++;
     return PX4LITE_INVALID_PARAM;
   }
+  /* 结构合法仍不等于执行；仅在原仲裁/应用结果处登记对应声光。 */
+  /* 两种事务共用Comm发送口，禁止切速率响应越过已排队的H1回显。 */
+  if (Px4Lite_RpiH1EchoPeekResponse(&pending_echo) == PX4LITE_OK) {
+    s_stats.busy_count++;
+    RpiBaudFeedbackRejected();
+    return PX4LITE_BUSY;
+  }
 
   if (s_stats.state == PX4LITE_RPI_BAUD_STATE_PENDING_TX) {
     if (RpiBaudSwitch_IsSamePendingRequest(source_system, source_component, payload) != 0U) {
       s_stats.duplicate_count++;
+      RpiBaudFeedbackRejected();
       return PX4LITE_OK;
     }
     s_stats.busy_count++;
+    RpiBaudFeedbackRejected();
     return PX4LITE_BUSY;
   }
   if (s_stats.state != PX4LITE_RPI_BAUD_STATE_IDLE) {
+    RpiBaudFeedbackRejected();
     s_stats.rejected_count++;
     return PX4LITE_INVALID_PARAM;
   }
@@ -148,6 +178,7 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchHandleTunnel(uint8_t source_system,
   result = Px4Lite_RpiMavlinkGetBaudRate(&current_baud_bps);
   if ((result != PX4LITE_OK) || (current_baud_bps != RPI_BAUD_B0_BPS)) {
     s_stats.current_baud_bps = (result == PX4LITE_OK) ? current_baud_bps : 0U;
+    RpiBaudFeedbackRejected();
     s_stats.rejected_count++;
     return (result == PX4LITE_OK) ? PX4LITE_NOT_READY : result;
   }
@@ -161,6 +192,10 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchHandleTunnel(uint8_t source_system,
   s_stats.current_baud_bps = current_baud_bps;
   s_stats.state = PX4LITE_RPI_BAUD_STATE_PENDING_TX;
   s_stats.accepted_count++;
+#if PX4LITE_RPI_LOCAL_RESULT_FEEDBACK
+  s_baud_feedback_pending = 1U;
+  s_baud_feedback_failure_sent = 0U;
+#endif
   s_stats.request_ms=Px4Lite_PlatformGetMs(); memcpy(s_stats.nonce,&payload[2],8U);
   return PX4LITE_OK;
 }
@@ -205,8 +240,32 @@ Px4Lite_Result_t Px4Lite_RpiBaudSwitchResponseSent(void)
   } else {
     s_stats.current_baud_bps = 0U;
   }
+#if PX4LITE_RPI_LOCAL_RESULT_FEEDBACK
+  if (s_baud_feedback_pending) {
+    uint8_t succeeded = (uint8_t)(result == PX4LITE_OK && s_stats.current_baud_bps == RPI_BAUD_B1_BPS);
+    if (succeeded || !s_baud_feedback_failure_sent) { Px4Lite_StartupToneNotifyRpiResult(succeeded); }
+    s_baud_feedback_pending = 0U;
+  }
+#endif
   memset(&s_slot, 0, sizeof(s_slot));
   return result;
+}
+
+/**
+ * @brief 记录响应发送未成功的提示事实，不改变原重试、协议状态或波特率。
+ * @details 同一待发事务只低音一次；BUSY是正常等候。后续真实应用成功仍可高音。
+ */
+void Px4Lite_RpiBaudSwitchResponseFailed(Px4Lite_Result_t result)
+{
+#if PX4LITE_RPI_LOCAL_RESULT_FEEDBACK
+  if (result == PX4LITE_OK || result == PX4LITE_BUSY || result == PX4LITE_IDLE) { return; }
+  if (s_stats.state == PX4LITE_RPI_BAUD_STATE_PENDING_TX && s_baud_feedback_pending && !s_baud_feedback_failure_sent) {
+    s_baud_feedback_failure_sent = 1U;
+    Px4Lite_StartupToneNotifyRpiResult(0U);
+  }
+#else
+  (void)result;
+#endif
 }
 
 /** @brief 复制切换计数和状态，并刷新 UART6 当前已应用波特率。 */

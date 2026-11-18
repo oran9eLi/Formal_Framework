@@ -1,0 +1,58 @@
+{
+  "changes": [
+    {
+      "after_sha256": "b807e6aec073dedaa96b944dd8057771bc1b47e36f98ae66f0f3bf56385ac221",
+      "path": "Bsp/Inc/bsp_config.h",
+      "before_sha256": "f39fdcfe28496fe680c22e22b628d87ea93b2d9083af2218164a6c047b67e3ce"
+    },
+    {
+      "after_sha256": "ca268d65bbb61a8e8ad12029fd99ce0f968e272d4f7b15b470eadc30238915db",
+      "path": "Bsp/Src/bsp_gnss.c",
+      "before_sha256": "bc07a2ed40b702e04532583a4fbb44c6f265f549143974296f588998968b52c5"
+    },
+    {
+      "after_sha256": "0560181113ba6bb4b6915c7aef14ea957190da6ee9751c87ebe9e23ad15d6000",
+      "path": "Sensor/Inc/sensor_gnss.h",
+      "before_sha256": "80e31b867e6515e57c4d7946438d36965976aba46e77fca0d81d98e42e58cadd"
+    },
+    {
+      "after_sha256": "f32f2ea71738a98611af7cffccf2544911b637e5408432e9d832b13e81be980e",
+      "path": "Sensor/Inc/sensor_nmea.h",
+      "before_sha256": "401bb759f847ed45428ab9c9e9e24acb9a3e4609dbc0bb5d614cf06c138b96c6"
+    },
+    {
+      "after_sha256": "b413370999fb573f8e47f9403b6d1f0ad574871a50a55946a64ee1205d4292ff",
+      "path": "Sensor/Src/sensor_gnss.c",
+      "before_sha256": "60c93abb68dff3d972fe09564472dea0707e9e6914f4c79c86681d7fa41b87d2"
+    },
+    {
+      "after_sha256": "926e22a8f0e0ea9218ad65dc7cb9afa16581162905568871cbf523951604b1c4",
+      "path": "Sensor/Src/sensor_nmea.c",
+      "before_sha256": "08e310c9eb67c9677f48f362b38c7b47215d5940fb0b98f4099abcfb8f9e67af"
+    },
+    {
+      "after_sha256": "9228372f96f2c1828876f26f704e59ce67be45d2d90c2f024006c2496db35dd6",
+      "path": "Framework/Inc/px4lite_platform.h",
+      "before_sha256": "678df9cae9db965e5287a75a45b1f0e3afe52849d08da57314b5a817ec339baa"
+    },
+    {
+      "after_sha256": "901e2b1330f434d0e6020eb8ff5351e123bfd49615e1c18694ee9985509bf615",
+      "path": "Framework/Src/px4lite_platform_f407.c",
+      "before_sha256": "57b74714f25f93fd632f16aaabaaba91394270e497407bf2b6d62595a0761c06"
+    },
+    {
+      "after_sha256": "1a5014064d937744c6ad88b7481872fe623abca6175ee9968118168209ca8bdd",
+      "path": "Debug/Inc/debug_config.h",
+      "before_sha256": "714ba0156b84e06194dca8d64ef59e13aa6eed6d4d788dc53bfd2a25f3b50ac9"
+    },
+    {
+      "after_sha256": "e1451b9e08cb3e1b6fef6999e220102d7cebf3a9de7a14f300beb96f30dc5169",
+      "path": "Debug/Src/debug_service.c",
+      "before_sha256": "aa07abf74689a3350cb28a87d84e4e44a11a74666b44f3289d2d7133391b1662"
+    }
+  ],
+  "baseline": "Release/Archive/2026-11-04_motor-manual-lock/production_inputs.json",
+  "variant_diff": [
+    "Debug/Inc/debug_config.h"
+  ]
+}

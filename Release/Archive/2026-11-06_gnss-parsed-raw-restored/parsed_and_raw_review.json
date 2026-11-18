@@ -1,0 +1,84 @@
+{
+  "status": "two_owned_files_frozen",
+  "scope": "Only two default switches and corresponding comments plus meaningful host tests; no wire/driver/typed-module/TX/Raw-module/project/runner changes",
+  "source_hashes": [
+    {
+      "path": "Framework/Inc/px4lite_config.h",
+      "sha256": "909d16fb3691312622498c70a25557ecc762e9c1cfa4fddfedc43df5bde8fdd5"
+    },
+    {
+      "path": "Tests/Unit/test_gnss_raw_uplink.c",
+      "sha256": "8c2ab0902f0e0fa393efaeb0f9b02c613e9fd1c94a79dfb3e6ed4f862369aa41"
+    }
+  ],
+  "defaults": {
+    "PX4LITE_RPI_GNSS_PARSED_TX_ENABLE": 1,
+    "PX4LITE_ENABLE_RPI_GNSS_UPLINK": 1,
+    "PX4LITE_ENABLE_RPI_GNSS_RAW_UPLINK": 1,
+    "PX4LITE_RPI_GNSS_RAW_STATS_ENABLE": 0
+  },
+  "profiles": [
+    {
+      "name": "default",
+      "flags": [],
+      "compile_exit": 0,
+      "run_exit": 0,
+      "warnings": 0,
+      "runrpi_calls": 600,
+      "duration_ms": 6000,
+      "complete_typed_six_packet_groups": 6,
+      "complete_original_bad_raw_frames": 30,
+      "raw_stats_packets": 0,
+      "log": "host/default.run.log"
+    },
+    {
+      "name": "raw_only",
+      "flags": [
+        "-DPX4LITE_RPI_GNSS_PARSED_TX_ENABLE=0",
+        "-DPX4LITE_ENABLE_RPI_GNSS_UPLINK=0"
+      ],
+      "compile_exit": 0,
+      "run_exit": 0,
+      "warnings": 0,
+      "runrpi_calls": 600,
+      "duration_ms": 6000,
+      "complete_typed_six_packet_groups": 0,
+      "complete_original_bad_raw_frames": 30,
+      "raw_stats_packets": 0,
+      "log": "host/raw_only.run.log"
+    }
+  ],
+  "coverage": [
+    "Default real RunRpi wire includes GPS_RAW24, GLOBAL_POSITION33, GNSS_SAT, GNSSUTC and BAROALT",
+    "All four typed classes8011/NAV,8012/DOP two parts,8013/COUNT,8014/LINK two parts form complete matching-id/matching-snapshot six-packet groups",
+    "Fresh typed NAV retains valid POSITION/TIME and exact UTC20261106/45296",
+    "8020 raw fragments reassemble complete original100B BAD wire byte-for-byte; raw wire unchanged",
+    "No8021 on scheduler; direct8021 mirror also rejected while Stats0",
+    "LOCATION12901/SYSTEM12904 mirrors restored and caller frame preserved for hardware broadcast",
+    "Power id1/12000mV, motor percent/pulse, attitude, heartbeat, pressure, system and alarms continue",
+    "Each RunRpi at most1UART submission; real App/LoRa/RTC reads and existing LoRa GPS encoders remain functional",
+    "Existing CRC29B1/1024B26parts/pin/queue-full/retry/timeout/priority/fairness tests remain included"
+  ],
+  "protected_unchanged": [
+    {
+      "path": "Framework/Src/px4lite_mavlink_tx.c",
+      "sha256": "bea0f0b108836a22e73b70dccc58b4d8f35f7bb7fecb8b77815251ee6532994b",
+      "unchanged": true
+    },
+    {
+      "path": "Framework/Inc/px4lite_gnss_raw_uplink.h",
+      "sha256": "bb5eed65939f0950feb40b4ca8e1ce159bf75d37f0e8fba2ef82568a07baa6d2",
+      "unchanged": true
+    },
+    {
+      "path": "Framework/Src/px4lite_gnss_raw_uplink.c",
+      "sha256": "03a8638c9f9664653b4fbd5a955b97515d5df555411e8bd1ef29fb16b8293b49",
+      "unchanged": true
+    }
+  ],
+  "raw_three_golden_frames_unchanged": true,
+  "compiler": "D:/mingw64/bin/gcc.exe -std=c11 -Wall -Wextra -Werror -O1 -fwhole-program -g -Wno-address-of-packed-member with Tests/stubs first and normal project includes",
+  "runner": "$mav + -Werror Unit/test_gnss_raw_uplink.c; raw_only variant adds the two policy/typed0 flags",
+  "keil": "Not run by this agent; root performs final default verification",
+  "hardware": "Host wire fixtures only, no real GPS/Pi serial test claimed"
+}

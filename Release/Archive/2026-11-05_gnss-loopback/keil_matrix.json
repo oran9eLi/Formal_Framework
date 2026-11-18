@@ -1,0 +1,70 @@
+[
+  {
+    "artifacts": [
+      {
+        "sha256": "A522BE719895B636BA66ADD40D77BAABE40F44B3F2740152B00EE921A8CA2AE9",
+        "bytes": 1289935,
+        "name": "formal_framework.hex"
+      },
+      {
+        "sha256": "C0BA85C61B2C666ED9A8231550F0CF9DFDAD7F3364B159464034336570360EF9",
+        "bytes": 5664176,
+        "name": "formal_framework.axf"
+      },
+      {
+        "sha256": "381BB44984D28735402F02DF26B3CA3BC572D9E73904989CF6517D37AF685D05",
+        "bytes": 2312830,
+        "name": "formal_framework.map"
+      },
+      {
+        "sha256": "2F3A13A2E725653FB32CB69682A21C534A617F7BCF8CFCF79562DFA1C23487A7",
+        "bytes": 7822,
+        "name": "formal_framework.build_log.htm"
+      }
+    ],
+    "bsp_sha256": "B807E6AEC073DEDAA96B944DD8057771BC1B47E36F98AE66F0F3BF56385AC221",
+    "framework_sha256": "9226B034B64BF0655DA8C5063AF1B7763904D5240D59648DA7C6991069D868FE",
+    "variant": "loopback",
+    "inputs_unchanged": true,
+    "input_count": 1027,
+    "exit_code": 0,
+    "passed": true,
+    "ended_utc": "2026-11-05T06:50:28.1030340Z",
+    "started_utc": "2026-11-05T06:50:10.8113231Z",
+    "debug_sha256": "1589FD85ECCACC2A696007BA80B33A766A889E6FBB024149109B78CC19E4E553"
+  },
+  {
+    "artifacts": [
+      {
+        "sha256": "5C2448804C2819C50EFDD514C865817BEB0FD39B6FBEB26B838AC5BE87C48CC3",
+        "bytes": 1276705,
+        "name": "formal_framework.hex"
+      },
+      {
+        "sha256": "6AF588D2FB530318CAA144B0942404E6ACDD280348DEF1DEB979030B746263A4",
+        "bytes": 5643828,
+        "name": "formal_framework.axf"
+      },
+      {
+        "sha256": "761509032198066F5468ADE509F68E5B11199CEF26094E495A9B53FF70B9F3AD",
+        "bytes": 2300000,
+        "name": "formal_framework.map"
+      },
+      {
+        "sha256": "1CA6A781DC1C9D61FE1CDA7C0400C66F88A0BEBE86FA43E7DB58234E82988681",
+        "bytes": 7822,
+        "name": "formal_framework.build_log.htm"
+      }
+    ],
+    "bsp_sha256": "B807E6AEC073DEDAA96B944DD8057771BC1B47E36F98AE66F0F3BF56385AC221",
+    "framework_sha256": "3165FB1FF9A090D23D0040811059E7DDBE08615DC24FB82F0B6E7B7F29EE6782",
+    "variant": "normal",
+    "inputs_unchanged": true,
+    "input_count": 1027,
+    "exit_code": 0,
+    "passed": true,
+    "ended_utc": "2026-11-05T06:50:43.0889736Z",
+    "started_utc": "2026-11-05T06:50:28.1451762Z",
+    "debug_sha256": "1A5014064D937744C6AD88B7481872FE623ABCA6175EE9968118168209CA8BDD"
+  }
+]

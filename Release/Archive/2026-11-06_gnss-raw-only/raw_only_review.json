@@ -1,0 +1,176 @@
+{
+  "status": "production_and_test_frozen",
+  "generated_at": "2026-11-06T16:48:29+08:00",
+  "owned_production_files": 4,
+  "owned_test_files": 1,
+  "source_hashes": [
+    {
+      "path": "Framework/Inc/px4lite_config.h",
+      "sha256": "60e7ed4fc298c45e3a4520fd9af33e4417568f72c9352766f10352f34897fe0d"
+    },
+    {
+      "path": "Framework/Src/px4lite_mavlink_tx.c",
+      "sha256": "bea0f0b108836a22e73b70dccc58b4d8f35f7bb7fecb8b77815251ee6532994b"
+    },
+    {
+      "path": "Framework/Inc/px4lite_gnss_raw_uplink.h",
+      "sha256": "bb5eed65939f0950feb40b4ca8e1ce159bf75d37f0e8fba2ef82568a07baa6d2"
+    },
+    {
+      "path": "Framework/Src/px4lite_gnss_raw_uplink.c",
+      "sha256": "03a8638c9f9664653b4fbd5a955b97515d5df555411e8bd1ef29fb16b8293b49"
+    },
+    {
+      "path": "Tests/Unit/test_gnss_raw_uplink.c",
+      "sha256": "af79e05c356ff095e092194ae93235b2f6bb52888ed435cf2f698f30a981e342"
+    }
+  ],
+  "default_policy": {
+    "PX4LITE_RPI_GNSS_PARSED_TX_ENABLE": 0,
+    "PX4LITE_ENABLE_RPI_GNSS_UPLINK": 0,
+    "PX4LITE_ENABLE_RPI_GNSS_RAW_UPLINK": 1,
+    "PX4LITE_RPI_GNSS_RAW_STATS_ENABLE": 0,
+    "gps_only_type": "0x8020 original complete-frame fragments",
+    "disabled_pi": [
+      "GPS_RAW_INT24",
+      "GLOBAL_POSITION_INT33",
+      "NAMED GNSS_SAT",
+      "NAMED GNSSUTC",
+      "NAMED BAROALT",
+      "TUNNEL8011..8014",
+      "TUNNEL8021",
+      "OPEN_DRONE_ID_LOCATION12901 mirror",
+      "OPEN_DRONE_ID_SYSTEM12904 mirror"
+    ]
+  },
+  "implementation": "RPi catalog admission plus final Exclusive/Mirror policy guard; blocked mirror returns IDLE without mutating caller hardware-broadcast frame; typed helper/init also require parsed policy; RawStats generation only inside explicit Stats macro, internal counters/timeout/retry retained",
+  "default_host": {
+    "status": "PASS -Werror",
+    "run_log": "host_raw_only/run.log",
+    "real_runrpi_calls": 600,
+    "duration_ms": 6000,
+    "complete_original_bad_frames": 30,
+    "forbidden_gps_frames": 0,
+    "max_uart_submissions_per_call": 1,
+    "required_non_gps_wire_observed": [
+      "HEARTBEAT0",
+      "ATTITUDE30",
+      "BATTERY_STATUS147 id1 12000mV",
+      "SCALED_PRESSURE29",
+      "SERVO_OUTPUT_RAW36",
+      "SYS_STATUS1",
+      "NAMED MOTOR12/MOTOR34",
+      "ALARM TUNNEL8001"
+    ],
+    "local_interfaces": "Real App_CopyGnssDetails/App_CopyNavigation and Framework CopyTime pass with fresh local facts",
+    "lora": "Actual existing GPS24/GNSS_SAT/GNSSUTC/POSITION encoders still submit to LoRa",
+    "mirrors": "12901/12904 and direct parsed bypass rejected; Basic/Self/Operator send actual CRC-valid frames and preserve caller bytes"
+  },
+  "additional_profiles": [
+    {
+      "name": "typed_misconfigured",
+      "flags": [
+        "-DPX4LITE_ENABLE_RPI_GNSS_UPLINK=1"
+      ],
+      "result": "PASS; policy0 still forbids typed and parsed; same6s/30 original frames"
+    },
+    {
+      "name": "compat",
+      "flags": [
+        "-DPX4LITE_RPI_GNSS_PARSED_TX_ENABLE=1",
+        "-DPX4LITE_ENABLE_RPI_GNSS_UPLINK=1",
+        "-DPX4LITE_RPI_GNSS_RAW_STATS_ENABLE=1"
+      ],
+      "result": "PASS; existing frame/stats wire unchanged and typed/old/RAW fairness"
+    },
+    {
+      "name": "raw_off",
+      "flags": [
+        "-DPX4LITE_ENABLE_RPI_GNSS_RAW_UPLINK=0"
+      ],
+      "result": "PASS; no new raw queue/data/stats/UART, heartbeat remains"
+    }
+  ],
+  "strict_c99": "Modified Raw module and MAVLink TX compiled -Wall -Wextra -Werror without diagnostics",
+  "golden": "host_raw_only/golden_frames.json",
+  "raw_wire_unchanged": true,
+  "protected_sources": [
+    {
+      "path": "MDK-ARM/formal_framework.uvprojx",
+      "sha256": "a616a901e144a5db3faf3d60e46742bbaef9db96528a847464ff838f54155d3a",
+      "prior_stage_sha256": "fe12f5a78ac94d006826504ab3e1c3c39ce46e45ec7a20f2a97360d20ccb8c6f",
+      "unchanged": false
+    },
+    {
+      "path": "Framework/Inc/px4lite_gnss_uplink.h",
+      "sha256": "115d795155fa12ad87866f20b633e1dcd7965a9afb064fecdaf7040c7a469ca0",
+      "prior_stage_sha256": "115d795155fa12ad87866f20b633e1dcd7965a9afb064fecdaf7040c7a469ca0",
+      "unchanged": true
+    },
+    {
+      "path": "Framework/Src/px4lite_gnss_uplink.c",
+      "sha256": "642ba9fb627861c9eeb7a69e7173f688b30be7f91d2b5199fb59ac076d21ad13",
+      "prior_stage_sha256": "642ba9fb627861c9eeb7a69e7173f688b30be7f91d2b5199fb59ac076d21ad13",
+      "unchanged": true
+    },
+    {
+      "path": "Business/Inc/app_data_api.h",
+      "sha256": "3a07cf9eea986178f28c7d98a268b89b3e4d19b68e51172e18ed291896a45cc3",
+      "prior_stage_sha256": "3a07cf9eea986178f28c7d98a268b89b3e4d19b68e51172e18ed291896a45cc3",
+      "unchanged": true
+    },
+    {
+      "path": "Business/Src/app_data_api.c",
+      "sha256": "097c554c2117a5c37744fe3cb679fa0afacad59188867632c616c7b951f16616",
+      "prior_stage_sha256": "097c554c2117a5c37744fe3cb679fa0afacad59188867632c616c7b951f16616",
+      "unchanged": true
+    },
+    {
+      "path": "Display/Src/display.c",
+      "sha256": "2705e51b290149a856abeb387990c3d11778b3a4ab54ee77b4b53196e330c60f",
+      "prior_stage_sha256": "2705e51b290149a856abeb387990c3d11778b3a4ab54ee77b4b53196e330c60f",
+      "unchanged": true
+    },
+    {
+      "path": "Display/Src/display_lvgl.c",
+      "sha256": "69b6aa1340066a9302e922cc0aeb78dd3cddade361f2f1284f08064990691d22",
+      "prior_stage_sha256": "69b6aa1340066a9302e922cc0aeb78dd3cddade361f2f1284f08064990691d22",
+      "unchanged": true
+    },
+    {
+      "path": "Sensor/Inc/sensor_gnss.h",
+      "sha256": "38f75f5e35bea7d031274bec580046046661041e6160bacfe358a3a97d39c6bb",
+      "prior_stage_sha256": "38f75f5e35bea7d031274bec580046046661041e6160bacfe358a3a97d39c6bb",
+      "unchanged": true
+    },
+    {
+      "path": "Sensor/Src/sensor_gnss.c",
+      "sha256": "fbda45ee37f139c7258b00887d7608a62bfa8a1e4b94ed8434b080819248255c",
+      "prior_stage_sha256": "fbda45ee37f139c7258b00887d7608a62bfa8a1e4b94ed8434b080819248255c",
+      "unchanged": true
+    },
+    {
+      "path": "Bsp/Inc/bsp_gnss.h",
+      "sha256": "385259a8b22a113a26296500cb17a0f28a443f233377611645edd4801120e7e3",
+      "prior_stage_sha256": "385259a8b22a113a26296500cb17a0f28a443f233377611645edd4801120e7e3",
+      "unchanged": true
+    },
+    {
+      "path": "Bsp/Src/bsp_gnss.c",
+      "sha256": "f356fe1bbe8d29b5eb450c9136143bfbcb5a4a25fdb3b375d51e60430318fd19",
+      "prior_stage_sha256": "f356fe1bbe8d29b5eb450c9136143bfbcb5a4a25fdb3b375d51e60430318fd19",
+      "unchanged": true
+    },
+    {
+      "path": "Framework/Src/px4lite_modules.c",
+      "sha256": "24ef6d3dffdfd46f172e400edc127ce699ccd60ea6be26465cdca8d740dc3b91",
+      "prior_stage_sha256": "24ef6d3dffdfd46f172e400edc127ce699ccd60ea6be26465cdca8d740dc3b91",
+      "unchanged": true
+    }
+  ],
+  "runner": "Use $mav + -Werror Unit/test_gnss_raw_uplink.c default. Existing dedicated typed test needs explicit parsed1/typed1; full RAW compatibility profile also Stats1.",
+  "resources": "No new task/heap; existing4 slots1024/data40<=64B/26 fragments unchanged; internal raw state4368B retained. No target WCET/long-run/heap peak validation by this agent.",
+  "keil": "Not invoked; root owns required default target verification",
+  "hardware": "No live GPS/Pi serial verification claimed",
+  "protected_sources_note": "11 protected firmware files match prior RAW stage. uvprojx was not edited in this task and currently retains requested DFP3.1.1; its hash differs from the older RAW production_inputs manifest, so historical equality is deliberately not claimed."
+}

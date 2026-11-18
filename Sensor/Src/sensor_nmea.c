@@ -1,6 +1,6 @@
 /**
  * @file sensor_nmea.c
- * @brief Implement bounded NMEA field extraction and navigation parsing.
+ * @brief Sensor层有界NMEA拆句与字段转换；仅处理协议，不执行硬件或业务策略。
  */
 
 #include "sensor_nmea.h"
@@ -54,7 +54,7 @@ static Nmea_Type_t Nmea_DetectType(const char *raw, uint16_t raw_len)
 }
 
 /**
- * @brief Extract one complete NMEA sentence from a byte buffer and advance the cursor.
+ * @brief 提取完整LF结尾NMEA并严格校验两位十六进制校验字段；不访问硬件或发布业务数据。
  */
 uint8_t Nmea_ExtractSentence(const uint8_t *buf, uint16_t buf_len, uint16_t *cursor, Nmea_Sentence_t *out)
 {
@@ -62,7 +62,6 @@ uint8_t Nmea_ExtractSentence(const uint8_t *buf, uint16_t buf_len, uint16_t *cur
   uint16_t start;
   uint16_t end;
   uint16_t i;
-  char checksum_text[3];
   uint8_t checksum_calc;
   uint8_t checksum_recv;
 
@@ -93,13 +92,23 @@ uint8_t Nmea_ExtractSentence(const uint8_t *buf, uint16_t buf_len, uint16_t *cur
   for (i = 0U; i < out->raw_len; i++) {
     if (out->raw[i] == '*') {
       if ((uint16_t)(i + 2U) < out->raw_len) {
-        checksum_text[0] = out->raw[i + 1U];
-        checksum_text[1] = out->raw[i + 2U];
-        checksum_text[2] = '\0';
-
-        checksum_recv = (uint8_t)strtol(checksum_text, NULL, 16);
-
-        out->checksum_ok = (checksum_calc == checksum_recv) ? 1U : 0U;
+        uint8_t digit, value = 0U, valid = 1U;
+        uint16_t tail;
+        /* 恰好两位十六进制校验；拒绝strtol可部分接受的*0G等噪声。 */
+        for (digit = 1U; digit <= 2U; digit++) {
+          uint8_t ch = (uint8_t)out->raw[i + digit];
+          uint8_t nibble;
+          if ((ch >= '0') && (ch <= '9')) { nibble = (uint8_t)(ch - '0'); }
+          else if ((ch >= 'A') && (ch <= 'F')) { nibble = (uint8_t)(ch - 'A' + 10U); }
+          else if ((ch >= 'a') && (ch <= 'f')) { nibble = (uint8_t)(ch - 'a' + 10U); }
+          else { valid = 0U; break; }
+          value = (uint8_t)((value << 4) | nibble);
+        }
+        for (tail = (uint16_t)(i + 3U); tail < out->raw_len; tail++) {
+          if ((out->raw[tail] != '\r') && (out->raw[tail] != '\n')) { valid = 0U; }
+        }
+        checksum_recv = value;
+        out->checksum_ok = (uint8_t)(valid && (checksum_calc == checksum_recv));
       }
 
       break;

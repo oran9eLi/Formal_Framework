@@ -1,0 +1,19 @@
+{
+  "production_inputs": 1047,
+  "source_zip_verified": true,
+  "changed_production": 5,
+  "all_other_inputs_unchanged": 1042,
+  "hex_sha256": "10d42da663e4497311f60b89c738e18cde8332eb20313e5e5545aa7986c4c866",
+  "main_sram_bytes": 126016,
+  "main_sram_free_bytes": 5056,
+  "main_sram_delta_from_e66_bytes": 8,
+  "rom_size_bytes": 491236,
+  "rom_delta_from_e66_bytes": 432,
+  "gnss_dma_address": "0x20009094",
+  "gnss_dma_bytes": 1024,
+  "ccm_uninit_bytes": 65536,
+  "hex_data_start": "0x8000000",
+  "hex_data_end_exclusive": "0x8077ee4",
+  "board_flashed": false,
+  "runtime_dropout_root_cause_verified": false
+}

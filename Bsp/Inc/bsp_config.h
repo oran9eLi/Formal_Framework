@@ -17,14 +17,68 @@
  * Flash/RAM。这些宏归 BSP 层所有，不依赖 Framework 的 PX4LITE_* 宏。
  */
 #define BSP_ENABLE_I2C    1U
-#define BSP_ENABLE_ADC    1U
-#define BSP_ENABLE_ADC_CURRENT 1U
+/** @brief 第一组外部电源输入（PA5 电压、PC0 电流）；当前停用，保留配置便于恢复。 */
+#ifndef BSP_ENABLE_POWER1
+#define BSP_ENABLE_POWER1 0U
+#endif
+/** @brief 第二组逻辑电源输入；用于整机主回路，物理引脚由板级路由配置选择。 */
+#ifndef BSP_ENABLE_POWER2
+#define BSP_ENABLE_POWER2 1U
+#endif
+/**
+ * @brief 第二组物理路由：1为主扩展板两根排线的PA5/PC0，0保留独立直连PA4/PC1。
+ * @details 扩展板VOLT/CURR经U3.17/U3.26进入PA5/PC0；只改变板级映射，
+ *          不启用逻辑组1，不改变ADC实例、标定、有效性判据或上层单组出口。
+ */
+#ifndef BSP_POWER2_USE_EXPANSION_ROUTE
+#define BSP_POWER2_USE_EXPANSION_ROUTE 1U
+#endif
+#if (BSP_POWER2_USE_EXPANSION_ROUTE != 0U) && (BSP_POWER2_USE_EXPANSION_ROUTE != 1U)
+#error "BSP_POWER2_USE_EXPANSION_ROUTE must be 0 or 1"
+#endif
+#if BSP_POWER2_USE_EXPANSION_ROUTE && BSP_ENABLE_POWER1 && BSP_ENABLE_POWER2
+#error "Expansion power2 PA5/PC0 route conflicts with enabled power1; select direct route for dual inputs"
+#endif
+/** @brief 任一电源组启用时保留 ADC1 内部参考及所需外部 ADC。 */
+#define BSP_ENABLE_ADC ((BSP_ENABLE_POWER1 != 0U) || (BSP_ENABLE_POWER2 != 0U))
+#define BSP_ENABLE_ADC_CURRENT BSP_ENABLE_ADC
 #define BSP_ENABLE_GNSS   1U
 #define BSP_ENABLE_RTC    1U
 #define BSP_ENABLE_PWM    1U
 #define BSP_ENABLE_BUTTON 1U
 #define BSP_ENABLE_REMOTEID 1U
 #define BSP_ENABLE_RPI_UART 1U
+
+/* 本分支为PE5启动音试听候选，旧硬件可独立关闭，不影响电机PWM。 */
+#ifndef BSP_ENABLE_BUZZER
+#define BSP_ENABLE_BUZZER 1U
+#endif
+#define BSP_BUZZER_TIM TIM9
+#define BSP_BUZZER_CHANNEL TIM_CHANNEL_1
+#define BSP_BUZZER_PORT GPIOE
+#define BSP_BUZZER_PIN GPIO_PIN_5
+#define BSP_BUZZER_AF GPIO_AF3_TIM9
+#define BSP_BUZZER_MIN_HZ 200U
+#define BSP_BUZZER_MAX_HZ 5000U
+
+/** @brief 扩展板单线RGB原始波形通道；协议编码由平台适配层负责。 */
+#ifndef BSP_ENABLE_RGB
+#define BSP_ENABLE_RGB 1U
+#endif
+#define BSP_RGB_TIM TIM8
+#define BSP_RGB_CHANNEL TIM_CHANNEL_4
+#define BSP_RGB_PORT GPIOC
+#define BSP_RGB_PIN GPIO_PIN_9
+#define BSP_RGB_AF GPIO_AF3_TIM8
+#define BSP_RGB_DMA_STREAM DMA2_Stream7
+#define BSP_RGB_DMA_CHANNEL DMA_CHANNEL_7
+#define BSP_RGB_DMA_IRQn DMA2_Stream7_IRQn
+#define BSP_RGB_IRQ_PRIORITY 6U
+#define BSP_RGB_BITRATE_HZ 800000U /**< 原始PWM槽速率，单位槽/s。 */
+#define BSP_RGB_ZERO_HIGH_NS 300U /**< 低占空比原始槽的目标高电平，单位ns。 */
+#define BSP_RGB_ONE_HIGH_NS 950U /**< 高占空比原始槽的目标高电平，单位ns。 */
+#define BSP_RGB_MAX_DUTY_COUNT 124U /**< 调用者单帧原始半字数量上限，不含BSP保护槽。 */
+#define BSP_RGB_DMA_TIMEOUT_MS 20U /**< 已接受发送等待DMA完成的最长时间，单位ms。 */
 
 /*
  * 独立看门狗(IWDG)。IWDG 由 LSI 驱动，STM32F407 的 LSI 标称 32 kHz，数据手册给出
@@ -83,9 +137,9 @@
 #define BSP_RPI_IRQn          USART6_IRQn
 #define BSP_RPI_IRQ_PRIORITY  6U
 
-/* ATGM336H GNSS：USART2，PA2/PA3，9600 8N1。 */
+/** @brief GNSS原始UART transport：USART2 PA2/PA3，默认115200 8N1；协议选择归Sensor。 */
 #define BSP_GNSS_UART           USART2
-#define BSP_GNSS_UART_BAUD      9600U
+#define BSP_GNSS_UART_BAUD      115200U
 #define BSP_GNSS_UART_WORD      UART_WORDLENGTH_8B
 #define BSP_GNSS_UART_STOP      UART_STOPBITS_1
 #define BSP_GNSS_UART_PARITY    UART_PARITY_NONE
@@ -102,7 +156,7 @@
 #define BSP_GNSS_RX_DMA_STREAM  DMA1_Stream5
 #define BSP_GNSS_RX_DMA_CHANNEL DMA_CHANNEL_4
 #define BSP_GNSS_RX_DMA_IRQn    DMA1_Stream5_IRQn
-#define BSP_GNSS_RX_BUF_SIZE    512U
+#define BSP_GNSS_RX_BUF_SIZE    1024U
 #define BSP_GNSS_IRQn           USART2_IRQn
 #define BSP_GNSS_IRQ_PRIORITY   6U
 
@@ -127,22 +181,45 @@
 #define BSP_ADC_DIVIDER_NUM 101779U
 #define BSP_ADC_DIVIDER_DEN 10000U
 
-/* 第二块电池电源采样 ADC2：ADC2 IN4，PA4。与电池 1 同规格，分压系数相同。 */
+/** @brief 第二组独立使用ADC2；扩展板走IN5/PA5，独立直连走IN4/PA4。 */
 #define BSP_ADC2_INS         ADC2
-#define BSP_ADC2_CH          ADC_CHANNEL_4
 #define BSP_ADC2_PORT        GPIOA
+#if BSP_POWER2_USE_EXPANSION_ROUTE
+#define BSP_ADC2_CH          ADC_CHANNEL_5
+#define BSP_ADC2_PIN         GPIO_PIN_5
+#else
+#define BSP_ADC2_CH          ADC_CHANNEL_4
 #define BSP_ADC2_PIN         GPIO_PIN_4
+#endif
 #define BSP_ADC2_DIVIDER_NUM 101779U
 #define BSP_ADC2_DIVIDER_DEN 10000U
 
-/* 两路电流计采样 ADC：ADC3 IN10/IN11，PC0/PC1。与电池电压 ADC1/ADC2 分属独立外设，互不冲突。 */
+/** @brief 第二组所选电压脚采样前以输入弱下拉清理残留电荷；不作用于电流脚。 */
+#ifndef BSP_ADC2_DISCHARGE_ENABLE
+#define BSP_ADC2_DISCHARGE_ENABLE 1U
+#endif
+/** @brief 弱下拉dummy采样后恢复模拟输入的等待时间，单位真实ms；等待期间不保持下拉。 */
+#ifndef BSP_ADC2_DISCHARGE_RECOVERY_MS
+#define BSP_ADC2_DISCHARGE_RECOVERY_MS 100U
+#endif
+/** @brief 弱下拉时仅用于清理采样保持电荷的转换次数，不能作为正式电压。 */
+#ifndef BSP_ADC2_DISCHARGE_SAMPLE_COUNT
+#define BSP_ADC2_DISCHARGE_SAMPLE_COUNT 4U
+#endif
+
+/** @brief 电流共用ADC3；组2扩展板走IN10/PC0，独立直连走IN11/PC1。 */
 #define BSP_ADC_CURRENT_INS           ADC3
 #define BSP_ADC_CURRENT1_CH           ADC_CHANNEL_10
 #define BSP_ADC_CURRENT1_PORT         GPIOC
 #define BSP_ADC_CURRENT1_PIN          GPIO_PIN_0
-#define BSP_ADC_CURRENT2_CH           ADC_CHANNEL_11
 #define BSP_ADC_CURRENT2_PORT         GPIOC
+#if BSP_POWER2_USE_EXPANSION_ROUTE
+#define BSP_ADC_CURRENT2_CH           ADC_CHANNEL_10
+#define BSP_ADC_CURRENT2_PIN          GPIO_PIN_0
+#else
+#define BSP_ADC_CURRENT2_CH           ADC_CHANNEL_11
 #define BSP_ADC_CURRENT2_PIN          GPIO_PIN_1
+#endif
 #define BSP_ADC_CURRENT_SAMPLE_TIME   ADC_SAMPLETIME_480CYCLES
 #define BSP_ADC_CURRENT_AVERAGE_COUNT 16U
 
@@ -358,6 +435,27 @@
 #define BSP_SD_SPI_MOSI_AF      GPIO_AF6_SPI3
 #define BSP_SD_CS_PORT          GPIOA
 #define BSP_SD_CS_PIN           GPIO_PIN_15
+
+/**
+ * @brief BMI088 备用独立 SPI2 引脚，实际接线及模块模式必须确认后使用。
+ * @details PB15 已用于 LCD 背光，因此 MOSI 选 PC3；不复用 SD 的 SPI3。
+ *          仅在驱动选用 SPI 时初始化；APB1=42 MHz 时 /32 约 1.3125 MHz。
+ */
+#define BSP_IMU_SPI_INS              SPI2
+#define BSP_IMU_SPI_PRESCALER        SPI_BAUDRATEPRESCALER_32
+#define BSP_IMU_SPI_SCK_PORT         GPIOB
+#define BSP_IMU_SPI_SCK_PIN          GPIO_PIN_13
+#define BSP_IMU_SPI_SCK_AF           GPIO_AF5_SPI2
+#define BSP_IMU_SPI_MISO_PORT        GPIOC
+#define BSP_IMU_SPI_MISO_PIN         GPIO_PIN_2
+#define BSP_IMU_SPI_MISO_AF          GPIO_AF5_SPI2
+#define BSP_IMU_SPI_MOSI_PORT        GPIOC
+#define BSP_IMU_SPI_MOSI_PIN         GPIO_PIN_3
+#define BSP_IMU_SPI_MOSI_AF          GPIO_AF5_SPI2
+#define BSP_IMU_SPI_ACCEL_CS_PORT    GPIOC
+#define BSP_IMU_SPI_ACCEL_CS_PIN     GPIO_PIN_4
+#define BSP_IMU_SPI_GYRO_CS_PORT     GPIOC
+#define BSP_IMU_SPI_GYRO_CS_PIN      GPIO_PIN_5
 
 /* ESP32-S3 RemoteID：UART4，PC10(TX)/PC11(RX)，57600 8N1，仅由 comm 任务经平台适配层发送。 */
 #define BSP_REMOTEID_ENABLE         BSP_ENABLE_REMOTEID

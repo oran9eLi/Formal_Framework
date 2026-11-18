@@ -14,7 +14,7 @@
 
 #include <string.h>
 
-/** @brief 只读事件目录；文本和严重度与编号逐项对应。 */
+/** @brief 只读事件目录；供电文本只描述测量/保护事实，不识别电源类型，编号和严重度保持兼容。 */
 typedef struct {
   const char *text; /**< 静态短英文，不依赖来源字段解释本机事件。 */
   uint8_t severity; /**< 0 INFO、1 WARN、2 ERROR。 */
@@ -35,17 +35,17 @@ static const LocalMsgLog_CatalogEntry_t s_catalog[PX4LITE_LOGMSG_COUNT] = {
   {"LoRa offline", 1U}, /* COMM_LOST */
   {"SD ready", 0U}, /* STORAGE_OK */
   {"SD offline", 1U}, /* STORAGE_LOST */
-  {"Motor supply normal", 0U}, /* MOTOR_OK */
-  {"Motor supply out of range", 1U}, /* MOTOR_DISCONNECT */
-  {"Motor battery low", 1U}, /* MOTOR_LOWPOWER */
+  {"Supply voltage normal", 0U}, /* MOTOR_OK */
+  {"Supply voltage out of range", 1U}, /* MOTOR_DISCONNECT */
+  {"Supply voltage low", 1U}, /* MOTOR_LOWPOWER */
   {"Motor 1 fault reported", 2U}, /* MOTOR1_FAIL */
   {"Motor 2 fault reported", 2U}, /* MOTOR2_FAIL */
   {"Motor 3 fault reported", 2U}, /* MOTOR3_FAIL */
   {"Motor 4 fault reported", 2U}, /* MOTOR4_FAIL */
   {"Motor faults reported", 2U}, /* MOTOR_ALL_FAIL */
-  {"Motor battery critical", 2U}, /* MOTOR_DEAD */
-  {"Motor battery charge needed", 1U}, /* MOTOR_CHARGE */
-  {"Main battery low", 1U}, /* MAIN_CHARGE */
+  {"Supply voltage critical", 2U}, /* MOTOR_DEAD */
+  {"Supply voltage warning", 1U}, /* MOTOR_CHARGE */
+  {"Supply voltage warning", 1U}, /* MAIN_CHARGE */
   {"Alarm active", 1U}, /* ALARM_ACTIVE */
   {"No active alarms", 0U}, /* ALARM_NONE */
   {"RID detected", 0U}, /* REMOTEID_OK */
@@ -145,12 +145,12 @@ static const LocalMsgLog_CatalogEntry_t s_catalog[PX4LITE_LOGMSG_COUNT] = {
   {"Network report stale", 1U}, /* NETWORK_STALE */
   {"RID UART TX error", 2U}, /* RID_TX_ERROR */
   {"RID TX submission resumed", 0U}, /* RID_TX_RESTORED */
-  {"Main supply normal", 0U}, /* MAIN_NORMAL */
-  {"Main supply restored", 0U}, /* MAIN_RESTORED */
-  {"Main supply out of range", 1U}, /* MAIN_ABSENT */
-  {"Main voltage unavailable", 1U}, /* MAIN_UNAVAILABLE */
-  {"Motor supply restored", 0U}, /* MOTOR_RESTORED */
-  {"Motor voltage unavailable", 1U}, /* MOTOR_UNAVAILABLE */
+  {"Supply voltage normal", 0U}, /* MAIN_NORMAL */
+  {"Supply voltage restored", 0U}, /* MAIN_RESTORED */
+  {"Supply voltage out of range", 1U}, /* MAIN_ABSENT */
+  {"Supply voltage unavailable", 1U}, /* MAIN_UNAVAILABLE */
+  {"Supply voltage restored", 0U}, /* MOTOR_RESTORED */
+  {"Supply voltage unavailable", 1U}, /* MOTOR_UNAVAILABLE */
   {"Alarm status unavailable", 1U}, /* ALARM_UNAVAILABLE */
   {"Alarm status available", 0U}, /* ALARM_RESTORED */
   {"Power inhibited", 1U}, /* POWER_INHIBITED */
@@ -211,6 +211,9 @@ static const LocalMsgLog_CatalogEntry_t s_catalog[PX4LITE_LOGMSG_COUNT] = {
   {"Observation started",0U}, {"Observation stopped",0U}, {"Observation reset",0U},
   {"CSV recording started",0U}, {"CSV recording stopping",0U}, {"CSV recording saved",0U},
   {"CSV recording partial",1U}, {"CSV recording failed",2U},
+  {"Motors locked", 0U}, /* MOTOR_MANUAL_LOCKED */
+  {"Motors unlocked: ESC preparing", 0U}, /* MOTOR_MANUAL_UNLOCKED */
+  {"Motor command blocked: locked", 1U}, /* THROTTLE_LOCKED */
 };
 /** @brief 返回只读事件短文案；未知消息保持显式未知。 */
 const char *Px4Lite_LogMessageText(uint16_t message_id)

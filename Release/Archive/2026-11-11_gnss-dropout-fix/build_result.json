@@ -1,0 +1,33 @@
+{
+  "variant": "default_fixed115200",
+  "started_utc": "2026-11-11T03:31:25.138089+00:00",
+  "ended_utc": "2026-11-11T03:31:41.535257+00:00",
+  "exit_code": 0,
+  "errors": 0,
+  "warnings": 0,
+  "input_count": 1047,
+  "inputs_unchanged": true,
+  "artifacts": [
+    {
+      "name": "formal_framework.hex",
+      "bytes": 1381781,
+      "sha256": "10d42da663e4497311f60b89c738e18cde8332eb20313e5e5545aa7986c4c866"
+    },
+    {
+      "name": "formal_framework.axf",
+      "bytes": 5901408,
+      "sha256": "3151b08f210860a458f0cd088752e585c985693b1c32482b41c146d50d939e95"
+    },
+    {
+      "name": "formal_framework.map",
+      "bytes": 2480294,
+      "sha256": "ef11791c2216e1d9d114d36166127935776aa61a75562ca0d2311b39819d74d8"
+    },
+    {
+      "name": "formal_framework.build_log.htm",
+      "bytes": 8115,
+      "sha256": "466a4a4495bf55afe27dde9750d50b1a6ff1b53597db90cdd48c277e7ed6c9a3"
+    }
+  ],
+  "passed": true
+}

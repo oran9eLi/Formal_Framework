@@ -3,6 +3,9 @@
  */
 #include <assert.h>
 #include <stdio.h>
+/* 只读任务统计声明需要基础RTOS类型；本用例不创建或访问任务。 */
+typedef int BaseType_t;
+typedef void *TaskHandle_t;
 #include "../../Business/Src/app_display_model.c"
 static App_NavigationSnapshot_t source;
 static App_AttitudeStatus_t status;

@@ -17,6 +17,7 @@ static FIL s_data_file, s_event_file;
 static Storage_SdStatus_t s_status;
 static uint32_t s_data_file_date, s_event_file_date;
 static uint8_t s_data_file_open, s_event_file_open;
+static uint32_t s_last_probe_ms; /**< 最近成功挂载或介质检查的时刻，单位 ms。 */
 
 /** @brief 故障阶段；保留原有 1..6 诊断编号。 */
 typedef enum {
@@ -26,14 +27,14 @@ typedef enum {
   STORAGE_OPEN_PHASE_ERROR_HEADER = 5, STORAGE_OPEN_PHASE_ERROR_SEEK = 6,
   STORAGE_OPEN_PHASE_ROTATE_SYNC = 7, STORAGE_OPEN_PHASE_ROTATE_CLOSE = 8,
   STORAGE_OPEN_PHASE_WRITE = 9, STORAGE_OPEN_PHASE_SYNC = 10,
-  STORAGE_OPEN_PHASE_MOUNT = 11, STORAGE_OPEN_PHASE_RECOVER_CLOSE = 12
+  STORAGE_OPEN_PHASE_MOUNT = 11, STORAGE_OPEN_PHASE_RECOVER_CLOSE = 12,
+  STORAGE_OPEN_PHASE_MEDIA_CHECK = 13
 } Storage_OpenPhase_t;
 
 /** @brief 在清理前复制底层诊断，避免 close/unmount 覆盖故障首因。 */
 static void Storage_SD_UpdateDiskDiag(void)
 {
   s_status.disk_error = (uint8_t)DiskioSdSpi_LastError();
-  s_status.card_type = DiskioSdSpi_CardType();
   s_status.last_command = DiskioSdSpi_LastCommand();
   s_status.last_response = DiskioSdSpi_LastResponse();
 }
@@ -77,6 +78,7 @@ static Px4Lite_Result_t Storage_SD_Fail(Storage_OpenPhase_t phase, FRESULT resul
   Storage_SD_CloseFiles(0U);
   (void)f_mount(0, "0:", 0U);
   s_status.mounted = 0U;
+  s_status.card_type = 0U;
   s_status.state = PX4LITE_STATE_DEGRADED;
   s_status.last_attempt_ms = Px4Lite_PlatformGetMs();
   return PX4LITE_IO_ERROR;
@@ -137,6 +139,7 @@ void Storage_SD_Init(void)
   memset(&s_data_file, 0, sizeof(s_data_file));
   memset(&s_event_file, 0, sizeof(s_event_file));
   memset(&s_status, 0, sizeof(s_status));
+  s_last_probe_ms = 0U;
   s_data_file_date = 0U; s_event_file_date = 0U;
   s_data_file_open = 0U; s_event_file_open = 0U;
   s_status.state = PX4LITE_STATE_UNINITIALIZED;
@@ -150,17 +153,27 @@ void Storage_SD_Recover(uint32_t now_ms)
   Storage_SD_CloseFiles(1U);
   (void)f_mount(0, "0:", 0U);
   s_status.mounted = 0U;
+  s_status.card_type = 0U;
   s_status.last_sync_ok = 0U;
   s_status.state = PX4LITE_STATE_DEGRADED;
   /* close/unmount 可阻塞，退避必须从全部清理完成的真实时间开始。 */
   s_status.last_attempt_ms = Px4Lite_PlatformGetMs();
 }
 
-/** @brief 周期挂载；包含时刻 0 和毫秒回绕在内，失败后至少等待配置退避。 */
+/** @brief 在线时按周期核对卡身份，包括日志空闲期；介质失效后按退避间隔重挂载。 */
 void Storage_SD_Service(uint32_t now_ms)
 {
   FRESULT result;
-  if (s_status.state == PX4LITE_STATE_ONLINE) { return; }
+  if (s_status.state == PX4LITE_STATE_ONLINE) {
+    if ((uint32_t)(now_ms - s_last_probe_ms) >= STORAGE_CARD_PROBE_MS) {
+      if (!DiskioSdSpi_CheckMedia()) {
+        (void)Storage_SD_Fail(STORAGE_OPEN_PHASE_MEDIA_CHECK, FR_NOT_READY, 0U, now_ms);
+      } else {
+        s_last_probe_ms = Px4Lite_PlatformGetMs();
+      }
+    }
+    return;
+  }
   if ((s_status.state != PX4LITE_STATE_UNINITIALIZED) &&
       (((int32_t)(now_ms - s_status.last_attempt_ms) < 0) ||
        ((uint32_t)(now_ms - s_status.last_attempt_ms) < STORAGE_MOUNT_RETRY_MS))) { return; }
@@ -170,6 +183,8 @@ void Storage_SD_Service(uint32_t now_ms)
   s_status.mount_result = (uint8_t)result;
   if (result != FR_OK) { (void)Storage_SD_Fail(STORAGE_OPEN_PHASE_MOUNT, result, 0U, now_ms); return; }
   s_status.mounted = 1U;
+  s_status.card_type = DiskioSdSpi_CardType();
+  s_last_probe_ms = Px4Lite_PlatformGetMs();
   s_status.last_sync_ok = 1U;
   s_status.state = PX4LITE_STATE_ONLINE;
 }

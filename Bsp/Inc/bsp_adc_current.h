@@ -2,7 +2,7 @@
  * @file bsp_adc_current.h
  * @brief 声明两路电流计模拟输出的板级 ADC 接口。
  * @details
- * 本文件属于 BSP 层，只负责 PC0/PC1 ADC 采样和引脚电压换算。电流计零点、比例、
+ * 本文件属于 BSP 层，只负责所选硬件路由的 ADC 采样和引脚电压换算。电流计零点、比例、
  * 滤波、功率和过流判断由 Sensor Power 层完成，上层不得绕过 Sensor 直接解释 ADC 值。
  */
 
@@ -17,7 +17,7 @@
  */
 typedef enum {
   BSP_ADC_CURRENT_BATTERY1 = 0, /**< 第一电池电流计输出，PC0 / ADC_IN10。 */
-  BSP_ADC_CURRENT_BATTERY2 = 1  /**< 第二电池电流计输出，PC1 / ADC_IN11。 */
+  BSP_ADC_CURRENT_BATTERY2 = 1  /**< 逻辑第二组电流输出；扩展板路由为PC0/IN10，独立线为PC1/IN11。 */
 } BSP_ADC_CurrentChannel_t;
 
 /**
@@ -43,6 +43,7 @@ BSP_Status_t BSP_ADC_Current_DeInit(void);
  * @param[in] channel 电流计通道。
  * @param[out] raw 输出原始 ADC 值，范围 0 到 4095。
  * @return BSP 通用返回码。
+ * @note 原始4095允许用于诊断；正式电流测量应使用会拒绝饱和的平均/毫伏接口。
  */
 BSP_Status_t BSP_ADC_Current_ReadRaw(BSP_ADC_CurrentChannel_t channel, uint32_t *raw);
 
@@ -52,6 +53,7 @@ BSP_Status_t BSP_ADC_Current_ReadRaw(BSP_ADC_CurrentChannel_t channel, uint32_t 
  * @param[out] raw 输出平均后的原始 ADC 值。
  * @param[in] count 采样次数，0 表示使用 1 次。
  * @return BSP 通用返回码。
+ * @note 任一原始样本>=4095即返回ERROR且保持raw不变，不能被平均稀释；原码0仍合法。
  */
 BSP_Status_t BSP_ADC_Current_ReadAverage(BSP_ADC_CurrentChannel_t channel, uint32_t *raw, uint8_t count);
 
@@ -60,13 +62,14 @@ BSP_Status_t BSP_ADC_Current_ReadAverage(BSP_ADC_CurrentChannel_t channel, uint3
  * @param[in] channel 电流计通道。
  * @param[out] voltage_mv 输出 ADC 引脚电压，单位 mV。
  * @return BSP 通用返回码。
+ * @note 正式样本满量程/越界时返回ERROR、不改voltage_mv；诊断缓存可保留拒绝值。
  */
 BSP_Status_t BSP_ADC_Current_ReadVoltageMv(BSP_ADC_CurrentChannel_t channel, uint32_t *voltage_mv);
 
 /**
- * @brief 读取上一次 ReadVoltageMv 缓存的诊断值（不访问 ADC，仅供调试打印）。
+ * @brief 读取最近ReadVoltageMv的正常或拒绝饱和值诊断缓存，不访问ADC。
  * @param[in] channel 电流计通道。
- * @param[out] adc_mv 上次成功采样的原始引脚电压（mV），未经浮空清零。可为 NULL。
+ * @param[out] adc_mv 正常值或拒绝原码换算的引脚mV，未经浮空清零；不等于测量有效，可为NULL。
  * @param[out] floating 上次浮空判定结果；1=浮空，0=未判浮空或探测已禁用。可为 NULL。
  * @note 临时诊断接口，定位电流计接线后可移除。
  */

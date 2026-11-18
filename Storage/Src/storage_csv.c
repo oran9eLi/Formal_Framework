@@ -1,6 +1,7 @@
 /**
  * @file storage_csv.c
- * @brief Implement CSV formatting without floating-point printf.
+ * @brief Storage 层固定列 CSV 格式化，不使用浮点 printf。
+ * @details 仅消费调用者复制的数据，不访问设备或 topic；未知电量输出空列，列数与顺序保持。
  */
 
 #include "storage_csv.h"
@@ -72,6 +73,14 @@ const char *StorageCsv_EventHeader(void)
   return "time_ms,local_date,local_time,event_type,source,state,fault,severity,active,count,message\r\n";
 }
 
+/** @brief 格式化电量估计；0..100 为可用百分比，其他值输出空列而非伪造 0%。 */
+static void Storage_FormatPercent(uint8_t value, char text[4])
+{
+  text[0] = '\0';
+  if (value <= 100U) { (void)snprintf(text, 4U, "%u", (unsigned int)value); }
+}
+
+/** @brief 格式化 schema2 的49列；缺测结合域状态，未知电量保留为空列。 */
 Px4Lite_Result_t StorageCsv_FormatDataLine(const Storage_CsvData_t *data, char *line, size_t line_size)
 {
   Storage_Fixed2_t roll;
@@ -80,6 +89,8 @@ Px4Lite_Result_t StorageCsv_FormatDataLine(const Storage_CsvData_t *data, char *
   Storage_Fixed2_t temperature;
   Storage_Fixed3_t current;
   Storage_Fixed3_t current2;
+  char percent1[4];
+  char percent2[4];
   int written;
 
   if ((data == 0) || (line == 0) || (line_size == 0U)) { return PX4LITE_INVALID_PARAM; }
@@ -90,14 +101,16 @@ Px4Lite_Result_t StorageCsv_FormatDataLine(const Storage_CsvData_t *data, char *
   Storage_FormatSignedCenti(data->temperature_c100, &temperature);
   Storage_FormatSignedMilli(data->current_ma, &current);
   Storage_FormatSignedMilli(data->current2_ma, &current2);
+  Storage_FormatPercent(data->battery_pct, percent1);
+  Storage_FormatPercent(data->battery2_pct, percent2);
 
   written = snprintf(line, line_size,
                      "%lu,%lu,%06lu,%u,%u,%ld,%ld,%c%lu.%02lu,%c%lu.%02lu,%c%lu.%02lu,"
-                     "%c%lu.%02lu,%lu.%02lu,%lu.%02lu,%lu.%03lu,%c%lu.%03lu,%lu.%03lu,%u,%u,"
-                     "%lu.%03lu,%c%lu.%03lu,%lu.%03lu,%u,%u,"
+                     "%c%lu.%02lu,%lu.%02lu,%lu.%02lu,%lu.%03lu,%c%lu.%03lu,%lu.%03lu,%s,%u,"
+                     "%lu.%03lu,%c%lu.%03lu,%lu.%03lu,%s,%u,"
                      "%u,%u,%u,%u,%u,%u,%u,%lu,%lu,%lu,%lu,%u,%lu,"
                      "2,%u,%lu,%u,%lu,%u,%lu,%u,%lu,%u,%lu,%u,%lu\r\n",
-                     (unsigned long)data->time_ms, (unsigned long)data->local_date_ymd, (unsigned long)data->local_time_hhmmss, (unsigned int)data->time_sync_state, (unsigned int)data->gnss_valid, (long)data->latitude_e7, (long)data->longitude_e7, roll.sign, (unsigned long)roll.whole, (unsigned long)roll.frac, pitch.sign, (unsigned long)pitch.whole, (unsigned long)pitch.frac, yaw.sign, (unsigned long)yaw.whole, (unsigned long)yaw.frac, temperature.sign, (unsigned long)temperature.whole, (unsigned long)temperature.frac, (unsigned long)(data->pressure_hpa100 / 100U), (unsigned long)(data->pressure_hpa100 % 100U), (unsigned long)(data->humidity_pct100 / 100U), (unsigned long)(data->humidity_pct100 % 100U), (unsigned long)(data->voltage_mv / 1000U), (unsigned long)(data->voltage_mv % 1000U), current.sign, (unsigned long)current.whole, (unsigned long)current.frac, (unsigned long)(data->power_mw / 1000U), (unsigned long)(data->power_mw % 1000U), (unsigned int)data->battery_pct, (unsigned int)data->low_voltage, (unsigned long)(data->voltage2_mv / 1000U), (unsigned long)(data->voltage2_mv % 1000U), current2.sign, (unsigned long)current2.whole, (unsigned long)current2.frac, (unsigned long)(data->power2_mw / 1000U), (unsigned long)(data->power2_mw % 1000U), (unsigned int)data->battery2_pct, (unsigned int)data->low_voltage2, (unsigned int)data->motor_pct[0], (unsigned int)data->motor_pct[1], (unsigned int)data->motor_pct[2], (unsigned int)data->motor_pct[3], (unsigned int)data->motor_run_state, (unsigned int)data->active_alarm_count, (unsigned int)data->highest_fault_code, (unsigned long)data->lora_rx_count, (unsigned long)data->lora_tx_count, (unsigned long)data->lora_parse_error_count, (unsigned long)data->lora_send_error_count, (unsigned int)data->storage_queue_count, (unsigned long)data->storage_drop_count,
+                     (unsigned long)data->time_ms, (unsigned long)data->local_date_ymd, (unsigned long)data->local_time_hhmmss, (unsigned int)data->time_sync_state, (unsigned int)data->gnss_valid, (long)data->latitude_e7, (long)data->longitude_e7, roll.sign, (unsigned long)roll.whole, (unsigned long)roll.frac, pitch.sign, (unsigned long)pitch.whole, (unsigned long)pitch.frac, yaw.sign, (unsigned long)yaw.whole, (unsigned long)yaw.frac, temperature.sign, (unsigned long)temperature.whole, (unsigned long)temperature.frac, (unsigned long)(data->pressure_hpa100 / 100U), (unsigned long)(data->pressure_hpa100 % 100U), (unsigned long)(data->humidity_pct100 / 100U), (unsigned long)(data->humidity_pct100 % 100U), (unsigned long)(data->voltage_mv / 1000U), (unsigned long)(data->voltage_mv % 1000U), current.sign, (unsigned long)current.whole, (unsigned long)current.frac, (unsigned long)(data->power_mw / 1000U), (unsigned long)(data->power_mw % 1000U), percent1, (unsigned int)data->low_voltage, (unsigned long)(data->voltage2_mv / 1000U), (unsigned long)(data->voltage2_mv % 1000U), current2.sign, (unsigned long)current2.whole, (unsigned long)current2.frac, (unsigned long)(data->power2_mw / 1000U), (unsigned long)(data->power2_mw % 1000U), percent2, (unsigned int)data->low_voltage2, (unsigned int)data->motor_pct[0], (unsigned int)data->motor_pct[1], (unsigned int)data->motor_pct[2], (unsigned int)data->motor_pct[3], (unsigned int)data->motor_run_state, (unsigned int)data->active_alarm_count, (unsigned int)data->highest_fault_code, (unsigned long)data->lora_rx_count, (unsigned long)data->lora_tx_count, (unsigned long)data->lora_parse_error_count, (unsigned long)data->lora_send_error_count, (unsigned int)data->storage_queue_count, (unsigned long)data->storage_drop_count,
                      (unsigned int)data->gnss_sample.state, (unsigned long)data->gnss_sample.sample_ms,
                      (unsigned int)data->attitude_sample.state, (unsigned long)data->attitude_sample.sample_ms,
                      (unsigned int)data->baro_sample.state, (unsigned long)data->baro_sample.sample_ms,

@@ -1,0 +1,73 @@
+{
+  "profile": "gnss_adaptive_frames_raw_debug",
+  "date": "2026-11-06",
+  "hex": "cns-f407-gnss-adaptive-frames-20261106.hex",
+  "hex_sha256": "d3a58c60bc47391557c51bf5a26e276e726d88cb8d2d2f433bf1e1e711c37766",
+  "keil": {
+    "inputs_unchanged": true,
+    "baseline": "2026-11-06_p25-fixed115200/raw-debug",
+    "variant": "gnss_adaptive_frames_raw_debug",
+    "input_count": 1030,
+    "errors": 0,
+    "passed": true,
+    "started_utc": "2026-11-06T06:23:32.6486439Z",
+    "artifacts": [
+      {
+        "sha256": "d3a58c60bc47391557c51bf5a26e276e726d88cb8d2d2f433bf1e1e711c37766",
+        "name": "formal_framework.hex",
+        "bytes": 1304180
+      },
+      {
+        "sha256": "95e23873db9f0a2dd60477b07756a2eb7a0e0c26198d71af674c610a03af1459",
+        "name": "formal_framework.axf",
+        "bytes": 5701764
+      },
+      {
+        "sha256": "68b9cef720e95a145cb96150406e82655d11dad9dd3ffd56768a637279a80f27",
+        "name": "formal_framework.map",
+        "bytes": 2338623
+      },
+      {
+        "sha256": "99cda6755b268979d4533f8333ec3242d1def04dbb69353c97715d24ac6d7b93",
+        "name": "formal_framework.build_log.htm",
+        "bytes": 7849
+      }
+    ],
+    "warnings": 0,
+    "ended_utc": "2026-11-06T06:23:54.2331309Z",
+    "exit_code": 0
+  },
+  "production_inputs": 1030,
+  "changed_production": 8,
+  "new_production_sources": [],
+  "program_size": {
+    "code": 352040,
+    "ro": 111476,
+    "rw": 1972,
+    "zi": 113956
+  },
+  "keil_log_seconds": 19,
+  "main_sram_static": 115928,
+  "main_sram_free": 15144,
+  "delta_vs_raw_debug_sram": 560,
+  "gnss_dma_buffers": [
+    "s_rx_buf                                 0x20006c70   Data        1024  bsp_gnss.o(.bss)",
+    "s_tx_buf                                 0x20007070   Data          96  bsp_gnss.o(.bss)"
+  ],
+  "flash_loaded_bytes": 463648,
+  "hex_min": "0x8000000",
+  "hex_end_exclusive": "0x8071320",
+  "hex_checksums_valid": true,
+  "no_overlap": true,
+  "sector11_untouched": true,
+  "host_groups_passed": 32,
+  "host_groups_failed": 0,
+  "new_tasks": 0,
+  "debug_raw_output_retained": true,
+  "baseline_rtos_heap_estimate_percent": 79.22,
+  "heap_75_percent_target_met": false,
+  "resource_hardware_verified": false,
+  "new_image_hardware_flashed": false,
+  "latest_changed": false,
+  "stable_release": false
+}

@@ -365,26 +365,31 @@ static uint8_t MavRx_DecodeNamedValueInt(Px4Lite_RemoteTelemetry_t *remote,const
 
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
-/** @brief 仅在 RPi 物理链路识别 H1 TUNNEL，不进入业务遥测快照。 */
-static uint8_t MavRx_DecodeRpiH1EchoTunnel(const mavlink_message_t *message)
+/** @brief 仅在RPi链路逐字段解码终态通知及H1实验TUNNEL，不进入遥测快照。 */
+static uint8_t MavRx_DecodeRpiTunnel(const mavlink_message_t *message)
 {
   mavlink_tunnel_t packet;
   Px4Lite_Result_t result;
-  Px4Lite_RpiH1EchoResponseView_t pending_echo;
   uint8_t wire_payload_length;
 
   if (message == 0) { return 0U; }
   mavlink_msg_tunnel_decode(message, &packet);
+  /* 固定头占5字节；失败result=0可被裁剪，标准decode负责补齐，禁止要求完整133字节。 */
+  wire_payload_length = (message->len >= 5U) ? (uint8_t)(message->len - 5U) : 0U;
+  if (packet.payload_type == PX4LITE_RPI_RESULT_TUNNEL_TYPE) {
+    result = Px4Lite_CommandHandleRpiResultTunnel(message->sysid, message->compid,
+               packet.target_system, packet.target_component, packet.payload_type,
+               packet.payload, packet.payload_length, wire_payload_length, PX4LITE_MAVLINK_LINK_RPI);
+    return (result == PX4LITE_OK) ? 1U : 0U;
+  }
   if (packet.payload_type != PX4LITE_RPI_H1_TUNNEL_TYPE) { return 0U; }
   if (packet.payload_length > (uint8_t)sizeof(packet.payload)) { return 1U; }
   /* TUNNEL 的固定字段在线上占 5 字节；不能把 MAVLink 解码补零当作实际文本。 */
-  wire_payload_length = (message->len >= 5U) ? (uint8_t)(message->len - 5U) : 0U;
 
 #if PX4LITE_RPI_BAUD_SWITCH_ENABLE
   if ((packet.payload_length >= 2U) &&
       (packet.payload[1] == PX4LITE_RPI_BAUD_REQUEST_TYPE)) {
-    /* 两种实验事务共用单个 CommTask 发送口；不让切速率响应越过已排队的 H1 回显。 */
-    if (Px4Lite_RpiH1EchoPeekResponse(&pending_echo) == PX4LITE_OK) { return 1U; }
+    /* 完整配置校验和H1发送仲裁统一由切速率模块处理，合法收包提示不因业务忙丢失。 */
     result = Px4Lite_RpiBaudSwitchHandleTunnel(message->sysid,
                                                message->compid,
                                                packet.target_system,
@@ -420,6 +425,17 @@ static uint8_t MavRx_DecodeCommandLong(const mavlink_message_t *message, Px4Lite
   mavlink_command_long_t packet;
 
   mavlink_msg_command_long_decode(message, &packet);
+#if PX4LITE_ENABLE_CNS_CONTROL
+  if (link == PX4LITE_MAVLINK_LINK_RPI) {
+    float params[7];
+    /* 接收快照不保留magic；完整帧已由Platform校验CRC，不能用重建后的0值拒收。 */
+    params[0] = packet.param1; params[1] = packet.param2;
+    params[2] = packet.param3; params[3] = packet.param4;
+    params[4] = packet.param5; params[5] = packet.param6; params[6] = packet.param7;
+    return (Px4Lite_CommandHandleRpiLongV01(packet.command, message->sysid, message->compid,
+        packet.target_system, packet.target_component, packet.confirmation, params, now_ms) == PX4LITE_OK) ? 1U : 0U;
+  }
+#endif
   return (Px4Lite_CommandHandleMavlinkLong(packet.command, message->sysid, message->compid, packet.target_system, packet.target_component, packet.param1, packet.param2, packet.param3, packet.param4, link, now_ms) == PX4LITE_OK) ? 1U : 0U;
 }
 
@@ -556,7 +572,7 @@ Px4Lite_Result_t Px4Lite_MavlinkRxRunRpi(uint32_t now_ms)
       decoded = MavRx_DecodeRpiNamedValueInt(&s_rx_message_scratch, now_ms);
       break;
     case MAVLINK_MSG_ID_TUNNEL:
-      decoded = MavRx_DecodeRpiH1EchoTunnel(&s_rx_message_scratch);
+      decoded = MavRx_DecodeRpiTunnel(&s_rx_message_scratch);
       break;
     default:
       decoded = 0U;

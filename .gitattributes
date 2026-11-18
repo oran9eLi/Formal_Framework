@@ -1,0 +1,3 @@
+# Preserve archived document/review bytes so FILES_SHA256.json is portable.
+Hardware/** -text
+Reports/** -text

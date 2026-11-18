@@ -1,0 +1,124 @@
+[
+  {
+    "variant": "feedback_off",
+    "defines": [
+      "PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK=0"
+    ],
+    "started_utc": "2026-11-12T05:27:05.328110+00:00",
+    "ended_utc": "2026-11-12T05:27:21.319822+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1047,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1391366,
+        "sha256": "3ce57fd903ad71b787ad029304bbbc8325e1e4b8ed4b2ff2cef41d6de3da5772"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5931664,
+        "sha256": "c854ef0eb81acb0ab592bd4b371e82f62d2a01bf3f59f0015d261a6a42af8656"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2492528,
+        "sha256": "8b6a86d76c4998d214ff8a8246ce816441ad6618e7ee076755c1cfd1145d8db3"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8115,
+        "sha256": "aa920070b56699ec94c4ef94d14210474df53355beb3acc71717389eddd45b06"
+      },
+      {
+        "name": "formal_framework.htm",
+        "bytes": 2017969,
+        "sha256": "15aa823c9f6cceb2c850751207a439b19833c122f3a2c897e9fa986a259b5712"
+      }
+    ],
+    "passed": true
+  },
+  {
+    "variant": "tone_rgb_off",
+    "defines": [
+      "PX4LITE_ENABLE_STARTUP_TONE=0",
+      "PX4LITE_ENABLE_STARTUP_RGB=0"
+    ],
+    "started_utc": "2026-11-12T05:27:21.635640+00:00",
+    "ended_utc": "2026-11-12T05:27:38.960160+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1047,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1384886,
+        "sha256": "c88bd91e1b8047650dc4530e4250296b1fadaa092fd074fb8595bcf61bbfc148"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5922612,
+        "sha256": "a401e9f053debfb0ae7a24e651326846ba702c4b5c80bce529053737a45fffb4"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2487600,
+        "sha256": "10ca0c4f04d9e7017ddee92d883e6d2eb2a5799dae57328473da20e2e83601b5"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8115,
+        "sha256": "35c85b231806d10d8efe1e2dd92df6de0f69fd55bea622fcb643c3c189e4484f"
+      },
+      {
+        "name": "formal_framework.htm",
+        "bytes": 2008536,
+        "sha256": "27473eda21bed485442512d67d204eaae30b087c2dd230b8ed3dfb4e36ccc5a2"
+      }
+    ],
+    "passed": true
+  },
+  {
+    "variant": "feedback",
+    "defines": [],
+    "started_utc": "2026-11-12T05:27:39.267091+00:00",
+    "ended_utc": "2026-11-12T05:27:55.388727+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1047,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1393677,
+        "sha256": "44504ff9fa769645b4d4ecf0026cf3aa9b57c1cc14756871249c12f5a099e3d9"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5927500,
+        "sha256": "3af7479e0fe7816d9fe21e72f910fab9a9a713ed763207bf9aae7042ad13b0f8"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2497555,
+        "sha256": "532868aa4c3b5734267fa108a16ec00bcc0f85676359f451a969984bc480278e"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8115,
+        "sha256": "600f744ef229bea3b92717043de8c44c626acdc61862a791a5d2f6e9fb6b4c58"
+      },
+      {
+        "name": "formal_framework.htm",
+        "bytes": 2021465,
+        "sha256": "586e574fc9f1e5dc62c4b33d3c5c65fa87fa86c9585bc493d6cea6d3710156f1"
+      }
+    ],
+    "passed": true
+  }
+]

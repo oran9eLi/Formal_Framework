@@ -1,0 +1,11 @@
+[
+  "Bsp/Inc/bsp_adc.h",
+  "Bsp/Inc/bsp_adc2.h",
+  "Bsp/Src/bsp_adc.c",
+  "Bsp/Src/bsp_adc2.c",
+  "Debug/Inc/debug_config.h",
+  "Debug/Src/debug_service.c",
+  "Framework/Inc/px4lite_platform.h",
+  "Framework/Src/px4lite_modules.c",
+  "Framework/Src/px4lite_platform_f407.c"
+]

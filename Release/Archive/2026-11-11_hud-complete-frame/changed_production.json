@@ -1,0 +1,42 @@
+[
+  {
+    "path": "Display/Inc/display_hud_masks.h",
+    "previous_sha256": null,
+    "sha256": "b1aac3724b35e7367dd13d569afdbf8da72d3e9ac7aef91e2b886ecdc47d580c"
+  },
+  {
+    "path": "Display/Inc/display_hud_present.h",
+    "previous_sha256": "200fd252cb07006f5e7d9961eb93a6f2c77a50296b35dd602bfc266396040277",
+    "sha256": "1d0f8d682ef0c055de081756689b73f8e9e8cfbf81a20b695ca42e7292cb0af8"
+  },
+  {
+    "path": "Display/Inc/lv_port_disp.h",
+    "previous_sha256": "51801521be0d23a92ba85af955c744dea3d66d43b1654667da683467d7fdd784",
+    "sha256": "a9f41823ec74252e5950d82942b1edde54242e3b5f52e1490f071c5b065853c0"
+  },
+  {
+    "path": "Display/Src/display_hud_masks.c",
+    "previous_sha256": null,
+    "sha256": "c980865347820215bf8b78086135c0b6626e33b888da481335840caac1ea73c6"
+  },
+  {
+    "path": "Display/Src/display_hud_present.c",
+    "previous_sha256": "f426b7f3d4b13e5149919b88335dab287fea02a72ab4227aa1b15cd00ea56b0e",
+    "sha256": "e5e9dffa0e8894be038aa45f139749d4047527395feee3d04579794e93a6071c"
+  },
+  {
+    "path": "Display/Src/display_lvgl.c",
+    "previous_sha256": "69c177f6277175358549f045f1f0b7f898593dd17bde8b4bd82823011f4b8a8c",
+    "sha256": "31bad315aa79ad3f5e6703af0a608f7cdd5607a74bb13f509c84497670d6867c"
+  },
+  {
+    "path": "Display/Src/lv_port_disp.c",
+    "previous_sha256": "032c5434e9de94c45fc86118c39cfbe3055b1181a96742f6072cc1f24bb09534",
+    "sha256": "dd48cd9b6752e219e002ffb139e0cee90c1bbb19cb615b07e4ba4e9ee92751ce"
+  },
+  {
+    "path": "MDK-ARM/formal_framework.uvprojx",
+    "previous_sha256": "76c6ae47d36d078bf71228c2b05ff920359a63fef660a57ac2741f21f6e7fbbc",
+    "sha256": "c177a6b90218276a1f8856d6dd0ddc9199ccb5f4aafff48f696a11d780c72231"
+  }
+]

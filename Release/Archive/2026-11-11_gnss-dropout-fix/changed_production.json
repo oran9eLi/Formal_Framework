@@ -1,0 +1,27 @@
+[
+  {
+    "path": "Bsp/Inc/bsp_gnss.h",
+    "previous_sha256": "385259a8b22a113a26296500cb17a0f28a443f233377611645edd4801120e7e3",
+    "sha256": "28de536c098e4e4475fe535481999899dbca82eddf618bc3f8dd836d3feaf4ee"
+  },
+  {
+    "path": "Bsp/Src/bsp_gnss.c",
+    "previous_sha256": "f356fe1bbe8d29b5eb450c9136143bfbcb5a4a25fdb3b375d51e60430318fd19",
+    "sha256": "33f83fd64dd75fc388f6fceeb034a773addeea7b063d41b9c6c1b202574faaf9"
+  },
+  {
+    "path": "Framework/Src/px4lite_platform_f407.c",
+    "previous_sha256": "3cb255394504c15dc2a7e364630ff9e738797ca2b54cc5ed21070fadc7ae68e1",
+    "sha256": "ad912bdcb668122bf5669f2eac1a28599adcd1a18c9e76123551e54a15ba8e60"
+  },
+  {
+    "path": "Sensor/Inc/sensor_gnss.h",
+    "previous_sha256": "1558e3051618078c27045eca08ac838dcd3fecb162762e0471fdfd8afedf9e3a",
+    "sha256": "001ff44ebfd1233be5dde183d7c23dc622030180be5152686fd076ac0a591fdf"
+  },
+  {
+    "path": "Sensor/Src/sensor_gnss.c",
+    "previous_sha256": "0c49646a3133038a1bbccdae40ac77ff04cd96318d686d0eedc1c9b83c6936ed",
+    "sha256": "1e5fde252ac2a7d1e8a75ae17666dd450669603ce7207a20defb9ab8db2f10f4"
+  }
+]

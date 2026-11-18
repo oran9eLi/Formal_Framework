@@ -1,0 +1,106 @@
+{
+  "groups": 14,
+  "passed": 14,
+  "failed": 0,
+  "real_hardware_tested": false,
+  "cases": [
+    {
+      "group": "rgb_platform",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host/rgb_platform.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "9b3f880022bb086ed71d7d24d763c0df16008dc2e857e305108400eb66ee02e2"
+    },
+    {
+      "group": "startup_rgb",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host/startup_rgb.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "ad93282e76caf944d84fa0751c801844620d84fbb24885b776eac77bc72be63b"
+    },
+    {
+      "group": "startup_rgb_off",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host/startup_rgb_off.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "4a9433cf1ee416a6aae9642f2a0e0a99e96ed29b6d0903612355693d95220cd7"
+    },
+    {
+      "group": "startup_tone_off",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host/startup_tone_off.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "da499ba18e4300053e157f5f46cad6d57ab60b5a5a63dcc54230e36ea1329785"
+    },
+    {
+      "group": "attitude",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/attitude.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "9c202428943d8752fab57716ca7cd9db3e082f25b98676153a939e7163f3a7c7"
+    },
+    {
+      "group": "baro_schedule",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/baro_schedule.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "9c9bfbe8362d32f6de29120996bc75bc653502fbb73dcff27372182c2dec4689"
+    },
+    {
+      "group": "bmi088_platform",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/bmi088_platform.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "bmi088_platform_spi",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/bmi088_platform_spi.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "gnss_satellite_mapping",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/gnss_satellite_mapping.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "e1e7af0a51a418822239ef152ec21363bc4f15e736879f8aa67f0b5d3bc92df5"
+    },
+    {
+      "group": "gnss_unified_uplink",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/gnss_unified_uplink.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "74926ff90873388b5698f6c29fbd840554ab07039b1aa6dda8f83e1adeeccacb"
+    },
+    {
+      "group": "motor_manual_lock",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/motor_manual_lock.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "63a1aa0773787e99d0f005b31cc45af8aa24f5697bfb62927d94777853ef9ab9"
+    },
+    {
+      "group": "mpu6050_platform",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/mpu6050_platform.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "power_diagnostics_mapping",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/power_diagnostics_mapping.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "427bdb9a90c7071df67c7dc1eaaaa5e5959064cb8dde04f50508ed30a01752b8"
+    },
+    {
+      "group": "pwm_fatal",
+      "passed": true,
+      "run_log": "build/20261110_rgb_tone/host_regression/pwm_fatal.run.log",
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "71c9f330bd8585f48944293bdb29b36d81160c0ad924f621bb1df40f75e7767f"
+    }
+  ]
+}

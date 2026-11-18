@@ -1,0 +1,34 @@
+{
+  "inputs_unchanged": true,
+  "variant": "gnss_parsed_and_raw_restored",
+  "passed": true,
+  "ended_utc": "2026-11-06T09:51:21.8215814Z",
+  "exit_code": 0,
+  "baseline": "gnss_unified_and_raw_uplink",
+  "artifacts": [
+    {
+      "sha256": "dd947416c6e07a7af4e5083316b25611954fe8c1960e5427185bcf083bb438ce",
+      "name": "formal_framework.hex",
+      "bytes": 1327339
+    },
+    {
+      "sha256": "bf613574703ec04c8a832df4d358295690e66cec71acfebcdc017ef15591ca1b",
+      "name": "formal_framework.axf",
+      "bytes": 5764928
+    },
+    {
+      "sha256": "31990d89b556869b625bcdcef705acb30e26deb105892069a169d45b8531a747",
+      "name": "formal_framework.map",
+      "bytes": 2379154
+    },
+    {
+      "sha256": "be5c83ed6b9d3febb317813a0c847f4b167dbe4f95eac623c8dc97b3f2da2867",
+      "name": "formal_framework.build_log.htm",
+      "bytes": 7925
+    }
+  ],
+  "warnings": 0,
+  "errors": 0,
+  "started_utc": "2026-11-06T09:50:43.6529875Z",
+  "input_count": 1034
+}

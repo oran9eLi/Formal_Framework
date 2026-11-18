@@ -35,3 +35,21 @@ Desktop.ini
 
 # Python tools output
 Tools/__pycache__/
+
+# Local document generation caches and temporary review outputs
+Reports/**/.build/
+/output/
+/tmp/
+
+# Local assistant memory and whole-folder reading records
+/PROJECT_MEMORY.json
+/docs/Project_Memory/
+
+# Candidate source/binary delivery bundles and Keil HTML logs stay out of source history
+Release/Archive/**/*.zip
+Release/Latest/*.zip
+Release/**/*.build_log.htm
+Release/**/*.htm
+**/~$*
+**/__pycache__/
+*.pyc

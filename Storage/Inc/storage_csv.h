@@ -36,8 +36,8 @@ typedef struct {
   Storage_CsvSample_t gnss_sample;     /**< 位置原始 GNSS 来源。 */
   Storage_CsvSample_t attitude_sample; /**< 估计姿态来源。 */
   Storage_CsvSample_t baro_sample;     /**< 温湿压来源。 */
-  Storage_CsvSample_t battery_sample;  /**< 主电池来源。 */
-  Storage_CsvSample_t battery2_sample; /**< 动力电池来源。 */
+  Storage_CsvSample_t battery_sample;  /**< 第一组来源；停用时为 Missing，占位数值不能当真实采样。 */
+  Storage_CsvSample_t battery2_sample; /**< 第二组来源；当前为整机主回路供电。 */
   Storage_CsvSample_t motor_sample;    /**< 实际电机输出来源。 */
   uint32_t time_ms;                /**< 记录时间，单位：ms。 */
   uint32_t local_date_ymd;         /**< 本地日期，编码 YYYYMMDD；未知时为 0。 */
@@ -55,12 +55,12 @@ typedef struct {
   uint32_t voltage_mv;             /**< 电压，单位：mV。 */
   int32_t current_ma;              /**< 第一电池电流，单位：mA。 */
   uint32_t power_mw;               /**< 第一电池功率，单位：mW。 */
-  uint8_t battery_pct;             /**< 电量百分比，范围：0 到 100。 */
+  uint8_t battery_pct;             /**< 电压估算电量0..100%；UINT8_MAX表示未提供，序列化为空列。 */
   uint8_t low_voltage;             /**< 第一电池低电压标志，0 表示正常，1 表示低电压。 */
-  uint32_t voltage2_mv;            /**< 第二电池电压，单位：mV。 */
-  int32_t current2_ma;             /**< 第二电池电流，单位：mA。 */
-  uint32_t power2_mw;              /**< 第二电池功率，单位：mW。 */
-  uint8_t battery2_pct;            /**< 第二电池电量百分比，范围：0 到 100。 */
+  uint32_t voltage2_mv;            /**< 第二组主回路电压，单位：mV，不识别电源/电池。 */
+  int32_t current2_ma;             /**< 第二组主回路总电流，单位：mA。 */
+  uint32_t power2_mw;              /**< 第二组主回路输入功率，单位：mW。 */
+  uint8_t battery2_pct;            /**< 电压估算电量0..100%；当前通用供电填UINT8_MAX并输出空列。 */
   uint8_t low_voltage2;            /**< 第二电池低电压标志，0 表示正常，1 表示低电压。 */
   uint8_t motor_pct[PX4LITE_MOTOR_COUNT];            /**< 四路电机输出油门百分比，范围：0 到 100；非实测转速。 */
   uint8_t motor_run_state;         /**< 电机运行状态，1 表示允许输出目标油门。 */

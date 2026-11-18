@@ -1,0 +1,75 @@
+{
+  "date": "2026-11-06",
+  "firmware_profile": "p25_fixed115200_raw_debug",
+  "hex": "cns-f407-p25-fixed115200-raw-20261106.hex",
+  "hex_sha256": "22e9f080346d5c5bb1ac86fa150dff43ac3e7372b720a2136772e1d14910fccc",
+  "keil": {
+    "variant": "p25_fixed115200_raw_debug",
+    "passed": true,
+    "input_count": 1030,
+    "artifacts": [
+      {
+        "bytes": 1296477,
+        "sha256": "22e9f080346d5c5bb1ac86fa150dff43ac3e7372b720a2136772e1d14910fccc",
+        "name": "formal_framework.hex"
+      },
+      {
+        "bytes": 5687176,
+        "sha256": "2007bd20e625253d8d566b9ca8f3889270f650e72ccd9ed7b5ac427015ea7a90",
+        "name": "formal_framework.axf"
+      },
+      {
+        "bytes": 2327950,
+        "sha256": "2dab21e9e842f9a517a46fcfe908db0bf6c6ae963862fcfd75f9a6413e5e2d9f",
+        "name": "formal_framework.map"
+      },
+      {
+        "bytes": 7849,
+        "sha256": "5f3267d04b0453d2ebdbe2f8e2854c1044b7229927fb0fa2b06b6d0fcf8f48fb",
+        "name": "formal_framework.build_log.htm"
+      }
+    ],
+    "started_utc": "2026-11-06T02:52:03.8110950Z",
+    "warnings": 0,
+    "exit_code": 0,
+    "inputs_unchanged": true,
+    "ended_utc": "2026-11-06T02:52:25.7873789Z",
+    "baseline": "2026-11-06_p25-fixed115200",
+    "errors": 0
+  },
+  "production_inputs": 1030,
+  "new_sources": [],
+  "program_size": {
+    "code": 349432,
+    "ro": 111344,
+    "rw": 1968,
+    "zi": 113400
+  },
+  "main_sram_static": 115368,
+  "main_sram_free": 15704,
+  "delta_vs_clean_sram": 2048,
+  "flash_loaded_bytes": 460908,
+  "hex_min": "0x8000000",
+  "hex_end_exclusive": "0x807086c",
+  "hex_checksums_valid": true,
+  "no_overlap": true,
+  "sector11_untouched": true,
+  "dma_map": [
+    "s_rx_buf                                 0x20006ab0   Data        1024  bsp_gnss.o(.bss)"
+  ],
+  "tx_map": [
+    "s_tx_buf                                 0x20006eb0   Data          96  bsp_gnss.o(.bss)"
+  ],
+  "host_groups_passed": 31,
+  "host_groups_failed": 0,
+  "new_sensor_tasks": 0,
+  "existing_debug_task_enabled": true,
+  "estimated_rtos_heap_percent": 79.22,
+  "heap_75_percent_target_met": false,
+  "observation_only": true,
+  "receive_link_user_confirmed": true,
+  "pre_cleanup_photo_handshake_confirmed": true,
+  "final_image_hardware_flashed": false,
+  "final_image_real_p25_verified": false,
+  "latest_changed": false
+}

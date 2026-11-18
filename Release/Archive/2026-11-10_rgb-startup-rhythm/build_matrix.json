@@ -1,0 +1,73 @@
+[
+  {
+    "variant": "rgb_disabled",
+    "defines": [
+      "BSP_ENABLE_RGB=0",
+      "PX4LITE_ENABLE_STARTUP_RGB=0"
+    ],
+    "started_utc": "2026-11-10T03:18:29.092393+00:00",
+    "ended_utc": "2026-11-10T03:18:50.981976+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1041,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1347507,
+        "sha256": "75c44f9e15bd1831157a53946e300468daf95d43695f1e2ccc1bbcb1cf6e8e23"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5821580,
+        "sha256": "ac774b44c002f00e443a78868c8936d6a17794d2ae79845a2a7b104b09d9574d"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2422284,
+        "sha256": "b11b3ec2bed9a87a3573f55c9ced1a43dc64728e33da78c6d0d74bf9eef07184"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8007,
+        "sha256": "863ee3811d3a698ae312d65c78ca271111ab247923a868c29f1cc4cff3e2f967"
+      }
+    ],
+    "passed": true
+  },
+  {
+    "variant": "rgb_tone",
+    "defines": [],
+    "started_utc": "2026-11-10T03:18:51.182448+00:00",
+    "ended_utc": "2026-11-10T03:19:11.631149+00:00",
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "input_count": 1041,
+    "inputs_unchanged": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "bytes": 1355930,
+        "sha256": "95ebe3867b3e9adcce3075bf064994cb4170e393173fe6be88e22b5631536f76"
+      },
+      {
+        "name": "formal_framework.axf",
+        "bytes": 5828968,
+        "sha256": "f638a64caa016e941a3980ae09e594cbdb2870b83fe915bd14e0983b1f8aa8c3"
+      },
+      {
+        "name": "formal_framework.map",
+        "bytes": 2436588,
+        "sha256": "fba413f9eb3f4e8bd5665e68ace9baed7108a55cddee754b6a181c547eabaf02"
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "bytes": 8007,
+        "sha256": "3074b743e6dffbe627f9376e8c8578da21b993eab16523a487a0700ab122134a"
+      }
+    ],
+    "passed": true
+  }
+]

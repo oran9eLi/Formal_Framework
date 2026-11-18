@@ -1,0 +1,7 @@
+[
+  {
+    "path": "Framework/Inc/px4lite_config.h",
+    "before": "60e7ed4fc298c45e3a4520fd9af33e4417568f72c9352766f10352f34897fe0d",
+    "after": "909d16fb3691312622498c70a25557ecc762e9c1cfa4fddfedc43df5bde8fdd5"
+  }
+]

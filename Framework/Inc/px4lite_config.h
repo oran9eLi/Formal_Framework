@@ -13,8 +13,45 @@
 
 #define PX4LITE_ENABLE_GNSS                1U
 #define PX4LITE_ENABLE_IMU                 1U
+/** @brief IMU芯片选择，0保留原MPU6050，1使用BMI088；由平台适配器隔离差异。 */
+#define PX4LITE_IMU_DRIVER_MPU6050         0U
+#define PX4LITE_IMU_DRIVER_BMI088          1U
+#ifndef PX4LITE_IMU_DRIVER
+#define PX4LITE_IMU_DRIVER PX4LITE_IMU_DRIVER_BMI088
+#endif
+/** @brief BMI088实际接线总线；不会自动改变模块PS/CS焊盘的硬件模式。 */
+#define PX4LITE_IMU_BMI088_BUS_I2C          1U
+#define PX4LITE_IMU_BMI088_BUS_SPI          2U
+#ifndef PX4LITE_IMU_BMI088_BUS
+#define PX4LITE_IMU_BMI088_BUS PX4LITE_IMU_BMI088_BUS_I2C
+#endif
+#if (PX4LITE_IMU_DRIVER != PX4LITE_IMU_DRIVER_MPU6050) && (PX4LITE_IMU_DRIVER != PX4LITE_IMU_DRIVER_BMI088)
+#error "Unsupported IMU driver selection"
+#endif
+#if (PX4LITE_IMU_BMI088_BUS != PX4LITE_IMU_BMI088_BUS_I2C) && (PX4LITE_IMU_BMI088_BUS != PX4LITE_IMU_BMI088_BUS_SPI)
+#error "Unsupported BMI088 bus selection"
+#endif
+/** @brief BMI088芯片轴到机体系的有符号轴号，1/2/3表示X/Y/Z；默认原轴，安装后验轴。 */
+#ifndef PX4LITE_BMI088_AXIS_X
+#define PX4LITE_BMI088_AXIS_X 1
+#endif
+#ifndef PX4LITE_BMI088_AXIS_Y
+#define PX4LITE_BMI088_AXIS_Y 2
+#endif
+#ifndef PX4LITE_BMI088_AXIS_Z
+#define PX4LITE_BMI088_AXIS_Z 3
+#endif
 #define PX4LITE_ENABLE_BARO                1U
-#define PX4LITE_ENABLE_BATTERY             1U
+/** @brief 第一组电源 topic 的生产开关；停用后不采集、不发布、不产生缺测告警。 */
+#ifndef PX4LITE_ENABLE_BATTERY1
+#define PX4LITE_ENABLE_BATTERY1            0U
+#endif
+/** @brief 第二组电源 topic 的生产开关；当前为整机主回路唯一测量源。 */
+#ifndef PX4LITE_ENABLE_BATTERY2
+#define PX4LITE_ENABLE_BATTERY2            1U
+#endif
+/** @brief 电源服务总开关由启用组派生；不得关闭总服务而遗漏第二组保护数据。 */
+#define PX4LITE_ENABLE_BATTERY (PX4LITE_ENABLE_BATTERY1 || PX4LITE_ENABLE_BATTERY2)
 #define PX4LITE_ENABLE_LORA                1U
 /* 5G-A 可通过所属服务发送 AT 指令做连接管理，不承载业务数据或 Remote ID 数据流。 */
 #define PX4LITE_ENABLE_5G                  1U
@@ -28,6 +65,80 @@
 #define PX4LITE_ENABLE_COMMAND             0U
 #define PX4LITE_ENABLE_LOG_POOL            0U
 
+/** @brief 一次性启动音、播放中节拍彩灯及结束后常亮慢渐变。 */
+#ifndef PX4LITE_ENABLE_STARTUP_TONE
+#define PX4LITE_ENABLE_STARTUP_TONE 1U
+#endif
+#ifndef PX4LITE_ENABLE_STARTUP_RGB
+#define PX4LITE_ENABLE_STARTUP_RGB 1U
+#endif
+#define PX4LITE_STARTUP_RGB_RECOVERY_MS 2000U /**< RGB失败后重建输出的最短间隔，单位ms。 */
+/** @brief 启动音结束后相邻色之间的渐变时长，单位ms；七色循环默认14s。 */
+#ifndef PX4LITE_STARTUP_RGB_IDLE_COLOR_MS
+#define PX4LITE_STARTUP_RGB_IDLE_COLOR_MS 2000U
+#endif
+/** @brief 常亮渐变成功提交之间的最小间隔，单位ms；恢复首帧不受此限。 */
+#ifndef PX4LITE_STARTUP_RGB_IDLE_UPDATE_MS
+#define PX4LITE_STARTUP_RGB_IDLE_UPDATE_MS 50U
+#endif
+#define PX4LITE_STARTUP_TONE_DELAY_MS 1000U
+
+/** @brief 电机实际运行时循环播放用户提供的单音曲谱；停机或提示抢占时保留进度。 */
+#ifndef PX4LITE_ENABLE_MOTOR_MUSIC
+#define PX4LITE_ENABLE_MOTOR_MUSIC 1U
+#endif
+/** @brief 音乐允许使用的实际电机输出快照最大年龄，单位真实ms，不延长控制失效保护。 */
+#ifndef PX4LITE_MOTOR_MUSIC_FRESH_MS
+#define PX4LITE_MOTOR_MUSIC_FRESH_MS 200U
+#endif
+
+/** @brief 树莓派控制/配置执行结果声光提示；由调用者区分成功和未执行/失败。 */
+#ifndef PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK
+#define PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK 1U
+#endif
+/**
+ * @brief 命令声光结果来源：1由Pi的TUNNEL/0x8040单向终态通知，0保留F407原本地执行结果模式。
+ * @note 默认由Pi统一汇总结果，避免同一控制命令在本地和Pi两处重复提示；不改变业务ACK。
+ */
+#ifndef PX4LITE_RPI_RESULT_SOURCE_PI
+#define PX4LITE_RPI_RESULT_SOURCE_PI 1U
+#endif
+#if (PX4LITE_RPI_RESULT_SOURCE_PI != 0U) && (PX4LITE_RPI_RESULT_SOURCE_PI != 1U)
+#error "PX4LITE_RPI_RESULT_SOURCE_PI must be 0 (local) or 1 (Pi notification)"
+#endif
+/** @brief 本地自动结果提示派生开关；Pi模式下只关闭本地提示来源，不改变命令执行或模块插拔。 */
+#define PX4LITE_RPI_LOCAL_RESULT_FEEDBACK (PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK && !PX4LITE_RPI_RESULT_SOURCE_PI)
+/** @brief 模块稳定连接恢复/中断提示；与命令结果和启动音开关独立。 */
+#ifndef PX4LITE_ENABLE_MODULE_CONNECTION_FEEDBACK
+#define PX4LITE_ENABLE_MODULE_CONNECTION_FEEDBACK 1U
+#endif
+/** @brief 模块连接观察启动建基线等待时间，单位真实ms；不改变原模块超时。 */
+#ifndef PX4LITE_MODULE_FEEDBACK_STARTUP_MS
+#define PX4LITE_MODULE_FEEDBACK_STARTUP_MS 3000U
+#endif
+/** @brief 模块连接状态边沿连续稳定时间，单位真实ms；由Health观察器使用。 */
+#ifndef PX4LITE_MODULE_FEEDBACK_STABLE_MS
+#define PX4LITE_MODULE_FEEDBACK_STABLE_MS 300U
+#endif
+#define PX4LITE_RPI_FEEDBACK_PENDING_MAX 8U /**< 四类声光事件共用FIFO待播上限，不含当前播放；满时只丢提示。 */
+#define PX4LITE_RPI_FEEDBACK_TAIL_MS 100U /**< 旋律后静音时长，真实ms；防止连续结果声音粘连。 */
+
+/** @brief CNS V0.1实验控制入口；关闭时保留旧控制、通用通知和本地页面语义。 */
+#ifndef PX4LITE_ENABLE_CNS_CONTROL
+#define PX4LITE_ENABLE_CNS_CONTROL 1U
+#endif
+#define PX4LITE_CNS_IDLE_PULSE_US 1200U /**< CNS解锁及降落后的怠速脉宽，单位us；停车仍为原最小脉宽。 */
+#define PX4LITE_CNS_ACK_TIMEOUT_MS 2000U /**< 请求受理到ACK发送的时限，单位真实ms；过期不启动普通动作。 */
+#define PX4LITE_CNS_ACK_QUEUE_DEPTH 16U /**< UART6受理应答FIFO容量，条；满时不执行新的普通动作。 */
+#define PX4LITE_CNS_LOW_TONE_HZ 880U /**< CNS低音请求频率，单位Hz。 */
+#define PX4LITE_CNS_HIGH_TONE_HZ 3136U /**< CNS高音请求频率，单位Hz。 */
+#define PX4LITE_CNS_ARM_TONE_MS 1000U /**< 解锁前低音最短时长，单位ms。 */
+#define PX4LITE_CNS_LOCK_TONE_MS 1000U /**< 上锁后高音最短时长，单位ms。 */
+#define PX4LITE_CNS_QUICK_TONE_MS 100U /**< 起飞/急停快速高音的单声时长，单位ms。 */
+#define PX4LITE_CNS_QUICK_GAP_MS 100U /**< 快速高音之间的静音时长，单位ms。 */
+#define PX4LITE_CNS_LAND_TONE_MS 500U /**< 降落间歇高音的单声时长，单位ms。 */
+#define PX4LITE_CNS_LAND_GAP_MS 500U /**< 降落间歇高音之间静音时长，单位ms。 */
+
 #define PX4LITE_SENSOR_WORK_PERIOD_MS      10U
 #define PX4LITE_ESTIMATOR_PERIOD_MS        20U
 #define PX4LITE_HEALTH_PERIOD_MS           100U
@@ -36,7 +147,11 @@
 #define PX4LITE_MOTOR_COUNT                4U
 #define PX4LITE_CONTROL_ESC_MIN_PULSE_US   1000U
 #define PX4LITE_CONTROL_ESC_MAX_PULSE_US   2000U
-/** 本机动力电池保护，单位 mV；恢复滞回独立于显示档位。 */
+/** @brief 暂停电压对电机的门禁，0 为旁路、1 恢复原采样/新鲜度/电压保护；不影响急停和人工锁。 */
+#ifndef PX4LITE_CONTROL_POWER_GATE_ENABLE
+#define PX4LITE_CONTROL_POWER_GATE_ENABLE 0U
+#endif
+/** 原本机电压门禁阈值，单位 mV；由上述开关保留，恢复滞回独立于显示档位。 */
 #define PX4LITE_CONTROL_POWER_CUTOFF_MV  9900U
 #define PX4LITE_CONTROL_POWER_RECOVER_MV 10100U
 #define PX4LITE_CONTROL_POWER_MAX_MV     13500U
@@ -261,6 +376,52 @@
  * 心跳与多数项本就 1000ms，仅 ATTITUDE/POSITION/MOTOR(500ms)、MODULE_STATE(700ms)被抬到 1000ms。
  */
 #define PX4LITE_MAVLINK_RPI_TELEM_MIN_PERIOD_MS 1000U
+
+/** @brief BMI088独立原始/解析通道；只对已选择BMI088的IMU与树莓派链路启用。 */
+#ifndef PX4LITE_ENABLE_RPI_BMI088_UPLINK
+#define PX4LITE_ENABLE_RPI_BMI088_UPLINK (PX4LITE_ENABLE_RPI_MAVLINK && PX4LITE_ENABLE_IMU && (PX4LITE_IMU_DRIVER == PX4LITE_IMU_DRIVER_BMI088))
+#endif
+/** @brief 单槽最新值抽样周期，200ms对应最多5对/s，非100Hz全量无损上报。 */
+#ifndef PX4LITE_RPI_BMI088_PERIOD_MS
+#define PX4LITE_RPI_BMI088_PERIOD_MS 200U
+#endif
+/** @brief 独立设备/发送状态报告周期，单位ms。 */
+#ifndef PX4LITE_RPI_BMI088_STATUS_PERIOD_MS
+#define PX4LITE_RPI_BMI088_STATUS_PERIOD_MS 1000U
+#endif
+#define PX4LITE_RPI_BMI088_RETRY_MS 50U /**< UART提交失败的最短重试间隔，ms。 */
+#define PX4LITE_RPI_BMI088_MAX_ATTEMPTS 3U /**< 每个内层包最多提交次数。 */
+#define PX4LITE_RPI_BMI088_MAX_AGE_MS 200U /**< V1上报协议固定源年龄上限，ms；变更须同步Pi契约。 */
+#if (PX4LITE_RPI_BMI088_PERIOD_MS == 0U) || (PX4LITE_RPI_BMI088_PERIOD_MS >= 0x80000000UL) || \
+    (PX4LITE_RPI_BMI088_STATUS_PERIOD_MS == 0U) || (PX4LITE_RPI_BMI088_STATUS_PERIOD_MS >= 0x80000000UL)
+#error "BMI088 uplink periods must be nonzero and less than 2^31 ms"
+#endif
+
+/** @brief Pi默认同时接收解析GPS与原wire；本机/LoRa/RTC/硬件RemoteID行为不变。 */
+#ifndef PX4LITE_RPI_GNSS_PARSED_TX_ENABLE
+#define PX4LITE_RPI_GNSS_PARSED_TX_ENABLE 1U
+#endif
+/** @brief GNSS规范化快照默认发往Pi，仍须通过Pi解析数据政策门禁。 */
+#ifndef PX4LITE_ENABLE_RPI_GNSS_UPLINK
+#define PX4LITE_ENABLE_RPI_GNSS_UPLINK 1U
+#endif
+#define PX4LITE_GNSS_UPLINK_PERIOD_MS 1000U /**< 新组替换未完成旧组，不追赶历史。 */
+#define PX4LITE_GNSS_UPLINK_RETRY_MS 50U    /**< 同包失败后最短重试间隔，ms。 */
+#define PX4LITE_GNSS_UPLINK_ATTEMPTS 3U     /**< 每包总尝试上限，含首次。 */
+#define PX4LITE_GNSS_UPLINK_TIME_MAX_AGE_MS 2500U /**< LINK系统UTC副本最大年龄，ms。 */
+
+/** @brief 独立原始GNSS完整帧上行，和typed/Debug/UI捕获开关无关；关闭后无RAW流。 */
+#ifndef PX4LITE_ENABLE_RPI_GNSS_RAW_UPLINK
+#define PX4LITE_ENABLE_RPI_GNSS_RAW_UPLINK 1U
+#endif
+/** @brief RAW通道默认只发原帧8020，不发统计8021；内部计数、重试和超时不受影响。 */
+#ifndef PX4LITE_RPI_GNSS_RAW_STATS_ENABLE
+#define PX4LITE_RPI_GNSS_RAW_STATS_ENABLE 0U
+#endif
+#define PX4LITE_GNSS_RAW_UPLINK_STATS_MS 1000U  /**< RAW统计最短间隔，ms。 */
+#define PX4LITE_GNSS_RAW_UPLINK_RETRY_MS 50U    /**< 片发送失败后的最短重试间隔，ms。 */
+#define PX4LITE_GNSS_RAW_UPLINK_ATTEMPTS 3U     /**< 单片/统计总尝试上限，含首次。 */
+#define PX4LITE_GNSS_RAW_UPLINK_ACTIVE_MS 2000U /**< 活跃帧片间最大持有时间，ms。 */
 
 /*
  * ESP32-S3 RemoteID 发送配置。身份字段是生产默认值，后续可由 5G/网口命令写入配置存储后统一加载。

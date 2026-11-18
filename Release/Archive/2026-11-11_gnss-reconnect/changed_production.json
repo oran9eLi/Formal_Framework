@@ -1,0 +1,22 @@
+[
+  {
+    "path": "Bsp/Src/bsp_gnss.c",
+    "previous_sha256": "33f83fd64dd75fc388f6fceeb034a773addeea7b063d41b9c6c1b202574faaf9",
+    "sha256": "dec07b873fdc7a613b2f6ab7626e96403e9bec936a702409209fe93bac340b19"
+  },
+  {
+    "path": "Debug/Src/debug_service.c",
+    "previous_sha256": "26731bdf6fdcb7e92b22fe19d9083e2ff27f425bd47ba97b991ddaade916263e",
+    "sha256": "06ff90703244675e510e27e9d2c946ed711d76d28bc3a8b805ee748f42447d46"
+  },
+  {
+    "path": "Sensor/Inc/sensor_gnss.h",
+    "previous_sha256": "001ff44ebfd1233be5dde183d7c23dc622030180be5152686fd076ac0a591fdf",
+    "sha256": "8d6d55aff9b6be22e2abc43b63e4098e84deff2ae7fd9c08865502ff631a5284"
+  },
+  {
+    "path": "Sensor/Src/sensor_gnss.c",
+    "previous_sha256": "1e5fde252ac2a7d1e8a75ae17666dd450669603ce7207a20defb9ab8db2f10f4",
+    "sha256": "c58983a94c652e194644d77a4893fd23d280fae09479d42a39bbd1bc413f4535"
+  }
+]

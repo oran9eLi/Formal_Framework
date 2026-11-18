@@ -1,0 +1,73 @@
+{
+  "date": "2026-11-06",
+  "firmware_profile": "p25_autodetect_nmea_ubx",
+  "hex": "cns-f407-p25-gps-20261106.hex",
+  "hex_sha256": "42189b44de011e759876536df33491b1b1cf9cf818d7928305fa87a5e0cedd65",
+  "keil": {
+    "variant": "p25_autodetect",
+    "input_count": 1030,
+    "exit_code": 0,
+    "warnings": 0,
+    "baseline": "2026-11-05_gnss-original-restored",
+    "started_utc": "2026-11-06T00:59:28.5339886Z",
+    "ended_utc": "2026-11-06T00:59:52.2101951Z",
+    "inputs_unchanged": true,
+    "errors": 0,
+    "passed": true,
+    "artifacts": [
+      {
+        "name": "formal_framework.hex",
+        "sha256": "42189b44de011e759876536df33491b1b1cf9cf818d7928305fa87a5e0cedd65",
+        "bytes": 1294391
+      },
+      {
+        "name": "formal_framework.axf",
+        "sha256": "c9e2dc0dc85adeef4506b9fe21eb53a0ce3a51e9c67c7aff80bec26711fb24cb",
+        "bytes": 5676060
+      },
+      {
+        "name": "formal_framework.map",
+        "sha256": "62a494cd2f9fd698a80b18409f4aaecf664b051a84885ae1a91048708e0495cd",
+        "bytes": 2318701
+      },
+      {
+        "name": "formal_framework.build_log.htm",
+        "sha256": "f49fb934b2645a465a820429518495301ad6b1ecc5dbdc29fefde2a307146cda",
+        "bytes": 7849
+      }
+    ]
+  },
+  "production_inputs": 1030,
+  "new_sources": [
+    "Sensor/Inc/sensor_ubx.h",
+    "Sensor/Src/sensor_ubx.c",
+    "Framework/Inc/px4lite_gnss_diagnostics.h"
+  ],
+  "program_size": {
+    "code": 348872,
+    "ro": 111160,
+    "rw": 1968,
+    "zi": 111344
+  },
+  "main_sram_static": 113312,
+  "main_sram_free": 17760,
+  "delta_vs_original_gnss_sram": 1320,
+  "flash_loaded_bytes": 460164,
+  "hex_min": "0x8000000",
+  "hex_end_exclusive": "0x8070584",
+  "hex_checksums_valid": true,
+  "no_overlap": true,
+  "sector11_untouched": true,
+  "dma_map": [
+    "s_rx_buf                                 0x20006448   Data        1024  bsp_gnss.o(.bss)"
+  ],
+  "tx_map": [
+    "s_tx_buf                                 0x20006848   Data          96  bsp_gnss.o(.bss)"
+  ],
+  "host_groups_passed": 24,
+  "host_groups_failed": 0,
+  "new_tasks": 0,
+  "hardware_flashed": false,
+  "real_p25_verified": false,
+  "latest_changed": false
+}

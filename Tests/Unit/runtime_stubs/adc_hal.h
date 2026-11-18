@@ -35,19 +35,35 @@ typedef unsigned GPIO_TypeDef;
 #define __HAL_RCC_GPIOC_CLK_ENABLE() ((void)0)
 #define __NOP() ((void)0)
 static unsigned drive_calls, write_calls, adc_calls, pin_mode = GPIO_MODE_ANALOG;
+static unsigned adc_last_channel, adc_channel_configs[32];
+/** @brief 各ADC实例保留各自通道，不能让ADC1参考测量覆盖ADC2/ADC3的硬件选择事实。 */
+static unsigned adc_instance_channels[4], adc_instance_configured[4];
+static GPIO_TypeDef *adc_gpio_last_port;
+static unsigned adc_gpio_last_pin;
 static HAL_StatusTypeDef adc_result = HAL_OK;
 static HAL_StatusTypeDef HAL_ADC_Init(ADC_HandleTypeDef *h) { (void)h; return HAL_OK; }
 static HAL_StatusTypeDef HAL_ADC_DeInit(ADC_HandleTypeDef *h) { (void)h; return HAL_OK; }
 static HAL_StatusTypeDef HAL_ADC_ConfigChannel(ADC_HandleTypeDef *h, ADC_ChannelConfTypeDef *c)
-{ (void)h; (void)c; return HAL_OK; }
+{
+  uintptr_t instance=(uintptr_t)h->Instance;
+  adc_last_channel=c->Channel;
+  if(c->Channel<32U) { ++adc_channel_configs[c->Channel]; }
+  if(instance<4U) { adc_instance_channels[instance]=c->Channel;adc_instance_configured[instance]=1U; }
+  return HAL_OK;
+}
 static HAL_StatusTypeDef HAL_ADC_Start(ADC_HandleTypeDef *h)
 { (void)h; ++adc_calls; assert(pin_mode == GPIO_MODE_ANALOG); return adc_result; }
 static HAL_StatusTypeDef HAL_ADC_Stop(ADC_HandleTypeDef *h) { (void)h; return HAL_OK; }
 static HAL_StatusTypeDef HAL_ADC_PollForConversion(ADC_HandleTypeDef *h, uint32_t ms)
 { (void)h; (void)ms; return HAL_OK; }
-static uint32_t HAL_ADC_GetValue(ADC_HandleTypeDef *h) { (void)h; return 1000U; }
+static uint32_t HAL_ADC_GetValue(ADC_HandleTypeDef *h)
+{
+  uintptr_t instance=(uintptr_t)h->Instance;
+  unsigned channel=(instance<4U && adc_instance_configured[instance])?adc_instance_channels[instance]:adc_last_channel;
+  return (channel==17U)?1500U:1000U;
+}
 static inline void HAL_GPIO_Init(GPIO_TypeDef *p, GPIO_InitTypeDef *g)
-{ (void)p; pin_mode = g->Mode; if (pin_mode == GPIO_MODE_OUTPUT_PP) { ++drive_calls; } }
+{ adc_gpio_last_port=p;adc_gpio_last_pin=g->Pin;pin_mode=g->Mode;if(pin_mode==GPIO_MODE_OUTPUT_PP) { ++drive_calls; } }
 static inline void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, unsigned value)
 { (void)p; (void)pin; (void)value; ++write_calls; }
 #endif

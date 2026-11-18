@@ -1,6 +1,6 @@
 /**
  * @file storage_config.h
- * @brief Configure SD CSV logging periods, buffers, and task resources.
+ * @brief Storage 层 SD 日志任务、探测周期和缓冲配置，仅供任务上下文使用。
  */
 
 #ifndef STORAGE_CONFIG_H
@@ -25,6 +25,7 @@
 #define STORAGE_DATA_PERIOD_MS     1000U
 #define STORAGE_SYNC_PERIOD_MS     5000U
 #define STORAGE_MOUNT_RETRY_MS     2000U
+#define STORAGE_CARD_PROBE_MS      500U  /**< 已挂载时两次卡身份检查的间隔，单位 ms。 */
 #define STORAGE_SPI_TIMEOUT_MS     50U
 #define STORAGE_SD_CS_PROBE_LOW_MS 0U
 #define STORAGE_QUEUE_LENGTH       8U

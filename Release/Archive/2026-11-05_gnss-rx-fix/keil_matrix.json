@@ -1,0 +1,70 @@
+[
+  {
+    "bsp_sha256": "B807E6AEC073DEDAA96B944DD8057771BC1B47E36F98AE66F0F3BF56385AC221",
+    "started_utc": "2026-11-05T01:52:11.8663235Z",
+    "debug_sha256": "1589FD85ECCACC2A696007BA80B33A766A889E6FBB024149109B78CC19E4E553",
+    "input_count": 1027,
+    "ended_utc": "2026-11-05T01:52:29.9905012Z",
+    "inputs_unchanged": true,
+    "passed": true,
+    "framework_sha256": "E50CBC9656D2BC6ECF490F85596C911FBC97155B903B488A19191A39A46A98BA",
+    "variant": "diagnostic",
+    "exit_code": 0,
+    "artifacts": [
+      {
+        "bytes": 1282653,
+        "name": "formal_framework.hex",
+        "sha256": "B0D1F157BDB6EEA1E0DD44CE4C4D3B8C2F9E958C13E9FB22F49DA6783A846205"
+      },
+      {
+        "bytes": 5652032,
+        "name": "formal_framework.axf",
+        "sha256": "D92F0D255DF9B549B3DFE0FFB5F4024EC08784ED882A9A9C8F894557ADBC08E0"
+      },
+      {
+        "bytes": 2303755,
+        "name": "formal_framework.map",
+        "sha256": "2867DD3D78EB01F18E590759853B1BB429EDEE7D66D16AD97DFAA2764CC8F8F7"
+      },
+      {
+        "bytes": 7822,
+        "name": "formal_framework.build_log.htm",
+        "sha256": "3693CE2059F1253D5FF9AA6A8005002A793FC8B52CFAEAF913B90479E23052A5"
+      }
+    ]
+  },
+  {
+    "bsp_sha256": "B807E6AEC073DEDAA96B944DD8057771BC1B47E36F98AE66F0F3BF56385AC221",
+    "started_utc": "2026-11-05T01:52:30.0319668Z",
+    "debug_sha256": "1A5014064D937744C6AD88B7481872FE623ABCA6175EE9968118168209CA8BDD",
+    "input_count": 1027,
+    "ended_utc": "2026-11-05T01:52:44.2166140Z",
+    "inputs_unchanged": true,
+    "passed": true,
+    "framework_sha256": "E50CBC9656D2BC6ECF490F85596C911FBC97155B903B488A19191A39A46A98BA",
+    "variant": "normal",
+    "exit_code": 0,
+    "artifacts": [
+      {
+        "bytes": 1276472,
+        "name": "formal_framework.hex",
+        "sha256": "D26A49334926FEE763F4EF7F0FD5E39C84768AEAF9B889F1A28840F0E3C60105"
+      },
+      {
+        "bytes": 5641808,
+        "name": "formal_framework.axf",
+        "sha256": "CE35736F27738FCDE28DFA32E179A1C7106976A236A96466883BFEF06EF1A8A4"
+      },
+      {
+        "bytes": 2297563,
+        "name": "formal_framework.map",
+        "sha256": "BAE6F9C3F4F673D7483A784357EEDD24A7FA9D35206B366B3F926E861DF03843"
+      },
+      {
+        "bytes": 7822,
+        "name": "formal_framework.build_log.htm",
+        "sha256": "9DAECFDBD81148522DC0F926A8BD9F5A6D924F36297065A01F5B5258AF342345"
+      }
+    ]
+  }
+]

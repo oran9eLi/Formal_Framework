@@ -1,0 +1,14 @@
+[
+  {
+    "path": "Framework/Inc/px4lite_config.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Inc/px4lite_startup_tone.h",
+    "kind": "modified"
+  },
+  {
+    "path": "Framework/Src/px4lite_startup_tone.c",
+    "kind": "modified"
+  }
+]

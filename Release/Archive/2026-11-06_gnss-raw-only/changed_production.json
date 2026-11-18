@@ -1,0 +1,31 @@
+{
+  "files": [
+    {
+      "path": "Framework/Inc/px4lite_config.h",
+      "baseline_sha256": "7e6b9a6e02cef6ec902298f9be4111c905b7133c3aa9e6769967fa7f324dbab5",
+      "sha256": "60e7ed4fc298c45e3a4520fd9af33e4417568f72c9352766f10352f34897fe0d"
+    },
+    {
+      "path": "Framework/Src/px4lite_mavlink_tx.c",
+      "baseline_sha256": "b02dedee516083855d8b2d180f1fb1a9ff99344510a1bb2a1c2f58fef9dda2f2",
+      "sha256": "bea0f0b108836a22e73b70dccc58b4d8f35f7bb7fecb8b77815251ee6532994b"
+    },
+    {
+      "path": "MDK-ARM/formal_framework.uvprojx",
+      "baseline_sha256": "fe12f5a78ac94d006826504ab3e1c3c39ce46e45ec7a20f2a97360d20ccb8c6f",
+      "sha256": "a616a901e144a5db3faf3d60e46742bbaef9db96528a847464ff838f54155d3a"
+    },
+    {
+      "path": "Framework/Inc/px4lite_gnss_raw_uplink.h",
+      "baseline_sha256": "32f4d509523e7200ddebc74b2020a499aae7bffc4a98c91b0c7d65ec35ceca8c",
+      "sha256": "bb5eed65939f0950feb40b4ca8e1ce159bf75d37f0e8fba2ef82568a07baa6d2"
+    },
+    {
+      "path": "Framework/Src/px4lite_gnss_raw_uplink.c",
+      "baseline_sha256": "fee694d914592b43ae0c63477589def7c275bab0b44c4bb00fe64ed255d9d260",
+      "sha256": "03a8638c9f9664653b4fbd5a955b97515d5df555411e8bd1ef29fb16b8293b49"
+    }
+  ],
+  "existing_project_configuration_preserved": true,
+  "new_sources": []
+}

@@ -1,0 +1,70 @@
+[
+  {
+    "started_utc": "2026-11-04T10:28:40.6483607Z",
+    "debug_sha256": "1589FD85ECCACC2A696007BA80B33A766A889E6FBB024149109B78CC19E4E553",
+    "input_count": 1027,
+    "artifacts": [
+      {
+        "sha256": "407D33A53368E1D8C9BA0A8B4F6C294E27548F042C9F6EBAF81993D2329AB4BB",
+        "name": "formal_framework.hex",
+        "bytes": 1278534
+      },
+      {
+        "sha256": "5152B219A67C49E49D99B68F7D32A884A85B8758B73EC01DF83E59F12342F814",
+        "name": "formal_framework.axf",
+        "bytes": 5642852
+      },
+      {
+        "sha256": "A898525459C9048341825D9B59A2FE9A72FC129C74B24FEE6AA7F08F72C0000E",
+        "name": "formal_framework.map",
+        "bytes": 2297274
+      },
+      {
+        "sha256": "8E80A596053DA224D9CDE9B528D10090A6176A11638512EB4A683CF8D6CD3BA3",
+        "name": "formal_framework.build_log.htm",
+        "bytes": 7822
+      }
+    ],
+    "bsp_sha256": "B807E6AEC073DEDAA96B944DD8057771BC1B47E36F98AE66F0F3BF56385AC221",
+    "ended_utc": "2026-11-04T10:28:55.1661844Z",
+    "variant": "diagnostic",
+    "exit_code": 0,
+    "inputs_unchanged": true,
+    "passed": true,
+    "framework_sha256": "E50CBC9656D2BC6ECF490F85596C911FBC97155B903B488A19191A39A46A98BA"
+  },
+  {
+    "started_utc": "2026-11-04T10:28:55.1870683Z",
+    "debug_sha256": "1A5014064D937744C6AD88B7481872FE623ABCA6175EE9968118168209CA8BDD",
+    "input_count": 1027,
+    "artifacts": [
+      {
+        "sha256": "2F5369FF44B6CDB927154D064D6EF45A23396C7A6FC0424FE01F82B469783D4E",
+        "name": "formal_framework.hex",
+        "bytes": 1274680
+      },
+      {
+        "sha256": "252D37750D567A199E0CB5AE36F628BB6B3FD33DFC9BCA7D886DBFA8DA725881",
+        "name": "formal_framework.axf",
+        "bytes": 5636276
+      },
+      {
+        "sha256": "B3E7A2CF40E0E2D60FDFF42E680791419C08DC0756FF7275E8E57B5B9048B88D",
+        "name": "formal_framework.map",
+        "bytes": 2292881
+      },
+      {
+        "sha256": "375777A0A3FA5DA17405E1865DA2EEA73F31731AFDF034AAEE2BE381C99CD985",
+        "name": "formal_framework.build_log.htm",
+        "bytes": 7822
+      }
+    ],
+    "bsp_sha256": "B807E6AEC073DEDAA96B944DD8057771BC1B47E36F98AE66F0F3BF56385AC221",
+    "ended_utc": "2026-11-04T10:29:09.7309327Z",
+    "variant": "normal",
+    "exit_code": 0,
+    "inputs_unchanged": true,
+    "passed": true,
+    "framework_sha256": "E50CBC9656D2BC6ECF490F85596C911FBC97155B903B488A19191A39A46A98BA"
+  }
+]

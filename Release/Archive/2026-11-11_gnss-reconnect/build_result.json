@@ -1,0 +1,33 @@
+{
+  "variant": "default_gnss_reconnect",
+  "started_utc": "2026-11-11T07:43:17.129734+00:00",
+  "ended_utc": "2026-11-11T07:43:33.266758+00:00",
+  "exit_code": 0,
+  "errors": 0,
+  "warnings": 0,
+  "input_count": 1047,
+  "inputs_unchanged": true,
+  "artifacts": [
+    {
+      "name": "formal_framework.hex",
+      "bytes": 1384955,
+      "sha256": "caf6619f9085ad99cd360362a49122ec1c22402c1df80973797734496d54e5b1"
+    },
+    {
+      "name": "formal_framework.axf",
+      "bytes": 5906544,
+      "sha256": "44f568ea9b83973c2178ab83a0b14f8597a1cd16ab2446608ea02a4f3a6d999c"
+    },
+    {
+      "name": "formal_framework.map",
+      "bytes": 2485468,
+      "sha256": "d3de624b1006858ebd91d8f8ea3c131b6a225c75222129f22d56a9775bdcae40"
+    },
+    {
+      "name": "formal_framework.build_log.htm",
+      "bytes": 8115,
+      "sha256": "523ae163df0db3ccc328228efbbfe6dbc4b33572ced8edc691b3f029e08fded8"
+    }
+  ],
+  "passed": true
+}

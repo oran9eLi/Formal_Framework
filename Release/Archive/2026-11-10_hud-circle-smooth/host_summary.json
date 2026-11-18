@@ -1,0 +1,86 @@
+{
+  "selected_groups": 13,
+  "passed": 13,
+  "failed": 0,
+  "groups": [
+    {
+      "group": "display_motor_lock",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "6538b7a2e5fa462614c01cbdbd633405736d0e6bfb789cee1072904e913c2e0d"
+    },
+    {
+      "group": "display_field_validity",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "8e8e7583db7f83bf4965138360d4998960593b0ecb72f53496885de38206091a"
+    },
+    {
+      "group": "display_gnss_status_utc",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "3ad32d2b488118d2491fb0ac2d4138ae7c568d72b87ae993c2369379d9e71aa3"
+    },
+    {
+      "group": "gnss_clean_display",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "b22bb09adb7b0f4aadfc89e36b98df74416b3f56ec7fd8160d2d33df3601ac35"
+    },
+    {
+      "group": "attitude",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "9c202428943d8752fab57716ca7cd9db3e082f25b98676153a939e7163f3a7c7"
+    },
+    {
+      "group": "attitude_ops",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "6efbd97e29ed66e253354ef4f726462717d6857e52b115f2b65f65d1f0d235cf"
+    },
+    {
+      "group": "attitude_roll_wrap",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "f35f1dafce48cfbc47fc7379e9b9b006241062a29beaac789a68d284670af5df"
+    },
+    {
+      "group": "bmi088_platform",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "8ad236dceb6330f382c9f8e47041b7faaaac64a899826774789f5fdef194b74c"
+    },
+    {
+      "group": "imu",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "c6c9b7a45ac0bcc42cad7c344a0e853d765f416bf03cfb501b774839f685dc18"
+    },
+    {
+      "group": "startup_rgb",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "ad93282e76caf944d84fa0751c801844620d84fbb24885b776eac77bc72be63b"
+    },
+    {
+      "group": "single_supply_service",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "93087b7fdfab3cc10430e30f6b0a4a5e29e3f36b25e8a958811f27d3b062e115"
+    },
+    {
+      "group": "motor_manual_lock",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "63a1aa0773787e99d0f005b31cc45af8aa24f5697bfb62927d94777853ef9ab9"
+    },
+    {
+      "group": "hud_refresh",
+      "passed": true,
+      "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "run_log_sha256": "c21ae895d7ba9bf4ecdba7c2d547a567d0853472ff96030005bf123c3f78613d"
+    }
+  ],
+  "physical_frame_rate_tested": false
+}
