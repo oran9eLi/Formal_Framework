@@ -92,22 +92,11 @@ Px4Lite_Result_t Px4Lite_PlatformHeartbeatConfigure(Px4Lite_HeartbeatId_t id, ui
 
 
 /**
- * @brief 检查所有必需任务心跳是否存在且未超时。
- *
- * @param[in] now_ms 当前系统毫秒时间。
- *
- * @return 1 表示全部必需任务心跳健康，0 表示至少一个心跳缺失或超时。
- */
-uint8_t Px4Lite_PlatformHeartbeatsHealthy(uint32_t now_ms);
-
-/**
  * @brief 毫秒时基前进且所有必需任务心跳健康时交接或刷新硬件看门狗。
  *
- * @param[in] now_ms 当前系统毫秒时间。
- *
- * @note 调用方不应绕过本函数直接喂狗。
+ * @note Health 任务更新本轮心跳后调用。平台同步采集心跳与检查时刻。
  */
-void Px4Lite_PlatformWatchdogFeed(uint32_t now_ms);
+void Px4Lite_PlatformWatchdogFeed(void);
 
 /** @brief 调度前封存实际任务集合并启动首轮期限；空集合/重复交接返回 NOT_READY。 */
 Px4Lite_Result_t Px4Lite_PlatformWatchdogBeginStartup(uint32_t now_ms);
@@ -144,6 +133,8 @@ Px4Lite_Result_t Px4Lite_PlatformRtcWrite(const Px4Lite_UtcDateTime_t *date_time
  * @return 初始化结果。
  */
 Px4Lite_Result_t Px4Lite_GnssInit(void);
+/** @brief sensor 所有者启动或停止 GNSS UART/DMA 会话。 */
+Px4Lite_Result_t Px4Lite_GnssSetExperimentEnabled(uint8_t enabled);
 
 /**
  * @brief 将最新 GNSS 驱动快照转换为 Framework GNSS 测量。
@@ -334,6 +325,8 @@ uint8_t Px4Lite_ButtonPressed(Px4Lite_ButtonId_t button);
  * @return 初始化结果。
  */
 Px4Lite_Result_t Px4Lite_LoRaInit(void);
+/** @brief Comm 停止 LoRa UART/DMA 会话，保留 UART6 通信。 */
+void Px4Lite_LoRaPause(void);
 
 /**
  * @brief 执行 LoRa 驱动周期服务。

@@ -13,6 +13,11 @@
 /* 架构上启用显示；真实显示驱动未就绪时，display adapter 返回 NOT_READY。 */
 #define BUSINESS_ENABLE_DISPLAY               1U
 
+/** @brief 本机 Observe 曲线和采样历史，远端版默认关闭。 */
+#ifndef BUSINESS_ENABLE_LOCAL_OBSERVATION
+#define BUSINESS_ENABLE_LOCAL_OBSERVATION      0U
+#endif
+
 #define BUSINESS_EVENT_QUEUE_LENGTH           8U
 #define BUSINESS_SYSTEM_PERIOD_MS             1000U
 #define BUSINESS_ACQUISITION_PERIOD_MS        200U

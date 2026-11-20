@@ -21,6 +21,29 @@
  */
 Px4Lite_Result_t Px4Lite_ModulesInit(void);
 
+/** @brief 显示任务使用的实验开关与远程选页快照。 */
+typedef struct {
+  uint32_t disabled_mask;             /**< bit 为模块编号，置位表示服务关闭。 */
+  uint32_t page_sequence;             /**< 已回执的开启请求流水号，0 表示尚无切屏请求。 */
+  uint32_t remote_id_submitted_count; /**< 本轮 UART4 初始化后的成功提交总数。 */
+  Px4Lite_ModuleId_t page_module;      /**< 最近一次开启请求对应的模块。 */
+} Px4Lite_ModuleExperimentDisplay_t;
+
+/** @brief 由 Comm 登记服务启停，硬件操作由原所有者执行。远端请求须先预留 ACK 空间。 */
+Px4Lite_Result_t Px4Lite_ModuleExperimentRequest(Px4Lite_ModuleId_t id, uint8_t enabled, uint32_t now_ms);
+
+/** @brief 提交本地重新开启请求；OK 表示已登记或已经开启，模块状态以快照为准。 */
+Px4Lite_Result_t Px4Lite_ModuleExperimentRequestLocalOpen(Px4Lite_ModuleId_t id);
+
+/** @brief 受理 ACK 经 UART6 成功发送后，安排声光提示，并在开启时发布切屏请求。 */
+void Px4Lite_ModuleExperimentAck(Px4Lite_ModuleId_t id, uint8_t enabled);
+
+/** @brief 复制供 Business 消费的一致开关和页面快照。 */
+void Px4Lite_ModuleExperimentCopyDisplay(Px4Lite_ModuleExperimentDisplay_t *out);
+
+/** @brief 查询已接受的运行期开关，供对应服务及上报路径检查。 */
+uint8_t Px4Lite_ModuleExperimentEnabled(Px4Lite_ModuleId_t id);
+
 /**
  * @brief 初始化 GNSS 模块并发布初始状态。
  *

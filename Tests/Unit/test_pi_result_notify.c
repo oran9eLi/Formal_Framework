@@ -136,12 +136,10 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorThrottles(const uint8_t percent[PX4LITE_
 /** @brief 精确PWM控制保留独立边界。 */
 Px4Lite_Result_t Px4Lite_ControlSetMotorPulses(const uint16_t pulse[PX4LITE_MOTOR_COUNT])
 { assert(pulse);s_control_calls++;return s_control_result; }
-/** @brief 模式控制不触及真实设备。 */
-Px4Lite_Result_t Px4Lite_ControlSetMode(Px4Lite_ControlMode_t mode)
-{ (void)mode;s_control_calls++;return s_control_result; }
-/** @brief 姿态目标控制不触及真实设备。 */
-Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll,int32_t pitch,int32_t yaw)
-{ (void)roll;(void)pitch;(void)yaw;s_control_calls++;return s_control_result; }
+/** @brief 模式和目标姿态配置不触及真实设备。 */
+Px4Lite_Result_t Px4Lite_ControlSetModeAndAttitudeTarget(Px4Lite_ControlMode_t mode,
+    int32_t roll, int32_t pitch, int32_t yaw)
+{ (void)mode;(void)roll;(void)pitch;(void)yaw;s_control_calls++;return s_control_result; }
 /** @brief 急停控制不触及真实设备。 */
 Px4Lite_Result_t Px4Lite_ControlEmergencyStop(uint32_t now)
 { assert(now==s_now);s_control_calls++;return s_control_result; }

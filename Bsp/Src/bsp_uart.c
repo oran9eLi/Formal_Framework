@@ -135,7 +135,7 @@ static void BSP_RpiUART_FillConfig(uint32_t baud_bps)
   huart6.Init.OverSampling = BSP_RPI_UART_OVERSAMP;
 }
 
-/** @brief 初始化指定速率并挂接第一个接收字节。 */
+/** @brief 在 NVIC 禁用时初始化指定速率并挂接第一个接收字节。 */
 static HAL_StatusTypeDef BSP_RpiUART_Start(uint32_t baud_bps)
 {
   HAL_StatusTypeDef status;
@@ -143,9 +143,27 @@ static HAL_StatusTypeDef BSP_RpiUART_Start(uint32_t baud_bps)
   BSP_RpiUART_FillConfig(baud_bps);
   status = HAL_UART_Init(&huart6);
   if (status != HAL_OK) { return status; }
+  /* 先清旧配置留下的挂起位，保留挂接新接收后产生的 IRQ。 */
+  HAL_NVIC_ClearPendingIRQ(BSP_RPI_IRQn);
   status = HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U);
   if (status != HAL_OK) { (void)HAL_UART_DeInit(&huart6); }
   return status;
+}
+
+/** @brief 暂停 USART6 IRQ 后再撤销端口就绪状态。 */
+static void BSP_RpiUART_BeginReconfigure(void)
+{
+  HAL_NVIC_DisableIRQ(BSP_RPI_IRQn);
+  s_rpi_reconfiguring = 1U;
+  s_rpi_initialized = 0U;
+}
+
+/** @brief 发布启动结果；接收就绪后才允许处理挂起的 IRQ。 */
+static void BSP_RpiUART_FinishReconfigure(HAL_StatusTypeDef status)
+{
+  s_rpi_initialized = (status == HAL_OK) ? 1U : 0U;
+  s_rpi_reconfiguring = 0U;
+  if (status == HAL_OK) { HAL_NVIC_EnableIRQ(BSP_RPI_IRQn); }
 }
 
 /** @brief ISR 仅记录字节/时间并入环；环满也保留收到字节的事实。 */
@@ -173,12 +191,10 @@ BSP_Status_t BSP_RpiUART_Init(void)
 {
   HAL_StatusTypeDef hal_status;
 
-  s_rpi_reconfiguring = 1U;
-  s_rpi_initialized = 0U;
+  BSP_RpiUART_BeginReconfigure();
   BSP_RpiUART_ResetRxState(1U);
   hal_status = BSP_RpiUART_Start(BSP_RPI_UART_BAUD);
-  if (hal_status == HAL_OK) { s_rpi_initialized = 1U; }
-  s_rpi_reconfiguring = 0U;
+  BSP_RpiUART_FinishReconfigure(hal_status);
   return BSP_UART_MapHalStatus(hal_status);
 }
 
@@ -242,33 +258,29 @@ BSP_Status_t BSP_RpiUART_SetBaudRate(uint32_t baud_bps)
 {
   uint32_t previous_baud_bps;
   HAL_StatusTypeDef target_status;
-  HAL_StatusTypeDef rollback_status;
+  HAL_StatusTypeDef active_status;
 
   if (baud_bps == 0U) { return BSP_STATUS_ERROR; }
   if ((s_rpi_initialized == 0U) || (s_rpi_reconfiguring != 0U)) { return BSP_STATUS_BUSY; }
   if (huart6.Init.BaudRate == baud_bps) { return BSP_STATUS_OK; }
 
   previous_baud_bps = huart6.Init.BaudRate;
-  s_rpi_reconfiguring = 1U;
-  s_rpi_initialized = 0U;
+  BSP_RpiUART_BeginReconfigure();
   (void)HAL_UART_AbortReceive(&huart6);
   (void)HAL_UART_DeInit(&huart6);
   BSP_RpiUART_ResetRxState(0U);
 
   target_status = BSP_RpiUART_Start(baud_bps);
-  if (target_status == HAL_OK) {
-    s_rpi_initialized = 1U;
-    s_rpi_reconfiguring = 0U;
-    return BSP_STATUS_OK;
+  active_status = target_status;
+  if (target_status != HAL_OK) {
+    /* 尽力回滚，仍返回目标配置失败供上层上报。 */
+    (void)HAL_UART_AbortReceive(&huart6);
+    (void)HAL_UART_DeInit(&huart6);
+    BSP_RpiUART_ResetRxState(0U);
+    active_status = BSP_RpiUART_Start(previous_baud_bps);
   }
 
-  /* 目标速率启动失败时尽力回滚，函数仍返回目标配置失败，供上层结构化上报。 */
-  (void)HAL_UART_AbortReceive(&huart6);
-  (void)HAL_UART_DeInit(&huart6);
-  BSP_RpiUART_ResetRxState(0U);
-  rollback_status = BSP_RpiUART_Start(previous_baud_bps);
-  if (rollback_status == HAL_OK) { s_rpi_initialized = 1U; }
-  s_rpi_reconfiguring = 0U;
+  BSP_RpiUART_FinishReconfigure(active_status);
   return BSP_UART_MapHalStatus(target_status);
 }
 
@@ -326,11 +338,15 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   }
 }
 
-/** @brief USART6 ISR 错误回调：保留原恢复动作，仅另记重新挂接失败，不重复累计硬件错误。 */
+/** @brief USART6 ISR 错误回调：清除无数据的溢出标志后重新挂接接收。 */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   if ((huart != 0) && (huart->Instance == BSP_RPI_UART) &&
       (s_rpi_initialized != 0U) && (s_rpi_reconfiguring == 0U)) {
+    /* ORE 可在 RXNE=0 时置位（RM0090）；HAL 此时未读 DR，重挂前必须清除 ORE。 */
+    if ((huart->Instance->SR & (USART_SR_ORE | USART_SR_RXNE)) == USART_SR_ORE) {
+      __HAL_UART_CLEAR_OREFLAG(huart);
+    }
     /* 硬件错误已在 IRQ 入口计数，此处只记录重新挂接失败，避免同次错误重复统计。 */
     if (HAL_UART_Receive_IT(&huart6, &s_rpi_rx_byte, 1U) != HAL_OK) { s_rpi_rx_rearm_failure_count++; }
   }

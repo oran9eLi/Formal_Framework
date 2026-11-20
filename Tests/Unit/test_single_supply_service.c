@@ -15,6 +15,7 @@ void Px4Lite_StartupToneNotifyModuleConnection(uint8_t connected) { (void)connec
 
 static uint32_t s_now;
 static unsigned s_reads[2], s_publishes[2], s_reinit_requests;
+static unsigned s_voltage_fault_marks;
 static Px4Lite_Result_t s_read_result[2] = {PX4LITE_OK, PX4LITE_OK};
 static uint8_t s_current_valid[2] = {1U, 1U};
 static uint8_t s_reference_degraded[2];
@@ -46,6 +47,8 @@ Px4Lite_Result_t Px4Lite_BatteryRead(Px4Lite_BatteryStatus_t *out) { return Test
 Px4Lite_Result_t Px4Lite_Battery2Read(Px4Lite_BatteryStatus_t *out) { return TestRead(1U, out); }
 void Px4Lite_PublishBattery(const Px4Lite_BatteryStatus_t *out) { ++s_publishes[0]; s_latest[0] = *out; }
 void Px4Lite_PublishBattery2(const Px4Lite_BatteryStatus_t *out) { ++s_publishes[1]; s_latest[1] = *out; }
+/** @brief 统计采集所有者发出的 Battery2 故障标记，topic 行为由独立集成测试覆盖。 */
+void Px4Lite_MarkBattery2VoltageIoFault(void) { ++s_voltage_fault_marks; }
 void Px4Lite_TimeRun(uint32_t now_ms) { (void)now_ms; }
 void Px4Lite_GetImuStats(Px4Lite_FifoStats_t *out) { memset(out, 0, sizeof(*out)); }
 void Px4Lite_AlarmUpdateFromStatuses(const Px4Lite_ModuleStatus_t *items, uint16_t count, uint32_t now_ms)
@@ -121,6 +124,7 @@ int main(void)
   TestSensorAt(2000U);
   status = TestPowerStatus();
   assert(s_publishes[target] == target_publishes && status.error_count == 1U);
+  assert(s_voltage_fault_marks == (PX4LITE_ENABLE_BATTERY2 ? 1U : 0U));
   assert(status.state != PX4LITE_STATE_OFFLINE && status.state != PX4LITE_STATE_FAILED);
   if (PX4LITE_ENABLE_BATTERY1 && PX4LITE_ENABLE_BATTERY2) { assert(status.state == PX4LITE_STATE_DEGRADED); }
 

@@ -10,6 +10,13 @@
 #include "bsp_lora.h"
 #include "bsp_time.h"
 
+/* 按工程级定义启用本地捕获；Driver 不依赖 Framework 配置头。 */
+#if defined(PX4LITE_ENABLE_LOCAL_CAPTURE) && PX4LITE_ENABLE_LOCAL_CAPTURE
+#define LORA_E22_LOCAL_CAPTURE 1U
+#else
+#define LORA_E22_LOCAL_CAPTURE 0U
+#endif
+
 #if defined(__CC_ARM)
 /*
  * ARMCC5 must use MAVLink's field-by-field wire encoder.  This avoids
@@ -39,6 +46,7 @@ static volatile uint16_t s_rx_q_count;
 
 static mavlink_status_t s_parse_status;
 static mavlink_message_t s_parse_msg;
+#if LORA_E22_LOCAL_CAPTURE
 static uint8_t s_diagnostic_raw[LORA_E22_TX_BUF_SIZE];
 static uint16_t s_diagnostic_length;
 static Lora_DiagnosticRx_t s_diagnostic_rx;
@@ -49,6 +57,9 @@ void Lora_E22_SetDiagnosticCallbacks(Lora_DiagnosticRx_t rx, Lora_DiagnosticTx_t
 /** @brief 报告已发生的本机事务阶段，不进行业务解析。 */
 static void Lora_E22_ReportTx(uint8_t stage)
 { if (s_diagnostic_tx) { s_diagnostic_tx(stage); } }
+#else
+#define Lora_E22_ReportTx(stage) ((void)0)
+#endif
 
 static uint32_t s_last_rx_ms;
 static uint32_t s_rx_frame_count;
@@ -309,7 +320,9 @@ static void Lora_E22_ResetParser(void)
   memset(&s_parse_status, 0, sizeof(s_parse_status));
   memset(&s_parse_msg, 0, sizeof(s_parse_msg));
   s_parse_last_byte_ms = 0U;
+#if LORA_E22_LOCAL_CAPTURE
   s_diagnostic_length = 0U;
+#endif
 }
 
 /**
@@ -363,6 +376,12 @@ static void Lora_E22_ResetSession(uint32_t now_ms, uint8_t local_failed)
   s_bsp_reinit_needed = 1U;
   s_reinit_request    = ready;
   BSP_Critical_Exit(primask);
+}
+
+/** @brief 主动停用时废弃本机收发会话，恢复后重新确认 AUX 在位。 */
+void Lora_E22_Pause(uint32_t now_ms)
+{
+  Lora_E22_ResetSession(now_ms, 1U);
 }
 
 /**
@@ -534,6 +553,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
       }
       s_parse_last_byte_ms = now_ms;
 
+#if LORA_E22_LOCAL_CAPTURE
       /* 原字节窗遵循生产解析器的帧状态；payload里的FD/FE不会重置。 */
       if (mavlink_get_channel_status(MAVLINK_COMM_0)->parse_state <= MAVLINK_PARSE_STATE_IDLE) {
         s_diagnostic_length = 0U;
@@ -541,6 +561,7 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
       } else if (s_diagnostic_length < sizeof(s_diagnostic_raw) && s_diagnostic_length) {
         s_diagnostic_raw[s_diagnostic_length++] = temp[i];
       }
+#endif
 
       framing = mavlink_frame_char(MAVLINK_COMM_0, temp[i], &s_parse_msg, &s_parse_status);
       /* 库输出的 drop 字段是本字节解析错误数，非累计丢帧数；CRC 由 framing 独立报告。 */
@@ -551,13 +572,17 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
 
         s_parse_error_count++;
         if (framing == MAVLINK_FRAMING_BAD_CRC) { s_crc_error_count++; }
+#if LORA_E22_LOCAL_CAPTURE
         if (s_diagnostic_rx) { s_diagnostic_rx(0, 0U, now_ms, 0U); }
         s_diagnostic_length = 0U;
+#endif
         parser->msg_received = MAVLINK_FRAMING_INCOMPLETE;
         parser->parse_state = MAVLINK_PARSE_STATE_IDLE;
         /* 与库 parse_char 一致：失败帧的末字节可能已是下一帧 STX。 */
         if (temp[i] == MAVLINK_STX) {
+#if LORA_E22_LOCAL_CAPTURE
           s_diagnostic_raw[0] = temp[i]; s_diagnostic_length = 1U;
+#endif
           parser->parse_state = MAVLINK_PARSE_STATE_GOT_STX;
           message->len = 0U;
           mavlink_start_checksum(message);
@@ -565,8 +590,10 @@ Lora_Result_t Lora_E22_Service(uint32_t now_ms)
       }
 
       if (framing == MAVLINK_FRAMING_OK) {
+#if LORA_E22_LOCAL_CAPTURE
         if (s_diagnostic_rx && s_diagnostic_length) { s_diagnostic_rx(s_diagnostic_raw, s_diagnostic_length, now_ms, 1U); }
         s_diagnostic_length = 0U;
+#endif
         /* --- complete MAVLink frame received --- */
         uint32_t primask;
         Lora_RxFrame_t *slot;
@@ -711,9 +738,13 @@ static void Lora_E22_TxStep(uint32_t now_ms)
         }
       } else if((!s_uart_done_seen && !BSP_LoRa_IsTxBusy()) ||
                 (uint32_t)(now_ms-s_tx_state_ms)>Lora_E22_GetUartDmaTimeoutMs(s_tx_pending_len)+Lora_E22_GetAuxWaitTimeoutMs()) {
+#if LORA_E22_LOCAL_CAPTURE
         uint8_t timed_out=(uint8_t)((uint32_t)(now_ms-s_tx_state_ms)>Lora_E22_GetUartDmaTimeoutMs(s_tx_pending_len)+Lora_E22_GetAuxWaitTimeoutMs());
+#endif
         BSP_LoRa_AbortTx(); s_send_error_count++; s_tx_state=LORA_TX_IDLE;
+#if LORA_E22_LOCAL_CAPTURE
         Lora_E22_ReportTx(timed_out?5U:4U);
+#endif
       }
       break;
 

@@ -805,11 +805,6 @@
               <FilePath>..\Display\Src\display_gt911.c</FilePath>
             </File>
             <File>
-              <FileName>display_pages.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Display\Src\display_pages.c</FilePath>
-            </File>
-            <File>
               <FileName>display_ssd1963.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Display\Src\display_ssd1963.c</FilePath>

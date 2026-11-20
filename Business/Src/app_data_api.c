@@ -471,6 +471,21 @@ Px4Lite_Result_t App_SetMotorLocked(uint8_t locked)
   return Px4Lite_ControlSetMotorLocked(locked);
 }
 
+/** @brief 触屏只允许解除按下时已知的本机急停。 */
+Px4Lite_Result_t App_UnlockMotor(uint32_t stop_sequence)
+{
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return PX4LITE_NOT_READY; }
+  return Px4Lite_ControlUnlockMotor(stop_sequence);
+}
+
+/** @brief 只读取本机急停序号。 */
+Px4Lite_Result_t App_GetMotorStopSequence(uint32_t *sequence)
+{
+  if (sequence == 0) { return PX4LITE_INVALID_PARAM; }
+  if (App_GetRemoteDisplayMode() == PX4LITE_REMOTE_MODE_REMOTE) { return PX4LITE_NOT_READY; }
+  return Px4Lite_ControlGetEmergencyStopSequence(sequence);
+}
+
 /** @brief 只返回已初始化的本机控制锁状态，远端状态缺失不推断为上锁或解锁。 */
 Px4Lite_Result_t App_GetMotorLocked(uint8_t *locked)
 {
@@ -844,6 +859,38 @@ static App_RemoteNodeState_t App_MapRemoteNodeState(Px4Lite_RemoteNodeState_t st
   return APP_REMOTE_NODE_EMPTY;
 }
 
+/** @brief 统一把 Framework 已判龄的节点状态映射到应用视图。 */
+static void App_ConvertRemoteNodeStatus(App_RemoteNodeView_t *out, const Px4Lite_RemoteNodeStatus_t *source)
+{
+  out->node_id = source->node_id;
+  out->system_id = source->system_id;
+  out->heartbeat_type = source->heartbeat_type;
+  out->heartbeat_system_status = source->heartbeat_system_status;
+  out->state = App_MapRemoteNodeState(source->state);
+  out->last_heartbeat_ms = source->last_heartbeat_ms;
+  out->last_data_ms = source->last_data_ms;
+  out->rx_frame_count = source->rx_frame_count;
+  out->rx_sequence_lost_count = source->rx_sequence_lost_count;
+  out->rx_loss_rate_x10 = source->rx_loss_rate_x10;
+  out->reserved = 0U;
+  out->identity_known = source->identity_known;
+  out->heartbeat_known = source->heartbeat_known;
+  out->id_conflict = source->id_conflict;
+  memcpy(out->product_id, source->product_id, sizeof(out->product_id));
+}
+
+/** @brief 读取当前对端摘要；仅临时复制一个发现槽，不读取完整遥测负载。 */
+Px4Lite_Result_t App_CopySelectedRemoteNodeStatus(App_RemoteNodeView_t *out, uint32_t now_ms)
+{
+  Px4Lite_RemoteNodeStatus_t selected;
+  Px4Lite_Result_t result;
+
+  if (!out) { return PX4LITE_INVALID_PARAM; }
+  result = Px4Lite_CopySelectedRemoteStatus(&selected, now_ms);
+  App_ConvertRemoteNodeStatus(out, &selected);
+  return result;
+}
+
 static Px4Lite_Result_t App_CopyRemoteNodeStatusesImpl(App_RemoteNodeView_t *out, uint8_t capacity, uint8_t *count, uint32_t now_ms)
 {
   uint8_t raw_count = 0U;
@@ -858,22 +905,7 @@ static Px4Lite_Result_t App_CopyRemoteNodeStatusesImpl(App_RemoteNodeView_t *out
   if ((result != PX4LITE_OK) && (result != PX4LITE_NOT_READY)) { return result; }
 
   for (i = 0U; (i < raw_count) && (written < capacity); i++) {
-
-    out[written].node_id = s_remote_node_status_scratch[i].node_id;
-    out[written].system_id = s_remote_node_status_scratch[i].system_id;
-    out[written].heartbeat_type = s_remote_node_status_scratch[i].heartbeat_type;
-    out[written].heartbeat_system_status = s_remote_node_status_scratch[i].heartbeat_system_status;
-    out[written].state = App_MapRemoteNodeState(s_remote_node_status_scratch[i].state);
-    out[written].last_heartbeat_ms = s_remote_node_status_scratch[i].last_heartbeat_ms;
-    out[written].last_data_ms = s_remote_node_status_scratch[i].last_data_ms;
-    out[written].rx_frame_count = s_remote_node_status_scratch[i].rx_frame_count;
-    out[written].rx_sequence_lost_count = s_remote_node_status_scratch[i].rx_sequence_lost_count;
-    out[written].rx_loss_rate_x10 = s_remote_node_status_scratch[i].rx_loss_rate_x10;
-    out[written].reserved = 0U;
-    out[written].identity_known=s_remote_node_status_scratch[i].identity_known;
-    out[written].heartbeat_known=s_remote_node_status_scratch[i].heartbeat_known;
-    out[written].id_conflict=s_remote_node_status_scratch[i].id_conflict;
-    memcpy(out[written].product_id,s_remote_node_status_scratch[i].product_id,21U);
+    App_ConvertRemoteNodeStatus(&out[written], &s_remote_node_status_scratch[i]);
     written++;
   }
 
@@ -887,6 +919,23 @@ static Px4Lite_Result_t App_CopyRemoteNodeStatusesImpl(App_RemoteNodeView_t *out
 Px4Lite_Result_t App_GetModuleStatus(Px4Lite_ModuleId_t module_id, Px4Lite_ModuleStatus_t *out)
 {
   return Px4Lite_GetModuleStatus(module_id, out);
+}
+
+/** @brief 将 Framework 已发布的快照映射为显示消费者的数据。 */
+void App_CopyModuleExperimentDisplay(App_ModuleExperimentDisplay_t *out)
+{
+  Px4Lite_ModuleExperimentDisplay_t snapshot;
+  Px4Lite_ModuleExperimentCopyDisplay(&snapshot);
+  out->disabled_mask = snapshot.disabled_mask;
+  out->page_sequence = snapshot.page_sequence;
+  out->remote_id_submitted_count = snapshot.remote_id_submitted_count;
+  out->page_module = snapshot.page_module;
+}
+
+/** @brief 将本地开启请求交给 Framework 的模块管理入口。 */
+Px4Lite_Result_t App_RequestModuleOpen(Px4Lite_ModuleId_t id)
+{
+  return Px4Lite_ModuleExperimentRequestLocalOpen(id);
 }
 
 /**
@@ -1097,59 +1146,6 @@ Px4Lite_Result_t App_RequestLoraLab(const Px4Lite_LabRequest_t *request) { retur
 void App_CopyLoraLab(Px4Lite_LabSnapshot_t *out) { Px4Lite_LoraLabCopy(out); }
 /** @brief 通过应用边界取得本机长期身份；长度由调用方指定。 */
 void App_FormatLocalProductId(char *out,uint8_t capacity) { Px4Lite_IdentityFormatVendorProductId(out,capacity); }
-/** @brief 单对端数据与发现身份分开读取，身份失败时不展示旧负载。 */
-static void App_CopyRemoteLabViewImpl(App_RemoteLabView_t *out,uint32_t now_ms)
-{
-  Px4Lite_RemoteNodeStatus_t selected;
-  uint32_t mask;
-  Px4Lite_RemoteTelemetry_t *r=&s_display_remote_scratch;
-  if(!out) { return; } memset(out,0,sizeof(*out));
-  out->heartbeat_age_ms=UINT32_MAX; out->data_age_ms=UINT32_MAX;
-  out->gnss_age_ms=UINT32_MAX; out->attitude_age_ms=UINT32_MAX;
-  out->power1_age_ms=UINT32_MAX; out->power2_age_ms=UINT32_MAX;
-  out->environment_age_ms=UINT32_MAX; out->humidity_age_ms=UINT32_MAX;
-  (void)Px4Lite_GetSelectedRemoteNode(&out->node_id);
-  if(Px4Lite_CopySelectedRemoteStatus(&selected,now_ms)==PX4LITE_OK) {
-    out->identity_known=selected.identity_known; out->id_conflict=selected.id_conflict;
-    memcpy(out->product_id,selected.product_id,21U);
-    if(selected.heartbeat_known) { out->heartbeat_age_ms=Px4Lite_ElapsedMs(now_ms,selected.last_heartbeat_ms); }
-  }
-  if(Px4Lite_CopyRemoteTelemetry(r)!=PX4LITE_OK || r->system_id!=out->node_id || out->id_conflict || !out->identity_known) { return; }
-  out->available=1U;
-  out->rx_frames=r->rx_frame_count; out->loss_rate_x10=r->rx_loss_rate_x10;
-  mask=r->navigation_valid_mask&~r->navigation_stale_mask;
-  if(mask&PX4LITE_NAV_VALID_POSITION) { out->valid_bits|=APP_LAB_POSITION; out->latitude_e7=r->latitude_e7; out->longitude_e7=r->longitude_e7; out->gnss_fix_type=r->gnss_fix_type; out->satellites_used=r->satellites_used; }
-  if(mask&PX4LITE_NAV_VALID_ALTITUDE) { out->valid_bits|=APP_LAB_ALTITUDE; out->altitude_mm=r->altitude_mm; }
-  if(mask&PX4LITE_NAV_VALID_VELOCITY) { out->valid_bits|=APP_LAB_VELOCITY; out->velocity_north_cms=r->velocity_north_cms; out->velocity_east_cms=r->velocity_east_cms; }
-  if((r->valid_mask&PX4LITE_REMOTE_VALID_ATTITUDE) && !(r->stale_mask&PX4LITE_REMOTE_VALID_ATTITUDE)) {
-    out->valid_bits|=APP_LAB_ATTITUDE; out->roll_deg100=r->roll_deg100; out->pitch_deg100=r->pitch_deg100; out->yaw_deg100=r->yaw_deg100;
-    out->roll_rate_dps100=r->roll_rate_dps100; out->pitch_rate_dps100=r->pitch_rate_dps100; out->yaw_rate_dps100=r->yaw_rate_dps100;
-  }
-  mask=r->battery_valid_mask&~r->battery_stale_mask;
-  if(mask&PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE1) { out->valid_bits|=APP_LAB_VOLTAGE1; out->voltage_mv=r->voltage_mv; }
-  if(mask&PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE2) { out->valid_bits|=APP_LAB_VOLTAGE2; out->voltage2_mv=r->voltage2_mv; }
-  if(mask&PX4LITE_REMOTE_BATTERY_VALID_CURRENT1) { out->valid_bits|=APP_LAB_CURRENT1; out->current_ma=r->current_ma; }
-  if(mask&PX4LITE_REMOTE_BATTERY_VALID_CURRENT2) { out->valid_bits|=APP_LAB_CURRENT2; out->current2_ma=r->current2_ma; }
-  if(mask&PX4LITE_REMOTE_BATTERY_VALID_PERCENT1) { out->valid_bits|=APP_LAB_PERCENT1; out->battery_percent=r->battery_percent; }
-  if(mask&PX4LITE_REMOTE_BATTERY_VALID_PERCENT2) { out->valid_bits|=APP_LAB_PERCENT2; out->battery2_percent=r->battery2_percent; }
-  mask=r->environment_valid_mask&~r->environment_stale_mask;
-  if(mask&PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE) { out->valid_bits|=APP_LAB_ENVIRONMENT; out->pressure_pa=(uint32_t)r->pressure_pa; out->temperature_deg100=(int32_t)(r->temperature_c*100.0f); }
-  if(mask&PX4LITE_REMOTE_ENV_VALID_HUMIDITY) { out->valid_bits|=APP_LAB_HUMIDITY; out->humidity_pct100=(uint32_t)(r->relative_humidity_pct*100.0f); }
-  if(r->navigation_valid_mask&PX4LITE_NAV_VALID_POSITION) { out->gnss_age_ms=Px4Lite_ElapsedMs(now_ms,r->position_update_ms); }
-  if(r->valid_mask&PX4LITE_REMOTE_VALID_ATTITUDE) { out->attitude_age_ms=Px4Lite_ElapsedMs(now_ms,r->attitude_update_ms); }
-  if(r->battery_valid_mask&PX4LITE_REMOTE_BATTERY_VALID_PRIMARY) { out->power1_age_ms=Px4Lite_ElapsedMs(now_ms,r->battery1_update_ms); }
-  if(r->battery_valid_mask&PX4LITE_REMOTE_BATTERY_VALID_SECONDARY) { out->power2_age_ms=Px4Lite_ElapsedMs(now_ms,r->battery2_update_ms); }
-  if(r->environment_valid_mask&PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE) { out->environment_age_ms=Px4Lite_ElapsedMs(now_ms,r->pressure_temperature_update_ms); }
-  if(r->environment_valid_mask&PX4LITE_REMOTE_ENV_VALID_HUMIDITY) { out->humidity_age_ms=Px4Lite_ElapsedMs(now_ms,r->humidity_update_ms); }
-  /* 数据年龄来自真实实验域，心跳不能刷新主数据年龄。 */
-  if(r->navigation_valid_mask&PX4LITE_NAV_VALID_POSITION) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->position_update_ms); }
-  if((r->valid_mask&PX4LITE_REMOTE_VALID_ATTITUDE) && Px4Lite_ElapsedMs(now_ms,r->attitude_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->attitude_update_ms); }
-  if((r->battery_valid_mask&PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE1) && Px4Lite_ElapsedMs(now_ms,r->battery1_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->battery1_update_ms); }
-  if((r->battery_valid_mask&PX4LITE_REMOTE_BATTERY_VALID_VOLTAGE2) && Px4Lite_ElapsedMs(now_ms,r->battery2_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->battery2_update_ms); }
-  if((r->environment_valid_mask&PX4LITE_REMOTE_ENV_VALID_PRESSURE_TEMPERATURE) && Px4Lite_ElapsedMs(now_ms,r->pressure_temperature_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->pressure_temperature_update_ms); }
-  if((r->environment_valid_mask&PX4LITE_REMOTE_ENV_VALID_HUMIDITY) && Px4Lite_ElapsedMs(now_ms,r->humidity_update_ms)<out->data_age_ms) { out->data_age_ms=Px4Lite_ElapsedMs(now_ms,r->humidity_update_ms); }
-}
-
 /** @brief 任务之间串行使用静态转换 scratch；计算不关闭中断，不含阻塞 I/O。 */
 uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out,uint32_t now_ms)
 { uint8_t result; vTaskSuspendAll(); result=App_CopyRemoteDisplaySnapshotImpl(out,now_ms); (void)xTaskResumeAll(); return result; }
@@ -1157,7 +1153,3 @@ uint8_t App_CopyRemoteDisplaySnapshot(App_DisplaySnapshot_t *out,uint32_t now_ms
 /** @brief 任务之间串行使用静态转换 scratch；计算不关闭中断，不含阻塞 I/O。 */
 Px4Lite_Result_t App_CopyRemoteNodeStatuses(App_RemoteNodeView_t *out,uint8_t capacity,uint8_t *count,uint32_t now_ms)
 { Px4Lite_Result_t result; vTaskSuspendAll(); result=App_CopyRemoteNodeStatusesImpl(out,capacity,count,now_ms); (void)xTaskResumeAll(); return result; }
-
-/** @brief 任务之间串行使用静态转换 scratch；计算不关闭中断，不含阻塞 I/O。 */
-void App_CopyRemoteLabView(App_RemoteLabView_t *out,uint32_t now_ms)
-{ vTaskSuspendAll(); App_CopyRemoteLabViewImpl(out,now_ms); (void)xTaskResumeAll(); }

@@ -11,7 +11,6 @@
 #include "px4lite_config.h"
 #include "px4lite_platform.h"
 #include "display_lvgl.h"
-#include "display_pages.h"
 #include "debug_console.h"
 #include <math.h>
 #include <string.h>
@@ -32,7 +31,7 @@ typedef struct {
 /*
  * 页面 ID 用于 App 和调试链路路由，枚举值保持稳定。
  */
-static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_MOTOR, 0x0006U, "motor", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}, {DISPLAY_HMI_PAGE_HIDDEN, 0x0007U, "comm", 200U}, {DISPLAY_HMI_PAGE_DIAGNOSTICS, 0x0008U, "diagnostics", 200U}, {DISPLAY_HMI_PAGE_EVENT_HISTORY, 0x0009U, "event_history", 200U}};
+static const Display_HmiPageConfig_t s_hmi_pages[] = {{DISPLAY_HMI_PAGE_SELF_CHECK, 0x0000U, "self_check", 200U}, {DISPLAY_HMI_PAGE_FLIGHT, 0x0004U, "flight", 500U}, {DISPLAY_HMI_PAGE_AIRCRAFT, 0x0005U, "aircraft", 500U}, {DISPLAY_HMI_PAGE_DATA, 0x0001U, "data", 500U}, {DISPLAY_HMI_PAGE_MOTOR, 0x0006U, "motor", 500U}, {DISPLAY_HMI_PAGE_ALARM, 0x0002U, "alarm", 200U}, {DISPLAY_HMI_PAGE_HIDDEN, 0x0007U, "comm", 200U}, {DISPLAY_HMI_PAGE_DIAGNOSTICS, 0x0008U, "diagnostics", 200U}};
 
 /*
  * ATK-MD0700 800x480 显示变量配置。
@@ -115,9 +114,6 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_MOTOR_BAT_VOLTAGE, DISPLAY_HMI_PAGE_FLIGHT, 0x1105U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 188U, 124U, 22U, "flight_motor_voltage", "V", "CNS_State.power"},
     {DISPLAY_HMI_VAR_MOTOR_BAT_CURRENT, DISPLAY_HMI_PAGE_FLIGHT, 0x110CU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 206U, 124U, 22U, "flight_motor_current", "A", "CNS_State.power"},
     {DISPLAY_HMI_VAR_MOTOR_BAT_PERCENT, DISPLAY_HMI_PAGE_FLIGHT, 0x1107U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 1000U, 392U, 224U, 124U, 22U, "flight_motor_battery", "%", "CNS_State.power"},
-    {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_DATA, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 540U, 76U, 252U, 330U, "msg_log_data", "-", "App_Registry"},
-    {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_FLIGHT, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 540U, 76U, 252U, 330U, "msg_log_flight", "-", "App_Registry"},
-    {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_AIRCRAFT, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 540U, 76U, 252U, 330U, "msg_log_aircraft", "-", "App_Registry"},
     {DISPLAY_HMI_VAR_VIEW_NODE_ID, DISPLAY_HMI_PAGE_FLIGHT, 0x110DU, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 500U, 0U, 0U, 0U, 0U, "view_node_id", "-", "App_Display"},
     {DISPLAY_HMI_VAR_DATE, DISPLAY_HMI_PAGE_FLIGHT, 0x110EU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "clock_date", "-", "App_Display"},
     {DISPLAY_HMI_VAR_CLOCK_TIME, DISPLAY_HMI_PAGE_FLIGHT, 0x110FU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 1000U, 0U, 0U, 0U, 0U, "clock_time", "-", "App_Display"},
@@ -172,7 +168,6 @@ static const Display_HmiVariableConfig_t s_hmi_variables[] = {
     {DISPLAY_HMI_VAR_MOTOR_OPERATION_STATE, DISPLAY_HMI_PAGE_MOTOR, 0x1615U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_operation_state", "-", "App_Control"},
     {DISPLAY_HMI_VAR_INPUT_POWER_MW, DISPLAY_HMI_PAGE_FLIGHT, 0x1110U, DISPLAY_HMI_TYPE_I32, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "input_power", "mW", "App_Environment"},
     {DISPLAY_HMI_VAR_MOTOR_LOCKED, DISPLAY_HMI_PAGE_MOTOR, 0x1616U, DISPLAY_HMI_TYPE_U16, DISPLAY_HMI_ACCESS_RO, 200U, 0U, 0U, 0U, 0U, "motor_locked", "0/1", "App_Control"},
-    {DISPLAY_HMI_VAR_MESSAGE_LOG, DISPLAY_HMI_PAGE_MOTOR, 0x110AU, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 616U, 76U, 176U, 330U, "msg_log_motor", "-", "App_Registry"},
 
     /* 告警页 -- 运行期告警项 */    {DISPLAY_HMI_VAR_ALARM_ACTIVE_MASK, DISPLAY_HMI_PAGE_ALARM, 0x1700U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 52U, 72U, 696U, 38U, "alarm_active_mask", "-", "App_Alarm"},
     {DISPLAY_HMI_VAR_ALARM_ROW1_CODE, DISPLAY_HMI_PAGE_ALARM, 0x1701U, DISPLAY_HMI_TYPE_U32, DISPLAY_HMI_ACCESS_RO, 200U, 42U, 150U, 716U, 48U, "alarm_row1_code", "-", "App_Alarm"},
@@ -309,10 +304,9 @@ Display_Result_t Display_RequestMotorEmergencyStop(void)
   return Display_MotorEmergencyStop();
 }
 
-/** @brief 只通过App提交明确的本机锁动作；成功或失败后均重读实际锁状态，不伪造输出。 */
-Display_Result_t Display_RequestMotorLocked(uint8_t locked)
+/** @brief 本机锁动作完成后重读实际状态和已确认的电机输出。 */
+static Display_Result_t Display_ReadMotorLockResult(Px4Lite_Result_t result)
 {
-  Px4Lite_Result_t result = App_SetMotorLocked(locked);
   App_MotorSnapshot_t motor;
   /* Control成功执行后已发布确认的最小输出；只复制该事实，不按请求值推算PWM。 */
   if ((result == PX4LITE_OK) && (App_CopyMotor(&motor, Px4Lite_PlatformGetMs()) == PX4LITE_OK)) {
@@ -322,6 +316,18 @@ Display_Result_t Display_RequestMotorLocked(uint8_t locked)
   Display_LoadMotorLockState();
   if ((result == PX4LITE_NOT_READY) || (result == PX4LITE_BUSY)) { return DISPLAY_NOT_READY; }
   return (result == PX4LITE_OK) ? DISPLAY_OK : DISPLAY_ERROR;
+}
+
+/** @brief 只通过 App 提交明确的本机锁动作。 */
+Display_Result_t Display_RequestMotorLocked(uint8_t locked)
+{
+  return Display_ReadMotorLockResult(App_SetMotorLocked(locked));
+}
+
+/** @brief 由 Control 串行确认急停序号后完成当前手势的解锁。 */
+Display_Result_t Display_RequestMotorUnlock(uint32_t stop_sequence)
+{
+  return Display_ReadMotorLockResult(App_UnlockMotor(stop_sequence));
 }
 
 /** @brief 发起本机缓降；由 Control 记录接受和达到最小输出。 */
@@ -1422,15 +1428,12 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   App_AlarmSnapshot_t alarm;
   App_DateTimeSnapshot_t date_time;
   App_MotorSnapshot_t motor;
-  /* 显示任务独占，避免 32 条事件历史额外占用调用栈。 */
-  static App_DisplayLogSnapshot_t log;
   Px4Lite_Result_t navigation_result;
   Px4Lite_Result_t system_result;
   Px4Lite_Result_t environment_result;
   Px4Lite_Result_t alarm_result;
   Px4Lite_Result_t date_time_result;
   Px4Lite_Result_t motor_result;
-  Px4Lite_Result_t log_result;
   uint16_t motor_fault = 0U;
   uint16_t main_fault = 0U;
   uint8_t status_fallback_loaded = 0U;
@@ -1475,13 +1478,6 @@ Display_Result_t Display_PrepareSnapshot(uint32_t now_ms)
   } else {
     Display_ClearAlarmSnapshot();
   }
-
-  log_result = App_GetDisplayMessageLog(&log, now_ms);
-  if ((log_result == PX4LITE_OK) || (log_result == PX4LITE_NOT_READY)) {
-    Display_PagesSetLogSnapshot(&log);
-    Display_LvglSetLogSnapshotVersion(log.version);
-  }
-  (void)Display_SetHmiValueU32(DISPLAY_HMI_VAR_MESSAGE_LOG, Display_PagesGetLogVersion());
 
   if (frozen == 0U) {
     if (environment_result == PX4LITE_OK) { Display_LoadEnvironmentSnapshot(&environment); }

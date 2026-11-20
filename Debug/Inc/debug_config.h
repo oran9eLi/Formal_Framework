@@ -19,19 +19,24 @@
 #define DEBUG_BOOT_LOG_ENABLE         1U
 #define DEBUG_BUSINESS_LOG_ENABLE     0U
 
-/** @brief 本轮GNSS/IMU/Baro共红诊断临时开启；仅读既有资源副本，不控制采集任务。 */
-#define DEBUG_STACK_MONITOR_ENABLE    1U
-#define DEBUG_GNSS_MONITOR_ENABLE     1U
+/* 交付默认保留启动日志，周期监控按模块独立启用；仅读取既有缓存。 */
+#ifndef DEBUG_STACK_MONITOR_ENABLE
+#define DEBUG_STACK_MONITOR_ENABLE    0U
+#endif
+#ifndef DEBUG_GNSS_MONITOR_ENABLE
+#define DEBUG_GNSS_MONITOR_ENABLE     0U
+#endif
 #define DEBUG_GNSS_BSP_MONITOR_ENABLE 0U
 
-/* 独立诊断输出开关；不改变设备使能、采集和恢复策略。 */
 #ifndef DEBUG_IMU_MONITOR_ENABLE
-/** @brief 本轮三模块诊断输出IMU型号/接口/双ID与驱动阶段，仅读缓存。 */
-#define DEBUG_IMU_MONITOR_ENABLE       1U
+#define DEBUG_IMU_MONITOR_ENABLE       0U
 #endif
-/** @brief 本轮三模块诊断输出Baro真实状态及sample有效性，仅读缓存，不访问I2C。 */
-#define DEBUG_BARO_MONITOR_ENABLE      1U
-#define DEBUG_POWER_MONITOR_ENABLE     1U /**< 逻辑第二组主回路调试：每秒输出topic及BSP所选路由的ADC/参考缓存，不触发采样。 */
+#ifndef DEBUG_BARO_MONITOR_ENABLE
+#define DEBUG_BARO_MONITOR_ENABLE      0U
+#endif
+#ifndef DEBUG_POWER_MONITOR_ENABLE
+#define DEBUG_POWER_MONITOR_ENABLE     0U
+#endif
 #define DEBUG_LORA_MONITOR_ENABLE      0U /* 临时诊断LoRa收不到：打印rx_byte/rx_frame；定位后改回0 */
 #define DEBUG_ALARM_MONITOR_ENABLE     0U
 #define DEBUG_STORAGE_MONITOR_ENABLE   0U

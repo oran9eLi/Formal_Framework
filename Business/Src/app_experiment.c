@@ -4,6 +4,9 @@
  * @details 唯一写者biz_acq；App API读取生产副本，不写控制或Navigation。
  */
 #include "app_experiment.h"
+#include "business_template_config.h"
+
+#if BUSINESS_ENABLE_LOCAL_OBSERVATION
 #include "app_data_api.h"
 #include "app_message_log.h"
 #include "px4lite_config.h"
@@ -150,3 +153,4 @@ Px4Lite_Result_t App_CopyObservationPoint(uint32_t session,uint16_t index,App_Ob
  if(session!=s_state.session_id||index>=s_state.point_count) { taskEXIT_CRITICAL();return PX4LITE_NOT_READY; }
  slot=(uint16_t)((s_head+APP_OBSERVATION_POINTS-s_state.point_count+index)%APP_OBSERVATION_POINTS);*out=s_points[slot];taskEXIT_CRITICAL();return PX4LITE_OK;
 }
+#endif

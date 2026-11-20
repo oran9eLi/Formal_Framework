@@ -77,6 +77,7 @@ static Px4Lite_SystemHealth_t s_test_health;
 static uint32_t s_test_publishes;
 static uint8_t s_test_inject_after_status;
 static uint32_t s_test_status_injections;
+static uint8_t s_test_cues;
 
 /** @brief 独立平台毫秒时钟，允许零点和uint32回绕。 */
 uint32_t BSP_Time_GetTickMs(void) { return s_test_clock; }
@@ -94,6 +95,14 @@ void Px4Lite_GetImuStats(Px4Lite_FifoStats_t *out) { memset(out, 0, sizeof(*out)
 void Px4Lite_AlarmUpdateFromStatuses(const Px4Lite_ModuleStatus_t *s, uint16_t n, uint32_t now)
 { assert(s && n == PX4LITE_MODULE_COUNT); (void)now; }
 void Px4Lite_StartupToneNotifyModuleConnection(uint8_t connected) { (void)connected; }
+
+/** @brief 验证真实 owner 停收；独立 topic/通信专项验证这三个出口的内容。 */
+void Px4Lite_InvalidateSensorTopics(Px4Lite_ModuleId_t id)
+{ assert(id == PX4LITE_MODULE_GNSS); memset(&s_test_topic, 0, sizeof(s_test_topic)); }
+void Px4Lite_GnssRawUplinkDiscard(void) { }
+void Px4Lite_GnssUplinkDiscard(uint32_t now_ms) { assert(now_ms == s_test_clock); }
+uint8_t Px4Lite_ControlModulePauseAllowed(Px4Lite_ModuleId_t id) { (void)id; assert(0); return 0U; }
+void Px4Lite_StartupToneNotifyRpiResult(uint8_t success) { assert(success); s_test_cues++; }
 
 /** @brief 模拟整板冷启动，仅在每场景起点清全局事实；场景内恢复全部走生产入口。 */
 static void RecoveryBoard(void)
@@ -235,11 +244,53 @@ static void TestFutureTimestamp(void)
   RecoveryHealth(3002U); assert(s_test_health.module_state[PX4LITE_MODULE_GNSS] == PX4LITE_STATE_OFFLINE);
 }
 
+/** @brief 收到暂停后停止 GNSS IRQ/DMA，恢复后旧原始和半帧不可重发，首个新帧仍可定位。 */
+static void TestIntentionalPauseAndResume(void)
+{
+  Px4Lite_ModuleExperimentDisplay_t display;
+  Gnss_Snapshot_t snapshot;
+  Gnss_RawFrameInfo_t frame_info;
+  uint8_t raw[128];
+  const uint16_t length = sizeof(s_good_gga) - 1U;
+  RecoveryBoard(); s_test_cues = 0U;
+  Wire(s_good_gga, length); RecoverySensor(100U);
+#if DEBUG_GNSS_MONITOR_ENABLE
+  assert(Sensor_GNSS_CopyRawFrame(2U, raw, sizeof(raw), &frame_info) == GNSS_RESULT_OK);
+#else
+  assert(Sensor_GNSS_CopyRawFrame(2U, raw, sizeof(raw), &frame_info) == GNSS_RESULT_NO_DATA);
+#endif
+  Wire(s_good_gga, length / 2U); RecoverySensor(200U);
+
+  assert(Px4Lite_ModuleExperimentRequest(PX4LITE_MODULE_GNSS, 0U, 200U) == PX4LITE_OK);
+  assert(Px4Lite_ModuleExperimentRequest(PX4LITE_MODULE_GNSS, 1U, 200U) == PX4LITE_BUSY);
+  assert(Info().initialized && !s_test_cues);
+  RecoverySensor(210U); Px4Lite_ModuleExperimentAck(PX4LITE_MODULE_GNSS, 0U);
+  RecoveryHealth(12200U);
+  assert(!Info().initialized && !irq_enabled[BSP_GNSS_IRQn] && !irq_enabled[BSP_GNSS_RX_DMA_IRQn]);
+  assert(Sensor_GNSS_CopySnapshot(&snapshot) == GNSS_RESULT_NO_DATA);
+  assert(Sensor_GNSS_CopyRawFrame(2U, raw, sizeof(raw), &frame_info) == GNSS_RESULT_NO_DATA);
+  assert(s_test_publishes == 1U && s_test_health.module_state[PX4LITE_MODULE_GNSS] == PX4LITE_STATE_DISABLED);
+
+  assert(Px4Lite_ModuleExperimentRequest(PX4LITE_MODULE_GNSS, 1U, 12200U) == PX4LITE_OK);
+  RecoveryHealth(12201U); Px4Lite_ModuleExperimentCopyDisplay(&display);
+  assert(s_test_health.module_state[PX4LITE_MODULE_GNSS] == PX4LITE_STATE_STARTING);
+  assert(display.page_sequence == 0U && s_test_cues == 1U);
+  RecoverySensor(12210U); Px4Lite_ModuleExperimentAck(PX4LITE_MODULE_GNSS, 1U);
+  assert(Info().initialized && s_test_publishes == 1U);
+  Wire(s_good_gga + length / 2U, (uint16_t)(length - length / 2U)); RecoverySensor(12220U);
+  assert(s_test_publishes == 1U);
+  Wire(s_good_gga, length); RecoverySensor(12230U);
+  assert(s_test_publishes == 2U && Snapshot().rx_sequence == 2U);
+  Px4Lite_ModuleExperimentCopyDisplay(&display);
+  assert(display.page_module == PX4LITE_MODULE_GNSS && display.page_sequence == 1U && s_test_cues == 2U);
+}
+
 int main(void)
 {
   TestStaleRecoveryCallback(); TestPendingRecoveryWithCompleteFrame(); TestPendingRecoveryWithHalfFrame();
   TestActualWarmResetSequence(); TestUnknownUbxLiveness(); TestBadCrcRemainsOffline(); TestFutureTimestamp();
+  TestIntentionalPauseAndResume();
   assert(primask == 0U);
-  puts("GNSS recovery liveness: real BSP+Driver+Adapter+Health+Registry stale-request gate / half-frame / no stale republish / monotonic warm sequence / unknown UBX / bad CRC / future clock PASS");
+  puts("GNSS recovery liveness: real BSP+Driver+Adapter+Health+Registry stale-request gate / half-frame / no stale republish / monotonic warm sequence / unknown UBX / bad CRC / future clock / intentional pause+resume PASS");
   return 0;
 }

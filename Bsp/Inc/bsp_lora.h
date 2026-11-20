@@ -21,6 +21,8 @@ void BSP_LoRa_PreInit(void);
  * @brief 初始化 LoRa E22 使用的 UART、DMA 和控制 GPIO。
  */
 int32_t BSP_LoRa_Init(void);
+/** @brief Comm 暂停 LoRa 原始收发，ESP 不受影响。 */
+void BSP_LoRa_Pause(void);
 /**
  * @brief 返回 LoRa 私有 UART 句柄，仅供中断和 MSP 使用。
  */

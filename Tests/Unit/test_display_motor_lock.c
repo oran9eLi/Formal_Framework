@@ -11,13 +11,18 @@ typedef void *TaskHandle_t;
 #include "../../Display/Src/display_lvgl.c"
 
 static uint8_t actual_locked = 1U, last_request = 255U;
+static uint8_t power_inhibited;
 static Px4Lite_Result_t setter_result = PX4LITE_OK, getter_result = PX4LITE_OK;
 static Px4Lite_Result_t motor_result = PX4LITE_OK;
 static App_MotorSnapshot_t published_motor;
 static unsigned lock_requests, throttle_requests;
+static uint32_t stop_sequence;
 static uint8_t last_motor, last_percent;
 static lv_obj_t fake_objects[8], fake_lock_label;
+static lv_indev_t fake_touch;
 static uint8_t disabled[8];
+static unsigned touch_cancelled, touch_reset, touch_released;
+static int32_t restored_target;
 static const char *button_text = "";
 
 /** @brief 模拟Control确认的最小输出，不在显示层依据请求自行捏造PWM。 */
@@ -40,6 +45,11 @@ Px4Lite_Result_t App_SetMotorLocked(uint8_t locked)
 }
 Px4Lite_Result_t App_GetMotorLocked(uint8_t *locked)
 { if (getter_result != PX4LITE_OK) { return getter_result; } *locked = actual_locked; return PX4LITE_OK; }
+Px4Lite_Result_t App_GetMotorStopSequence(uint32_t *sequence)
+{ *sequence = stop_sequence; return PX4LITE_OK; }
+Px4Lite_Result_t App_UnlockMotor(uint32_t sequence)
+{ return sequence == stop_sequence ? App_SetMotorLocked(0U) : PX4LITE_NOT_READY; }
+uint8_t App_IsMotorPowerInhibited(void) { return power_inhibited; }
 Px4Lite_Result_t App_CopyMotor(App_MotorSnapshot_t *out, uint32_t now_ms)
 { (void)now_ms; *out = published_motor; return motor_result; }
 Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor, uint8_t percent)
@@ -50,6 +60,7 @@ Px4Lite_Result_t App_SetMotorThrottlePercent(uint8_t motor, uint8_t percent)
   return PX4LITE_OK;
 }
 uint32_t Px4Lite_PlatformGetMs(void) { return 1000U; }
+void LvPortDisp_AbortHudFrame(void) {}
 
 /** @brief 映射固定对象替身，任何越界访问都立即失败。 */
 static unsigned ObjectIndex(lv_obj_t *obj)
@@ -62,6 +73,13 @@ void lv_obj_add_state(lv_obj_t *obj, lv_state_t state)
 { assert(state == LV_STATE_DISABLED); disabled[ObjectIndex(obj)] = 1U; }
 void lv_obj_clear_state(lv_obj_t *obj, lv_state_t state)
 { assert(state == LV_STATE_DISABLED); disabled[ObjectIndex(obj)] = 0U; }
+lv_indev_t *lv_indev_get_next(lv_indev_t *indev) { return indev ? NULL : &fake_touch; }
+void lv_indev_reset(lv_indev_t *indev, lv_obj_t *obj) { assert(indev == &fake_touch && obj == NULL); touch_reset++; }
+void lv_indev_wait_release(lv_indev_t *indev) { assert(indev == &fake_touch); touch_released++; }
+lv_res_t lv_event_send(lv_obj_t *obj, lv_event_code_t code, void *param)
+{ assert(obj == &fake_objects[4] && code == LV_EVENT_PRESS_LOST && param == NULL); touch_cancelled++; return LV_RES_OK; }
+void lv_bar_set_value(lv_obj_t *obj, int32_t value, lv_anim_enable_t anim)
+{ assert(obj == &fake_objects[4] && anim == LV_ANIM_OFF); restored_target = value; }
 char *lv_label_get_text(const lv_obj_t *obj)
 { assert(obj == &fake_lock_label); return (char *)button_text; }
 void lv_label_set_text_static(lv_obj_t *obj, const char *text)
@@ -96,6 +114,109 @@ static void AssertProjection(const char *state, const char *action, uint8_t bloc
   assert(disabled[2] == 0U && disabled[3] == 0U);
   for (i = 4U; i < 8U; i++) { assert(disabled[i] == blocked); }
   assert(lock_requests == before && throttle_requests == before_throttle); /* 刷新不能产生控制。 */
+}
+
+/** @brief 供电断开禁用主页面滑杆和详情步进，保留降低输出的安全动作。 */
+static void TestPowerInterlock(void)
+{
+  BindControls();
+  power_inhibited = 1U;
+  actual_locked = 1U;
+  Display_LoadMotorLockState();
+  AssertProjection("LOCKED", "Unlock", 1U);
+  assert(disabled[0]);
+  actual_locked = 0U;
+  Display_LoadMotorLockState();
+  (void)Display_LvglSetValue(DISPLAY_HMI_VAR_MOTOR_TARGET_1, 42U);
+  s_motor_touch_valid[0] = s_motor_slider_dragging[0] = 1U;
+  AssertProjection("UNLOCKED", "Lock", 1U);
+  assert(!disabled[0] && !s_motor_touch_valid[0] && !s_motor_slider_dragging[0]);
+  assert(touch_cancelled == 1U && touch_reset == 1U && touch_released == 1U && restored_target == 42);
+
+  s_current_lvgl_page = DISPLAY_HMI_PAGE_DETAILS;
+  s_details_kind = 3U;
+  s_buttons[0].action = UI_ACTION_MOTOR_STEP;
+  s_buttons[1].action = UI_ACTION_MOTOR_STEP;
+  UiMotorLockControls();
+  assert(disabled[0] && disabled[1] && !disabled[2] && !disabled[3]);
+  power_inhibited = 0U;
+  UiMotorLockControls();
+  assert(!disabled[0] && !disabled[1] && !disabled[2] && !disabled[3]);
+}
+
+/** @brief 保持同一手势时，上锁变化不能把旧按钮变成解锁。 */
+static void TestLockGesture(void)
+{
+  const unsigned before = lock_requests;
+  BindControls();
+  actual_locked = 0U;
+  power_inhibited = 0U;
+  Display_LoadMotorLockState();
+  UiMotorLockControls();
+  assert(strcmp(button_text, "Lock") == 0);
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_PRESSED);
+  actual_locked = 1U; /* 外部急停已上锁，下一份快照可早于按钮重绘。 */
+  Display_LoadMotorLockState();
+  assert(strcmp(button_text, "Lock") == 0);
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_CLICKED);
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_PRESSED);
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_CLICKED);
+  assert(lock_requests == before && actual_locked);
+
+  UiMotorLockControls();
+  assert(strcmp(button_text, "Unlock") == 0);
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_PRESSED);
+  actual_locked = 0U; /* 真实锁状态先于缓存变化。 */
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_CLICKED);
+  assert(lock_requests == before);
+  actual_locked = 1U;
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_PRESSED);
+  actual_locked = 0U;
+  Display_LoadMotorLockState();
+  actual_locked = 1U;
+  Display_LoadMotorLockState();
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_CLICKED);
+  assert(lock_requests == before);
+
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_PRESSED);
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_PRESS_LOST);
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_CLICKED);
+  assert(lock_requests == before);
+
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_PRESSED);
+  stop_sequence++; /* 已经上锁时又收到一次急停，按钮文字和锁缓存均未变化。 */
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_CLICKED);
+  assert(lock_requests == before && actual_locked);
+
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_PRESSED);
+  Display_LoadMotorLockState(); /* 同值刷新仍允许明确的解锁。 */
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_RELEASED);
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_CLICKED);
+  assert(lock_requests == before + 1U && last_request == 0U);
+}
+
+/** @brief 远端请求先切换逻辑页，旧按钮必须等新布局完成后才允许接收电机输入。 */
+static void TestMotorInputDuringPageChange(void)
+{
+  const unsigned before = lock_requests;
+  App_ModuleExperimentDisplay_t request = {0};
+  BindControls();
+  s_lvgl_display_ready = 1U;
+  Display_LoadMotorLockState();
+  UiMotorLockControls();
+  assert(UiMotorInputReady());
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_PRESSED);
+
+  request.page_sequence = 1U;
+  request.page_module = PX4LITE_MODULE_GNSS;
+  UiApplyExperimentDisplay(&request);
+  assert(s_current_lvgl_page == DISPLAY_HMI_PAGE_DATA && s_layout_requested);
+  assert(s_buttons[0].action == UI_ACTION_MOTOR_LOCK && !UiMotorInputReady());
+  UiMotorLockTouch(&s_buttons[0], LV_EVENT_CLICKED);
+  assert(lock_requests == before);
+
+  assert(Display_SetHmiPage(DISPLAY_HMI_PAGE_MOTOR) == DISPLAY_OK);
+  assert(!UiMotorInputReady());
 }
 
 /** @brief 初始上锁、显式解锁/上锁、失败真实状态及未知状态回归。 */
@@ -155,6 +276,9 @@ int main(void)
   assert(UiMotorStepRequest(2U, 1U) == DISPLAY_NOT_READY && throttle_requests == 5U);
   assert(published_motor.base_percent[2] == 0U);
   assert(UiMotorStepRequest(4U, 1U) == DISPLAY_ERROR && throttle_requests == 5U);
-  puts("display motor lock: PASS (actual toggle, no implicit throttle, failure/N-A, fixed controls, real +/- motor route)");
+  TestPowerInterlock();
+  TestLockGesture();
+  TestMotorInputDuringPageChange();
+  puts("display motor lock: PASS (lock gestures, deferred layout, supply interlock, real +/- motor route)");
   return 0;
 }

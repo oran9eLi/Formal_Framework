@@ -1,6 +1,6 @@
 /**
  * @file test_gnss_raw_forward_hooks.c
- * @brief 使用真实Sensor、Adapter tee及屏幕捕获验证独立RAW来源事件与原字节。
+ * @brief 用真实Sensor和Adapter验证关闭及启用本地捕获时的独立RAW来源事件和原字节。
  * @details RAW队列入口为计数/复制替身；队列编码由独立Framework回归验证，不产生实板伪数据。
  */
 #include <stdint.h>
@@ -87,8 +87,12 @@ static void TestCompleteTeeAndUiIndependence(void)
 {
   static const uint8_t nmea[]="$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n";
   uint8_t payload[92]={0},wire[100],bad_nmea[sizeof(nmea)-1U];
-  Gnss_Snapshot_t snapshot;Px4Lite_CaptureStatus_t status;
-  ColdForward();s_status.source=PX4LITE_CAPTURE_GNSS;s_status.running=0U;s_status.filter=PX4LITE_CAPTURE_FILTER_GGA;
+  Gnss_Snapshot_t snapshot;
+  Px4Lite_CaptureStatus_t status;
+  ColdForward();
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
+  s_status.source=PX4LITE_CAPTURE_GNSS;s_status.running=0U;s_status.filter=PX4LITE_CAPTURE_FILTER_GGA;
+#endif
   memcpy(payload,nmea,sizeof(nmea)-1U);payload[20]=0U;payload[21]=0U;payload[23]=0U; /* UBX内部$..LF不能另造NMEA事件。 */
   assert(Ubx_BuildFrame(1U,7U,payload,sizeof(payload),wire,sizeof(wire))==sizeof(wire));
   FeedBytes(wire,sizeof(wire),0U);SameWire(wire,sizeof(wire),2U,1U);
@@ -96,12 +100,22 @@ static void TestCompleteTeeAndUiIndependence(void)
   FeedBytes(nmea,sizeof(nmea)-1U,10U);SameWire(nmea,sizeof(nmea)-1U,1U,1U);
   assert(s_forward_count==2U && s_forward_type==1U);
   assert(Sensor_GNSS_CopySnapshot(&snapshot)==GNSS_RESULT_NO_FIX && !(snapshot.valid_mask&GNSS_VALID_POSITION));
-  (void)Px4Lite_CaptureCopyStatus(&status);assert(status.count==0U && (status.gnss_seen_mask&3U)==3U);
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
+  assert(Px4Lite_CaptureCopyStatus(&status)==PX4LITE_OK && status.count==0U && (status.gnss_seen_mask&3U)==3U);
   s_status.running=1U;s_status.filter=PX4LITE_CAPTURE_FILTER_UBX;
+#else
+  assert(Px4Lite_CaptureCopyStatus(&status)==PX4LITE_NOT_READY);
+#endif
   memcpy(bad_nmea,nmea,sizeof(bad_nmea));bad_nmea[sizeof(bad_nmea)-4U]='0';bad_nmea[sizeof(bad_nmea)-3U]='0';
-  FeedBytes(bad_nmea,sizeof(bad_nmea),20U);SameWire(bad_nmea,sizeof(bad_nmea),1U,0U);assert(s_forward_count==3U && s_status.count==0U);
+  FeedBytes(bad_nmea,sizeof(bad_nmea),20U);SameWire(bad_nmea,sizeof(bad_nmea),1U,0U);assert(s_forward_count==3U);
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
+  assert(s_status.count==0U);
+#endif
   wire[98]^=0x55U;wire[99]=0x00U;FeedBytes(wire,sizeof(wire),30U);SameWire(wire,sizeof(wire),2U,0U);
-  assert(s_forward_count==4U && s_status.count==1U && s_reject_count==0U);
+  assert(s_forward_count==4U && s_reject_count==0U);
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
+  assert(s_status.count==1U);
+#endif
   FeedBytes((const uint8_t*)"$\n",2U,40U);SameWire((const uint8_t*)"$\n",2U,1U,0U);assert(s_forward_count==5U);
 }
 
@@ -109,13 +123,19 @@ static void TestCompleteTeeAndUiIndependence(void)
 static void TestOversizeRejectOnce(void)
 {
   uint8_t payload[UBX_PAYLOAD_CAPACITY+1U]={0},wire[UBX_PAYLOAD_CAPACITY+9U],line[180];
-  ColdForward();s_status.source=PX4LITE_CAPTURE_GNSS;s_status.running=1U;s_status.filter=PX4LITE_CAPTURE_FILTER_ALL;
+  ColdForward();
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
+  s_status.source=PX4LITE_CAPTURE_GNSS;s_status.running=1U;s_status.filter=PX4LITE_CAPTURE_FILTER_ALL;
+#endif
   payload[100]='$';payload[101]='X';payload[102]='\n';
   assert(Ubx_BuildFrame(0x99U,1U,payload,sizeof(payload),wire,sizeof(wire))==sizeof(wire));
   FeedBytes(wire,sizeof(wire),0U);assert(s_reject_count==1U && s_reject_length==1025U && s_reject_protocol==2U && s_reject_reason==GNSS_RAW_REJECT_OVERSIZE && s_forward_count==0U);
   wire[sizeof(wire)-1U]^=1U;FeedBytes(wire,sizeof(wire),30U);assert(s_reject_count==2U && s_forward_count==0U);
   memset(line,'1',sizeof(line));line[0]='$';line[178]='\r';line[179]='\n';FeedBytes(line,sizeof(line),60U);
-  assert(s_reject_count==3U && s_reject_protocol==1U && s_reject_length==129U && s_forward_count==0U && s_status.capture_drops==1U);
+  assert(s_reject_count==3U && s_reject_protocol==1U && s_reject_length==129U && s_forward_count==0U);
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
+  assert(s_status.capture_drops==1U);
+#endif
 }
 
 /** @brief 32/64/84颗NAV-SAT完整400/784/1024B保真转发，旧392B镜像不被前缀截断替换。 */
@@ -123,19 +143,33 @@ static void TestLongSatWireAndLegacyMirror(void)
 {
   static const uint8_t counts[3]={32U,64U,84U};
   uint8_t payload[UBX_PAYLOAD_CAPACITY],wire[GNSS_RAW_FORWARD_MAX_BYTES],small[8],mirror[GNSS_RAW_MAX_BYTES];
-  Gnss_RawFrameInfo_t info;uint16_t length;unsigned i,j;
-  ColdForward();s_status.source=PX4LITE_CAPTURE_GNSS;s_status.running=1U;s_status.filter=PX4LITE_CAPTURE_FILTER_UBX;
+  Gnss_RawFrameInfo_t info;Gnss_SatellitePage_t page;uint16_t length;unsigned i,j;
+  ColdForward();
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
+  s_status.source=PX4LITE_CAPTURE_GNSS;s_status.running=1U;s_status.filter=PX4LITE_CAPTURE_FILTER_UBX;
+#endif
   assert(Ubx_BuildFrame(0x99U,1U,NULL,0U,small,sizeof(small))==sizeof(small));FeedBytes(small,sizeof(small),0U);
+#if defined(TEST_UART1_GNSS_SLOTS) && TEST_UART1_GNSS_SLOTS
   assert(Sensor_GNSS_CopyRawFrame(2U,mirror,sizeof(mirror),&info)==GNSS_RESULT_OK && info.length==8U && info.sequence==0U);
+#else
+  assert(Sensor_GNSS_CopyRawFrame(2U,mirror,sizeof(mirror),&info)==GNSS_RESULT_NO_DATA);
+#endif
   for(i=0U;i<3U;i++) {
     length=(uint16_t)(8U+12U*counts[i]);memset(payload,0,sizeof(payload));payload[4]=1U;payload[5]=counts[i];
     for(j=8U;j<length;j++) { payload[j]=(uint8_t)(j*17U); }
     assert(Ubx_BuildFrame(1U,0x35U,payload,length,wire,sizeof(wire))==(uint16_t)(length+8U));
     length=(uint16_t)(length+8U);FeedBytes(wire,length,100U+i*100U);SameWire(wire,length,2U,1U);
     assert(s_forward_count==i+2U && s_reject_count==0U && s_forward_class==1U && s_forward_id==0x35U);
+#if defined(TEST_UART1_GNSS_SLOTS) && TEST_UART1_GNSS_SLOTS
     assert(Sensor_GNSS_CopyRawFrame(2U,mirror,sizeof(mirror),&info)==GNSS_RESULT_OK && info.length==8U && info.sequence==0U && !memcmp(mirror,small,sizeof(small)));
+#else
+    assert(Sensor_GNSS_CopyRawFrame(2U,mirror,sizeof(mirror),&info)==GNSS_RESULT_NO_DATA);
+#endif
+    assert(Sensor_GNSS_CopySatellitePage(0U,&page)==GNSS_RESULT_NO_DATA);
   }
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   assert(s_status.capture_drops==3U); /* 屏幕上限392，独立RAW上限1024，两个状态不能混淆。 */
+#endif
 }
 
 /** @brief 最大u16声明长度不能越过owner半帧期限或伪造成完整RAW；codec全长度另有独立覆盖。 */
@@ -181,5 +215,5 @@ static void TestFramingBoundaries(void)
 int main(void)
 {
   TestCompleteTeeAndUiIndependence();TestOversizeRejectOnce();TestLongSatWireAndLegacyMirror();TestUbx65535Length();TestFramingBoundaries();
-  puts("GNSS RAW forwarding hooks passed: realSensor+Adapter,UIpause/filter,BAD,bounded-oversize,reject-once,resync,0ms/wrap");return 0;
+  puts("GNSS RAW forwarding hooks passed: realSensor+Adapter,BAD,bounded-oversize,reject-once,resync,0ms/wrap");return 0;
 }

@@ -1,7 +1,7 @@
 /**
  * @file px4lite_remote_telemetry.c
  * @brief Framework 层八项发现摘要和唯一活动对端快照。
- * @details CommTask 观察身份并发布活动数据，UI 人工选择；没有控制、租约或自动选择。
+ * @details CommTask 观察身份并发布活动数据，默认锁定第一个确认身份的无冲突对端。
  * 调度互斥保护发现/选择的计算，中断保持可用；固定容量，无运行期分配。
  */
 #include "px4lite_remote_telemetry.h"
@@ -73,7 +73,7 @@ Px4Lite_Result_t Px4Lite_RemoteTelemetrySetMode(Px4Lite_RemoteMode_t mode,uint32
 { (void)now_ms; return (mode==PX4LITE_REMOTE_MODE_LOCAL)?PX4LITE_OK:PX4LITE_NOT_READY; }
 /** @brief 一级页面数据源固定 local。 */
 Px4Lite_RemoteMode_t Px4Lite_RemoteTelemetryGetMode(void) { return PX4LITE_REMOTE_MODE_LOCAL; }
-/** @brief 只维护发现摘要；同地址不同长期身份不能覆盖已有身份。 */
+/** @brief 更新发现摘要并在首次确认对端时选中它；冲突身份各自记录。 */
 void Px4Lite_RemoteObserve(uint8_t node,uint8_t component,uint8_t sequence,uint32_t msg,const char *identity,uint32_t now)
 {
   uint8_t i,index=PX4LITE_REMOTE_NODE_MAX,empty=PX4LITE_REMOTE_NODE_MAX,oldest=PX4LITE_REMOTE_NODE_MAX,conflict,old_conflict,changed=0U,discovered=0U,restored=0U;
@@ -118,6 +118,7 @@ void Px4Lite_RemoteObserve(uint8_t node,uint8_t component,uint8_t sequence,uint3
   if(msg==0U) { entry->heartbeat_seen=1U; entry->view.heartbeat_known=1U; entry->view.last_heartbeat_ms=now; }
   else if(msg!=12900U) { entry->view.last_data_ms=now; }
   conflict=Remote_Conflict(node,now);
+  if(s_selected==0U && identity && !conflict) { s_selected=node; }
   if(node==s_selected && (conflict || changed || !Remote_Accept(node,now))) { Remote_ClearActive(); }
   (void)xTaskResumeAll();
   if(discovered) { Px4Lite_LocalMsgLogEvent(PX4LITE_LOGMSG_REMOTE_DISCOVERED,now,0U,PX4LITE_MODULE_LORA,1U); }

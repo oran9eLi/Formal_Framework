@@ -48,10 +48,7 @@ Display_Result_t Display_LvglSetPage(Display_HmiPage_t page);
  */
 void Display_LvglSetAlarmSnapshot(const App_AlarmSnapshot_t *alarm, const uint32_t *packed, uint16_t count);
 
-/** @brief 在设置日志窗口后同步其生产环版本；清视图依据追加计数，不能传缓存修订号。 */
-void Display_LvglSetLogSnapshotVersion(uint32_t source_version);
-
-/** @brief 只冻结观察数据；门面仍须实时刷新控制、告警、事件和时间。 */
+/** @brief 只冻结观察数据；门面仍须实时刷新控制、告警和时间。 */
 uint8_t Display_LvglObservationFrozen(void);
 
 #ifdef __cplusplus

@@ -84,6 +84,8 @@ typedef struct {
  * @return 初始化结果。
  */
 Lora_Result_t Lora_E22_Init(void);
+/** @brief Comm 主动停用时撤销 LoRa 解析、TX 以及配置会话。 */
+void Lora_E22_Pause(uint32_t now_ms);
 
 /**
  * @brief 执行 LoRa 周期服务，处理 RX、TX 完成和延迟 reinit。

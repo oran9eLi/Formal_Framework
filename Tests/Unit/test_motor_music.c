@@ -16,6 +16,9 @@ static unsigned s_critical,s_scheduler;
 #include "px4lite_startup_tone.h"
 #include "px4lite_config.h"
 #include "px4lite_platform.h"
+#if defined(TEST_MOTOR_MUSIC_DEFAULT_OFF) && PX4LITE_ENABLE_MOTOR_MUSIC
+#error "Motor background music must be disabled in the default firmware"
+#endif
 #if PX4LITE_ENABLE_MOTOR_MUSIC && !defined(TEST_MOTOR_MUSIC_REAL_SCORE)
 /** @brief 测试专用原创三音/休止相位，不与用户的歌曲数据相耦合。 */
 typedef struct { uint16_t frequency_hz,duration_ms; } MotorMusicNote;

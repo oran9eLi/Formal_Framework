@@ -27,41 +27,17 @@ static App_CaptureRequest_t s_last_capture_request;
 static unsigned s_capture_requests,s_gnss_frame_copies;
 static unsigned s_measurement_copies, s_diagnostic_copies;
 static uint32_t s_now_ms;
-static Px4Lite_TimeSnapshot_t s_clock;
-static Px4Lite_Result_t s_clock_result = PX4LITE_NOT_READY;
-static Px4Lite_GnssSatellitePage_t s_satellite_meta;
-static Px4Lite_GnssSatellite_t s_satellite_entries[64];
-static Px4Lite_Result_t s_satellite_result = PX4LITE_NOT_READY;
-static unsigned s_satellite_copies;
 const lv_font_t display_lvgl_font_zh_16 = {0};
 const lv_font_t display_lvgl_numeric_14 = {0};
 const lv_font_t display_lvgl_hex_14 = {0};
 const lv_font_t lv_font_montserrat_14 = {0};
+const lv_font_t lv_font_montserrat_24 = {0};
 
 /** @brief Framework测量替身仍经真实App执行逐域时效检查。 */
 Px4Lite_Result_t Px4Lite_CopyGnss(Px4Lite_SensorGnss_t *out)
 { s_measurement_copies++; *out = s_measurement; return s_measurement_result; }
 /** @brief 与App复制后的真实毫秒基准对应，不以RTC或本地时区续期GNSS事实。 */
 uint32_t Px4Lite_PlatformGetMs(void) { return s_now_ms; }
-/** @brief 时间源只提供已发布快照，真实App负责2500ms时效裁剪。 */
-Px4Lite_Result_t Px4Lite_CopyTime(Px4Lite_TimeSnapshot_t *out)
-{ *out = s_clock; return s_clock_result; }
-/** @brief 逐星只读页替身：分页复制同一代数，真实App继续执行年龄与available授权。 */
-Px4Lite_Result_t Px4Lite_GnssCopySatellitePage(uint8_t page, Px4Lite_GnssSatellitePage_t *out)
-{
-  unsigned i, first = (unsigned)page * 5U;
-  s_satellite_copies++;
-  if (s_satellite_result != PX4LITE_OK) { return s_satellite_result; }
-  if ((s_satellite_meta.stored == 0U && page != 0U) ||
-      (s_satellite_meta.stored != 0U && first >= s_satellite_meta.stored)) { return PX4LITE_INVALID_PARAM; }
-  *out = s_satellite_meta;
-  out->page = page; out->count = 0U;
-  memset(out->entries, 0, sizeof(out->entries));
-  for (i = 0U; i < 5U && first + i < s_satellite_meta.stored; i++) {
-    out->entries[i] = s_satellite_entries[first + i]; out->count++;
-  }
-  return PX4LITE_OK;
-}
 /** @brief 诊断接口保留但正常页面不得再调用它。 */
 Px4Lite_Result_t Px4Lite_GnssCopyDiagnostics(Px4Lite_GnssDiagnostics_t *out)
 { (void)out; s_diagnostic_copies++; assert(0 && "clean GNSS UI must not read diagnostics"); return PX4LITE_NOT_READY; }
@@ -106,6 +82,7 @@ char *lv_label_get_text(const lv_obj_t *obj)
 { const char *text = s_fake_text[ObjectIndex(obj)]; return (char *)(text ? text : ""); }
 void lv_obj_set_pos(lv_obj_t *obj, lv_coord_t x, lv_coord_t y) { (void)x; s_fake_y[ObjectIndex(obj)] = y; }
 void lv_obj_set_size(lv_obj_t *obj, lv_coord_t w, lv_coord_t h) { (void)w; (void)h; (void)ObjectIndex(obj); }
+void lv_obj_set_height(lv_obj_t *obj, lv_coord_t h) { (void)h; (void)ObjectIndex(obj); }
 void lv_obj_set_style_text_font(lv_obj_t *obj, const lv_font_t *font, lv_style_selector_t selector)
 { (void)selector; s_fake_font[ObjectIndex(obj)] = font; }
 void lv_obj_set_style_text_color(lv_obj_t *obj, lv_color_t color, lv_style_selector_t selector)
@@ -137,13 +114,13 @@ static void BindPool(void)
 /** @brief 临时GNSS收发、配置和服务提示不应留在正常页面文本中。 */
 static void AssertNoTemporaryText(const char *text)
 {
-  assert((strstr(text, "Local ") == NULL || s_gnss_details_view == 1U) && strstr(text, "UART RX") == NULL);
+  assert(strstr(text, "Local ") == NULL && strstr(text, "UART RX") == NULL);
   assert(strstr(text, "Svc ") == NULL && strstr(text, "Config ") == NULL);
   assert(strstr(text, "receive diagnostics") == NULL && strstr(text, "UBX status") == NULL);
   assert(strstr(text, "TX submit") == NULL && strstr(text, "HW(now)") == NULL);
 }
 
-/** @brief 主页面只绑定八项测量的16标签和原两个按钮，不创建或刷新三行诊断。 */
+/** @brief 主页面绑定八项测量和可读时效；可选 Frames 入口仍独立于实时读数。 */
 static void TestNormalGnssLayout(void)
 {
   static const Display_HmiVariableId_t ids[8] = {DISPLAY_HMI_VAR_GNSS_FIX, DISPLAY_HMI_VAR_GNSS_SAT_COUNT,
@@ -151,21 +128,25 @@ static void TestNormalGnssLayout(void)
     DISPLAY_HMI_VAR_LONGITUDE, DISPLAY_HMI_VAR_ALTITUDE, DISPLAY_HMI_VAR_GNSS_TIME};
   unsigned i;
   BindPool(); Display_LvglLayoutGnss();
-  assert(s_label_used == 16U && s_button_used == 2U);
-  for (i = 0U; i < 8U; ++i) { assert(strcmp(s_value_slots[ids[i]].text, "N/A") == 0); }
-  assert(s_row_labels[0] == NULL && s_row_labels[1] == NULL && s_row_labels[2] == NULL);
-  assert(s_fake_y[0] == 84 && s_fake_y[2] == 132 && s_fake_y[4] == 180 && s_fake_y[6] == 228);
+  assert(s_button_used == 2U);
+  for (i = 0U; i < 8U; ++i) {
+    assert(s_value_slots[ids[i]].label != NULL);
+    assert(strcmp(s_value_slots[ids[i]].text, "N/A") == 0);
+  }
+  assert(s_page_info != NULL && s_row_labels[0] != NULL && s_row_labels[1] != NULL);
+  assert(s_fake_y[ObjectIndex(s_value_slots[DISPLAY_HMI_VAR_LATITUDE].label)] ==
+         s_fake_y[ObjectIndex(s_value_slots[DISPLAY_HMI_VAR_LONGITUDE].label)]);
   assert(s_buttons[0].action == UI_ACTION_PAGE && s_buttons[0].argument == DISPLAY_HMI_PAGE_NMEA);
   assert(strcmp(s_fake_text[ObjectIndex(s_buttons[0].label)],"Frames >")==0);
   assert(s_buttons[1].action == UI_ACTION_PAGE && s_buttons[1].argument == DISPLAY_HMI_PAGE_DETAILS);
-  for (i = 0U; i < 16U; ++i) { AssertNoTemporaryText(s_fake_text[i]); }
+  for (i = 0U; i < s_label_used; ++i) { AssertNoTemporaryText(s_fake_text[i]); }
   for (i = 0U; i < 8U; ++i) { s_value_valid[ids[i]] = 1U; }
   s_values[DISPLAY_HMI_VAR_GNSS_FIX] = 3U; s_values[DISPLAY_HMI_VAR_GNSS_SAT_COUNT] = 12U;
   s_values[DISPLAY_HMI_VAR_GNSS_HDOP] = 95U; s_values[DISPLAY_HMI_VAR_GNSS_SPEED] = 250U;
   s_values[DISPLAY_HMI_VAR_LATITUDE] = 225000000U; s_values[DISPLAY_HMI_VAR_LONGITUDE] = 1135000000U;
   s_values[DISPLAY_HMI_VAR_ALTITUDE] = 1250U; s_values[DISPLAY_HMI_VAR_GNSS_TIME] = 123519U;
   s_label_used = s_button_used = 0U; Display_LvglLayoutGnss();
-  assert(s_label_used == 16U && s_button_used == 2U);
+  assert(s_button_used == 2U);
   assert(strcmp(s_value_slots[DISPLAY_HMI_VAR_GNSS_HDOP].text, "0.95") == 0);
   assert(strcmp(s_value_slots[DISPLAY_HMI_VAR_LATITUDE].text, "22.5000000") == 0);
   assert(strcmp(s_value_slots[DISPLAY_HMI_VAR_GNSS_TIME].text, "12:35:19") == 0);
@@ -201,16 +182,15 @@ static void TestMeasurementDetails(void)
   s_measurement.ground_speed_cms = 250U; s_measurement.heading_deg100 = 9000U;
   DetailsAt(1000U);
   assert(strcmp(s_row_text[0], "3D fix / used satellites 12 / age 0ms") == 0);
-  assert(strcmp(s_row_text[1], "GPS/BDS breakdown N/A / antenna N/A") == 0);
-  assert(strcmp(s_row_text[2], "Position valid / age 0ms / HDOP 0.95") == 0);
-  assert(strstr(s_row_text[3], "Ground speed 2.50m/s / course 90.00deg"));
-  assert(strstr(s_row_text[4], "Altitude valid") && strstr(s_row_text[5], "UTC 12:34:56"));
+  assert(strcmp(s_row_text[1], "Position valid / age 0ms / HDOP 0.95") == 0);
+  assert(strstr(s_row_text[2], "Ground speed 2.50m/s / course 90.00deg"));
+  assert(strstr(s_row_text[3], "Altitude valid") && strstr(s_row_text[4], "UTC 12:34:56"));
   s_measurement.dimension_source = PX4LITE_GNSS_SOURCE_NONE; DetailsAt(1000U);
   assert(strcmp(s_row_text[0], "Position fix / used satellites 12 / age 0ms") == 0);
   s_measurement.dimension_source = PX4LITE_GNSS_SOURCE_NMEA_GSA;
   s_measurement.dimension_update_ms = 1000U - (PX4LITE_GNSS_MAX_AGE_MS + 1U);
   DetailsAt(1000U); assert(strcmp(s_row_text[0], "Position fix / used satellites 12 / age 0ms") == 0);
-  s_measurement.hdop_x100 = 0U; DetailsAt(1000U); assert(strstr(s_row_text[2], "HDOP N/A"));
+  s_measurement.hdop_x100 = 0U; DetailsAt(1000U); assert(strstr(s_row_text[1], "HDOP N/A"));
   s_measurement.valid_mask = PX4LITE_GNSS_VALID_NAV_STATUS | PX4LITE_GNSS_VALID_TIME; s_measurement.fix_type = 0U;
   s_measurement.fix_dimension = 0U;
   for (i = 0U; i < 3U; ++i) {
@@ -220,14 +200,14 @@ static void TestMeasurementDetails(void)
     assert(strcmp(s_row_text[0], expected) == 0);
   }
   DetailsAt(1000U);
-  assert(strstr(s_row_text[2], "Position N/A") && strcmp(s_row_text[3], "N/A") == 0);
-  s_measurement.utc_sec = 0U; DetailsAt(1000U); assert(strstr(s_row_text[5], "UTC 00:00:00"));
+  assert(strstr(s_row_text[1], "Position N/A") && strcmp(s_row_text[2], "N/A") == 0);
+  s_measurement.utc_sec = 0U; DetailsAt(1000U); assert(strstr(s_row_text[4], "UTC 00:00:00"));
   /* 新ACK只刷新链路时刻，旧状态及UTC不得因此继续显示。 */
   s_measurement.last_rx_ms = 2501U; DetailsAt(2501U);
-  assert(strcmp(s_row_text[0], "Fix N/A / used satellites N/A") == 0 && strcmp(s_row_text[5], "UTC N/A") == 0);
+  assert(strcmp(s_row_text[0], "Fix N/A / used satellites N/A") == 0 && strcmp(s_row_text[4], "UTC N/A") == 0);
   DetailsAt(2501U);
-  assert(strstr(s_row_text[0], "Fix N/A") && strstr(s_row_text[2], "HDOP N/A"));
-  assert(strcmp(s_row_text[3], "N/A") == 0 && strstr(s_row_text[5], "UTC N/A"));
+  assert(strstr(s_row_text[0], "Fix N/A") && strstr(s_row_text[1], "HDOP N/A"));
+  assert(strcmp(s_row_text[2], "N/A") == 0 && strstr(s_row_text[4], "UTC N/A"));
 }
 
 /** @brief Auto兼容NMEA，保留ASCII/HEX；暂停标题仍明确真实RX与历史选帧不同。 */
@@ -353,131 +333,11 @@ static void TestAutoProtocolAndSession(void)
   s_capture_status_result=PX4LITE_OK;
 }
 
-/** @brief 无GNSS时RTC仍可读；日期/UTC/本地钟独立，旧系统钟和未知校时年龄不冒充有效值。 */
-static void TestLocalTimeView(void)
-{
-  BindPool(); s_details_kind = 1U; s_gnss_details_view = 1U;
-  memset(&s_clock, 0, sizeof(s_clock)); memset(&s_measurement, 0, sizeof(s_measurement));
-  s_measurement_result = PX4LITE_NOT_READY;
-  s_clock_result = PX4LITE_OK; s_clock.header.valid = 1U; s_clock.header.sample_time_ms = 1000U;
-  s_clock.utc_date_ymd = 20261109U; s_clock.utc_time_hhmmss = 123456U;
-  s_clock.local_date_ymd = 20261109U; s_clock.local_time_hhmmss = 203456U;
-  s_clock.source = PX4LITE_TIME_SOURCE_RTC; s_clock.sync_state = PX4LITE_TIME_SYNC_RTC_VALID;
-  DetailsAt(1000U);
-  assert(!strcmp(s_page_info_text, "GNSS / Time") && !strcmp(s_row_text[0], "GNSS UTC N/A"));
-  assert(strstr(s_row_text[1], "System UTC 2026-11-09 12:34:56") && strstr(s_row_text[2], "Local time 2026-11-09 20:34:56"));
-  assert(strstr(s_row_text[3], "Source RTC / sync RTC valid") && strstr(s_row_text[4], "age N/A"));
-  s_clock.last_sync_ms = 500U; s_clock.sync_age_s = 31U;
-  DetailsAt(1000U); assert(strstr(s_row_text[4], "age 31s"));
-  s_clock.source = PX4LITE_TIME_SOURCE_GNSS; s_clock.sync_state = PX4LITE_TIME_SYNC_GNSS_SYNCED;
-  s_clock.last_sync_ms = s_clock.sync_age_s = 0U;
-  s_measurement_result = PX4LITE_OK; s_measurement.valid_mask = PX4LITE_GNSS_VALID_TIME;
-  s_measurement.last_rx_ms = s_measurement.time_update_ms = 1000U;
-  s_measurement.utc_date = 261109U; s_measurement.utc_sec = 0U;
-  DetailsAt(1000U);
-  assert(strstr(s_row_text[0], "GNSS UTC 2026-11-09 00:00:00") && strstr(s_row_text[4], "age 0s"));
-  assert(strstr(s_row_text[3], "Source GNSS / sync GNSS synced"));
-  s_measurement.last_rx_ms = s_measurement.time_update_ms = 3501U;
-  DetailsAt(3501U);
-  assert(strstr(s_row_text[0], "GNSS UTC 2026-11-09") && strstr(s_row_text[1], "System UTC N/A / STALE"));
-  assert(!strcmp(s_row_text[3], "Source N/A / sync N/A"));
-  s_measurement_result = s_clock_result = PX4LITE_NOT_READY;
-  DetailsAt(4000U); assert(!strcmp(s_row_text[0], "GNSS UTC N/A") && !strcmp(s_row_text[1], "System UTC N/A"));
-}
-
-/** @brief 初始化7项同代数逐星事实，含同号异星座、零角度/载噪比和未知角度。 */
-static void SetSatelliteFacts(uint32_t now_ms)
-{
-  unsigned i;
-  memset(&s_satellite_meta, 0, sizeof(s_satellite_meta));
-  memset(s_satellite_entries, 0, sizeof(s_satellite_entries));
-  s_satellite_result = PX4LITE_OK;
-  s_satellite_meta.sequence = 42U; s_satellite_meta.received_ms = now_ms;
-  s_satellite_meta.available = 1U; s_satellite_meta.total = s_satellite_meta.stored = 7U;
-  s_satellite_meta.used_count = 3U;
-  for (i = 0U; i < 7U; i++) {
-    s_satellite_entries[i].gnss_id = 0U; s_satellite_entries[i].sv_id = (uint8_t)(12U + i);
-    s_satellite_entries[i].elevation_deg = 0; s_satellite_entries[i].azimuth_deg = 0;
-    s_satellite_entries[i].valid_mask = APP_GNSS_SAT_VALID_ELEVATION | APP_GNSS_SAT_VALID_AZIMUTH;
-  }
-  s_satellite_entries[1].gnss_id = 3U; s_satellite_entries[1].sv_id = 12U;
-  s_satellite_entries[1].cno_dbhz = 45U; s_satellite_entries[1].used = 1U; s_satellite_entries[1].quality = 7U;
-  s_satellite_entries[2].gnss_id = 42U; s_satellite_entries[2].valid_mask = 0U;
-  s_satellite_entries[3].gnss_id = 2U; s_satellite_entries[3].elevation_deg = -15;
-  s_satellite_entries[3].azimuth_deg = 270;
-  s_satellite_entries[4].gnss_id = 6U; s_satellite_entries[4].azimuth_deg = 360;
-}
-
-/** @brief 翻页与Hold只冻结当前5项，来源仍继续；过期Live清空，历史Held明确显示seq/age。 */
-static void TestSatelliteViewAndHold(void)
-{
-  unsigned before, i;
-  BindPool(); s_details_kind = 1U; s_gnss_details_view = 2U;
-  s_gnss_satellite_page_index = s_gnss_satellite_held = 0U;
-  SetSatelliteFacts(1000U); DetailsAt(1000U);
-  assert(strstr(s_page_info_text, "Sat 1/2 / Live"));
-  assert(strstr(s_row_text[0], "Live seq42 age0ms") && strstr(s_row_text[0], "NAV-SAT 7 stored7 used3"));
-  assert(strstr(s_row_text[1], "GPS SV12 / E 0 A 0 deg / C/N0 0 dBHz / used No Q0"));
-  assert(strstr(s_row_text[2], "BDS SV12") && strstr(s_row_text[2], "used Yes Q7"));
-  assert(strstr(s_row_text[3], "ID?42 SV14 / E N/A A N/A"));
-  assert(strstr(s_row_text[4], "GAL SV15 / E -15 A 270") && strstr(s_row_text[5], "GLO SV16 / E 0 A 360"));
-  before = s_satellite_copies;
-  UiGnssDetailsAction(UI_ACTION_GNSS_SAT_HOLD);
-  assert(s_gnss_satellite_held && s_satellite_copies == before);
-  s_satellite_meta.sequence = 43U; s_satellite_meta.received_ms = 5000U;
-  s_satellite_entries[0].cno_dbhz = 55U;
-  DetailsAt(5000U);
-  assert(s_satellite_copies == before && strstr(s_row_text[0], "HELD seq42 age4000ms"));
-  assert(strstr(s_row_text[1], "C/N0 0 dBHz"));
-  UiGnssDetailsAction(UI_ACTION_GNSS_SAT_NEXT); DetailsAt(5000U);
-  assert(!s_gnss_satellite_held && strstr(s_page_info_text, "Sat 2/2 / Live"));
-  assert(strstr(s_row_text[0], "Live seq43") && strstr(s_row_text[1], "SV17"));
-  for (i = 3U; i < 6U; i++) { assert(!strcmp(s_row_text[i], "N/A")); }
-  UiGnssDetailsAction(UI_ACTION_GNSS_SAT_NEXT); DetailsAt(5000U);
-  assert(strstr(s_page_info_text, "Sat 1/2") && strstr(s_row_text[1], "C/N0 55 dBHz"));
-  DetailsAt(7500U); assert(strstr(s_row_text[0], "Live seq43"));
-  DetailsAt(7501U); assert(strstr(s_row_text[0], "STALE"));
-  for (i = 1U; i < 6U; i++) { assert(!strcmp(s_row_text[i], "N/A")); }
-  UiGnssDetailsAction(UI_ACTION_GNSS_SAT_HOLD); assert(!s_gnss_satellite_held);
-  s_satellite_result = PX4LITE_NOT_READY; DetailsAt(7501U);
-  assert(strstr(s_row_text[0], "unavailable"));
-  s_satellite_result = PX4LITE_OK; s_satellite_meta.received_ms = 8000U;
-  s_satellite_meta.total = s_satellite_meta.stored = s_satellite_meta.used_count = 0U;
-  DetailsAt(8000U); assert(strstr(s_row_text[0], "NAV-SAT 0 stored0 used0"));
-  for (i = 1U; i < 6U; i++) { assert(!strcmp(s_row_text[i], "N/A")); }
-  /* 源表缩短后旧页号失效，必须回第一页而不是显示上轮第二页。 */
-  SetSatelliteFacts(9000U); s_gnss_satellite_page_index = 1U;
-  s_satellite_meta.total = s_satellite_meta.stored = 1U; DetailsAt(9000U);
-  assert(s_gnss_satellite_page_index == 0U && strstr(s_page_info_text, "Sat 1/1"));
-  assert(strstr(s_row_text[1], "GPS SV12") && !strcmp(s_row_text[2], "N/A"));
-  s_satellite_meta.total = 70U; s_satellite_meta.stored = 64U; s_satellite_meta.truncated = 1U;
-  DetailsAt(9000U); assert(strstr(s_row_text[0], "TRUNCATED"));
-}
-
-/** @brief GNSS子视图切换与固定按钮预算，不启动LVGL分配或控制命令。 */
-static void TestGnssViewButtons(void)
-{
-  BindPool(); s_details_kind = 1U; s_gnss_details_view = 0U;
-  s_button_used = 12U; UiGnssDetailsButtons();
-  assert(s_button_used == 13U && s_buttons[12].action == UI_ACTION_GNSS_VIEW);
-  assert(!strcmp(s_fake_text[ObjectIndex(s_buttons[12].label)], "View >"));
-  UiGnssDetailsAction(UI_ACTION_GNSS_VIEW); assert(s_gnss_details_view == 1U);
-  UiGnssDetailsAction(UI_ACTION_GNSS_VIEW); assert(s_gnss_details_view == 2U);
-  s_button_used = 12U; UiGnssDetailsButtons();
-  assert(s_button_used == 15U && s_button_used <= UI_BUTTON_COUNT);
-  assert(s_buttons[13].action == UI_ACTION_GNSS_SAT_NEXT && s_buttons[14].action == UI_ACTION_GNSS_SAT_HOLD);
-  s_gnss_satellite_held = 1U; s_button_used = 12U; UiGnssDetailsButtons();
-  assert(!strcmp(s_fake_text[ObjectIndex(s_buttons[14].label)], "Live"));
-  UiGnssDetailsAction(UI_ACTION_GNSS_VIEW);
-  assert(s_gnss_details_view == 0U && !s_gnss_satellite_held && s_gnss_satellite_page_index == 0U);
-}
-
 /** @brief 正常页面闭环回归，不启动实际LVGL或任何硬件服务。 */
 int main(void)
 {
   TestNormalGnssLayout(); TestMeasurementDetails(); TestNormalNmeaCapture();
   TestUbxRawAndMessageNames();TestAutoProtocolAndSession();
-  TestLocalTimeView(); TestSatelliteViewAndHold(); TestGnssViewButtons();
   puts("GNSS Frames UI: PASS (normal measurements/NMEA+UBX complete raw/Auto RX/filters/session isolation)");
   return 0;
 }

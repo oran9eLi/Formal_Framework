@@ -32,6 +32,8 @@ typedef struct {
 
 /** @brief Comm 初始化；首组允许立即生成，bundle 代数从 0 开始。 */
 void Px4Lite_GnssUplinkInit(uint32_t now_ms);
+/** @brief Comm 丢弃已冻结的旧 GNSS 分组，保留分组流水号。 */
+void Px4Lite_GnssUplinkDiscard(uint32_t now_ms);
 /**
  * @brief 按 1s 节奏冻结同一次源副本并返回一个到期待发包；未知/无定位也有包。
  * @details 同组保留物理量与源时刻；每次编码/重试按当前真实毫秒重新计算年龄及有效位。

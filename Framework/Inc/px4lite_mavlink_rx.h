@@ -37,6 +37,8 @@ Px4Lite_Result_t Px4Lite_MavlinkRxRunRpi(uint32_t now_ms);
  * @return 最近对端解码成功帧时间，单位：ms；0 表示尚未收到。
  */
 uint32_t Px4Lite_MavlinkRxLastPeerMs(void);
+/** @brief Comm 暂停 LoRa 时撤销前一会话的对端接收时刻。 */
+void Px4Lite_MavlinkRxResetLoRa(void);
 
 /**
  * @brief 复制最近一份远端遥测快照。

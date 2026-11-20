@@ -4,6 +4,7 @@
  * @details 无任务/堆分配；Comm执行动作，Adapter提交副本，不读生产队列或DMA。
  */
 #include "px4lite_diagnostic_capture.h"
+#include "px4lite_config.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
@@ -11,6 +12,7 @@
 static Px4Lite_SerialExperiment_t s_serial;
 /** @brief Comm 发布、应用只读的通用串口事实，独立于捕获会话。 */
 static Px4Lite_SerialMonitor_t s_serial_monitor;
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
 /** @brief 固定互斥区；切类型必须换会话且暂停。 */
 typedef union {
   Px4Lite_CaptureFrame_t mav[PX4LITE_CAPTURE_CAPACITY]; /**< MAVLink完整帧。 */
@@ -24,13 +26,6 @@ static uint32_t s_tx_session, s_tx_token;
 static uint8_t s_head;
 /** @brief 非零代数递增，处理uint32回绕。 */
 static uint32_t CaptureNext(uint32_t value) { return value == UINT32_MAX ? 1U : value + 1U; }
-/** @brief 调度前一次初始化。 */
-void Px4Lite_CaptureInit(void)
-{
-  memset(&s_serial_monitor, 0, sizeof(s_serial_monitor));
-  memset(&s_store, 0, sizeof(s_store)); memset(s_summary, 0, sizeof(s_summary)); memset(&s_status, 0, sizeof(s_status));
-  s_status.session_id = 1U; s_status.source = PX4LITE_CAPTURE_LORA_RX; s_head = 0U; s_tx_session = 0U; s_tx_token = 0U;
-}
 /** @brief 固定请求槽只复制，不在调用方执行切换。 */
 Px4Lite_Result_t Px4Lite_CaptureRequest(const Px4Lite_CaptureRequest_t *request)
 {
@@ -40,10 +35,21 @@ Px4Lite_Result_t Px4Lite_CaptureRequest(const Px4Lite_CaptureRequest_t *request)
   s_request = *request; s_status.request_id = CaptureNext(s_status.request_id); s_status.pending = 1U;
   taskEXIT_CRITICAL(); return PX4LITE_OK;
 }
-/** @brief Comm处理捕获动作；换会话只清记录统计，保留端口统计和独立GNSS协议发现事实。 */
+#endif
+/** @brief 调度前初始化串口监视及启用的本地捕获。 */
+void Px4Lite_CaptureInit(void)
+{
+  memset(&s_serial_monitor, 0, sizeof(s_serial_monitor));
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
+  memset(&s_store, 0, sizeof(s_store)); memset(s_summary, 0, sizeof(s_summary)); memset(&s_status, 0, sizeof(s_status));
+  s_status.session_id = 1U; s_status.source = PX4LITE_CAPTURE_LORA_RX; s_head = 0U; s_tx_session = 0U; s_tx_token = 0U;
+#endif
+}
+/** @brief 发布串口监视；捕获换会话只清记录统计，保留上电累计事实。 */
 void Px4Lite_CaptureWorkRun(void)
 {
   Px4Lite_SerialExperiment_t serial;
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   taskENTER_CRITICAL();
   if (s_status.pending) {
     uint8_t reset = (uint8_t)(s_request.operation == PX4LITE_CAPTURE_START || s_request.operation == PX4LITE_CAPTURE_CLEAR || s_request.operation == PX4LITE_CAPTURE_SELECT || s_request.source != s_status.source);
@@ -60,6 +66,7 @@ void Px4Lite_CaptureWorkRun(void)
     s_status.completed_request_id = s_status.request_id; s_status.result = PX4LITE_OK; s_status.pending = 0U;
   }
   taskEXIT_CRITICAL();
+#endif
   Px4Lite_RpiH1EchoGetStats(&serial.h1); Px4Lite_RpiBaudSwitchGetStats(&serial.b1);
   serial.measured_ms=Px4Lite_PlatformGetMs();
   taskENTER_CRITICAL(); s_serial=serial; taskEXIT_CRITICAL();
@@ -79,6 +86,7 @@ Px4Lite_Result_t Px4Lite_CopySerialMonitor(Px4Lite_SerialMonitor_t *out)
 /** @brief 只复制Comm已发布状态，不让消费者访问外设。 */
 Px4Lite_Result_t Px4Lite_CopySerialExperiment(Px4Lite_SerialExperiment_t *out)
 { if(!out) { return PX4LITE_INVALID_PARAM; } taskENTER_CRITICAL(); *out=s_serial; taskEXIT_CRITICAL(); return PX4LITE_OK; }
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
 /** @brief 复制摘要。 */
 Px4Lite_Result_t Px4Lite_CaptureCopyStatus(Px4Lite_CaptureStatus_t *out)
 { if (!out) { return PX4LITE_INVALID_PARAM; } taskENTER_CRITICAL(); *out = s_status; taskEXIT_CRITICAL(); return PX4LITE_OK; }
@@ -325,3 +333,26 @@ Px4Lite_Result_t Px4Lite_CaptureCopyNmea(uint32_t session, uint32_t token, Px4Li
   }
   taskEXIT_CRITICAL(); return PX4LITE_NOT_READY;
 }
+#else
+/* 保留应用数据接口，未编入捕获时不分配会话或写出快照。 */
+Px4Lite_Result_t Px4Lite_CaptureRequest(const Px4Lite_CaptureRequest_t *request)
+{ return request ? PX4LITE_NOT_READY : PX4LITE_INVALID_PARAM; }
+
+Px4Lite_Result_t Px4Lite_CaptureCopyStatus(Px4Lite_CaptureStatus_t *out)
+{ return out ? PX4LITE_NOT_READY : PX4LITE_INVALID_PARAM; }
+
+Px4Lite_Result_t Px4Lite_CaptureCopySummary(uint32_t session, uint8_t index, Px4Lite_CaptureSummary_t *out)
+{ (void)session; (void)index; return out ? PX4LITE_NOT_READY : PX4LITE_INVALID_PARAM; }
+
+Px4Lite_Result_t Px4Lite_CaptureCopyFrame(uint32_t session, uint32_t token, Px4Lite_CaptureFrame_t *out)
+{ (void)session; (void)token; return out ? PX4LITE_NOT_READY : PX4LITE_INVALID_PARAM; }
+
+Px4Lite_Result_t Px4Lite_CaptureCopyStage(uint32_t session, uint32_t token, uint8_t *stage)
+{ (void)session; (void)token; return stage ? PX4LITE_NOT_READY : PX4LITE_INVALID_PARAM; }
+
+Px4Lite_Result_t Px4Lite_CaptureCopyGnss(uint32_t session, uint32_t token, Px4Lite_GnssCapturedFrame_t *out)
+{ (void)session; (void)token; return out ? PX4LITE_NOT_READY : PX4LITE_INVALID_PARAM; }
+
+Px4Lite_Result_t Px4Lite_CaptureCopyNmea(uint32_t session, uint32_t token, Px4Lite_NmeaSentence_t *out)
+{ (void)session; (void)token; return out ? PX4LITE_NOT_READY : PX4LITE_INVALID_PARAM; }
+#endif

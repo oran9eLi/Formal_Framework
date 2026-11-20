@@ -9,6 +9,7 @@
 
 #include "bsp_critical.h"
 #include "bsp_gnss.h"
+#include "debug_config.h"
 #include "sensor_nmea.h"
 #include "sensor_ubx.h"
 
@@ -40,6 +41,7 @@
 
 static Gnss_Snapshot_t s_snapshot;
 static uint32_t s_rx_sequence_counter; /**< 本次上电完整合法帧流水号；warm Init保留，0不作为新帧发布。 */
+#if GNSS_LOCAL_SATELLITE_TABLE_ENABLE
 /** @brief 独立卫星表；sensor在区外完整解析后一次发布，不扩展主导航快照或创建任务。 */
 typedef struct {
   uint32_t sequence;    /**< NAV-SAT有效帧代数，自然回绕。 */
@@ -50,6 +52,7 @@ typedef struct {
   Gnss_Satellite_t entries[GNSS_SAT_CAPACITY]; /**< 静态64项，未保留项保持0。 */
 } Gnss_SatelliteTable_t;
 static Gnss_SatelliteTable_t s_satellite_work, s_satellite_published;
+#endif
 static uint8_t s_line_buf[NMEA_SENTENCE_MAX_LEN + 1U];
 static Gnss_DiagnosticSentence_t s_diagnostic_sentence;
 static Gnss_UbxDiagnostic_t s_diagnostic_ubx;
@@ -80,14 +83,16 @@ static uint8_t s_recover_attempt_seen;
 static Ubx_Parser_t s_ubx;
 static uint8_t s_tx_command[64];
 
-/** @brief owner写入、其它任务短临界复制的完整原帧采样槽，不承担队列或测量职责。 */
+#if DEBUG_GNSS_MONITOR_ENABLE
+/** @brief UART1 周期诊断的原帧采样槽，由 sensor 写入，DebugTask 读取。 */
 typedef struct {
   uint8_t bytes[GNSS_RAW_MAX_BYTES]; /**< 最近完整原帧，保留收到的校验字节。 */
   Gnss_RawFrameInfo_t info;         /**< 原帧独立元数据，序号0和时刻0均合法。 */
   uint8_t ready;                    /**< 已捕获完整原帧为1，不用sequence判空。 */
 } Gnss_RawSlot_t;
 static Gnss_RawSlot_t s_raw_slots[GNSS_RAW_SLOT_COUNT];
-static uint8_t s_raw_work[GNSS_RAW_FORWARD_MAX_BYTES]; /**< 独立forward静态工作区；旧3槽仍只有392B，长帧不假截断。 */
+#endif
+static uint8_t s_raw_work[GNSS_RAW_FORWARD_MAX_BYTES]; /**< 独立原帧转发区，保留完整长帧及接收校验。 */
 
 /** @brief 非阻塞协议接入的私有上下文；所有时间字段均为真实 ms。 */
 typedef struct {
@@ -130,9 +135,6 @@ static void Gnss_ResetFraming(uint32_t now, uint8_t report_now);
 static void Gnss_ExpireUbxCandidate(uint32_t now);
 static void Gnss_Unconfirmed(uint32_t now);
 static void Gnss_RecordValidSentence(uint32_t now);
-static void Gnss_CaptureRaw(uint8_t slot, const uint8_t *bytes, uint16_t length,
-                            uint8_t protocol, uint8_t class_id, uint8_t message_id,
-                            uint8_t checksum_valid, uint32_t now);
 static void Gnss_CaptureUbxRaw(uint8_t checksum_valid, uint32_t now);
 
 /** @brief 在owner上下文报告有依据的软件拒绝事件；绝不构造完整帧或修改typed状态。 */
@@ -542,9 +544,13 @@ Gnss_Result_t Sensor_GNSS_Init(void)
     memset(&s_link, 0, sizeof(s_link));
     memset(&s_diag_work, 0, sizeof(s_diag_work));
     memset(&s_diag_published, 0, sizeof(s_diag_published));
+#if DEBUG_GNSS_MONITOR_ENABLE
     memset(s_raw_slots, 0, sizeof(s_raw_slots));
+#endif
+#if GNSS_LOCAL_SATELLITE_TABLE_ENABLE
     memset(&s_satellite_work, 0, sizeof(s_satellite_work));
     memset(&s_satellite_published, 0, sizeof(s_satellite_published));
+#endif
     s_diag_work.state = GNSS_LINK_SCAN;
     s_driver_started = 1U;
     s_recover_rx_pending = 0U;
@@ -562,6 +568,28 @@ Gnss_Result_t Sensor_GNSS_Init(void)
   Gnss_ResetFraming(0U, 0U);
   s_reinit_request = 0U;
   return GNSS_RESULT_OK;
+}
+
+/** @brief sensor 在 UART 停止后撤销暂停前的快照、原始帧和卫星页。 */
+void Sensor_GNSS_DiscardExperimentData(void)
+{
+#if DEBUG_GNSS_MONITOR_ENABLE
+  uint8_t i;
+#endif
+#if DEBUG_GNSS_MONITOR_ENABLE || GNSS_LOCAL_SATELLITE_TABLE_ENABLE
+  uint32_t primask;
+#endif
+  (void)Sensor_GNSS_Init();
+#if DEBUG_GNSS_MONITOR_ENABLE || GNSS_LOCAL_SATELLITE_TABLE_ENABLE
+  primask = BSP_Critical_Enter();
+#if DEBUG_GNSS_MONITOR_ENABLE
+  for (i = 0U; i < GNSS_RAW_SLOT_COUNT; ++i) { s_raw_slots[i].ready = 0U; }
+#endif
+#if GNSS_LOCAL_SATELLITE_TABLE_ENABLE
+  s_satellite_published.available = 0U;
+#endif
+  BSP_Critical_Exit(primask);
+#endif
 }
 
 /**
@@ -690,9 +718,12 @@ Gnss_Result_t Sensor_GNSS_CopyDiagnostics(Gnss_Diagnostics_t *out)
 /** @brief 只复制完整原帧采样及元数据，保持槽ready/序号和硬件接收游标不变。 */
 Gnss_Result_t Sensor_GNSS_CopyRawFrame(uint8_t slot, uint8_t *bytes, uint16_t capacity, Gnss_RawFrameInfo_t *info)
 {
+#if DEBUG_GNSS_MONITOR_ENABLE
   uint32_t primask;
   Gnss_Result_t result;
+#endif
   if (slot >= GNSS_RAW_SLOT_COUNT || bytes == NULL || info == NULL || capacity == 0U) { return GNSS_RESULT_INVALID_PARAM; }
+#if DEBUG_GNSS_MONITOR_ENABLE
   primask = BSP_Critical_Enter();
   if (!s_raw_slots[slot].ready) { result = GNSS_RESULT_NO_DATA; }
   else if (capacity < s_raw_slots[slot].info.length) { result = GNSS_RESULT_INVALID_PARAM; }
@@ -703,8 +734,12 @@ Gnss_Result_t Sensor_GNSS_CopyRawFrame(uint8_t slot, uint8_t *bytes, uint16_t ca
   }
   BSP_Critical_Exit(primask);
   return result;
+#else
+  return GNSS_RESULT_NO_DATA;
+#endif
 }
 
+#if DEBUG_GNSS_MONITOR_ENABLE
 /** @brief owner发布一个有界完整原帧；临界区内仅复制字节/元数据和设置ready。 */
 static void Gnss_CaptureRaw(uint8_t slot, const uint8_t *bytes, uint16_t length,
                             uint8_t protocol, uint8_t class_id, uint8_t message_id,
@@ -723,12 +758,15 @@ static void Gnss_CaptureRaw(uint8_t slot, const uint8_t *bytes, uint16_t length,
   s_raw_slots[slot].ready = 1U;
   BSP_Critical_Exit(primask);
 }
+#endif
 
-/** @brief 用刚收到的头/载荷/原校验保存完整UBX字节，绝不重算或修正坏校验。 */
+/** @brief 用收到的头、载荷和原校验发布完整 UBX；UART1 诊断启用时额外采样。 */
 static void Gnss_CaptureUbxRaw(uint8_t checksum_valid, uint32_t now)
 {
   uint16_t length;
+#if DEBUG_GNSS_MONITOR_ENABLE
   uint8_t slot = 2U;
+#endif
   if (s_ubx.length > UBX_PAYLOAD_CAPACITY) {
     Gnss_RejectRaw(GNSS_PROTOCOL_UBX, (uint32_t)s_ubx.length + UBX_FRAME_OVERHEAD, GNSS_RAW_REJECT_OVERSIZE, now);
     return;
@@ -739,9 +777,11 @@ static void Gnss_CaptureUbxRaw(uint8_t checksum_valid, uint32_t now)
   s_raw_work[4] = (uint8_t)s_ubx.length; s_raw_work[5] = (uint8_t)(s_ubx.length >> 8);
   memcpy(&s_raw_work[6], s_ubx.payload, s_ubx.length);
   s_raw_work[length - 2U] = s_ubx.received_ck_a; s_raw_work[length - 1U] = s_ubx.received_ck_b;
+#if DEBUG_GNSS_MONITOR_ENABLE
   if (s_ubx.class_id == 0x01U && s_ubx.message_id == 0x07U) { slot = 0U; }
   else if (s_ubx.class_id == 0x01U && s_ubx.message_id == 0x04U) { slot = 1U; }
   Gnss_CaptureRaw(slot, s_raw_work, length, GNSS_PROTOCOL_UBX, s_ubx.class_id, s_ubx.message_id, checksum_valid, now);
+#endif
   if (s_diagnostic_ubx != NULL) {
     s_diagnostic_ubx(s_raw_work, length, s_ubx.class_id, s_ubx.message_id, checksum_valid, now);
   }
@@ -767,12 +807,15 @@ Gnss_Result_t Sensor_GNSS_CopySnapshot(Gnss_Snapshot_t *out)
 /** @brief 只复制已发布卫星页，临界区内不解析、计数、排序、访问UART或执行过期策略。 */
 Gnss_Result_t Sensor_GNSS_CopySatellitePage(uint8_t page, Gnss_SatellitePage_t *out)
 {
-  Gnss_SatellitePage_t copy;
   uint16_t start = (uint16_t)page * GNSS_SAT_PAGE_CAPACITY;
+#if GNSS_LOCAL_SATELLITE_TABLE_ENABLE
+  Gnss_SatellitePage_t copy;
   uint16_t remaining;
   uint16_t bytes;
   uint32_t primask;
+#endif
   if (out == NULL || start >= GNSS_SAT_CAPACITY) { return GNSS_RESULT_INVALID_PARAM; }
+#if GNSS_LOCAL_SATELLITE_TABLE_ENABLE
   remaining = (uint16_t)(GNSS_SAT_CAPACITY - start);
   if (remaining > GNSS_SAT_PAGE_CAPACITY) { remaining = GNSS_SAT_PAGE_CAPACITY; }
   bytes = (uint16_t)(remaining * sizeof(Gnss_Satellite_t));
@@ -795,6 +838,9 @@ Gnss_Result_t Sensor_GNSS_CopySatellitePage(uint8_t page, Gnss_SatellitePage_t *
   copy.count = (uint8_t)((remaining > GNSS_SAT_PAGE_CAPACITY) ? GNSS_SAT_PAGE_CAPACITY : remaining);
   *out = copy;
   return GNSS_RESULT_OK;
+#else
+  return GNSS_RESULT_NO_DATA;
+#endif
 }
 
 /**
@@ -916,7 +962,9 @@ static void Gnss_FeedAndParse(uint32_t now)
           s_line_buf[s_line_pos] = '\0';
           memset(&sentence,0,sizeof(sentence));
           (void)Nmea_ExtractSentence(s_line_buf,s_line_pos,&cursor,&sentence);
+#if DEBUG_GNSS_MONITOR_ENABLE
           Gnss_CaptureRaw(2U, s_line_buf, s_line_pos, GNSS_PROTOCOL_NMEA, 0U, 0U, sentence.checksum_ok, now);
+#endif
           if (s_diagnostic_sentence) {
             uint8_t type=0U;
             if (s_line_pos>=6U) {
@@ -1135,6 +1183,7 @@ static uint8_t Gnss_VersionText(const uint8_t *p, uint16_t length)
   return 0U;
 }
 
+#if GNSS_LOCAL_SATELLITE_TABLE_ENABLE
 /**
  * @brief 在sensor上下文解析结构有效的NAV-SAT，并一次发布独立卫星表。
  * @param[in] now 本机消费时刻，单位ms；不使用模块iTOW充当本机时钟。
@@ -1183,6 +1232,7 @@ static uint8_t Gnss_ParseSatellites(uint32_t now)
   BSP_Critical_Exit(primask);
   return 1U;
 }
+#endif
 
 /** @brief 仅解析已支持UBX测量/配置内容；完整帧链路计数由调用方统一完成。 */
 static void Gnss_ProcessUbx(uint32_t now)
@@ -1208,8 +1258,10 @@ static void Gnss_ProcessUbx(uint32_t now)
         s_link.pvt_itow == s_link.dop_itow && (uint32_t)(now - s_link.pvt_ms) <= GNSS_PVT_FRESH_MS) {
       primask = BSP_Critical_Enter(); s_snapshot.hdop_cm = s_link.hdop; BSP_Critical_Exit(primask);
     }
+#if GNSS_LOCAL_SATELLITE_TABLE_ENABLE
   } else if (s_ubx.class_id == 0x01U && s_ubx.message_id == 0x35U) {
     (void)Gnss_ParseSatellites(now);
+#endif
   } else if (s_ubx.class_id == 0x0AU && s_ubx.message_id == 0x04U && length >= 40U && (length - 40U) % 30U == 0U &&
              Gnss_VersionText(p, 30U) && Gnss_VersionText(p + 30, 10U)) {
     uint16_t offset, version = 0U;

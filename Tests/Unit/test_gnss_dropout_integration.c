@@ -35,6 +35,12 @@ static void ExitCritical(void);
 /** @brief 本夹具只核验原GNSS采集/健康规则，新增声光事件隔离为无硬件输出。 */
 void Px4Lite_StartupToneNotifyModuleConnection(uint8_t connected) { (void)connected; }
 
+/** @brief 此专项只注入在线快照，owner 启停由真实 BSP 集成专项验证。 */
+Gnss_Result_t Sensor_GNSS_Init(void) { assert(0); return GNSS_RESULT_IO_ERROR; }
+BSP_Status_t BSP_GNSS_Init(void) { assert(0); return BSP_STATUS_ERROR; }
+BSP_Status_t BSP_GNSS_DeInit(void) { assert(0); return BSP_STATUS_ERROR; }
+void Sensor_GNSS_DiscardExperimentData(void) { assert(0); }
+
 static uint32_t s_published_gnss,s_health_runs;
 static Px4Lite_SystemHealth_t s_last_health;
 

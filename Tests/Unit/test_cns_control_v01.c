@@ -19,6 +19,7 @@ static unsigned s_sched, s_critical;
 static uint16_t s_pwm[4];
 static Px4Lite_MotorOutputs_t s_motor;
 static uint8_t s_key, s_write_fail, s_disarm_fail, s_nav_ready = 1U;
+static uint8_t s_battery_ready = 1U;
 static int32_t s_nav_roll;
 static uint8_t s_tone_action, s_tone_done, s_tone_error;
 static uint32_t s_tone_token;
@@ -42,7 +43,10 @@ void Px4Lite_PublishMotor(const Px4Lite_MotorOutputs_t *motor) { s_motor=*motor;
 Px4Lite_Result_t Px4Lite_CopyMotor(Px4Lite_MotorOutputs_t *motor)
 { *motor=s_motor; return motor->header.valid?PX4LITE_OK:PX4LITE_NOT_READY; }
 Px4Lite_Result_t Px4Lite_CopyBattery2(Px4Lite_BatteryStatus_t *out)
-{ memset(out,0,sizeof(*out));out->header.valid=1U;out->header.sample_time_ms=s_now;out->voltage_mv=12000U;return PX4LITE_OK; }
+{
+  if(!s_battery_ready) { return PX4LITE_NOT_READY; }
+  memset(out,0,sizeof(*out));out->header.valid=1U;out->header.sample_time_ms=s_now;out->voltage_mv=12000U;return PX4LITE_OK;
+}
 Px4Lite_Result_t Px4Lite_CopyNavigation(Px4Lite_VehicleNavigation_t *nav)
 {
   if(!s_nav_ready) { return PX4LITE_NOT_READY; }
@@ -74,7 +78,7 @@ static void Advance(uint32_t duration)
 /** @brief 复位实际控制模块；令牌序列按生产恢复规则不清零。 */
 static void Reset(void)
 {
-  s_now=1000U;s_key=0U;s_write_fail=0U;s_disarm_fail=0U;s_nav_ready=1U;s_nav_roll=0;
+  s_now=1000U;s_key=0U;s_write_fail=0U;s_disarm_fail=0U;s_nav_ready=1U;s_battery_ready=1U;s_nav_roll=0;
   s_watch_armed_during_idle=0U;s_tone_done=0U;s_tone_error=0U;
   assert(Px4Lite_ControlModuleInit()==PX4LITE_OK);Advance(20U);assert(!Px4Lite_ControlCnsArmed());
 }
@@ -257,10 +261,71 @@ static void TestPreemption(void)
   assert(!Px4Lite_ControlCnsArmed());
 }
 
+/** @brief 真实控制输出和起飞受理对实验暂停的保护。 */
+static void TestExperimentPause(void)
+{
+  const uint8_t throttle[4] = {40U,40U,40U,40U};
+  uint32_t token;
+
+  Reset();
+  assert(Px4Lite_ControlModulePauseAllowed(PX4LITE_MODULE_IMU));
+  assert(Px4Lite_ControlModulePauseAllowed(PX4LITE_MODULE_BARO));
+  Arm();
+  assert(Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_DIRECT)==PX4LITE_OK);
+  assert(Px4Lite_ControlSetMotorThrottles(throttle)==PX4LITE_OK);
+  Advance(20U);
+  assert(Px4Lite_ControlModulePauseAllowed(PX4LITE_MODULE_IMU));
+  assert(Px4Lite_ControlModulePauseAllowed(PX4LITE_MODULE_BARO));
+  assert(Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST)==PX4LITE_OK);
+  Advance(20U);
+  assert(!Px4Lite_ControlModulePauseAllowed(PX4LITE_MODULE_IMU));
+  assert(Px4Lite_ControlModulePauseAllowed(PX4LITE_MODULE_BARO));
+  token=Request(PX4LITE_CNS_TAKEOFF,0U,0U,PX4LITE_OK,0U);
+  assert(!Px4Lite_ControlModulePauseAllowed(PX4LITE_MODULE_IMU));
+  assert(!Px4Lite_ControlModulePauseAllowed(PX4LITE_MODULE_BARO));
+  Px4Lite_ControlCnsAckSent(token);
+  Advance(20U);
+  s_tone_done=1U;
+  Advance(20U);
+  assert(!Px4Lite_ControlModulePauseAllowed(PX4LITE_MODULE_BARO));
+}
+
+/** @brief 失去动力电时拒绝驱动请求，安全撤收及其 ACK 后的提示仍可执行。 */
+static void TestPowerGateCns(void)
+{
+  uint32_t token;
+  uint8_t locked;
+
+  Reset();Arm();
+  s_battery_ready=0U;
+  (void)Request(PX4LITE_CNS_SET_MOTOR_PWM,0U,1400U,PX4LITE_NOT_READY,4U);
+  assert(!Px4Lite_ControlCnsArmed());
+  assert(Px4Lite_ControlGetMotorLocked(&locked)==PX4LITE_OK && !locked);
+  (void)Request(PX4LITE_CNS_TAKEOFF,0U,0U,PX4LITE_NOT_READY,4U);
+  token=Request(PX4LITE_CNS_DISARM,0U,0U,PX4LITE_OK,0U);All(1000U);
+  Px4Lite_ControlCnsAckSent(token);Advance(20U);
+  assert(s_tone_action==PX4LITE_CNS_DISARM && s_tone_token==token);
+  s_tone_done=1U;Advance(20U);All(1000U);
+
+  Reset();s_battery_ready=0U;
+  (void)Request(PX4LITE_CNS_ARM,0U,0U,PX4LITE_NOT_READY,4U);
+  token=Request(PX4LITE_CNS_EMERGENCY_STOP,0U,0U,PX4LITE_OK,0U);All(1000U);
+  Px4Lite_ControlCnsAckSent(token);Advance(20U);
+  assert(s_tone_action==PX4LITE_CNS_EMERGENCY_STOP && s_tone_token==token);
+  s_tone_done=1U;Advance(20U);
+  assert(!Px4Lite_ControlCnsArmed());All(1000U);
+
+  Reset();Arm();s_battery_ready=0U;Advance(20U);
+  assert(!Px4Lite_ControlCnsArmed());All(1000U);
+  s_battery_ready=1U;Advance(PX4LITE_CONTROL_ESC_ARM_TIME_MS+20U);
+  assert(Px4Lite_ControlCnsArmed());All(1000U);
+}
+
 int main(void)
 {
   TestAckAndLock();TestRearmFromUnlocked();TestAckDeadlineBoundary();TestArmOutputFailure();TestSinglePwmAndBusy();TestRampsAndStops();TestPreemption();
-  assert(!s_sched && !s_critical);puts("CNS V0.1 control: PASS (ACK, lock, output, ramps, preemption)");return 0;
+  TestExperimentPause();TestPowerGateCns();
+  assert(!s_sched && !s_critical);puts("CNS V0.1 control: PASS (ACK, lock, power gate, output, ramps, preemption)");return 0;
 }
 #else
 /** @brief 关闭 CNS 后真实旧人工锁路径可用，新接口明确拒绝且不启动专属声光。 */

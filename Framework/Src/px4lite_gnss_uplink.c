@@ -219,6 +219,18 @@ void Px4Lite_GnssUplinkInit(uint32_t now_ms)
   (void)now_ms;
 #endif
 }
+/** @brief 丢弃停采前冻结的 GNSS 分组；下一次 Peek 重新冻结数据。 */
+void Px4Lite_GnssUplinkDiscard(uint32_t now_ms)
+{
+#if PX4LITE_ENABLE_RPI_GNSS_UPLINK
+  s_uplink.part = PX4LITE_GNSS_UPLINK_PARTS;
+  s_uplink.next_bundle_ms = now_ms;
+  s_uplink.offered = 0U;
+#else
+  (void)now_ms;
+#endif
+}
+
 /** @brief 一次只提供当前一个冻结包；新秒周期主动丢弃未完成旧组。 */
 Px4Lite_Result_t Px4Lite_GnssUplinkPeek(uint32_t now_ms, Px4Lite_GnssUplinkView_t *out)
 {

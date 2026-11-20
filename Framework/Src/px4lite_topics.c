@@ -37,6 +37,33 @@ static QueueHandle_t s_alarm_queue;
 static QueueHandle_t s_command_queue;
 static QueueHandle_t s_command_ack_queue;
 
+/** @brief 模块启停只撤销当前快照和消费队列，保留上电累计统计。 */
+void Px4Lite_InvalidateSensorTopics(Px4Lite_ModuleId_t id)
+{
+  taskENTER_CRITICAL();
+  switch (id) {
+    case PX4LITE_MODULE_GNSS:
+      s_gnss_ready = 0U;
+      s_navigation.valid_mask &= ~(PX4LITE_NAV_VALID_POSITION | PX4LITE_NAV_VALID_VELOCITY |
+                                   PX4LITE_NAV_VALID_ALTITUDE | PX4LITE_NAV_VALID_TIME);
+      s_navigation.gnss_fix_type = 0U;
+      break;
+    case PX4LITE_MODULE_IMU:
+      s_imu_latest_ready = 0U;
+      s_imu_fifo.tail = s_imu_fifo.head;
+      s_imu_fifo.count = 0U;
+      s_imu_fifo.stats.count = 0U;
+      s_navigation.valid_mask &= ~(PX4LITE_NAV_VALID_ATTITUDE | PX4LITE_NAV_VALID_YAW_REL);
+      break;
+    case PX4LITE_MODULE_BARO:
+      s_baro_ready = 0U;
+      break;
+    default:
+      break;
+  }
+  taskEXIT_CRITICAL();
+}
+
 #define DEFINE_LATEST_ACCESSORS(type, suffix, name)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    \
   void Px4Lite_Publish##suffix(const type *data)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       \
   {                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    \
@@ -64,6 +91,14 @@ DEFINE_LATEST_ACCESSORS(Px4Lite_BatteryStatus_t, Battery2, battery2)
 DEFINE_LATEST_ACCESSORS(Px4Lite_VehicleNavigation_t, Navigation, navigation)
 DEFINE_LATEST_ACCESSORS(Px4Lite_MotorOutputs_t, Motor, motor)
 DEFINE_LATEST_ACCESSORS(Px4Lite_SystemHealth_t, Health, health)
+
+/** @brief 撤销历史电压的电机准入资格，下一次完整发布覆盖故障标记。 */
+void Px4Lite_MarkBattery2VoltageIoFault(void)
+{
+  taskENTER_CRITICAL();
+  if (s_battery2_ready != 0U) { s_battery2.header.flags |= PX4LITE_DATA_BATTERY2_VOLTAGE_IO_FAULT; }
+  taskEXIT_CRITICAL();
+}
 
 Px4Lite_Result_t Px4Lite_TopicsInit(void)
 {

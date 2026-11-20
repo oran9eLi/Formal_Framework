@@ -114,6 +114,7 @@ typedef struct {
 #define PX4LITE_DATA_FILTERED   (1UL << 2) /**< 数据已经过滤波。 */
 #define PX4LITE_DATA_FUSED      (1UL << 3) /**< 数据来自多源融合。 */
 #define PX4LITE_DATA_DEGRADED   (1UL << 4) /**< 数据可用但处于降级状态。 */
+#define PX4LITE_DATA_BATTERY2_VOLTAGE_IO_FAULT (1UL << 5) /**< Battery2 最近一次电压采集失败，历史样本不得用于电机准入。 */
 
 /**
  * @brief 单个 Framework 模块的运行状态。
@@ -466,6 +467,7 @@ typedef struct {
   uint8_t component_id;                        /**< MAVLink component id。 */
   uint8_t sequence;                            /**< MAVLink packet sequence。 */
   uint8_t payload_len;                         /**< payload 长度，单位：byte。 */
+  uint8_t wire_magic;                          /**< 物理链路已知的起始字节，UART6为0xFD或0xFE。 */
   uint8_t payload[PX4LITE_COMM_RX_PAYLOAD_MAX]; /**< MAVLink payload 副本。 */
 } Px4Lite_CommRxFrame_t;
 

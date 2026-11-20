@@ -17,10 +17,12 @@
 #include <string.h>
 
 #include "px4lite_config.h"
+#include "px4lite_command.h"
 #include "px4lite_control.h"
 #include "px4lite_alarm.h"
 #include "px4lite_identity.h"
 #include "px4lite_local_msglog.h"
+#include "px4lite_modules.h"
 #include "px4lite_platform.h"
 #include "px4lite_remoteid_tx.h"
 #include "px4lite_rpi_baud_switch.h"
@@ -356,7 +358,9 @@ static Px4Lite_Result_t MavTx_SendRpiGnssUplink(uint32_t now_ms)
 #if PX4LITE_RPI_GNSS_PARSED_TX_ENABLE && PX4LITE_ENABLE_RPI_GNSS_UPLINK
   Px4Lite_GnssUplinkView_t view;
   mavlink_tunnel_t packet;
-  Px4Lite_Result_t result=Px4Lite_GnssUplinkPeek(now_ms,&view);
+  Px4Lite_Result_t result;
+  if (!Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_GNSS)) { return PX4LITE_IDLE; }
+  result=Px4Lite_GnssUplinkPeek(now_ms,&view);
   if(result!=PX4LITE_OK) { return result; }
   if(view.payload==0 || view.length>PX4LITE_GNSS_UPLINK_PAYLOAD_MAX || view.length==0U) {
     Px4Lite_GnssUplinkResult(PX4LITE_INVALID_PARAM,now_ms);return PX4LITE_INVALID_PARAM;
@@ -379,7 +383,9 @@ static Px4Lite_Result_t MavTx_SendRpiGnssRawUplink(uint32_t now_ms)
 #if PX4LITE_ENABLE_RPI_GNSS_RAW_UPLINK
   Px4Lite_GnssRawUplinkView_t view;
   mavlink_tunnel_t packet;
-  Px4Lite_Result_t result=Px4Lite_GnssRawUplinkPeek(now_ms,&view);
+  Px4Lite_Result_t result;
+  if (!Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_GNSS)) { return PX4LITE_IDLE; }
+  result=Px4Lite_GnssRawUplinkPeek(now_ms,&view);
   if(result!=PX4LITE_OK){return result;}
   if(view.payload==0 || !view.length || view.length>PX4LITE_GNSS_RAW_UPLINK_PAYLOAD_MAX){Px4Lite_GnssRawUplinkResult(PX4LITE_INVALID_PARAM,now_ms);return PX4LITE_INVALID_PARAM;}
   memset(&packet,0,sizeof(packet));packet.payload_type=view.payload_type;packet.payload_length=view.length;
@@ -397,7 +403,9 @@ static Px4Lite_Result_t MavTx_SendRpiBmi088Uplink(uint32_t now_ms)
 {
   Px4Lite_Bmi088UplinkView_t view;
   mavlink_tunnel_t packet;
-  Px4Lite_Result_t result=Px4Lite_Bmi088UplinkPeek(now_ms,&view);
+  Px4Lite_Result_t result;
+  if (!Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_IMU)) { return PX4LITE_IDLE; }
+  result=Px4Lite_Bmi088UplinkPeek(now_ms,&view);
   if(result!=PX4LITE_OK) { return result; }
   if(view.payload==0 || view.length!=PX4LITE_BMI088_UPLINK_PAYLOAD_SIZE) {
     Px4Lite_Bmi088UplinkResult(PX4LITE_INVALID_PARAM,now_ms);return PX4LITE_INVALID_PARAM;
@@ -716,8 +724,8 @@ static Px4Lite_Result_t MavTx_SendPendingAck(uint8_t slot, uint32_t now_ms)
 
 #if PX4LITE_ENABLE_CNS_CONTROL && PX4LITE_ENABLE_RPI_MAVLINK
 /**
- * @brief CNS应答优先于H1和周期遥测；同步UART发送成功才向Control确认对应令牌。
- * @details 过期项仅撤出FIFO，不释放动作门禁；Control也独立检查2秒时限。
+ * @brief CNS应答优先于H1和周期遥测；同步UART发送成功才释放电机令牌或模块切屏声光。
+ * @details 过期项仅撤出FIFO，不释放动作门禁；普通电机动作由Control独立检查2秒时限。
  *          物理链路不可用或超出有界接收容量时不伪称2秒已送达Pi。
  */
 static Px4Lite_Result_t MavTx_SendCnsAck(uint32_t now_ms)
@@ -753,7 +761,12 @@ static Px4Lite_Result_t MavTx_SendCnsAck(uint32_t now_ms)
     --s_cns_ack_count;
     ++s_stats.command_ack_tx_count;
     s_stats.last_message_id = MAVLINK_MSG_ID_COMMAND_ACK;
-    if (token) { Px4Lite_ControlCnsAckSent(token); }
+    if (packet.command == PX4LITE_CNS_MODULE_SWITCH_COMMAND) {
+      if ((packet.result == MAV_RESULT_ACCEPTED) &&
+          ((uint32_t)(Px4Lite_PlatformGetMs() - pending->queued_ms) < PX4LITE_CNS_ACK_TIMEOUT_MS)) {
+        Px4Lite_ModuleExperimentAck((Px4Lite_ModuleId_t)(token >> 1U), (uint8_t)(token & 1U));
+      }
+    } else if (token) { Px4Lite_ControlCnsAckSent(token); }
   }
   return result;
 }
@@ -1182,7 +1195,7 @@ static Px4Lite_Result_t MavTx_SendEnvHumidity(uint32_t now_ms)
 
 
 /**
- * @brief 将启用的 Framework 传感器健康状态编码为 SYS_STATUS。
+ * @brief 将 Framework 传感器在位、服务启停和健康状态编码为 SYS_STATUS。
  */
 static Px4Lite_Result_t MavTx_SendSystemStatus(uint32_t now_ms)
 {
@@ -1200,25 +1213,28 @@ static Px4Lite_Result_t MavTx_SendSystemStatus(uint32_t now_ms)
 
 #if PX4LITE_ENABLE_GNSS
   present |= MAV_SYS_STATUS_SENSOR_GPS;
-  enabled |= MAV_SYS_STATUS_SENSOR_GPS;
-  if (MavTx_ModuleHealthy(health.module_state[PX4LITE_MODULE_GNSS]) != 0U) { healthy |= MAV_SYS_STATUS_SENSOR_GPS; }
+  if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_GNSS) != 0U) {
+    enabled |= MAV_SYS_STATUS_SENSOR_GPS;
+    if (MavTx_ModuleHealthy(health.module_state[PX4LITE_MODULE_GNSS]) != 0U) { healthy |= MAV_SYS_STATUS_SENSOR_GPS; }
+  }
 #endif
 
 #if PX4LITE_ENABLE_IMU
-  present |= MAV_SYS_STATUS_SENSOR_3D_GYRO;
-  present |= MAV_SYS_STATUS_SENSOR_3D_ACCEL;
-  enabled |= MAV_SYS_STATUS_SENSOR_3D_GYRO;
-  enabled |= MAV_SYS_STATUS_SENSOR_3D_ACCEL;
-  if (MavTx_ModuleHealthy(health.module_state[PX4LITE_MODULE_IMU]) != 0U) {
-    healthy |= MAV_SYS_STATUS_SENSOR_3D_GYRO;
-    healthy |= MAV_SYS_STATUS_SENSOR_3D_ACCEL;
+  present |= MAV_SYS_STATUS_SENSOR_3D_GYRO | MAV_SYS_STATUS_SENSOR_3D_ACCEL;
+  if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_IMU) != 0U) {
+    enabled |= MAV_SYS_STATUS_SENSOR_3D_GYRO | MAV_SYS_STATUS_SENSOR_3D_ACCEL;
+    if (MavTx_ModuleHealthy(health.module_state[PX4LITE_MODULE_IMU]) != 0U) {
+      healthy |= MAV_SYS_STATUS_SENSOR_3D_GYRO | MAV_SYS_STATUS_SENSOR_3D_ACCEL;
+    }
   }
 #endif
 
 #if PX4LITE_ENABLE_BARO
   present |= MAV_SYS_STATUS_SENSOR_ABSOLUTE_PRESSURE;
-  enabled |= MAV_SYS_STATUS_SENSOR_ABSOLUTE_PRESSURE;
-  if (MavTx_ModuleHealthy(health.module_state[PX4LITE_MODULE_BARO]) != 0U) { healthy |= MAV_SYS_STATUS_SENSOR_ABSOLUTE_PRESSURE; }
+  if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_BARO) != 0U) {
+    enabled |= MAV_SYS_STATUS_SENSOR_ABSOLUTE_PRESSURE;
+    if (MavTx_ModuleHealthy(health.module_state[PX4LITE_MODULE_BARO]) != 0U) { healthy |= MAV_SYS_STATUS_SENSOR_ABSOLUTE_PRESSURE; }
+  }
 #endif
 
   memset(&packet, 0, sizeof(packet));
@@ -1495,7 +1511,7 @@ static uint16_t MavTx_PackMessageLogTable(uint8_t *out, uint16_t out_cap)
  *   [0:15]  接收侧估算丢包率，单位 0.1%(0..1000)
  *   [16:23] LoRa 节点 ID
  *   [24]    LoRa 模块在位标志
- *   [25:27] LoRa 链路状态枚举(Px4Lite_State_t)
+ *   [25:27] LoRa 链路状态枚举(Px4Lite_State_t)，主动关闭时为 DISABLED
  * 仅发 USART6，不进入 LoRa 目录。
  */
 static Px4Lite_Result_t MavTx_SendRpiLoraStatus(uint32_t now_ms)
@@ -1508,7 +1524,8 @@ static Px4Lite_Result_t MavTx_SendRpiLoraStatus(uint32_t now_ms)
 
   Px4Lite_LoRaGetDebugInfo(&info);
   loss  = (info.rx_loss_rate_x10 > 1000U) ? 1000U : info.rx_loss_rate_x10;
-  state = (uint8_t)Px4Lite_LoRaGetState(now_ms);
+  state = (uint8_t)((Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_LORA) != 0U) ?
+                    Px4Lite_LoRaGetState(now_ms) : PX4LITE_STATE_DISABLED);
 
   packed  = (uint32_t)loss & 0xFFFFUL;
   packed |= ((uint32_t)Px4Lite_IdentityGetNodeId() & 0xFFUL) << 16U;

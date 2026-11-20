@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include "px4lite_types.h"
 
+#define PX4LITE_CNS_MODULE_SWITCH_COMMAND 31015U /**< UART6 五模块运行启停与切屏命令。 */
 #define PX4LITE_RPI_RESULT_TUNNEL_TYPE 0x8040U /**< Pi命令终态通知TUNNEL类型。 */
 #define PX4LITE_RPI_RESULT_VERSION 1U /**< 两字节结果载荷的协议版本。 */
 #define PX4LITE_RPI_RESULT_PAYLOAD_LENGTH 2U /**< 声明的内层载荷长度，单位字节。 */
@@ -43,7 +44,7 @@ Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t sour
 
 /**
  * @brief UART6完整命令边界：按CNS V0.1校验端点、confirmation和七个参数。
- * @param[in] command 命令号；六类CNS动作使用31090～31094及31014。
+ * @param[in] command 命令号；六类电机动作使用31090～31094及31014，模块切屏使用31015。
  * @param[in] source_system 来源系统号，须为当前动态本机系统号。
  * @param[in] source_component 来源组件号，须为Pi的191。
  * @param[in] target_system 目标系统号，须精确为本机系统号，不接受广播。
@@ -52,7 +53,8 @@ Px4Lite_Result_t Px4Lite_CommandHandleMavlinkLong(uint16_t command, uint8_t sour
  * @param[in] params 七个已标准解码的float参数；不得传NULL。
  * @param[in] now_ms 请求受理时刻，单位真实ms。
  * @return OK表示已排受理结果；IDLE表示端点不符；BUSY表示应答容量不足且普通动作未执行。
- * @note 非CNS旧命令保留原分发；新动作只在受理ACK真实发送后推进，急停停车除外。
+ * @note 模块命令在有应答容量时登记启停，ACK 发送成功后发布页面请求和声光。
+ *       电机动作原门禁保持独立，急停停车不依赖ACK。
  */
 Px4Lite_Result_t Px4Lite_CommandHandleRpiLongV01(uint16_t command,
     uint8_t source_system, uint8_t source_component, uint8_t target_system,

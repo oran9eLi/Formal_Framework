@@ -29,6 +29,8 @@ typedef struct {
 
 /** @brief 调度前初始化；整个队列生命周期状态在一个临界区复位，禁止并发重置发送流程。 */
 void Px4Lite_GnssRawUplinkInit(uint32_t now_ms);
+/** @brief Comm 丢弃暂停前的原始帧及统计重试，保留累计计数和帧流水号。 */
+void Px4Lite_GnssRawUplinkDiscard(void);
 /**
  * @brief Sensor/Adapter提交一个借用的完整原wire，函数返回前完成静态复制。
  * @param protocol 1NMEA/2UBX，与typed source枚举不同。

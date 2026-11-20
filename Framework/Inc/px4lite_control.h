@@ -38,16 +38,29 @@ Px4Lite_Result_t Px4Lite_ControlCnsRequest(Px4Lite_CnsAction_t action, uint8_t m
                                          uint16_t pulse_us, uint8_t *reason, uint32_t *token);
 /** @brief ACK 已实际提交串口成功后的通知；过期或已取消令牌静默忽略。 */
 void Px4Lite_ControlCnsAckSent(uint32_t token);
-/** @brief 返回真实人工解锁事实；未初始化及 CNS 解锁音期间为 0，不根据 PWM 大小推断。 */
+/** @brief 心跳解锁状态要求人工锁已解除且动力电压门禁放行。 */
 uint8_t Px4Lite_ControlCnsArmed(void);
+/**
+ * @brief 查询 IMU 或气压计实验服务是否可以暂停。
+ * @param[in] id 已校验的 IMU 或气压计模块编号。
+ * @return 1 允许暂停，0 表示待执行或运行中的电机动作仍依赖该模块。
+ * @note 调用方在暂停状态提交的同一短临界区内调用，函数只读控制状态。
+ */
+uint8_t Px4Lite_ControlModulePauseAllowed(Px4Lite_ModuleId_t id);
 
 /**
  * @brief 设置人工上锁/解锁；首次启动、恢复和急停后必须显式解锁。
  * @param[in] locked 1 上锁并立即清目标、撤收输出；0 解锁但只开始 2500 ms 最小脉宽预备。
- * @return OK 已执行；NOT_READY 未初始化、维护中或急停键仍按下；IO_ERROR 最小 PWM 写入失败。
+ * @return OK 已执行；NOT_READY 未初始化，或解锁被维护、动力电压门禁或急停键拦截；IO_ERROR 最小 PWM 写入失败。
  * @note 解锁不提交油门，不切换模式；上锁即使写入失败也保留闭锁，禁止普通命令自动解除。
  */
 Px4Lite_Result_t Px4Lite_ControlSetMotorLocked(uint8_t locked);
+
+/** @brief 只在按下后未发生新急停时完成触屏解锁；序号由 Control 提供。 */
+Px4Lite_Result_t Px4Lite_ControlUnlockMotor(uint32_t stop_sequence);
+
+/** @brief 读取急停序号；每次急停均更新，重复急停也计入。 */
+Px4Lite_Result_t Px4Lite_ControlGetEmergencyStopSequence(uint32_t *sequence);
 
 /** @brief 复制人工锁状态，0 解锁、1 上锁；模块未初始化/关闭返回 NOT_READY。 */
 Px4Lite_Result_t Px4Lite_ControlGetMotorLocked(uint8_t *locked);
@@ -130,6 +143,7 @@ Px4Lite_Result_t Px4Lite_ControlStartAutoLanding(void);
  *
  * @param[in] mode 输出模式；姿态辅助模式只在姿态数据新鲜且基础油门有效时修正输出。
  * @return 设置结果。
+ * @retval PX4LITE_BUSY 已受理的 CNS 降落尚未结束，暂不可切换模式。
  */
 Px4Lite_Result_t Px4Lite_ControlSetMode(Px4Lite_ControlMode_t mode);
 
@@ -149,8 +163,23 @@ Px4Lite_Result_t Px4Lite_ControlGetMode(Px4Lite_ControlMode_t *mode);
  * @param[in] yaw_deg100 目标相对偏航角，单位 degree * 100，范围为 -18000~18000。
  * @return 设置结果。
  * @retval PX4LITE_INVALID_PARAM 横滚/俯仰目标或偏航目标超过各自安全范围。
+ * @retval PX4LITE_BUSY 已受理的 CNS 降落尚未结束，暂不可变更目标姿态。
  */
 Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll_deg100, int32_t pitch_deg100, int32_t yaw_deg100);
+
+/**
+ * @brief 一次提交输出模式和三轴目标，拒绝时保留原配置。
+ * @param[in] mode 直控或姿态辅助模式。
+ * @param[in] roll_deg100 目标横滚角，单位 degree * 100，范围同单独设置。
+ * @param[in] pitch_deg100 目标俯仰角，单位 degree * 100，范围同单独设置。
+ * @param[in] yaw_deg100 目标相对偏航角，单位 degree * 100，范围同单独设置。
+ * @return 设置结果。
+ * @retval PX4LITE_OK 四项设置均已生效，重复提交相同设置也成功。
+ * @retval PX4LITE_INVALID_PARAM 模式或角度超出范围。
+ * @retval PX4LITE_BUSY 已受理的 CNS 降落尚未结束，暂不可变更配置。
+ */
+Px4Lite_Result_t Px4Lite_ControlSetModeAndAttitudeTarget(Px4Lite_ControlMode_t mode,
+    int32_t roll_deg100, int32_t pitch_deg100, int32_t yaw_deg100);
 
 /**
  * @brief 锁存控制模块急停并立即撤销所有电机输出。

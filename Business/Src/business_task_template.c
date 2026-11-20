@@ -86,7 +86,9 @@ void Business_AcquisitionTask(void *argument)
     uint32_t now_ms = Business_PlatformGetMs();
 
     App_MessageLogUpdate(now_ms);
+#if BUSINESS_ENABLE_LOCAL_OBSERVATION
     App_ObservationWorkRun(now_ms);
+#endif
     (void)Business_AcquisitionRunOnce(now_ms);
     Business_StatusHeartbeat(BUSINESS_COMPONENT_ACQUISITION);
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BUSINESS_ACQUISITION_PERIOD_MS));

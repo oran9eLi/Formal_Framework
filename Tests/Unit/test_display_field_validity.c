@@ -35,8 +35,6 @@ Px4Lite_Result_t App_GetDisplayMotor(App_MotorSnapshot_t *out, uint32_t now)
 { (void)out; (void)now; return PX4LITE_NOT_READY; }
 Px4Lite_Result_t App_GetDisplayDateTime(App_DateTimeSnapshot_t *out, uint32_t now)
 { (void)out; (void)now; return PX4LITE_NOT_READY; }
-Px4Lite_Result_t App_GetDisplayMessageLog(App_DisplayLogSnapshot_t *out, uint32_t now)
-{ (void)now; memset(out, 0, sizeof(*out)); return PX4LITE_NOT_READY; }
 void App_GetDisplayLinkStatus(App_DisplayLinkStatus_t *out, uint32_t now)
 { (void)now; memset(out, 0, sizeof(*out)); }
 Px4Lite_Result_t App_CopyAttitudeStatus(App_AttitudeStatus_t *out)
@@ -47,9 +45,6 @@ Px4Lite_Result_t App_CopyGnssDetails(App_GnssDetails_t *out, uint32_t now)
 uint8_t App_GetLocalNodeId(void) { return 1U; }
 Px4Lite_Result_t App_GetMotorLocked(uint8_t *locked) { *locked = 1U; return PX4LITE_OK; }
 uint32_t Px4Lite_PlatformGetMs(void) { return 1000U; }
-uint32_t Display_PagesGetLogVersion(void) { return 0U; }
-void Display_PagesSetLogSnapshot(const App_DisplayLogSnapshot_t *snapshot) { (void)snapshot; }
-void Display_LvglSetLogSnapshotVersion(uint32_t version) { (void)version; }
 void Display_LvglSetAlarmSnapshot(const App_AlarmSnapshot_t *alarm, const uint32_t *rows, uint16_t count)
 { (void)alarm; (void)rows; (void)count; }
 uint8_t Display_LvglObservationFrozen(void) { return 0U; }

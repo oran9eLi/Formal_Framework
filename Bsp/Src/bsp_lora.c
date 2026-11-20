@@ -134,6 +134,18 @@ int32_t BSP_LoRa_Init(void)
   return 0;
 }
 
+/** @brief Comm 停止 LoRa RX DMA 和 UART 接收中断，丢弃环形缓冲旧字节。 */
+void BSP_LoRa_Pause(void)
+{
+  if (s_lora_uart.Instance != BSP_LORA_UART) { return; }
+  __HAL_UART_DISABLE_IT(&s_lora_uart, UART_IT_IDLE);
+  __HAL_UART_DISABLE_IT(&s_lora_uart, UART_IT_ERR);
+  (void)HAL_UART_AbortReceive(&s_lora_uart);
+  s_rx_head = 0U;
+  s_rx_tail = 0U;
+  s_rx_recover_request = 0U;
+}
+
 /**
  * @brief 尽早配置 E22 模式/AUX 引脚并驱动到正常模式。
  *
@@ -353,6 +365,7 @@ uint8_t BSP_LoRa_IsTxBusy(void)
  */
 void BSP_LoRa_AbortTx(void)
 {
+  if (s_lora_uart.Instance != BSP_LORA_UART) { return; }
   (void)HAL_UART_AbortTransmit(&s_lora_uart);
   s_tx_busy = 0U;
 }

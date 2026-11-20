@@ -45,6 +45,7 @@ int main(void)
   BSP_Watchdog_BootProgress();
 
   DebugConsole_Init();
+  DBG_BOOT_PRINT("BOOT RESET: cause=0x%02X", (unsigned int)BSP_Watchdog_GetResetCause());
   BSP_Watchdog_BootProgress();
   if (BSP_Init() != BSP_STATUS_OK) {
     DBG_BOOT_PRINT("boot failed: BSP_Init");

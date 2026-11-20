@@ -10,6 +10,7 @@ static uint8_t s_require_feedback_lock;
 static uint8_t s_resume_probe;
 static uint8_t s_resume_expected_mode;
 static int32_t s_resume_expected_roll,s_resume_expected_pitch,s_resume_expected_yaw;
+static uint32_t s_cns_ack_token;
 static int TestRpiResultResumeAll(void);
 #define TEST_RPI_RESULT_RESUME_ALL 1
 #define TEST_RPI_RESULT_NOTIFY 1
@@ -38,6 +39,36 @@ static void Rpi(uint16_t command,float a,float b,float c,float d,uint8_t ack)
   assert(Px4Lite_CommandHandleMavlinkLong(command,42U,7U,1U,193U,a,b,c,d,
     PX4LITE_MAVLINK_LINK_RPI,s_test_now)==PX4LITE_OK);
   assert(s_test_ack==ack && s_test_scheduler_depth==0U && s_test_critical_depth==0U);
+}
+/** @brief 仅替代旧夹具未合编的 UART6 发送队列和声光硬件。 */
+uint8_t Px4Lite_MavlinkCnsAckAvailable(void) { return 1U; }
+Px4Lite_Result_t Px4Lite_MavlinkQueueCnsAck(uint16_t command, uint8_t result,
+    uint8_t reason, uint8_t target, uint32_t token, uint32_t now_ms)
+{
+  (void)command;
+  assert(reason == 0U && target == 1U && now_ms == s_test_now);
+  s_test_ack = result;
+  s_cns_ack_token = token;
+  return PX4LITE_OK;
+}
+void Px4Lite_StartupToneCnsStart(uint8_t action, uint32_t token)
+{ assert(action == PX4LITE_CNS_LAND && token != 0U); }
+
+/** @brief 经真实 UART6 Command V0.1 入口发送和取得应答，ACK 仍由测试按时提交。 */
+static uint32_t RpiV01(uint16_t command, float mode, float roll, float pitch, float yaw,
+                       uint8_t expected_ack)
+{
+  const float params[7] = {mode, roll, pitch, yaw, 0.0f, 0.0f, 0.0f};
+  s_test_ack = 0xFFU;
+  s_cns_ack_token = 0U;
+  assert(Px4Lite_CommandHandleRpiLongV01(command, 1U, PX4LITE_RPI_RESULT_PI_COMPONENT_ID,
+    1U, PX4LITE_RPI_MAVLINK_COMPONENT_ID, 0U, params, s_test_now) == PX4LITE_OK);
+  if (s_test_ack != expected_ack) {
+    fprintf(stderr, "UART6 command %u ACK %u, expected %u\n",
+            (unsigned)command, (unsigned)s_test_ack, (unsigned)expected_ack);
+  }
+  assert(s_test_ack == expected_ack && s_test_scheduler_depth == 0U && s_test_critical_depth == 0U);
+  return s_cns_ack_token;
 }
 /** @brief 在调度恢复点模拟新RPi抢占；恢复之前原配置必须已完整提交。 */
 static int TestRpiResultResumeAll(void)
@@ -141,6 +172,113 @@ static void TestConfigurationTransactions(void)
   assert(Px4Lite_ControlSetAttitudeTarget(100,-100,200)==PX4LITE_OK);
   s_require_feedback_lock = 0U;assert(!s_resume_probe && !s_test_scheduler_depth);
   Expect("0");TestAdvance(20U);Expect("01");
+  Fresh(1U);Rpi(31011U,20,20,20,20,MAV_RESULT_ACCEPTED);
+  s_resume_expected_mode = PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST;
+  s_resume_expected_roll = 100;s_resume_expected_pitch = -100;s_resume_expected_yaw = 200;
+  s_resume_probe = 1U;
+  RpiV01(31012U,1,1,-1,2,MAV_RESULT_ACCEPTED);
+  assert(!s_resume_probe && !s_test_scheduler_depth);
+  Expect("01");TestAdvance(20U);Expect("011");
+}
+
+/** @brief 已受理的 CNS 降落在 UART6 或本地设置变更时继续降到四路怠速。 */
+static void TestCnsLandingConfiguration(void)
+{
+  const uint16_t pulse[PX4LITE_MOTOR_COUNT] = {1600U, 1600U, 1600U, 1600U};
+  uint32_t token;
+  unsigned channel;
+
+  Fresh(1U);
+  assert(Px4Lite_ControlSetMotorPulses(pulse) == PX4LITE_OK);
+  TestAdvance(20U);
+  token = RpiV01(31092U, 0, 0, 0, 0, MAV_RESULT_ACCEPTED);
+  assert(token != 0U && s_cns.phase == CONTROL_CNS_WAIT_ACK);
+  RpiV01(31012U, 1, 2, -3, 4, MAV_RESULT_TEMPORARILY_REJECTED);
+  assert(s_control_mode == PX4LITE_CONTROL_MODE_DIRECT &&
+         s_target_roll_deg100 == 0 && s_target_pitch_deg100 == 0 && s_target_yaw_deg100 == 0);
+  RpiV01(31012U, 0, 0, 0, 0, MAV_RESULT_ACCEPTED);
+  assert(Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_DIRECT) == PX4LITE_OK);
+  assert(Px4Lite_ControlSetAttitudeTarget(0, 0, 0) == PX4LITE_OK);
+  assert(s_cns.token == token && s_cns.phase == CONTROL_CNS_WAIT_ACK);
+
+  Px4Lite_ControlCnsAckSent(token);
+  TestAdvance(2020U);
+  assert(s_cns.phase == CONTROL_CNS_RAMP && s_test_pwm[0] < 1600U &&
+         s_test_pwm[0] > PX4LITE_CNS_IDLE_PULSE_US);
+  assert(Px4Lite_ControlSetMode(PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) == PX4LITE_BUSY);
+  assert(Px4Lite_ControlSetAttitudeTarget(100, 0, 0) == PX4LITE_BUSY);
+  RpiV01(31012U, 1, 0, 0, 0, MAV_RESULT_TEMPORARILY_REJECTED);
+  RpiV01(31012U, 0, 2, 0, 0, MAV_RESULT_TEMPORARILY_REJECTED);
+  assert(s_control_mode == PX4LITE_CONTROL_MODE_DIRECT &&
+         s_target_roll_deg100 == 0 && s_target_pitch_deg100 == 0 && s_target_yaw_deg100 == 0);
+  RpiV01(31012U, 0, 0, 0, 0, MAV_RESULT_ACCEPTED);
+  TestAdvance(6000U);
+  for (channel = 0U; channel < PX4LITE_MOTOR_COUNT; ++channel) {
+    assert(s_test_pwm[channel] == PX4LITE_CNS_IDLE_PULSE_US);
+  }
+  assert(s_cns.phase == CONTROL_CNS_NONE && Px4Lite_ControlCnsArmed());
+  RpiV01(31012U, 1, 2, -3, 4, MAV_RESULT_ACCEPTED);
+  assert(s_control_mode == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST &&
+         s_target_roll_deg100 == 200 && s_target_pitch_deg100 == -300 && s_target_yaw_deg100 == 400);
+}
+
+/** @brief UART6 油门、本地油门及起降入口均不能取消等待 ACK 的降落。 */
+static void TestPendingCnsLandingOutput(void)
+{
+  const uint16_t pulse[PX4LITE_MOTOR_COUNT] = {1600U, 1600U, 1600U, 1600U};
+  uint32_t token;
+  unsigned channel;
+
+  Fresh(1U);
+  assert(Px4Lite_ControlSetMotorPulses(pulse) == PX4LITE_OK);
+  TestAdvance(20U);
+  token = RpiV01(31092U, 0, 0, 0, 0, MAV_RESULT_ACCEPTED);
+  assert(token != 0U && s_cns.phase == CONTROL_CNS_WAIT_ACK);
+  RpiV01(31011U, 55, 55, 55, 55, MAV_RESULT_TEMPORARILY_REJECTED);
+  RpiV01(31013U, 1750, 1750, 1750, 1750, MAV_RESULT_TEMPORARILY_REJECTED);
+  RpiV01(31011U, 0, 0, 0, 0, MAV_RESULT_ACCEPTED);
+  RpiV01(31013U, 1000, 1000, 1000, 1000, MAV_RESULT_ACCEPTED);
+  Expect("0000");
+  assert(App_SetMotorThrottlePercent(0U, 55U) == PX4LITE_NOT_READY);
+  assert(App_SetMotorThrottlePercent(0U, 0U) == PX4LITE_OK);
+  assert(Px4Lite_ControlSetMotorPulseUs(0U, 1750U) == PX4LITE_NOT_READY);
+  assert(Px4Lite_ControlSetMotorPulseUs(0U, 1000U) == PX4LITE_OK);
+  assert(App_StartMotorAutoTakeoff() == PX4LITE_BUSY);
+  assert(App_StartMotorAutoLanding() == PX4LITE_BUSY);
+  TestAdvance(20U);
+  assert(s_cns.token == token && s_cns.phase == CONTROL_CNS_WAIT_ACK);
+  for (channel = 0U; channel < PX4LITE_MOTOR_COUNT; ++channel) {
+    assert(s_test_pwm[channel] == 1600U);
+  }
+
+  Px4Lite_ControlCnsAckSent(token);
+  TestAdvance(8100U);
+  assert(s_cns.phase == CONTROL_CNS_NONE);
+  for (channel = 0U; channel < PX4LITE_MOTOR_COUNT; ++channel) {
+    assert(s_test_pwm[channel] == PX4LITE_CNS_IDLE_PULSE_US);
+  }
+  Expect("0000");
+}
+
+/** @brief 急停及上锁仍可在 CNS 降落期间立即写入停车脉宽。 */
+static void TestCnsLandingStop(void)
+{
+  const uint16_t pulse[PX4LITE_MOTOR_COUNT] = {1600U, 1600U, 1600U, 1600U};
+  const uint16_t stops[] = {31090U, 31094U};
+  uint32_t token;
+  unsigned i;
+  for (i = 0U; i < sizeof(stops) / sizeof(stops[0]); ++i) {
+    Fresh(1U);
+    assert(Px4Lite_ControlSetMotorPulses(pulse) == PX4LITE_OK);
+    TestAdvance(20U);
+    token = RpiV01(31092U, 0, 0, 0, 0, MAV_RESULT_ACCEPTED);
+    Px4Lite_ControlCnsAckSent(token);
+    TestAdvance(2020U);
+    assert(s_cns.phase == CONTROL_CNS_RAMP && s_test_pwm[0] > PX4LITE_CNS_IDLE_PULSE_US);
+    assert(RpiV01(stops[i], 0, 0, 0, 0, MAV_RESULT_ACCEPTED) != 0U);
+    assert(TestLocked() && !Px4Lite_ControlCnsArmed());
+    TestMinimum();
+  }
 }
 
 /** @brief 自动起飞和降落只在各自真实终点四路写入成功后高音。 */
@@ -195,9 +333,10 @@ static void TestWrapAndLocalSilence(void)
 int main(void)
 {
   TestClassification();TestRealManualOutputs();TestPreparingAndZero();
+  TestCnsLandingConfiguration();TestPendingCnsLandingOutput();TestCnsLandingStop();
   TestSupersessionAndDenial();TestConfigurationTransactions();TestAutoCompletionAndNoop();TestAutoFailureAndCancellation();
   TestWrapAndLocalSilence();
-  printf("RPi execution feedback: real Command/Control target-vs-PWM / preparing+zero / atomic config+preempt / actual auto completion / abort+protection / failed+superseded / noop landing / local+LoRa silence / wrap PASS feedback=%u gate=%u\n",
+  printf("RPi execution feedback: real Command/Control target-vs-PWM / preparing+zero / atomic config+preempt / CNS landing config interlock+safe stops / actual auto completion / abort+protection / failed+superseded / noop landing / local+LoRa silence / wrap PASS feedback=%u gate=%u\n",
     (unsigned)PX4LITE_ENABLE_RPI_COMMAND_FEEDBACK,(unsigned)PX4LITE_CONTROL_POWER_GATE_ENABLE);
   return 0;
 }

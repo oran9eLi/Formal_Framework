@@ -15,6 +15,7 @@
 #include "px4lite_control.h"
 #include "px4lite_identity.h"
 #include "px4lite_mavlink_tx.h"
+#include "px4lite_modules.h"
 
 #if defined(__CC_ARM)
 #define MAVLINK_ALIGNED_FIELDS   0
@@ -173,6 +174,7 @@ static uint8_t Command_HandleSetMotorControlMode(float param1, float param2, flo
   int32_t roll_target_deg100;
   int32_t pitch_target_deg100;
   int32_t yaw_target_deg100;
+  Px4Lite_Result_t result;
 
   if ((param1 >= -0.01f) && (param1 <= 0.01f)) {
     mode = PX4LITE_CONTROL_MODE_DIRECT;
@@ -184,8 +186,10 @@ static uint8_t Command_HandleSetMotorControlMode(float param1, float param2, flo
   if (Command_ParamToDeg100(param2, (float)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 / 100.0f, &roll_target_deg100) == 0U) { return (uint8_t)MAV_RESULT_DENIED; }
   if (Command_ParamToDeg100(param3, (float)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 / 100.0f, &pitch_target_deg100) == 0U) { return (uint8_t)MAV_RESULT_DENIED; }
   if (Command_ParamToDeg100(param4, (float)PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100 / 100.0f, &yaw_target_deg100) == 0U) { return (uint8_t)MAV_RESULT_DENIED; }
-  if (Px4Lite_ControlSetAttitudeTarget(roll_target_deg100, pitch_target_deg100, yaw_target_deg100) != PX4LITE_OK) { return (uint8_t)MAV_RESULT_FAILED; }
-  return Command_MapControlResult(Px4Lite_ControlSetMode(mode));
+  result = Px4Lite_ControlSetModeAndAttitudeTarget(mode, roll_target_deg100, pitch_target_deg100, yaw_target_deg100);
+  /* 保留 Control 未编入时旧 31012 的失败应答，降落忙则可在降落完成后重试。 */
+  if (result == PX4LITE_NOT_READY) { return (uint8_t)MAV_RESULT_FAILED; }
+  return Command_MapControlResult(result);
 }
 
 /** @brief 透传同步升速结果；真实接受/拒绝与过程事件由 Control 统一记录。 */
@@ -263,6 +267,61 @@ Px4Lite_Result_t Px4Lite_CommandHandleMavlinkAck(uint16_t command, uint8_t resul
   return PX4LITE_OK;
 }
 
+#if PX4LITE_ENABLE_CNS_CONTROL
+/** @brief 解码模块命令的固定线号及参数。浮点比较同时拒绝NaN和无穷值。 */
+static uint8_t Command_DecodeModuleSwitch(uint8_t confirmation, const float params[7],
+                                         Px4Lite_ModuleId_t *id)
+{
+  uint8_t i;
+  if ((confirmation != 0U) || ((params[1] != 0.0f) && (params[1] != 1.0f))) { return 0U; }
+  for (i = 2U; i < 7U; ++i) {
+    if (params[i] != 0.0f) { return 0U; }
+  }
+  if (params[0] == 0.0f) { *id = PX4LITE_MODULE_GNSS; }
+  else if (params[0] == 1.0f) { *id = PX4LITE_MODULE_IMU; }
+  else if (params[0] == 2.0f) { *id = PX4LITE_MODULE_BARO; }
+  else if (params[0] == 4.0f) { *id = PX4LITE_MODULE_LORA; }
+  else if (params[0] == 7.0f) { *id = PX4LITE_MODULE_REMOTE_ID; }
+  else { return 0U; }
+  return 1U;
+}
+
+/** @brief UART6 CommTask在已有ACK空间时受理模块状态，发送成功后再释放切屏和提示。 */
+static Px4Lite_Result_t Command_HandleModuleSwitch(uint8_t confirmation, const float params[7],
+                                                  uint8_t local_system, uint32_t now_ms)
+{
+  Px4Lite_ModuleId_t id;
+  uint8_t enabled, result, reason;
+  uint32_t token = 0U;
+
+  if (!Px4Lite_MavlinkCnsAckAvailable()) { return PX4LITE_BUSY; }
+  if (!Command_DecodeModuleSwitch(confirmation, params, &id)) {
+    return Px4Lite_MavlinkQueueCnsAck(PX4LITE_CNS_MODULE_SWITCH_COMMAND, MAV_RESULT_DENIED, 3U,
+                                    local_system, 0U, now_ms);
+  }
+
+  enabled = (uint8_t)(params[1] == 1.0f);
+  switch (Px4Lite_ModuleExperimentRequest(id, enabled, now_ms)) {
+    case PX4LITE_OK:
+      result = MAV_RESULT_ACCEPTED; reason = 0U;
+      /* 31015独占该令牌解释：低位为开关，其余为已校验的模块枚举。 */
+      token = ((uint32_t)id << 1U) | enabled;
+      break;
+    case PX4LITE_BUSY:
+      result = MAV_RESULT_TEMPORARILY_REJECTED; reason = 2U;
+      break;
+    case PX4LITE_IO_ERROR:
+      result = MAV_RESULT_FAILED; reason = 0U;
+      break;
+    default:
+      result = MAV_RESULT_DENIED; reason = 4U;
+      break;
+  }
+  return Px4Lite_MavlinkQueueCnsAck(PX4LITE_CNS_MODULE_SWITCH_COMMAND, result, reason,
+                                  local_system, token, now_ms);
+}
+#endif
+
 /**
  * @brief CNS V0.1的UART6受理边界；旧LoRa入口及旧命令参数布局保持独立。
  * @details 先校验寻址/参数和应答容量，再请求Control；拒绝不登记失败声光。
@@ -290,6 +349,8 @@ Px4Lite_Result_t Px4Lite_CommandHandleRpiLongV01(uint16_t command,
     case 31094U: action = PX4LITE_CNS_DISARM; break;
     case 31090U: action = PX4LITE_CNS_EMERGENCY_STOP; break;
     case 31014U: action = PX4LITE_CNS_SET_MOTOR_PWM; break;
+    case PX4LITE_CNS_MODULE_SWITCH_COMMAND:
+      return Command_HandleModuleSwitch(confirmation, params, local_system, now_ms);
     case 31011U:
     case 31012U:
     case 31013U:

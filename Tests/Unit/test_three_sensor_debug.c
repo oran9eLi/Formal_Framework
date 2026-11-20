@@ -21,18 +21,15 @@ TickType_t xTaskGetTickCount(void);
 void vTaskDelayUntil(TickType_t *last,TickType_t ticks);
 BaseType_t xTaskCreate(void (*fn)(void *),const char *name,uint16_t words,void *arg,UBaseType_t priority,TaskHandle_t *out);
 #include "debug_config.h"
-/* 本用例测三模块诊断；GNSS原帧和电源报告由各自已有用例覆盖。 */
+#if defined(TEST_THREE_SENSOR_DIAG_DISABLED) && TEST_THREE_SENSOR_DIAG_DISABLED && DEBUG_PERIODIC_SERVICE_ENABLE
+#error Production default must leave the UART1 periodic service disabled
+#endif
+/* 显式诊断用例隔离GNSS和电源；关闭用例使用固件原始默认配置。 */
+#if !defined(TEST_THREE_SENSOR_DIAG_DISABLED) || !TEST_THREE_SENSOR_DIAG_DISABLED
 #undef DEBUG_GNSS_MONITOR_ENABLE
 #define DEBUG_GNSS_MONITOR_ENABLE 0U
 #undef DEBUG_POWER_MONITOR_ENABLE
 #define DEBUG_POWER_MONITOR_ENABLE 0U
-#if defined(TEST_THREE_SENSOR_DIAG_DISABLED) && TEST_THREE_SENSOR_DIAG_DISABLED
-#undef DEBUG_STACK_MONITOR_ENABLE
-#define DEBUG_STACK_MONITOR_ENABLE 0U
-#undef DEBUG_IMU_MONITOR_ENABLE
-#define DEBUG_IMU_MONITOR_ENABLE 0U
-#undef DEBUG_BARO_MONITOR_ENABLE
-#define DEBUG_BARO_MONITOR_ENABLE 0U
 #endif
 #include "../../Debug/Src/debug_service.c"
 #include "../../Debug/Src/debug_task_monitor.c"
@@ -165,6 +162,10 @@ static void TestLineBounds(void)
 /** @brief 默认与关闭构建分别核验，诊断不改变任务数或栈配置。 */
 int main(void)
 {
+#if defined(TEST_THREE_SENSOR_DIAG_DISABLED) && TEST_THREE_SENSOR_DIAG_DISABLED
+  assert(DEBUG_CONSOLE_ENABLE && DEBUG_BOOT_LOG_ENABLE);
+  assert(DebugService_CreateTask()==pdPASS && !s_created && !s_status_copies && !s_runtime_copies && !s_lines);
+#endif
 #if DEBUG_IMU_MONITOR_ENABLE && DEBUG_BARO_MONITOR_ENABLE && DEBUG_STACK_MONITOR_ENABLE
   TestStatesAndUnknownBaro();TestImuFacts();TestBaroFreshnessAndInvalidHeader();TestTaskCadenceAndWatermarks();TestLineBounds();
   printf("Three sensor Debug: states / BMI IDs / unknown+stale Baro / once tag / 1s+5s cadence / copy-only / maxline=%luB scratch=%luB runtime=%luB row=%luB PASS\n",

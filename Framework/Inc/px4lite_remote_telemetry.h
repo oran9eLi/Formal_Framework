@@ -33,7 +33,7 @@ typedef enum {
  * @param[in] now_ms 当前系统时间，单位：ms。
  */
 void Px4Lite_RemoteTelemetryInit(uint32_t now_ms);
-/** @brief CommTask 观察轻量帧事实；identity 为 20 字节长期身份或 NULL。自回环忽略。 */
+/** @brief CommTask 记录帧事实并默认选择首个无冲突身份；identity 为 20 字节长期身份或 NULL。自回环忽略。 */
 void Px4Lite_RemoteObserve(uint8_t node_id,uint8_t component_id,uint8_t sequence,uint32_t msg_id,const char *identity,uint32_t now_ms);
 /** @brief 已选择、身份已确认且无冲突时允许解码完整快照。 */
 uint8_t Px4Lite_RemoteCanAccept(uint8_t node_id,uint32_t now_ms);

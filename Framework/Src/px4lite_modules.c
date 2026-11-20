@@ -11,7 +11,9 @@
 #include "px4lite_modules.h"
 #include "px4lite_alarm.h"
 #include "px4lite_attitude.h"
+#include "px4lite_bmi088_uplink.h"
 #include "px4lite_config.h"
+#include "px4lite_control.h"
 #include "px4lite_faults.h"
 #include "px4lite_platform.h"
 #include "px4lite_recovery.h"
@@ -21,6 +23,8 @@
 #include "px4lite_diagnostic_capture.h"
 #include "px4lite_mavlink_rx.h"
 #include "px4lite_mavlink_tx.h"
+#include "px4lite_gnss_raw_uplink.h"
+#include "px4lite_gnss_uplink.h"
 #include "px4lite_lora_lab.h"
 #include "px4lite_remote_telemetry.h"
 #include "px4lite_remoteid_tx.h"
@@ -32,6 +36,15 @@
 
 static Px4Lite_ModuleStatus_t s_status[PX4LITE_MODULE_COUNT];
 static uint32_t s_status_version;
+#define MODULE_BIT(id) (1UL << (id))
+#define MODULE_EXPERIMENT_MASK (MODULE_BIT(PX4LITE_MODULE_GNSS) | MODULE_BIT(PX4LITE_MODULE_IMU) | \
+                                MODULE_BIT(PX4LITE_MODULE_BARO) | MODULE_BIT(PX4LITE_MODULE_LORA) | \
+                                MODULE_BIT(PX4LITE_MODULE_REMOTE_ID))
+static Px4Lite_ModuleExperimentDisplay_t s_experiment_display;
+static uint32_t s_experiment_pending; /**< 临界区保护的 owner 待执行切换位图。 */
+static uint32_t s_experiment_local_open; /**< 临界区保护的本地开启请求，每个模块占一位。 */
+static uint32_t s_experiment_restarted; /**< 本次启动中曾恢复服务，用于选择重新开启的超时起点。 */
+static uint8_t s_experiment_imu_reset; /**< estimator 下一轮撤销停采前的估计值。 */
 static uint32_t s_gnss_sequence;
 static uint32_t s_imu_sequence;
 static uint32_t s_baro_sequence;
@@ -277,6 +290,9 @@ static void Px4Lite_SetStatusLocked(Px4Lite_ModuleId_t id, Px4Lite_State_t state
 {
   Px4Lite_ModuleStatus_t *item = &s_status[id];
   uint8_t changed = 0U;
+
+  /* Health 的超时判断和所有者更新均不得覆盖已受理的主动关闭。 */
+  if ((state != PX4LITE_STATE_DISABLED) && ((s_experiment_display.disabled_mask & MODULE_BIT(id)) != 0U)) { return; }
   if (item->state != state) {
     if (((item->state == PX4LITE_STATE_DEGRADED) || (item->state == PX4LITE_STATE_OFFLINE) || (item->state == PX4LITE_STATE_FAILED)) && (state == PX4LITE_STATE_ONLINE)) {
       if (item->recovery_count < 255U) { item->recovery_count++; }
@@ -294,6 +310,138 @@ static void Px4Lite_SetStatusLocked(Px4Lite_ModuleId_t id, Px4Lite_State_t state
     changed        = 1U;
   }
   if (changed != 0U) { s_status_version++; }
+}
+
+/** @brief 由 Comm 登记逻辑启停并撤销仍可能被消费者读到的旧快照。 */
+Px4Lite_Result_t Px4Lite_ModuleExperimentRequest(Px4Lite_ModuleId_t id, uint8_t enabled, uint32_t now_ms)
+{
+  Px4Lite_Result_t result = PX4LITE_OK;
+  uint8_t discard_gnss = 0U;
+  uint32_t bit;
+  if (((uint32_t)id >= (uint32_t)PX4LITE_MODULE_COUNT) || (enabled > 1U)) { return PX4LITE_INVALID_PARAM; }
+  bit = MODULE_BIT(id);
+  if ((MODULE_EXPERIMENT_MASK & bit) == 0U) { return PX4LITE_INVALID_PARAM; }
+  if (Px4Lite_IsModuleEnabled(id) == 0U) { return PX4LITE_NOT_READY; }
+  taskENTER_CRITICAL();
+  if (((s_experiment_display.disabled_mask & bit) == 0U) != (enabled != 0U)) {
+    if (((s_experiment_pending & bit) != 0U) ||
+        ((enabled == 0U) && ((id == PX4LITE_MODULE_IMU) || (id == PX4LITE_MODULE_BARO)) &&
+         (Px4Lite_ControlModulePauseAllowed(id) == 0U))) {
+      result = PX4LITE_BUSY;
+    } else {
+      s_experiment_pending |= bit;
+      if (enabled != 0U) {
+        s_experiment_display.disabled_mask &= ~bit;
+        s_experiment_restarted |= bit;
+        Px4Lite_SetStatusLocked(id, PX4LITE_STATE_STARTING, PX4LITE_FAULT_NONE, now_ms);
+      } else {
+        s_experiment_display.disabled_mask |= bit;
+        Px4Lite_SetStatusLocked(id, PX4LITE_STATE_DISABLED, PX4LITE_FAULT_NONE, now_ms);
+        s_status[id].last_rx_ms = 0U;
+        s_status[id].last_valid_ms = 0U;
+        s_status[id].consecutive_valid = 0U;
+        s_status[id].consecutive_errors = 0U;
+        Px4Lite_InvalidateSensorTopics(id);
+        if (id == PX4LITE_MODULE_GNSS) { discard_gnss = 1U; }
+        if (id == PX4LITE_MODULE_IMU) {
+          s_experiment_imu_reset = 1U;
+          s_attitude_action_request = 0U;
+          s_attitude_status.measurement_valid = 0U;
+        }
+        if (id == PX4LITE_MODULE_REMOTE_ID) { s_experiment_display.remote_id_submitted_count = 0U; }
+      }
+#if PX4LITE_ENABLE_MODULE_CONNECTION_FEEDBACK
+      /* 主动启停由命令成功提示，设备观察器重新建立基线。 */
+      for (uint32_t i = 0U; i < sizeof(s_connection_feedback_ids) / sizeof(s_connection_feedback_ids[0]); ++i) {
+        if (s_connection_feedback_ids[i] == id) { memset(&s_connection_feedback[i], 0, sizeof(s_connection_feedback[i])); }
+      }
+#endif
+    }
+  }
+  taskEXIT_CRITICAL();
+  if (discard_gnss != 0U) {
+    Px4Lite_GnssRawUplinkDiscard();
+    Px4Lite_GnssUplinkDiscard(now_ms);
+  }
+  return result;
+}
+
+/** @brief 由应用登记本地开启意图，服务状态只由 Comm 修改。 */
+Px4Lite_Result_t Px4Lite_ModuleExperimentRequestLocalOpen(Px4Lite_ModuleId_t id)
+{
+  uint32_t bit;
+  if ((uint32_t)id >= (uint32_t)PX4LITE_MODULE_COUNT) { return PX4LITE_INVALID_PARAM; }
+  bit = MODULE_BIT(id);
+  if ((MODULE_EXPERIMENT_MASK & bit) == 0U) { return PX4LITE_INVALID_PARAM; }
+  if (Px4Lite_IsModuleEnabled(id) == 0U) { return PX4LITE_NOT_READY; }
+  taskENTER_CRITICAL();
+  s_experiment_local_open |= s_experiment_display.disabled_mask & bit;
+  taskEXIT_CRITICAL();
+  return PX4LITE_OK;
+}
+
+/** @brief Comm 受理本地开启；原所有者尚未取走关闭动作时保留请求，下一轮重试。 */
+static void Px4Lite_ModuleExperimentRunLocalOpens(uint32_t now_ms)
+{
+  uint32_t pending;
+  uint32_t i;
+  taskENTER_CRITICAL();
+  pending = s_experiment_local_open;
+  taskEXIT_CRITICAL();
+  if (pending == 0U) { return; }
+
+  for (i = 0U; i < (uint32_t)PX4LITE_MODULE_COUNT; ++i) {
+    uint32_t bit = MODULE_BIT(i);
+    if (((pending & bit) != 0U) &&
+        (Px4Lite_ModuleExperimentRequest((Px4Lite_ModuleId_t)i, 1U, now_ms) != PX4LITE_BUSY)) {
+      taskENTER_CRITICAL();
+      s_experiment_local_open &= ~bit;
+      taskEXIT_CRITICAL();
+    }
+  }
+}
+
+/** @brief 只有 UART6 发出受理 ACK 才选页并登记成功声光。 */
+void Px4Lite_ModuleExperimentAck(Px4Lite_ModuleId_t id, uint8_t enabled)
+{
+  if (enabled != 0U) {
+    taskENTER_CRITICAL();
+    s_experiment_display.page_module = id;
+    s_experiment_display.page_sequence++;
+    if (s_experiment_display.page_sequence == 0U) { s_experiment_display.page_sequence = 1U; }
+    taskEXIT_CRITICAL();
+  }
+  Px4Lite_StartupToneNotifyRpiResult(1U);
+}
+
+/** @brief 一致复制运行开关、选页流水号及 Remote ID 提交统计。 */
+void Px4Lite_ModuleExperimentCopyDisplay(Px4Lite_ModuleExperimentDisplay_t *out)
+{
+  taskENTER_CRITICAL();
+  *out = s_experiment_display;
+  taskEXIT_CRITICAL();
+}
+
+/** @brief 查询已受理的逻辑服务状态，传入已校验的模块编号。 */
+uint8_t Px4Lite_ModuleExperimentEnabled(Px4Lite_ModuleId_t id)
+{
+  uint8_t enabled;
+  taskENTER_CRITICAL();
+  enabled = (uint8_t)((s_experiment_display.disabled_mask & MODULE_BIT(id)) == 0U);
+  taskEXIT_CRITICAL();
+  return enabled;
+}
+
+/** @brief 所有者取出切换请求；停采路径也必须推进切换。 */
+static uint8_t Px4Lite_ModuleExperimentTake(Px4Lite_ModuleId_t id)
+{
+  uint32_t bit = MODULE_BIT(id);
+  uint8_t pending;
+  taskENTER_CRITICAL();
+  pending = (uint8_t)((s_experiment_pending & bit) != 0U);
+  s_experiment_pending &= ~bit;
+  taskEXIT_CRITICAL();
+  return pending;
 }
 
 /** @brief 原子更新指定模块公开状态；now_ms为本机毫秒时标。 */
@@ -337,9 +485,15 @@ Px4Lite_Result_t Px4Lite_ModulesInit(void)
   uint32_t i;
 
   memset(s_status, 0, sizeof(s_status));
+  memset(&s_experiment_display, 0, sizeof(s_experiment_display));
+  s_experiment_pending = 0U;
+  s_experiment_local_open = 0U;
+  s_experiment_restarted = 0U;
+  s_experiment_imu_reset = 0U;
   for (i = 0U; i < (uint32_t)PX4LITE_MODULE_COUNT; ++i) {
     s_status[i].module_id = (Px4Lite_ModuleId_t)i;
     s_status[i].state     = (Px4Lite_IsModuleEnabled((Px4Lite_ModuleId_t)i) != 0U) ? PX4LITE_STATE_UNINITIALIZED : PX4LITE_STATE_DISABLED;
+    if (s_status[i].state == PX4LITE_STATE_DISABLED) { s_experiment_display.disabled_mask |= MODULE_EXPERIMENT_MASK & MODULE_BIT(i); }
   }
 
   s_status_version       = 1U;
@@ -558,6 +712,7 @@ static void Px4Lite_PowerPublishStatus(uint32_t now_ms)
  *          第二组BUSY只继续恢复阶段，不累计错误；NOT_READY代表本轮已确认无有效输入，
  *          OVERFLOW代表正式ADC量程越界并累计I/O错误；两者均立即发布该组失效快照，
  *          不把内部零占位数作为有效0V/0A，不延长饱和之前的有效样本。
+ *          Battery2 电压 I/O 失败保留历史读数，立即撤销其电机准入资格。
  */
 static void Px4Lite_PowerWorkRun(uint32_t now_ms)
 {
@@ -617,6 +772,9 @@ static void Px4Lite_PowerWorkRun(uint32_t now_ms)
       fact->low_voltage = 0U;
       if (result == PX4LITE_OVERFLOW) { Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms); }
     } else if (result == PX4LITE_IO_ERROR) {
+#if PX4LITE_ENABLE_BATTERY2
+      if (index == 1U) { Px4Lite_MarkBattery2VoltageIoFault(); }
+#endif
       fact->io_failed = 1U;
       Px4Lite_RecordSensorIoError(PX4LITE_MODULE_BATTERY, now_ms);
     }
@@ -637,10 +795,17 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 #if PX4LITE_ENABLE_GNSS
   /** @brief sensor所有者的GNSS采集暂存，发布时完整复制，不跨任务共享。 */
   static Px4Lite_SensorGnss_t gnss;
-  Px4Lite_Result_t result;
+  Px4Lite_Result_t result = PX4LITE_IDLE;
 
-  memset(&gnss, 0, sizeof(gnss));
-  result = Px4Lite_GnssRead(&gnss);
+  if (Px4Lite_ModuleExperimentTake(PX4LITE_MODULE_GNSS) != 0U) {
+    uint8_t enabled = Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_GNSS);
+    Px4Lite_Result_t transition = Px4Lite_GnssSetExperimentEnabled(enabled);
+    if (enabled != 0U) { Px4Lite_PublishInitState(PX4LITE_MODULE_GNSS, transition, now_ms); }
+  }
+  if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_GNSS) != 0U) {
+    memset(&gnss, 0, sizeof(gnss));
+    result = Px4Lite_GnssRead(&gnss);
+  }
 
   if (result == PX4LITE_OK) {
     /* 零测量时刻合法；链路活动和各测量时间戳分别保留。 */
@@ -668,7 +833,16 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 #endif
 
 #if PX4LITE_ENABLE_IMU
-  if ((s_last_imu_work_ms == 0U) || ((uint32_t)(now_ms - s_last_imu_work_ms) >= PX4LITE_IMU_WORK_PERIOD_MS)) {
+  if (Px4Lite_ModuleExperimentTake(PX4LITE_MODULE_IMU) != 0U) {
+    if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_IMU) != 0U) {
+      s_last_imu_work_ms = 0U;
+      (void)Px4Lite_ImuModuleInit();
+    } else {
+      Px4Lite_Bmi088UplinkInvalidate();
+    }
+  }
+  if ((Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_IMU) != 0U) &&
+      ((s_last_imu_work_ms == 0U) || ((uint32_t)(now_ms - s_last_imu_work_ms) >= PX4LITE_IMU_WORK_PERIOD_MS))) {
     /** @brief sensor所有者的IMU采集暂存，PushImu同步复制到FIFO及latest槽。 */
     static Px4Lite_SensorImu_t imu;
     Px4Lite_Result_t result;
@@ -702,7 +876,12 @@ void Px4Lite_SensorWorkRun(uint32_t now_ms)
 #endif
 
 #if PX4LITE_ENABLE_BARO
-  {
+  if ((Px4Lite_ModuleExperimentTake(PX4LITE_MODULE_BARO) != 0U) &&
+      (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_BARO) != 0U)) {
+    s_baro_work_started = 0U;
+    (void)Px4Lite_BaroModuleInit();
+  }
+  if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_BARO) != 0U) {
     /** @brief sensor所有者的气压采集暂存，PublishBaro同步复制到topic。 */
     static Px4Lite_SensorBaro_t baro;
     Px4Lite_Result_t result;
@@ -783,7 +962,8 @@ Px4Lite_Result_t Px4Lite_RequestAttitudeAction(Px4Lite_AttitudeAction_t action)
     Px4Lite_AttitudeLogRejected(action, PX4LITE_BUSY, now_ms);
     return PX4LITE_BUSY;
   }
-  if ((s_attitude_status.measurement_valid == 0U) ||
+  if (((s_experiment_display.disabled_mask & MODULE_BIT(PX4LITE_MODULE_IMU)) != 0U) ||
+      (s_attitude_status.measurement_valid == 0U) ||
       ((uint32_t)(now_ms - s_attitude_status.last_sample_ms) > PX4LITE_IMU_MAX_AGE_MS)) {
     taskEXIT_CRITICAL();
     Px4Lite_AttitudeLogRejected(action, PX4LITE_NOT_READY, now_ms);
@@ -819,6 +999,7 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
   uint8_t attitude_updated   = 0U;
   uint8_t imu_pop_count      = 0U;
   uint8_t requested_action;
+  uint8_t reset_imu;
   int32_t roll_deg100        = 0;
   int32_t pitch_deg100       = 0;
   int32_t yaw_deg100         = 0;
@@ -831,7 +1012,13 @@ void Px4Lite_EstimatorRun(uint32_t now_ms)
   taskENTER_CRITICAL();
   requested_action = s_attitude_action_request;
   s_attitude_action_request = 0U;
+  reset_imu = s_experiment_imu_reset;
+  s_experiment_imu_reset = 0U;
   taskEXIT_CRITICAL();
+  if (reset_imu != 0U) {
+    s_attitude_state.valid = 0U;
+    s_attitude_state.motion_ref_valid = 0U;
+  }
   if (requested_action != 0U) {
     (void)Px4Lite_AttitudeRequest(&s_attitude_state, (Px4Lite_AttitudeAction_t)requested_action, now_ms);
   }
@@ -951,7 +1138,9 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   Px4Lite_State_t fiveg_state;
   uint32_t i;
   uint32_t imu_last_rx_ms;
+  uint32_t imu_start_ms;
   uint32_t baro_last_rx_ms;
+  uint32_t baro_start_ms;
   uint32_t battery_last_rx_ms;
   uint32_t lora_last_valid_ms;
   uint32_t display_last_valid_ms;
@@ -965,17 +1154,20 @@ void Px4Lite_HealthRun(uint32_t now_ms)
     /* sensor可在Health运行中抢占。读取最后收数与写入OFFLINE须在同一状态临界区。 */
     uint8_t has_rx = (uint8_t)(gnss->last_rx_ms != 0U || gnss->state == PX4LITE_STATE_ONLINE ||
                                gnss->state == PX4LITE_STATE_DEGRADED);
-    uint32_t elapsed = Px4Lite_ElapsedMs(now_ms, has_rx ? gnss->last_rx_ms : s_start_ms);
+    uint32_t start_ms = (s_experiment_restarted & MODULE_BIT(PX4LITE_MODULE_GNSS)) != 0U ? gnss->state_since_ms : s_start_ms;
+    uint32_t elapsed = Px4Lite_ElapsedMs(now_ms, has_rx ? gnss->last_rx_ms : start_ms);
     uint32_t limit = has_rx ? PX4LITE_GNSS_OFFLINE_MS : PX4LITE_GNSS_INSERT_CHECK_MS;
-    if (gnss->state != PX4LITE_STATE_FAILED && elapsed > limit) {
+    if (gnss->state != PX4LITE_STATE_DISABLED && gnss->state != PX4LITE_STATE_FAILED && elapsed > limit) {
       Px4Lite_SetStatusLocked(PX4LITE_MODULE_GNSS, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms);
     }
   }
 #endif
   imu_last_rx_ms        = s_status[PX4LITE_MODULE_IMU].last_rx_ms;
   imu_state             = s_status[PX4LITE_MODULE_IMU].state;
+  imu_start_ms          = ((s_experiment_restarted & MODULE_BIT(PX4LITE_MODULE_IMU)) != 0U) ? s_status[PX4LITE_MODULE_IMU].state_since_ms : s_start_ms;
   baro_last_rx_ms       = s_status[PX4LITE_MODULE_BARO].last_rx_ms;
   baro_state            = s_status[PX4LITE_MODULE_BARO].state;
+  baro_start_ms         = ((s_experiment_restarted & MODULE_BIT(PX4LITE_MODULE_BARO)) != 0U) ? s_status[PX4LITE_MODULE_BARO].state_since_ms : s_start_ms;
   battery_last_rx_ms    = s_status[PX4LITE_MODULE_BATTERY].last_rx_ms;
   battery_state         = s_status[PX4LITE_MODULE_BATTERY].state;
   lora_last_valid_ms    = s_status[PX4LITE_MODULE_LORA].last_valid_ms;
@@ -987,21 +1179,23 @@ void Px4Lite_HealthRun(uint32_t now_ms)
   taskEXIT_CRITICAL();
 
 #if PX4LITE_ENABLE_IMU
-  if ((imu_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, imu_last_rx_ms) > PX4LITE_IMU_OFFLINE_MS)) {
-    if ((imu_last_rx_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_IMU_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_IMU, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms); }
+  if ((imu_state != PX4LITE_STATE_DISABLED) && (imu_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, imu_last_rx_ms) > PX4LITE_IMU_OFFLINE_MS)) {
+    if ((imu_last_rx_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, imu_start_ms) > PX4LITE_IMU_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_IMU, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms); }
   }
 #else
   (void)imu_state;
   (void)imu_last_rx_ms;
+  (void)imu_start_ms;
 #endif
 
 #if PX4LITE_ENABLE_BARO
-  if ((baro_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, baro_last_rx_ms) > PX4LITE_BARO_OFFLINE_MS)) {
-    if ((baro_last_rx_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, s_start_ms) > PX4LITE_BARO_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_BARO, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms); }
+  if ((baro_state != PX4LITE_STATE_DISABLED) && (baro_state != PX4LITE_STATE_FAILED) && (Px4Lite_ElapsedMs(now_ms, baro_last_rx_ms) > PX4LITE_BARO_OFFLINE_MS)) {
+    if ((baro_last_rx_ms != 0U) || (Px4Lite_ElapsedMs(now_ms, baro_start_ms) > PX4LITE_BARO_STARTUP_GRACE_MS)) { Px4Lite_SetStatus(PX4LITE_MODULE_BARO, PX4LITE_STATE_OFFLINE, PX4LITE_FAULT_SENSOR_OFFLINE, now_ms); }
   }
 #else
   (void)baro_state;
   (void)baro_last_rx_ms;
+  (void)baro_start_ms;
 #endif
 
 #if PX4LITE_ENABLE_BATTERY
@@ -1256,41 +1450,33 @@ static Px4Lite_Result_t Px4Lite_RemoteIdRunReinitIfRequested(uint32_t now_ms)
 }
 #endif
 
-/**
- * @brief 执行既有通信服务并记录整轮经过时间。
- * @details 保持 UART6 协议和调度；计时包含同步发送及抢占，不代表 CPU 利用率。
- */
-void Px4Lite_CommWorkRun(uint32_t now_ms)
-{
-  uint32_t work_started_us = Px4Lite_PlatformGetUs();
-  Px4Lite_RuntimeReportComm(now_ms);
-  Px4Lite_CaptureWorkRun();
-#if PX4LITE_ENABLE_RPI_MAVLINK
-  (void)Px4Lite_RpiMavlinkService(now_ms);
-  (void)Px4Lite_MavlinkRxRunRpi(now_ms);
-#endif
-
 #if PX4LITE_ENABLE_LORA
+/** @brief Comm 在调用 LoRa 收发前执行本轮启停请求。 */
+static void Px4Lite_LoRaApplyExperimentTransition(uint32_t now_ms)
+{
+  if (Px4Lite_ModuleExperimentTake(PX4LITE_MODULE_LORA) != 0U) {
+    if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_LORA) != 0U) {
+      if (Px4Lite_LoRaInit() != PX4LITE_OK) { Px4Lite_LoRaRequestReinit(); }
+    } else {
+      const Px4Lite_LabRequest_t stop = { .operation = PX4LITE_LAB_STOP };
+      Px4Lite_LoRaPause();
+      Px4Lite_MavlinkSetTxEnabled(0U);
+      Px4Lite_MavlinkRxResetLoRa();
+      (void)Px4Lite_LoraLabRequest(&stop);
+      Px4Lite_RemoteTelemetryResetLink(now_ms);
+      s_lora_link_reset_pending = 1U;
+    }
+  }
+}
+
+/** @brief 按 LoRa 本机在位事实发布状态；统计暂存无需与 MAVLink 发送栈同时保留。 */
+static void Px4Lite_LoRaPublishStatus(Px4Lite_Result_t result, uint32_t now_ms)
+{
   Px4Lite_CommDebugInfo_t info;
   Px4Lite_State_t state;
-  Px4Lite_Result_t result;
-  Px4Lite_Result_t rx_result;
-  Px4Lite_Result_t tx_result;
   uint32_t peer_rx_ms;
   uint8_t lora_present;
   uint8_t lora_unavailable;
-
-  result = Px4Lite_LoRaService(now_ms);
-  Px4Lite_LoraLabRun(now_ms);
-  rx_result = Px4Lite_MavlinkRxRun(now_ms);
-  Px4Lite_RemoteDiscoveryRun(now_ms);
-  if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY)) { result = rx_result; }
-  if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
-    /* LoRa 半双工服务返回 BUSY 属于常态，发送器内部会再检查 DMA 是否空闲。
-       若这里只允许 OK，电机/日志/告警等后段扩展帧会长期排不上调度。 */
-    tx_result = Px4Lite_MavlinkTxRun(now_ms);
-    if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) && (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
-  }
 
   memset(&info, 0, sizeof(info));
   Px4Lite_LoRaGetDebugInfo(&info);
@@ -1328,6 +1514,41 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
     }
     Px4Lite_SetStatus(PX4LITE_MODULE_LORA, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);
   }
+}
+#endif
+
+/**
+ * @brief 执行既有通信服务并记录整轮经过时间。
+ * @details 保持 UART6 协议和调度；计时包含同步发送及抢占，不代表 CPU 利用率。
+ */
+void Px4Lite_CommWorkRun(uint32_t now_ms)
+{
+  uint32_t work_started_us = Px4Lite_PlatformGetUs();
+  Px4Lite_RuntimeReportComm(now_ms);
+  Px4Lite_CaptureWorkRun();
+#if PX4LITE_ENABLE_RPI_MAVLINK
+  (void)Px4Lite_RpiMavlinkService(now_ms);
+  (void)Px4Lite_MavlinkRxRunRpi(now_ms);
+#endif
+  Px4Lite_ModuleExperimentRunLocalOpens(now_ms);
+
+#if PX4LITE_ENABLE_LORA
+  Px4Lite_LoRaApplyExperimentTransition(now_ms);
+  if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_LORA) != 0U) {
+    Px4Lite_Result_t result = Px4Lite_LoRaService(now_ms);
+    Px4Lite_Result_t rx_result;
+    Px4Lite_LoraLabRun(now_ms);
+    rx_result = Px4Lite_MavlinkRxRun(now_ms);
+    Px4Lite_RemoteDiscoveryRun(now_ms);
+    if ((rx_result != PX4LITE_OK) && (rx_result != PX4LITE_IDLE) && (rx_result != PX4LITE_NOT_READY)) { result = rx_result; }
+    if ((result == PX4LITE_OK) || (result == PX4LITE_BUSY)) {
+      /* LoRa 正常半双工等待也应推进 TX 调度，由发送器复核 DMA 空闲。 */
+      Px4Lite_Result_t tx_result = Px4Lite_MavlinkTxRun(now_ms);
+      if ((tx_result != PX4LITE_OK) && (tx_result != PX4LITE_IDLE) && (tx_result != PX4LITE_NOT_READY) &&
+          (tx_result != PX4LITE_STALE) && (tx_result != PX4LITE_BUSY)) { result = tx_result; }
+    }
+    Px4Lite_LoRaPublishStatus(result, now_ms);
+  }
 #endif
 
 #if PX4LITE_ENABLE_RPI_MAVLINK
@@ -1336,15 +1557,22 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
 #endif
 
 #if PX4LITE_ENABLE_REMOTE_ID
-  {
+  /* BASIC_ID 仍用于树莓派身份，与 UART4/ESP32 广播服务独立。 */
+  (void)Px4Lite_RemoteIdTxRunRpiIdentity(now_ms);
+  if (Px4Lite_ModuleExperimentTake(PX4LITE_MODULE_REMOTE_ID) != 0U) {
+    if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_REMOTE_ID) != 0U) {
+      (void)Px4Lite_RemoteIdModuleInit();
+    } else {
+      Px4Lite_RemoteIdAbortTx();
+      s_remoteid_reinit_requested = 0U;
+      s_remoteid_present_prev = 0xFFU;
+    }
+  }
+  if (Px4Lite_ModuleExperimentEnabled(PX4LITE_MODULE_REMOTE_ID) != 0U) {
     /* 本机 ESP32(RemoteID)在位由 PC8 硬件电平判定：插着并上电(PC8 高)=ONLINE 绿，
        未插/未上电(PC8 低)=FAILED 红。RemoteID 为盲发通道，发送必"成功"，无法据此
        判断 ESP32 是否真的在，故灯色只按 PC8；在位时仍照常泵帧广播并自愈，发送结果不改灯色。 */
     uint8_t remoteid_present = Px4Lite_RemoteIdIsPresent();
-
-    /* 树莓派身份帧先于在位判定发送：BASIC_ID 是 RPi 提取 vendor_id 建 MQTT 客户端的唯一来源，
-       ESP32 未插时也必须持续供给，否则拔掉 RemoteID 广播模块会连带上不了云。 */
-    (void)Px4Lite_RemoteIdTxRunRpiIdentity(now_ms);
 
     /* 热拔插边沿检测：插入(低→高)请求重初始化 UART4/DMA，保证 ESP32 重新插上后广播干净恢复；
        拔出(高→低)中止 TX 并清忙，避免继续往已断通道 DMA。首拍(prev=0xFF)不算边沿。
@@ -1376,6 +1604,8 @@ void Px4Lite_CommWorkRun(uint32_t now_ms)
         s_status[PX4LITE_MODULE_REMOTE_ID].last_valid_ms = remoteid_stats.last_success_ms;
         s_status[PX4LITE_MODULE_REMOTE_ID].error_count   = remoteid_stats.error_count;
         s_status[PX4LITE_MODULE_REMOTE_ID].drop_count    = remoteid_stats.busy_count;
+        s_experiment_display.remote_id_submitted_count = remoteid_stats.heartbeat_count + remoteid_stats.basic_id_count +
+            remoteid_stats.location_count + remoteid_stats.system_count + remoteid_stats.operator_id_count + remoteid_stats.self_id_count;
         taskEXIT_CRITICAL();
       }
       Px4Lite_SetStatus(PX4LITE_MODULE_REMOTE_ID, PX4LITE_STATE_ONLINE, PX4LITE_FAULT_NONE, now_ms);

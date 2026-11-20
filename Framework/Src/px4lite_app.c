@@ -347,9 +347,8 @@ static void Px4Lite_HealthTask(void *argument)
     now_ms = Px4Lite_PlatformGetMs();
 
     (void)Px4Lite_WorkRunDue(&work, now_ms);
-    now_ms = Px4Lite_PlatformGetMs();
-    Px4Lite_PlatformHeartbeat(PX4LITE_HEARTBEAT_HEALTH, now_ms);
-    Px4Lite_PlatformWatchdogFeed(now_ms);
+    Px4Lite_PlatformHeartbeat(PX4LITE_HEARTBEAT_HEALTH, Px4Lite_PlatformGetMs());
+    Px4Lite_PlatformWatchdogFeed();
 
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(PX4LITE_HEALTH_PERIOD_MS));
   }

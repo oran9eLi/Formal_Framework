@@ -139,6 +139,24 @@ void Px4Lite_GnssRawUplinkInit(uint32_t now_ms)
   (void)now_ms;
 #endif
 }
+/** @brief Comm 在禁止 GNSS 采集后丢弃待发原始帧，统计包含中断的分片组。 */
+void Px4Lite_GnssRawUplinkDiscard(void)
+{
+#if PX4LITE_ENABLE_RPI_GNSS_RAW_UPLINK
+  uint8_t i;
+  taskENTER_CRITICAL();
+  s_raw.counters.aborted_frames += s_raw.depth;
+  for (i = 0U; i < PX4LITE_GNSS_RAW_UPLINK_CAPACITY; ++i) { s_raw.slots[i].state = RAW_SLOT_FREE; }
+  s_raw.head = 0U;
+  s_raw.depth = 0U;
+  s_raw.active = 0U;
+  s_raw.offered = 0U;
+  s_raw.stats_pending = 0U;
+  s_raw.prefer_data = 0U;
+  taskEXIT_CRITICAL();
+#endif
+}
+
 /** @brief 唯一Sensor生产者预留空槽、临界区外复制，随后READY发布；满时丢新，不碰活跃帧。 */
 void Px4Lite_GnssRawEnqueue(const uint8_t *bytes,uint16_t length,uint8_t protocol,uint8_t nmea_type,uint8_t cls,uint8_t id,uint8_t valid,uint32_t now_ms)
 {

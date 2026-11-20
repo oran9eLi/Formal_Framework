@@ -39,8 +39,8 @@ static uint8_t s_test_key1;
 static uint8_t s_test_battery_ready = 1U;
 static uint8_t s_test_battery_valid = 1U;
 static uint8_t s_test_battery_stale;
+static uint32_t s_test_battery_flags;
 static uint32_t s_test_battery_mv = 12000U;
-static unsigned s_test_battery_copies;
 static uint8_t s_test_attitude_ready = 1U;
 static Px4Lite_State_t s_test_imu_state = PX4LITE_STATE_ONLINE;
 static Px4Lite_State_t s_test_baro_state = PX4LITE_STATE_ONLINE;
@@ -76,10 +76,10 @@ Px4Lite_Result_t Px4Lite_CopyMotor(Px4Lite_MotorOutputs_t *out)
 { *out = s_test_motor; return out->header.valid ? PX4LITE_OK : PX4LITE_NOT_READY; }
 Px4Lite_Result_t Px4Lite_CopyBattery2(Px4Lite_BatteryStatus_t *out)
 {
-  ++s_test_battery_copies;
   if (!s_test_battery_ready) { return PX4LITE_NOT_READY; }
   memset(out, 0, sizeof(*out));
   out->header.valid = s_test_battery_valid;
+  out->header.flags = s_test_battery_flags;
   out->header.sample_time_ms = s_test_now - (s_test_battery_stale ? PX4LITE_BATTERY_MAX_AGE_MS + 1U : 0U);
   out->voltage_mv = s_test_battery_mv;
   return PX4LITE_OK;
@@ -138,7 +138,8 @@ static void TestReset(void)
   s_test_key1 = 0U; s_test_write_fail = 0U;
   s_test_init_result = PX4LITE_OK; s_test_disarm_result = PX4LITE_OK;
   s_test_battery_ready = 1U; s_test_battery_valid = 1U; s_test_battery_stale = 0U;
-  s_test_battery_mv = 12000U; s_test_battery_copies = 0U;
+  s_test_battery_flags = 0U;
+  s_test_battery_mv = 12000U;
   s_test_attitude_ready = 1U;
   s_test_imu_state = PX4LITE_STATE_ONLINE; s_test_baro_state = PX4LITE_STATE_ONLINE;
   memset(&s_test_motor, 0, sizeof(s_test_motor));
@@ -191,9 +192,11 @@ static void TestStartupAndEntries(void)
   assert(TestLocked() == 1U); TestMinimum();
 }
 
-/** @brief 默认旁路覆盖缺失/无效/过期/低压/高压，配置恢复后同样的输入必须闭锁。 */
+/** @brief 生产配置下缺失、无效、过期和超出既有电压限值时都禁止驱动。 */
 static void TestVoltagePolicy(void)
 {
+  const uint8_t throttle[4] = {50U, 50U, 50U, 50U};
+  const uint16_t pwm[4] = {1500U, 1500U, 1500U, 1500U};
   unsigned condition;
   for (condition = 0U; condition < 6U; ++condition) {
     TestReset();
@@ -203,27 +206,58 @@ static void TestVoltagePolicy(void)
     if (condition == 3U) { s_test_battery_mv = 9800U; }
     if (condition == 4U) { s_test_battery_mv = 14000U; }
     if (condition == 5U) { s_test_battery_mv = 0U; }
-#if PX4LITE_CONTROL_POWER_GATE_ENABLE
     assert(App_SetMotorLocked(0U) == PX4LITE_NOT_READY);
     assert(TestLocked() == 1U && App_IsMotorPowerInhibited() == 1U);
     assert(App_SetMotorThrottlePercent(0U, 50U) == PX4LITE_NOT_READY);
-#else
-    TestUnlockReady();
-    assert(App_SetMotorThrottlePercent(0U, 50U) == PX4LITE_OK);
-    Px4Lite_ControlRun(s_test_now);
-    assert(s_test_pwm[0] == 1500U && App_IsMotorPowerInhibited() == 0U);
-    assert(s_test_battery_copies == 0U);
-#endif
   }
-#if PX4LITE_CONTROL_POWER_GATE_ENABLE
   TestReset(); TestUnlockReady();
   assert(App_SetMotorThrottlePercent(0U, 40U) == PX4LITE_OK);
   Px4Lite_ControlRun(s_test_now); assert(s_test_pwm[0] == 1400U);
   s_test_battery_mv = 9800U; Px4Lite_ControlRun(s_test_now); TestMinimum();
   assert(App_IsMotorPowerInhibited() == 1U && s_target_valid[0] == 0U);
+  s_test_battery_mv = 10000U; Px4Lite_ControlRun(s_test_now);
+  assert(App_IsMotorPowerInhibited() == 1U); TestMinimum();
   s_test_battery_mv = 12000U; TestAdvance(PX4LITE_CONTROL_ESC_ARM_TIME_MS + PX4LITE_CONTROL_PERIOD_MS);
   TestMinimum(); /* 恢复电压不重放旧油门。 */
-#endif
+
+  assert(App_SetMotorThrottlePercent(0U, 40U) == PX4LITE_OK);
+  Px4Lite_ControlRun(s_test_now); assert(s_test_pwm[0] == 1400U);
+  s_test_battery_ready = 0U;
+  assert(App_SetMotorThrottlePercent(0U, 50U) == PX4LITE_NOT_READY);
+  assert(Px4Lite_ControlSetMotorPulseUs(0U, 1500U) == PX4LITE_NOT_READY);
+  assert(Px4Lite_ControlSetMotorThrottles(throttle) == PX4LITE_NOT_READY);
+  assert(Px4Lite_ControlSetMotorPulses(pwm) == PX4LITE_NOT_READY);
+  assert(App_StartMotorAutoTakeoff() == PX4LITE_NOT_READY);
+  TestCommand(31011U, 30, 30, 30, 30, MAV_RESULT_TEMPORARILY_REJECTED);
+  TestCommand(31013U, 1500, 1500, 1500, 1500, MAV_RESULT_TEMPORARILY_REJECTED);
+  TestCommand(31091U, 0, 0, 0, 0, MAV_RESULT_TEMPORARILY_REJECTED);
+  Px4Lite_ControlRun(s_test_now); TestMinimum();
+  assert(App_SetMotorLocked(1U) == PX4LITE_OK && TestLocked() == 1U);
+}
+
+/** @brief 电压采集失败在样本过期前即闭锁，恢复电压不重放目标。 */
+static void TestVoltageIoFault(void)
+{
+  TestReset(); TestUnlockReady();
+  assert(App_SetMotorThrottlePercent(0U, 40U) == PX4LITE_OK);
+  Px4Lite_ControlRun(s_test_now);
+  assert(s_test_pwm[0] == 1400U);
+
+  s_test_battery_flags = PX4LITE_DATA_DEGRADED; /* 仅电流不可用时仍按有效电压准入。 */
+  Px4Lite_ControlRun(s_test_now);
+  assert(s_test_pwm[0] == 1400U && !App_IsMotorPowerInhibited());
+
+  s_test_battery_flags = PX4LITE_DATA_BATTERY2_VOLTAGE_IO_FAULT;
+  Px4Lite_ControlRun(s_test_now);
+  TestMinimum();
+  assert(App_IsMotorPowerInhibited() && !s_target_valid[0]);
+  assert(App_SetMotorLocked(0U) == PX4LITE_NOT_READY);
+  TestCommand(31011U, 40, 0, 0, 0, MAV_RESULT_TEMPORARILY_REJECTED);
+
+  s_test_battery_flags = PX4LITE_DATA_DEGRADED;
+  TestAdvance(PX4LITE_CONTROL_ESC_ARM_TIME_MS + PX4LITE_CONTROL_PERIOD_MS);
+  TestMinimum();
+  assert(!App_IsMotorPowerInhibited());
 }
 
 /** @brief 上锁同步撤收并发布真实零输出，解锁和重复解锁均不自动旋转。 */
@@ -254,7 +288,29 @@ static void TestLockAndEmergency(void)
   assert(TestLocked() == 1U && s_estop_latched == 1U); TestMinimum();
 }
 
-/** @brief 控制失步、写入失败和恢复仍撤收并重新上锁，不受电压旁路影响。 */
+/** @brief 同一毫秒两次急停也须撤销仍按住的旧解锁；重新按下可以解锁。 */
+static void TestTouchUnlockAfterEmergency(void)
+{
+  uint32_t pending_sequence;
+  uint32_t current_sequence;
+  TestReset();
+  TestCommand(31090U, 0, 0, 0, 0, MAV_RESULT_ACCEPTED);
+  assert(App_GetMotorStopSequence(&pending_sequence) == PX4LITE_OK);
+  assert(TestLocked() == 1U && s_estop_latched == 1U);
+  TestCommand(31090U, 0, 0, 0, 0, MAV_RESULT_ACCEPTED);
+  assert(TestLocked() == 1U && s_estop_latched == 1U);
+  assert(App_UnlockMotor(pending_sequence) == PX4LITE_NOT_READY);
+  assert(TestLocked() == 1U && s_estop_latched == 1U);
+  TestMinimum();
+
+  assert(App_GetMotorStopSequence(&current_sequence) == PX4LITE_OK);
+  assert(current_sequence != pending_sequence);
+  assert(App_UnlockMotor(current_sequence) == PX4LITE_OK);
+  assert(TestLocked() == 0U && s_estop_latched == 0U);
+  TestMinimum();
+}
+
+/** @brief 控制失步、写入失败和恢复仍撤收并重新上锁。 */
 static void TestNonVoltageFaultsAndRecovery(void)
 {
   uint32_t confirmed_sequence;
@@ -339,7 +395,9 @@ int main(void)
   assert(App_SetMotorLocked(0U) == PX4LITE_NOT_READY);
   TestStartupAndEntries();
   TestVoltagePolicy();
+  TestVoltageIoFault();
   TestLockAndEmergency();
+  TestTouchUnlockAfterEmergency();
   TestNonVoltageFaultsAndRecovery();
   TestRampAndMaintenance();
   TestReset(); s_test_now = UINT32_MAX - 999U;

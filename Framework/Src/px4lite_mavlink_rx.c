@@ -134,6 +134,7 @@ static void MavRx_MessageFromFrame(const Px4Lite_CommRxFrame_t *frame, mavlink_m
   message->sysid  = frame->system_id;
   message->compid = frame->component_id;
   message->seq    = frame->sequence;
+  message->magic  = frame->wire_magic;
   message->len    = payload_len;
   memcpy(_MAV_PAYLOAD_NON_CONST(message), frame->payload, payload_len);
 }
@@ -425,10 +426,11 @@ static uint8_t MavRx_DecodeCommandLong(const mavlink_message_t *message, Px4Lite
   mavlink_command_long_t packet;
 
   mavlink_msg_command_long_decode(message, &packet);
+  if ((packet.command == PX4LITE_CNS_MODULE_SWITCH_COMMAND) &&
+      ((link != PX4LITE_MAVLINK_LINK_RPI) || (message->magic != MAVLINK_STX))) { return 0U; }
 #if PX4LITE_ENABLE_CNS_CONTROL
   if (link == PX4LITE_MAVLINK_LINK_RPI) {
     float params[7];
-    /* 接收快照不保留magic；完整帧已由Platform校验CRC，不能用重建后的0值拒收。 */
     params[0] = packet.param1; params[1] = packet.param2;
     params[2] = packet.param3; params[3] = packet.param4;
     params[4] = packet.param5; params[5] = packet.param6; params[6] = packet.param7;
@@ -589,4 +591,10 @@ Px4Lite_Result_t Px4Lite_MavlinkRxRunRpi(uint32_t now_ms)
 uint32_t Px4Lite_MavlinkRxLastPeerMs(void)
 {
   return s_last_peer_rx_ms;
+}
+
+/** @brief LoRa owner 清除接收时刻，UART6 解析状态保持独立。 */
+void Px4Lite_MavlinkRxResetLoRa(void)
+{
+  s_last_peer_rx_ms = 0U;
 }

@@ -35,6 +35,9 @@ typedef struct {
  */
 Px4Lite_Result_t Px4Lite_TopicsInit(void);
 
+/** @brief 撤销停采传感器的最新测量、待处理 IMU 样本及其派生导航有效位。 */
+void Px4Lite_InvalidateSensorTopics(Px4Lite_ModuleId_t id);
+
 /**
  * @brief 原子发布一份完整 GNSS 测量快照。
  *
@@ -134,6 +137,9 @@ Px4Lite_Result_t Px4Lite_CopyBattery(Px4Lite_BatteryStatus_t *data);
  * @param[in] data 电池状态快照指针，不能为 NULL。
  */
 void Px4Lite_PublishBattery2(const Px4Lite_BatteryStatus_t *data);
+
+/** @brief 由采集任务标记 Battery2 电压读取失败，保留历史读数和采样时间。 */
+void Px4Lite_MarkBattery2VoltageIoFault(void);
 
 /**
  * @brief 复制最新的第二块电池状态快照。

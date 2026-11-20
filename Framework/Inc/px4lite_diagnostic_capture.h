@@ -130,11 +130,11 @@ typedef struct {
   uint32_t last_ubx_ms; /**< 上电最近完整且校验通过UBX服务时刻，ms；须检查seen bit1。 */
   uint8_t gnss_seen_mask; /**< 常驻RX事实：bit0 NMEA/bit1 UBX；0ms合法，不随会话/筛选/暂停清除。 */
 } Px4Lite_CaptureStatus_t;
-/** @brief 调度前复位，不由页面切换调用。 */
+/** @brief 调度前复位串口监视和启用的捕获状态，不由页面切换调用。 */
 void Px4Lite_CaptureInit(void);
-/** @brief 排队一个动作；槽忙返回BUSY，不覆盖。 */
+/** @brief 排队一个动作；槽忙返回BUSY，未编入捕获时请求及读取返回NOT_READY。 */
 Px4Lite_Result_t Px4Lite_CaptureRequest(const Px4Lite_CaptureRequest_t *request);
-/** @brief 只由Comm每轮处理请求。 */
+/** @brief 由Comm每轮发布串口监视快照并处理启用的捕获请求。 */
 void Px4Lite_CaptureWorkRun(void);
 /** @brief 原子复制状态。 */
 Px4Lite_Result_t Px4Lite_CaptureCopyStatus(Px4Lite_CaptureStatus_t *out);

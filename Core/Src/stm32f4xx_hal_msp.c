@@ -50,7 +50,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     HAL_GPIO_Init(BSP_RPI_RX_PORT, &gpio);
 
     HAL_NVIC_SetPriority(BSP_RPI_IRQn, BSP_RPI_IRQ_PRIORITY, 0U);
-    HAL_NVIC_EnableIRQ(BSP_RPI_IRQn);
+    /* USART6 仅设优先级；BSP 挂接接收并发布就绪后开放中断。 */
 #endif
   } else if (huart->Instance == BSP_GNSS_UART) {
     __HAL_RCC_GPIOA_CLK_ENABLE();

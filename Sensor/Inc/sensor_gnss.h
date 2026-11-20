@@ -34,6 +34,9 @@ typedef enum {
   GNSS_RESULT_IO_ERROR      /**< UART/DMA 或 BSP 访问失败。 */
 } Gnss_Result_t;
 
+#ifndef GNSS_LOCAL_SATELLITE_TABLE_ENABLE
+#define GNSS_LOCAL_SATELLITE_TABLE_ENABLE 0U /**< 本机逐颗卫星表，独立于原帧转发和导航汇总。 */
+#endif
 #define GNSS_SAT_CAPACITY 64U      /**< 本机静态卫星表最多保留64颗；原帧仍独立完整转发。 */
 #define GNSS_SAT_PAGE_CAPACITY 5U  /**< 跨层只读页最多5项，避免在消费者任务栈复制整张卫星表。 */
 #define GNSS_SAT_VALID_ELEVATION (1U << 0) /**< 仰角在协议允许的-90..90度范围内。 */
@@ -73,7 +76,7 @@ typedef struct {
  * @brief 原子复制最近NAV-SAT的一页元数据及固定最多5项，不读硬件、不消费数据。
  * @param[in] page 从0起的页号；报告0颗卫星时page0仍为有效空页。
  * @param[out] out 输出副本，不能为NULL；失败不改输出。
- * @return 未有完整卫星帧为NO_DATA，空指针或越界页为INVALID_PARAM，其余OK。
+ * @return 未启用本机逐颗表或未有完整卫星帧为NO_DATA，空指针或越界页为INVALID_PARAM，其余OK。
  * @note 驱动不执行过期策略，消费者依据received_ms判新鲜度；NMEA/GSV不伪填为UBX卫星表。
  */
 Gnss_Result_t Sensor_GNSS_CopySatellitePage(uint8_t page, Gnss_SatellitePage_t *out);
@@ -230,7 +233,7 @@ typedef struct {
 /** @brief 只复制驱动事实；首次 Service 前返回 NO_DATA，之后即使没有定位也返回 OK。 */
 Gnss_Result_t Sensor_GNSS_CopyDiagnostics(Gnss_Diagnostics_t *out);
 
-#define GNSS_RAW_MAX_BYTES 392U /**< 旧Debug采样槽容量；独立完整原帧转发容量由下一个宏定义。 */
+#define GNSS_RAW_MAX_BYTES 392U /**< UART1 周期诊断采样槽容量。 */
 #define GNSS_RAW_FORWARD_MAX_BYTES 1024U /**< 独立完整UBX事件转发容量，不扩大旧3槽392B镜像。 */
 #define GNSS_RAW_SLOT_COUNT 3U /**< 静态采样槽数量：0 NAV-PVT，1 NAV-DOP，2其它UBX/NMEA。 */
 
@@ -249,7 +252,8 @@ typedef struct {
  * @brief 短临界复制一个原帧采样槽，不读硬件、不消费UART/DMA或推进队列。
  * @details 首个槽序号为0，以独立ready标记区分空槽；warm Init保留已捕获槽和序号。
  *          OK仅表示已复制原帧，校验结果另见checksum_valid。容量不足/参数非法返回INVALID_PARAM，
- *          空槽返回NO_DATA；失败不写输出。bytes和info必须指向各自独立的调用者缓冲。
+ *          空槽或未启用 UART1 GNSS 周期诊断时返回NO_DATA；失败不写输出。
+ *          bytes和info必须指向各自独立的调用者缓冲。
  */
 Gnss_Result_t Sensor_GNSS_CopyRawFrame(uint8_t slot, uint8_t *bytes, uint16_t capacity, Gnss_RawFrameInfo_t *info);
 
@@ -260,6 +264,8 @@ Gnss_Result_t Sensor_GNSS_CopyRawFrame(uint8_t slot, uint8_t *bytes, uint16_t ca
  * @return 初始化结果。
  */
 Gnss_Result_t Sensor_GNSS_Init(void);
+/** @brief sensor 停采时废弃原始帧和卫星页，保留累计诊断。 */
+void Sensor_GNSS_DiscardExperimentData(void);
 
 /**
  * @brief 处理待解析 GNSS 输入并更新内部快照。

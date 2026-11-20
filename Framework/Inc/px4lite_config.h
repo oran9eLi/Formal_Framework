@@ -59,6 +59,10 @@
 /* Remote ID 由 STM32 通过 UART4 向 ESP32-S3 发送 MAVLink/OpenDroneID 消息。 */
 #define PX4LITE_ENABLE_REMOTE_ID           1U
 #define PX4LITE_ENABLE_RPI_MAVLINK         1U
+/** @brief 本地 Frames 抓包回看，启用时须对整个工程定义此宏为 1。 */
+#ifndef PX4LITE_ENABLE_LOCAL_CAPTURE
+#define PX4LITE_ENABLE_LOCAL_CAPTURE       0U
+#endif
 #define PX4LITE_ENABLE_DISPLAY             1U
 #define PX4LITE_ENABLE_CONTROL             1U
 #define PX4LITE_ENABLE_ALARM               1U
@@ -83,9 +87,9 @@
 #endif
 #define PX4LITE_STARTUP_TONE_DELAY_MS 1000U
 
-/** @brief 电机实际运行时循环播放用户提供的单音曲谱；停机或提示抢占时保留进度。 */
+/** @brief 电机背景曲默认关闭；启用时电机运行期间循环播放单音曲谱。 */
 #ifndef PX4LITE_ENABLE_MOTOR_MUSIC
-#define PX4LITE_ENABLE_MOTOR_MUSIC 1U
+#define PX4LITE_ENABLE_MOTOR_MUSIC 0U
 #endif
 /** @brief 音乐允许使用的实际电机输出快照最大年龄，单位真实ms，不延长控制失效保护。 */
 #ifndef PX4LITE_MOTOR_MUSIC_FRESH_MS
@@ -147,11 +151,11 @@
 #define PX4LITE_MOTOR_COUNT                4U
 #define PX4LITE_CONTROL_ESC_MIN_PULSE_US   1000U
 #define PX4LITE_CONTROL_ESC_MAX_PULSE_US   2000U
-/** @brief 暂停电压对电机的门禁，0 为旁路、1 恢复原采样/新鲜度/电压保护；不影响急停和人工锁。 */
+/** @brief 默认启用动力电压门禁；0 为调试旁路。急停和显式上锁独立生效。 */
 #ifndef PX4LITE_CONTROL_POWER_GATE_ENABLE
-#define PX4LITE_CONTROL_POWER_GATE_ENABLE 0U
+#define PX4LITE_CONTROL_POWER_GATE_ENABLE 1U
 #endif
-/** 原本机电压门禁阈值，单位 mV；由上述开关保留，恢复滞回独立于显示档位。 */
+/** @brief 本机动力电压门禁阈值，单位 mV；恢复滞回独立于显示档位。 */
 #define PX4LITE_CONTROL_POWER_CUTOFF_MV  9900U
 #define PX4LITE_CONTROL_POWER_RECOVER_MV 10100U
 #define PX4LITE_CONTROL_POWER_MAX_MV     13500U

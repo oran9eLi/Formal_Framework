@@ -3,6 +3,9 @@
  * @details 两路独立纵轴自动范围；横轴实际采样槽时间，缺测不连接。
  */
 #include "display_observation.h"
+#include "business_template_config.h"
+
+#if BUSINESS_ENABLE_LOCAL_OBSERVATION
 #include <string.h>
 static lv_point_t s_coords[2][APP_OBSERVATION_POINTS];
 static uint8_t s_valid[2][8],s_segment[2][8];
@@ -58,3 +61,4 @@ void Display_ObservationDraw(lv_obj_t *object,lv_draw_ctx_t *dc)
   }
  }
 }
+#endif

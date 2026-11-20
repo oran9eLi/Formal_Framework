@@ -118,8 +118,10 @@ static mavlink_message_t s_rpi_parse_msg;
 static uint32_t s_rpi_pending_rx_ms;
 static uint32_t s_rpi_last_byte_ms; /**< 最近消费字节时刻；解析状态单独表示半帧存在。 */
 static uint8_t s_rpi_pending_frame;
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
 static uint8_t s_rpi_diagnostic_raw[PX4LITE_CAPTURE_FRAME_BYTES];
 static uint16_t s_rpi_diagnostic_length;
+#endif
 /** @brief Comm 独占的协议收发累计事实；不随半帧重置或波特率切换清零。 */
 static struct {
   uint32_t rx_valid_frames;  /**< MAVLink 解析器返回 FRAMING_OK 的帧数。 */
@@ -133,6 +135,7 @@ static struct {
 
 #endif
 
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
 /** @brief Driver原字节事实经Adapter转换，捕获不接触生产队列。 */
 static void PlatformCaptureLoRaRx(const uint8_t *bytes, uint16_t length, uint32_t now, uint8_t valid)
 { if (valid) { Px4Lite_CaptureRx(PX4LITE_CAPTURE_LORA_RX, bytes, length, now); } else { Px4Lite_CaptureReject(PX4LITE_CAPTURE_LORA_RX); } }
@@ -147,6 +150,7 @@ static void PlatformCaptureLoRaTx(uint8_t stage)
     default: Px4Lite_CaptureTxStage(PX4LITE_CAPTURE_ERROR); break;
   }
 }
+#endif
 
 /**
  * @brief 将 float 按四舍五入方式转换为 int32。
@@ -277,20 +281,24 @@ Px4Lite_Result_t Px4Lite_PlatformRgbService(uint32_t now_ms)
   return PlatformRgb_Result(BSP_RGB_Service(now_ms));
 }
 
-/** @brief 保留屏幕NMEA捕获，并将完整原句独立复制给RAW上行；NULL超长通知不重复入Raw统计。 */
-static void PlatformCaptureGnssNmea(const uint8_t *bytes, uint16_t length, uint8_t type, uint8_t checksum_valid, uint32_t now)
+/** @brief 将完整NMEA原句交给远端RAW上行及启用的本地捕获；NULL超长通知不重复计数。 */
+static void PlatformForwardGnssNmea(const uint8_t *bytes, uint16_t length, uint8_t type, uint8_t checksum_valid, uint32_t now)
 {
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   Px4Lite_CaptureNmea(bytes, length, type, checksum_valid, now);
+#endif
   if (bytes != NULL && length != 0U) { Px4Lite_GnssRawEnqueue(bytes, length, 1U, type, 0U, 0U, checksum_valid, now); }
 }
 
 /**
- * @brief 屏幕与独立RAW出口共用一次完整UBX借用视图，不读取三槽采样代替原帧事件流。
- * @details 屏幕/Debug仍为392B，较长帧可记录屏幕drop；独立RAW接收完整1024B，不截断。
+ * @brief 转发完整UBX原帧给远端RAW上行及启用的本地捕获。
+ * @details 远端RAW接收完整1024B，启用的本地捕获在392B以上只计丢弃。
  */
-static void PlatformCaptureGnssUbx(const uint8_t *bytes, uint16_t length, uint8_t cls, uint8_t id, uint8_t checksum_valid, uint32_t now)
+static void PlatformForwardGnssUbx(const uint8_t *bytes, uint16_t length, uint8_t cls, uint8_t id, uint8_t checksum_valid, uint32_t now)
 {
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   Px4Lite_CaptureUbx(bytes, length, cls, id, checksum_valid, now);
+#endif
   if (bytes != NULL && length != 0U) { Px4Lite_GnssRawEnqueue(bytes, length, 2U, 0U, cls, id, checksum_valid, now); }
 }
 
@@ -306,9 +314,11 @@ static void PlatformRejectGnssRaw(uint8_t protocol, uint32_t length, uint8_t rea
 Px4Lite_Result_t Px4Lite_PlatformInit(void)
 {
   Px4Lite_CaptureInit();
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   Lora_E22_SetDiagnosticCallbacks(PlatformCaptureLoRaRx, PlatformCaptureLoRaTx);
-  Gnss_SetDiagnosticCallback(PlatformCaptureGnssNmea);
-  Gnss_SetUbxDiagnosticCallback(PlatformCaptureGnssUbx);
+#endif
+  Gnss_SetDiagnosticCallback(PlatformForwardGnssNmea);
+  Gnss_SetUbxDiagnosticCallback(PlatformForwardGnssUbx);
   Gnss_SetRawRejectCallback(PlatformRejectGnssRaw);
   memset(s_heartbeat_ms, 0, sizeof(s_heartbeat_ms));
   s_heartbeat_seen_mask = 0U;
@@ -450,26 +460,6 @@ void Px4Lite_PlatformHeartbeat(Px4Lite_HeartbeatId_t id, uint32_t now_ms)
 }
 
 /**
- * @brief 检查所有必需任务心跳是否存在且未超时。
- *
- * @param[in] now_ms 当前系统毫秒时间。
- *
- * @return 1 表示心跳健康，0 表示至少一个必需任务未上报或已超时。
- */
-uint8_t Px4Lite_PlatformHeartbeatsHealthy(uint32_t now_ms)
-{
-  uint32_t heartbeat[PX4LITE_HEARTBEAT_COUNT];
-  uint32_t seen_mask;
-  taskENTER_CRITICAL();
-  memcpy(heartbeat, s_heartbeat_ms, sizeof(heartbeat));
-  seen_mask = s_heartbeat_seen_mask;
-  taskEXIT_CRITICAL();
-  /* 期限与必需位图已在调度前固定，运行期无需重复复制。 */
-  return Px4Lite_HeartbeatsCheck(heartbeat, s_heartbeat_timeout_ms, PX4LITE_HEARTBEAT_COUNT,
-                               seen_mask, s_heartbeat_required_mask, now_ms);
-}
-
-/**
  * @brief 调度器启动前封存任务集合并开始首轮期限，不能重复交接。
  * @param[in] now_ms 当前真实毫秒时间。
  * @return 空集合/重复交接/硬件未启动时失败；失败不再续期。
@@ -498,10 +488,26 @@ Px4Lite_Result_t Px4Lite_PlatformWatchdogBeginStartup(uint32_t now_ms)
 }
 
 /** @brief HealthTask 完成工作并更新心跳后执行；时基停走不续期，首轮超时/硬件切换失败锁存。 */
-void Px4Lite_PlatformWatchdogFeed(uint32_t now_ms)
+void Px4Lite_PlatformWatchdogFeed(void)
 {
-  Px4Lite_WatchdogAction_t action = Px4Lite_WatchdogEvaluate(&s_watchdog_phase, &s_watchdog_last_check_ms, s_watchdog_start_ms,
-                                                          now_ms, Px4Lite_PlatformHeartbeatsHealthy(now_ms));
+  uint32_t heartbeat[PX4LITE_HEARTBEAT_COUNT];
+  uint32_t seen_mask;
+  uint32_t now_ms;
+  uint8_t healthy;
+  Px4Lite_WatchdogAction_t action;
+
+  taskENTER_CRITICAL();
+  memcpy(heartbeat, s_heartbeat_ms, sizeof(heartbeat));
+  seen_mask = s_heartbeat_seen_mask;
+  /* 与心跳一起取样，避免任务抢占后用较早的时刻计算较新的心跳年龄。 */
+  now_ms = Px4Lite_PlatformGetMs();
+  taskEXIT_CRITICAL();
+
+  /* 期限与必需位图在调度前封存，运行期无需重复复制。 */
+  healthy = Px4Lite_HeartbeatsCheck(heartbeat, s_heartbeat_timeout_ms, PX4LITE_HEARTBEAT_COUNT,
+                                  seen_mask, s_heartbeat_required_mask, now_ms);
+  action = Px4Lite_WatchdogEvaluate(&s_watchdog_phase, &s_watchdog_last_check_ms, s_watchdog_start_ms,
+                                    now_ms, healthy);
   if (action == PX4LITE_WATCHDOG_ENTER_RUNTIME) {
 #if PX4LITE_ENABLE_HARDWARE_WATCHDOG
     if (BSP_Watchdog_EnterRuntime() != BSP_STATUS_OK) {
@@ -527,6 +533,19 @@ Px4Lite_Result_t Px4Lite_GnssInit(void)
   s_gnss_reinit_pending = 0U;
   /* GNSS UART/DMA 由 BSP_Init() 集中初始化；此处只初始化解析器状态。 */
   return (Sensor_GNSS_Init() == GNSS_RESULT_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
+}
+
+/** @brief sensor 切换 GNSS UART/DMA 并撤销暂停前的解析数据。 */
+Px4Lite_Result_t Px4Lite_GnssSetExperimentEnabled(uint8_t enabled)
+{
+  if (enabled != 0U) {
+    Px4Lite_Result_t result = Px4Lite_GnssInit();
+    if (BSP_GNSS_Init() != BSP_STATUS_OK) { return PX4LITE_IO_ERROR; }
+    return result;
+  }
+  BSP_Status_t stopped = BSP_GNSS_DeInit();
+  Sensor_GNSS_DiscardExperimentData();
+  return (stopped == BSP_STATUS_OK) ? PX4LITE_OK : PX4LITE_IO_ERROR;
 }
 
 void Px4Lite_GnssRequestReinit(void)
@@ -1306,6 +1325,13 @@ Px4Lite_Result_t Px4Lite_LoRaInit(void)
   return PX4LITE_IO_ERROR;
 }
 
+/** @brief Comm 撤销待发帧和驱动会话，再停止 LoRa UART/DMA。 */
+void Px4Lite_LoRaPause(void)
+{
+  Lora_E22_Pause(Px4Lite_PlatformGetMs());
+  BSP_LoRa_Pause();
+}
+
 void Px4Lite_LoRaRequestReinit(void)
 {
   Lora_E22_RequestReinit();
@@ -1322,15 +1348,21 @@ Px4Lite_Result_t Px4Lite_LoRaService(uint32_t now_ms)
 Px4Lite_Result_t Px4Lite_LoRaSend(const uint8_t *data, uint16_t len)
 {
   Lora_Result_t result;
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   uint32_t token = 0U;
+#endif
   Px4Lite_Result_t mapped;
 
   if ((data == 0) || (len == 0U)) { return PX4LITE_INVALID_PARAM; }
 
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   if (Lora_E22_IsTransportIdle()) { token = Px4Lite_CaptureTxBegin(data, len, Px4Lite_PlatformGetMs()); }
+#endif
   result = Lora_E22_Send(data, len);
   mapped = result == LORA_RESULT_OK ? PX4LITE_OK : (result == LORA_RESULT_BUSY ? PX4LITE_BUSY : (result == LORA_RESULT_INVALID_PARAM ? PX4LITE_INVALID_PARAM : PX4LITE_IO_ERROR));
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   Px4Lite_CaptureTxSubmit(token, mapped);
+#endif
   return mapped;
 }
 
@@ -1377,7 +1409,9 @@ static void Px4Lite_RpiMavlinkResetRxState(void)
   s_rpi_pending_rx_ms = 0U;
   s_rpi_pending_frame = 0U;
   s_rpi_last_byte_ms = 0U;
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   s_rpi_diagnostic_length = 0U;
+#endif
 }
 #endif
 
@@ -1415,7 +1449,9 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkSend(const uint8_t *data, uint16_t len)
   } else {
     s_rpi_monitor.tx_failures++;
   }
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
   Px4Lite_CaptureRpiTx(data, len, completed_ms, status == BSP_STATUS_OK ? PX4LITE_CAPTURE_UART_DONE : (status == BSP_STATUS_TIMEOUT ? PX4LITE_CAPTURE_TIMEOUT : PX4LITE_CAPTURE_ERROR));
+#endif
   if (status == BSP_STATUS_OK) { return PX4LITE_OK; }
   if (status == BSP_STATUS_BUSY) { return PX4LITE_BUSY; }
   return PX4LITE_IO_ERROR;
@@ -1535,25 +1571,41 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkService(uint32_t now_ms)
       Px4Lite_RpiMavlinkResetRxState();
     }
     s_rpi_last_byte_ms = now_ms;
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
     if (mavlink_get_channel_status(MAVLINK_COMM_0)->parse_state <= MAVLINK_PARSE_STATE_IDLE) {
       s_rpi_diagnostic_length = 0U;
       if (byte == 0xFD || byte == 0xFE) { s_rpi_diagnostic_raw[s_rpi_diagnostic_length++] = byte; }
     } else if (s_rpi_diagnostic_length && s_rpi_diagnostic_length < sizeof(s_rpi_diagnostic_raw)) {
       s_rpi_diagnostic_raw[s_rpi_diagnostic_length++] = byte;
     }
+#endif
     framing = mavlink_frame_char(MAVLINK_COMM_0, byte, &s_rpi_parse_msg, &s_rpi_parse_status);
     if (framing == MAVLINK_FRAMING_BAD_CRC || framing == MAVLINK_FRAMING_BAD_SIGNATURE) {
       mavlink_status_t *parser = mavlink_get_channel_status(MAVLINK_COMM_0);
       mavlink_message_t *message = mavlink_get_channel_buffer(MAVLINK_COMM_0);
       s_rpi_monitor.rx_frame_errors++;
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
       Px4Lite_CaptureReject(PX4LITE_CAPTURE_RPI_RX);
-      s_rpi_diagnostic_length = 0U; parser->msg_received = MAVLINK_FRAMING_INCOMPLETE; parser->parse_state = MAVLINK_PARSE_STATE_IDLE;
-      if (byte == MAVLINK_STX) { parser->parse_state = MAVLINK_PARSE_STATE_GOT_STX; message->len = 0U; mavlink_start_checksum(message); s_rpi_diagnostic_raw[0] = byte; s_rpi_diagnostic_length = 1U; }
+      s_rpi_diagnostic_length = 0U;
+#endif
+      parser->msg_received = MAVLINK_FRAMING_INCOMPLETE;
+      parser->parse_state = MAVLINK_PARSE_STATE_IDLE;
+      if (byte == MAVLINK_STX) {
+        parser->parse_state = MAVLINK_PARSE_STATE_GOT_STX;
+        message->len = 0U;
+        mavlink_start_checksum(message);
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
+        s_rpi_diagnostic_raw[0] = byte;
+        s_rpi_diagnostic_length = 1U;
+#endif
+      }
     }
     if (framing == MAVLINK_FRAMING_OK) {
       s_rpi_monitor.rx_valid_frames++;
+#if PX4LITE_ENABLE_LOCAL_CAPTURE
       Px4Lite_CaptureRx(PX4LITE_CAPTURE_RPI_RX, s_rpi_diagnostic_raw, s_rpi_diagnostic_length, now_ms);
       s_rpi_diagnostic_length = 0U;
+#endif
       s_rpi_pending_rx_ms = now_ms;
       s_rpi_pending_frame = 1U;
       return PX4LITE_OK;
@@ -1580,6 +1632,7 @@ Px4Lite_Result_t Px4Lite_RpiMavlinkCopyRxFrame(Px4Lite_CommRxFrame_t *out)
   out->system_id    = s_rpi_parse_msg.sysid;
   out->component_id = s_rpi_parse_msg.compid;
   out->sequence     = s_rpi_parse_msg.seq;
+  out->wire_magic   = s_rpi_parse_msg.magic;
   out->payload_len  = (s_rpi_parse_msg.len > PX4LITE_COMM_RX_PAYLOAD_MAX) ? PX4LITE_COMM_RX_PAYLOAD_MAX : s_rpi_parse_msg.len;
   if (out->payload_len > 0U) { memcpy(out->payload, _MAV_PAYLOAD(&s_rpi_parse_msg), out->payload_len); }
   s_rpi_pending_frame = 0U;

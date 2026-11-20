@@ -67,13 +67,15 @@ typedef enum {
   DISPLAY_HMI_PAGE_ALARM,      /* 告警页：运行期告警码和原因表*/
   DISPLAY_HMI_PAGE_HIDDEN,     /* 通信工作区；保留历史 ID，可由头部入口或 KEY0 打开。 */
   DISPLAY_HMI_PAGE_DIAGNOSTICS, /**< 自检二级诊断：模块、故障与运行状态。 */
-  DISPLAY_HMI_PAGE_EVENT_HISTORY, /**< 本机二级事件历史；不改变活动告警。 */
+  DISPLAY_HMI_PAGE_EVENT_HISTORY, /**< 保留原事件历史页编号，精简固件拒绝切入。 */
   DISPLAY_HMI_PAGE_DETAILS, /**< 二级测量详情和有界逐路步进。 */
   DISPLAY_HMI_PAGE_INSPECTOR, /**< 通信二级观察；Messages/Raw/Decoded同级。 */
   DISPLAY_HMI_PAGE_NMEA, /**< 与MAVLink互斥的原始定位观察。 */
   DISPLAY_HMI_PAGE_SERIAL, /**< H1/B1本机响应事实。 */
   DISPLAY_HMI_PAGE_OBSERVE, /**< 两路共享观察/统计和局部定位漂移。 */
   DISPLAY_HMI_PAGE_RECORD, /**< 手动CSV及本次写入/同步结果。 */
+  DISPLAY_HMI_PAGE_BARO, /**< 气压计、温度及状态。 */
+  DISPLAY_HMI_PAGE_REMOTE_ID, /**< Remote ID 本机 UART4 发送状态。 */
   DISPLAY_HMI_PAGE_COUNT       /* 页面数量 */
 } Display_HmiPage_t;
 
@@ -151,7 +153,7 @@ typedef enum {
   DISPLAY_HMI_VAR_CLOCK_TIME,            /* 本地显示时间，编码 HHMMSS，由业务层喂值*/
   DISPLAY_HMI_VAR_DATE,                  /* 本地显示日期，编码 YYYYMMDD，由业务层喂值*/
   DISPLAY_HMI_VAR_FLIGHT_TIME_S,         /* 飞行时间(上电后运行)，单位 s */
-  DISPLAY_HMI_VAR_MESSAGE_LOG,           /* 消息日志缓冲版本号，变化即重绘日志区 */
+  DISPLAY_HMI_VAR_MESSAGE_LOG,           /* 保留原消息日志变量编号 */
   DISPLAY_HMI_VAR_VIEW_NODE_ID,          /* 当前查看对象编号：本地=本机sysid(UID派生)，远端=选中节点，显示 DCDW-xxx */
   DISPLAY_HMI_VAR_MOTOR_TARGET_1,        /* 电机1学生设定目标，单位% */
   DISPLAY_HMI_VAR_MOTOR_TARGET_2,        /* 电机2学生设定目标，单位% */
@@ -358,6 +360,9 @@ Display_Result_t Display_RequestMotorEmergencyStop(void);
  * @return DISPLAY_OK表示请求执行成功，NOT_READY表示本机控制未就绪，ERROR表示拒绝或执行失败。
  */
 Display_Result_t Display_RequestMotorLocked(uint8_t locked);
+
+/** @brief 确认触屏按下时读取的急停序号后解锁。 */
+Display_Result_t Display_RequestMotorUnlock(uint32_t stop_sequence);
 
 Display_Result_t Display_RequestMotorAutoLanding(void);
 

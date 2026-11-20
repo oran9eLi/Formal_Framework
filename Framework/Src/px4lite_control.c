@@ -77,6 +77,7 @@ static volatile int32_t s_target_roll_deg100;
 static volatile int32_t s_target_pitch_deg100;
 static volatile int32_t s_target_yaw_deg100;
 static volatile uint8_t s_estop_latched;
+static uint32_t s_estop_sequence; /**< 每次急停更新一次，跨 Control 恢复保留。 */
 /**< 电压门禁事实；关闭门禁时恒为 0，不承担人工锁职责。 */
 static volatile uint8_t s_power_inhibited = (PX4LITE_CONTROL_POWER_GATE_ENABLE != 0U) ? 1U : 0U;
 static volatile uint8_t s_power_low_voltage;
@@ -577,6 +578,19 @@ static void ControlCnsCancel(uint8_t all)
 #endif
 }
 
+/** @brief 已受理的 CNS 降落在等待 ACK 和执行期间均占用请求槽。 */
+static uint8_t ControlCnsLandingAccepted(void)
+{
+  return (uint8_t)(s_cns.phase != CONTROL_CNS_NONE && s_cns.action == PX4LITE_CNS_LAND);
+}
+
+/** @brief 用户降落约束从 CNS 受理开始，普通本地降落仍按现有斜坡状态判断。 */
+static uint8_t ControlUserLandingActive(void)
+{
+  return (uint8_t)(ControlCnsLandingAccepted() ||
+    (s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING && s_auto_landing_user != 0U));
+}
+
 #if PX4LITE_ENABLE_CNS_CONTROL
 /** @brief ACK 未放行时撤销的只是新请求；原已确认精确保持不能因超时而切回混控。 */
 static void ControlCnsExpirePending(void)
@@ -869,6 +883,7 @@ static void Px4Lite_ControlCopyTargetPercent(uint8_t duty_percent[PX4LITE_MOTOR_
  * @brief 在控制周期或命令提交前更新可配置的电压门禁；关闭时只旁路电压条件。
  * @param[in] now_ms 当前真实毫秒时间。
  * @note 调用者已挂起任务调度；快照内部短临界区，不依赖显示或远端数据。
+ *       采集已报电压 I/O 故障时，尚未过期的 Battery2 历史读数也不能授权输出。
  *       闭锁同时清目标、自动过程及预解锁进度，恢复不会重放旧命令。
  */
 static void Px4Lite_ControlRefreshPowerGate(uint32_t now_ms)
@@ -879,6 +894,7 @@ static void Px4Lite_ControlRefreshPowerGate(uint32_t now_ms)
   s_power_low_voltage = 0U;
   if ((Px4Lite_CopyBattery2(&battery) == PX4LITE_OK) &&
       (battery.header.valid != 0U) &&
+      ((battery.header.flags & PX4LITE_DATA_BATTERY2_VOLTAGE_IO_FAULT) == 0U) &&
       (Px4Lite_ElapsedMs(now_ms, battery.header.sample_time_ms) <= PX4LITE_BATTERY_MAX_AGE_MS)) {
     s_power_low_voltage = (battery.voltage_mv < PX4LITE_CONTROL_POWER_CUTOFF_MV) ? 1U : 0U;
     if ((battery.voltage_mv <= PX4LITE_CONTROL_POWER_MAX_MV) &&
@@ -892,7 +908,10 @@ static void Px4Lite_ControlRefreshPowerGate(uint32_t now_ms)
     if ((inhibit != 0U) && (s_output_above_minimum != 0U)) { s_power_cutoff_pending = 1U; }
   }
   if (inhibit != 0U) {
-    ControlCnsCancel(0U);
+    /* 撤收已执行，锁定/急停的 ACK 与声光可在无动力电时继续。 */
+    if ((s_cns.action != PX4LITE_CNS_DISARM) && (s_cns.action != PX4LITE_CNS_EMERGENCY_STOP)) {
+      ControlCnsCancel(0U);
+    }
     Px4Lite_ControlClearTargets();
     Px4Lite_ControlAbortAuto(now_ms);
     s_esc_armed = 0U;
@@ -900,7 +919,7 @@ static void Px4Lite_ControlRefreshPowerGate(uint32_t now_ms)
   }
   s_power_inhibited = inhibit;
 #else
-  /* 教学期间临时旁路；完整电压保护算法和阈值保留在上方，可由配置恢复。 */
+  /* 调试配置只旁路电压门禁。 */
   (void)now_ms;
   s_power_inhibited = 0U;
   s_power_low_voltage = 0U;
@@ -931,9 +950,10 @@ static void Px4Lite_ControlPublishMinimum(uint32_t now_ms)
 
 /**
  * @brief 显式修改人工锁；解锁先确认最小输出并丢弃旧目标，不替用户提交油门。
+ * @param[in] stop_sequence 触屏解锁按下时的急停序号，普通锁命令传空。
  * @note 与 Control 周期串行，保持中断可用；急停键按下、维护或启用的电压门禁拒绝解锁。
  */
-Px4Lite_Result_t Px4Lite_ControlSetMotorLocked(uint8_t locked)
+static Px4Lite_Result_t Px4Lite_ControlSetMotorLockedImpl(uint8_t locked, const uint32_t *stop_sequence)
 {
   Px4Lite_Result_t result;
   uint32_t now_ms;
@@ -941,7 +961,9 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorLocked(uint8_t locked)
   if (locked > 1U) { return PX4LITE_INVALID_PARAM; }
   vTaskSuspendAll();
   now_ms = Px4Lite_PlatformGetMs();
-  if (s_control_initialized == 0U) { (void)xTaskResumeAll(); return PX4LITE_NOT_READY; }
+  if (s_control_initialized == 0U || (stop_sequence != 0 && *stop_sequence != s_estop_sequence)) {
+    (void)xTaskResumeAll(); return PX4LITE_NOT_READY;
+  }
   Px4Lite_ControlRefreshPowerGate(now_ms);
   ControlCnsCancel(0U);
   if (locked == 0U) {
@@ -978,6 +1000,30 @@ Px4Lite_Result_t Px4Lite_ControlSetMotorLocked(uint8_t locked)
   return result;
 }
 
+/** @brief 普通人工锁命令使用 Control 的现有准入和撤收流程。 */
+Px4Lite_Result_t Px4Lite_ControlSetMotorLocked(uint8_t locked)
+{
+  return Px4Lite_ControlSetMotorLockedImpl(locked, 0);
+}
+
+/** @brief 触屏解锁与急停串行检查，拒绝急停之前已开始的手势。 */
+Px4Lite_Result_t Px4Lite_ControlUnlockMotor(uint32_t stop_sequence)
+{
+  return Px4Lite_ControlSetMotorLockedImpl(0U, &stop_sequence);
+}
+
+/** @brief 读取已初始化的本机急停序号。 */
+Px4Lite_Result_t Px4Lite_ControlGetEmergencyStopSequence(uint32_t *sequence)
+{
+  Px4Lite_Result_t result;
+  if (sequence == 0) { return PX4LITE_INVALID_PARAM; }
+  taskENTER_CRITICAL();
+  result = s_control_initialized ? PX4LITE_OK : PX4LITE_NOT_READY;
+  if (result == PX4LITE_OK) { *sequence = s_estop_sequence; }
+  taskEXIT_CRITICAL();
+  return result;
+}
+
 /** @brief 在任务同步边界读取人工锁；未初始化时不向 UI 伪造可用状态。 */
 Px4Lite_Result_t Px4Lite_ControlGetMotorLocked(uint8_t *locked)
 {
@@ -1006,7 +1052,7 @@ static uint8_t Px4Lite_ControlRejectNonzero(uint32_t now_ms)
 
 /**
  * @brief 提交完整四路目标；暂停任务调度期间检查本机供电并整体更新状态。
- * @details 百分比保持当前模式，脉宽命令同时选择 DIRECT。用户缓降中的全零命令
+ * @details 百分比保持当前模式，脉宽命令同时选择 DIRECT。用户缓降已受理时，全零命令
  *          只确认已有撤收意图，不改变曲线或模式；被拒命令不解除急停。
  */
 static Px4Lite_Result_t Px4Lite_ControlCommitMotorTargets(const uint8_t percent[PX4LITE_MOTOR_COUNT],
@@ -1023,7 +1069,7 @@ static Px4Lite_Result_t Px4Lite_ControlCommitMotorTargets(const uint8_t percent[
     (void)xTaskResumeAll();
     return PX4LITE_NOT_READY;
   }
-  if ((s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) && (s_auto_landing_user != 0U)) {
+  if (ControlUserLandingActive()) {
     if (nonzero != 0U) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_LANDING_THROTTLE_REJECT, now_ms); }
     (void)xTaskResumeAll();
     return (nonzero != 0U) ? PX4LITE_NOT_READY : PX4LITE_OK;
@@ -1084,10 +1130,8 @@ static Px4Lite_Result_t Px4Lite_ControlSetMotorThrottlePercentImpl(uint8_t motor
   if (throttle_percent > 100U) { throttle_percent = 100U; }
   /* 拒绝先于目标和自动过程变更；非零普通命令不能解除人工锁或急停。 */
   if ((throttle_percent != 0U) && (Px4Lite_ControlRejectNonzero(Px4Lite_PlatformGetMs()) != 0U)) { return PX4LITE_NOT_READY; }
-  /* 一键降落是用户明确的撤收动作，进行中不接受新的非零手动油门；0 与降落终点一致，接受但
-     不打断斜坡。姿态丢失触发的强制降落不在此列——那是内部保护，必须留出手动接管的出口。
-     一键起飞也不做此限制，手动接管随时可以打断上升。 */
-  if ((s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) && (s_auto_landing_user != 0U)) {
+  /* 已受理的用户降落拒绝非零油门，零油门仅确认撤收意图。内部保护降落仍允许手动接管。 */
+  if (ControlUserLandingActive()) {
     if (throttle_percent != 0U) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_LANDING_THROTTLE_REJECT, Px4Lite_PlatformGetMs()); return PX4LITE_NOT_READY; }
     return PX4LITE_OK;
   }
@@ -1111,7 +1155,7 @@ static Px4Lite_Result_t Px4Lite_ControlSetMotorPulseUsImpl(uint8_t motor_index, 
       (pulse_us > PX4LITE_CONTROL_ESC_MAX_PULSE_US)) { return PX4LITE_INVALID_PARAM; }
   /* 与百分比入口同口径：闭锁和一键降落期间只接受最小脉宽。 */
   if ((pulse_us != PX4LITE_CONTROL_ESC_MIN_PULSE_US) && (Px4Lite_ControlRejectNonzero(Px4Lite_PlatformGetMs()) != 0U)) { return PX4LITE_NOT_READY; }
-  if ((s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING) && (s_auto_landing_user != 0U)) {
+  if (ControlUserLandingActive()) {
     if (pulse_us != PX4LITE_CONTROL_ESC_MIN_PULSE_US) { Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_LANDING_THROTTLE_REJECT, Px4Lite_PlatformGetMs()); return PX4LITE_NOT_READY; }
     return PX4LITE_OK;
   }
@@ -1130,7 +1174,7 @@ static Px4Lite_Result_t Px4Lite_ControlSetMotorPulseUsImpl(uint8_t motor_index, 
 /** @brief 在状态机内给出精确拒绝原因；重复过程不重置已有斜坡计时。 */
 static Px4Lite_Result_t Px4Lite_ControlStartAutoTakeoffImpl(void)
 {
-  if (s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) {
+  if (ControlCnsLandingAccepted() || s_auto_profile != PX4LITE_CONTROL_AUTO_NONE) {
     Px4Lite_ControlLogCommand(PX4LITE_LOGMSG_RAMP_UP_BUSY, Px4Lite_PlatformGetMs());
     return PX4LITE_BUSY;
   }
@@ -1179,20 +1223,58 @@ static Px4Lite_Result_t Px4Lite_ControlStartAutoLandingImpl(void)
 }
 
 /**
- * @brief 设置直控或姿态辅助输出模式。
+ * @brief 在同一调度事务内更新可选的输出模式和三轴目标。
+ * @details 已受理的 CNS 降落从等待 ACK 到四路到达怠速期间，禁止改变混控配置。
  */
-Px4Lite_Result_t Px4Lite_ControlSetMode(Px4Lite_ControlMode_t mode)
+static Px4Lite_Result_t ControlApplyOutputConfig(const Px4Lite_ControlMode_t *mode,
+                                                const int32_t target_deg100[3])
 {
-  if ((mode != PX4LITE_CONTROL_MODE_DIRECT) && (mode != PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST)) {
+  uint8_t mode_changed, attitude_changed;
+  Px4Lite_Result_t result = PX4LITE_OK;
+
+  if (mode != 0 && *mode != PX4LITE_CONTROL_MODE_DIRECT &&
+      *mode != PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST) {
+    return PX4LITE_INVALID_PARAM;
+  }
+  if (target_deg100 != 0 &&
+      (target_deg100[0] < -(int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 ||
+       target_deg100[0] > (int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 ||
+       target_deg100[1] < -(int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 ||
+       target_deg100[1] > (int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100 ||
+       target_deg100[2] < -(int32_t)PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100 ||
+       target_deg100[2] > (int32_t)PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100)) {
     return PX4LITE_INVALID_PARAM;
   }
 
-  /* 配置赋值与旧观察失效属于同一短事务，防止新RPi请求插入后被旧设置误取消。 */
   vTaskSuspendAll();
-  if (s_control_mode != mode) { ControlCnsCancel(0U); ControlRpiFeedbackContextChanged(); }
-  s_control_mode = mode;
+  mode_changed = (mode != 0 && *mode != s_control_mode) ? 1U : 0U;
+  attitude_changed = (target_deg100 != 0 &&
+      (target_deg100[0] != s_target_roll_deg100 || target_deg100[1] != s_target_pitch_deg100 ||
+       target_deg100[2] != s_target_yaw_deg100)) ? 1U : 0U;
+  if (mode_changed || attitude_changed) {
+    if (ControlCnsLandingAccepted()) {
+      result = PX4LITE_BUSY;
+    } else {
+      ControlCnsCancel(0U);
+      ControlRpiFeedbackContextChanged();
+      if (mode_changed) { s_control_mode = *mode; }
+      if (attitude_changed) {
+        s_target_roll_deg100  = target_deg100[0];
+        s_target_pitch_deg100 = target_deg100[1];
+        s_target_yaw_deg100   = target_deg100[2];
+      }
+    }
+  }
   (void)xTaskResumeAll();
-  return PX4LITE_OK;
+  return result;
+}
+
+/**
+ * @brief 设置直控或姿态辅助输出模式，CNS 降落期间尝试切换时返回忙。
+ */
+Px4Lite_Result_t Px4Lite_ControlSetMode(Px4Lite_ControlMode_t mode)
+{
+  return ControlApplyOutputConfig(&mode, 0);
 }
 
 /**
@@ -1206,30 +1288,22 @@ Px4Lite_Result_t Px4Lite_ControlGetMode(Px4Lite_ControlMode_t *mode)
 }
 
 /**
- * @brief 校验并设置姿态辅助目标角。
+ * @brief 设置姿态辅助目标角，CNS 降落期间尝试变更时返回忙。
  */
 Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll_deg100, int32_t pitch_deg100, int32_t yaw_deg100)
 {
-  if ((roll_deg100 < -(int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100) ||
-      (roll_deg100 > (int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100) ||
-      (pitch_deg100 < -(int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100) ||
-      (pitch_deg100 > (int32_t)PX4LITE_CONTROL_ATTITUDE_TARGET_LIMIT_DEG100) ||
-      (yaw_deg100 < -(int32_t)PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100) ||
-      (yaw_deg100 > (int32_t)PX4LITE_CONTROL_ATTITUDE_YAW_TARGET_LIMIT_DEG100)) {
-    return PX4LITE_INVALID_PARAM;
-  }
+  const int32_t target_deg100[3] = {roll_deg100, pitch_deg100, yaw_deg100};
 
-  /* 三轴赋值和观察失效保持原子；只序列化已有配置写入，不新增输出或准入条件。 */
-  vTaskSuspendAll();
-  if (s_target_roll_deg100 != roll_deg100 || s_target_pitch_deg100 != pitch_deg100 || s_target_yaw_deg100 != yaw_deg100) {
-    ControlCnsCancel(0U);
-    ControlRpiFeedbackContextChanged();
-  }
-  s_target_roll_deg100  = roll_deg100;
-  s_target_pitch_deg100 = pitch_deg100;
-  s_target_yaw_deg100   = yaw_deg100;
-  (void)xTaskResumeAll();
-  return PX4LITE_OK;
+  return ControlApplyOutputConfig(0, target_deg100);
+}
+
+/** @brief 将模式和三轴目标的一组设置一起提交。 */
+Px4Lite_Result_t Px4Lite_ControlSetModeAndAttitudeTarget(Px4Lite_ControlMode_t mode,
+    int32_t roll_deg100, int32_t pitch_deg100, int32_t yaw_deg100)
+{
+  const int32_t target_deg100[3] = {roll_deg100, pitch_deg100, yaw_deg100};
+
+  return ControlApplyOutputConfig(&mode, target_deg100);
 }
 
 /**
@@ -1242,6 +1316,7 @@ static Px4Lite_Result_t Px4Lite_ControlEmergencyStopImpl(uint32_t now_ms)
   ControlCnsCancel(0U);
   ControlRpiFeedbackFinish(0U);
   Px4Lite_ControlLog(PX4LITE_LOGMSG_ESTOP, now_ms);
+  s_estop_sequence++;
   s_manual_locked = 1U;
   s_estop_latched  = 1U;
   s_esc_armed      = 0U;
@@ -1474,12 +1549,12 @@ Px4Lite_Result_t Px4Lite_ControlCnsRequest(Px4Lite_CnsAction_t action, uint8_t m
 void Px4Lite_ControlCnsAckSent(uint32_t token) { (void)token; }
 #endif
 
-/** @brief 实际锁事实的短临界区快照，不根据 PWM、run_state 或已受理请求推测。 */
+/** @brief 从人工锁和动力电压门禁生成实际解锁状态，供 MAVLink 心跳使用。 */
 uint8_t Px4Lite_ControlCnsArmed(void)
 {
   uint8_t armed;
   taskENTER_CRITICAL();
-  armed = (uint8_t)(s_control_initialized && !s_manual_locked);
+  armed = (uint8_t)(s_control_initialized && !s_manual_locked && !s_power_inhibited);
   taskEXIT_CRITICAL();
   return armed;
 }
@@ -1691,9 +1766,13 @@ Px4Lite_Result_t Px4Lite_ControlStartAutoLanding(void)
   Px4Lite_Result_t result;
   vTaskSuspendAll();
   Px4Lite_ControlRefreshPowerGate(Px4Lite_PlatformGetMs());
-  /* 重复降落按旧逻辑返回 BUSY，不能为了取消 CNS 而重置原曲线。 */
-  if (s_auto_profile != PX4LITE_CONTROL_AUTO_LANDING) { ControlCnsCancel(0U); }
-  result = Px4Lite_ControlStartAutoLandingImpl();
+  /* 重复降落返回 BUSY，等待 ACK 的 CNS 降落也必须保留原请求和怠速终点。 */
+  if (ControlCnsLandingAccepted()) {
+    result = PX4LITE_BUSY;
+  } else {
+    if (s_auto_profile != PX4LITE_CONTROL_AUTO_LANDING) { ControlCnsCancel(0U); }
+    result = Px4Lite_ControlStartAutoLandingImpl();
+  }
   if (result == PX4LITE_OK) {
     Px4Lite_ControlLog(PX4LITE_LOGMSG_RAMP_DOWN_ACCEPTED, Px4Lite_PlatformGetMs());
     if (s_auto_profile == PX4LITE_CONTROL_AUTO_NONE) {
@@ -1742,6 +1821,18 @@ static uint8_t Px4Lite_ControlConfigOutputsStopped(void)
   return 1U;
 }
 
+/** @brief 同步升速依赖 IMU 和气压计，带输出的姿态辅助还依赖 IMU。 */
+uint8_t Px4Lite_ControlModulePauseAllowed(Px4Lite_ModuleId_t id)
+{
+  if (s_auto_profile == PX4LITE_CONTROL_AUTO_TAKEOFF ||
+      (s_cns.phase != CONTROL_CNS_NONE && s_cns.action == PX4LITE_CNS_TAKEOFF)) { return 0U; }
+  if (id == PX4LITE_MODULE_IMU && s_control_mode == PX4LITE_CONTROL_MODE_ATTITUDE_ASSIST &&
+      !s_cns_exact_hold && s_control_initialized) {
+    return Px4Lite_ControlConfigOutputsStopped();
+  }
+  return 1U;
+}
+
 /**
  * @brief 在调度互斥内确认停止并建立配置维护锁，允许未接动力电源时保存。
  * @note 本接口假定主控供电符合 Flash 编程要求；动力电压闭锁仍只约束电机运行。
@@ -1782,9 +1873,21 @@ Px4Lite_Result_t Px4Lite_ControlCnsRequest(Px4Lite_CnsAction_t action, uint8_t m
 void Px4Lite_ControlCnsAckSent(uint32_t token) { (void)token; }
 /** @brief Control 关闭时始终锁定。 */
 uint8_t Px4Lite_ControlCnsArmed(void) { return 0U; }
+/** @brief 控制器关闭时没有使用实验传感器的电机动作。 */
+uint8_t Px4Lite_ControlModulePauseAllowed(Px4Lite_ModuleId_t id)
+{
+  (void)id;
+  return 1U;
+}
 /** @brief Control 关闭时无法执行人工锁命令。 */
 Px4Lite_Result_t Px4Lite_ControlSetMotorLocked(uint8_t locked)
 { return (locked > 1U) ? PX4LITE_INVALID_PARAM : PX4LITE_NOT_READY; }
+/** @brief Control 关闭时禁止解锁。 */
+Px4Lite_Result_t Px4Lite_ControlUnlockMotor(uint32_t stop_sequence)
+{ (void)stop_sequence; return PX4LITE_NOT_READY; }
+/** @brief Control 关闭时未取得急停序号。 */
+Px4Lite_Result_t Px4Lite_ControlGetEmergencyStopSequence(uint32_t *sequence)
+{ return (sequence == 0) ? PX4LITE_INVALID_PARAM : PX4LITE_NOT_READY; }
 /** @brief Control 关闭时人工锁状态不可用，不伪造已解锁。 */
 Px4Lite_Result_t Px4Lite_ControlGetMotorLocked(uint8_t *locked)
 { return (locked == 0) ? PX4LITE_INVALID_PARAM : PX4LITE_NOT_READY; }
@@ -1861,6 +1964,17 @@ Px4Lite_Result_t Px4Lite_ControlSetAttitudeTarget(int32_t roll_deg100, int32_t p
   return PX4LITE_NOT_READY;
 }
 
+/** @brief Control 模块关闭时不处理一组模式和姿态设置。 */
+Px4Lite_Result_t Px4Lite_ControlSetModeAndAttitudeTarget(Px4Lite_ControlMode_t mode,
+    int32_t roll_deg100, int32_t pitch_deg100, int32_t yaw_deg100)
+{
+  (void)mode;
+  (void)roll_deg100;
+  (void)pitch_deg100;
+  (void)yaw_deg100;
+  return PX4LITE_NOT_READY;
+}
+
 /**
  * @brief Control 模块关闭时的急停空实现。
  */
@@ -1910,7 +2024,7 @@ Px4Lite_Result_t Px4Lite_ControlSetRpiMotorThrottles(const uint8_t percent[PX4LI
   result = Px4Lite_ControlSetMotorThrottles(percent);
   if (result == PX4LITE_OK) {
     /* 用户缓降期间全零只确认旧意图，没有执行新目标，不能替原过程提前报成功。 */
-    if (s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING && s_auto_landing_user) { Px4Lite_StartupToneNotifyRpiResult(0U); }
+    if (ControlUserLandingActive()) { Px4Lite_StartupToneNotifyRpiResult(0U); }
     else { ControlRpiFeedbackTrackOutput(0U); }
   }
   (void)xTaskResumeAll();
@@ -1927,7 +2041,7 @@ Px4Lite_Result_t Px4Lite_ControlSetRpiMotorPulses(const uint16_t pulse[PX4LITE_M
   vTaskSuspendAll();
   result = Px4Lite_ControlSetMotorPulses(pulse);
   if (result == PX4LITE_OK) {
-    if (s_auto_profile == PX4LITE_CONTROL_AUTO_LANDING && s_auto_landing_user) { Px4Lite_StartupToneNotifyRpiResult(0U); }
+    if (ControlUserLandingActive()) { Px4Lite_StartupToneNotifyRpiResult(0U); }
     else { ControlRpiFeedbackTrackOutput(1U); }
   }
   (void)xTaskResumeAll();
